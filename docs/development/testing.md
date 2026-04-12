@@ -58,6 +58,8 @@ Notes:
 - `uv run pre-commit install --install-hooks` installs the local `pre-commit`, `commit-msg`, and `pre-push` hooks.
 - Use `uv run ruff format` only when formatting is intentionally part of the change.
 - GitHub Actions `Checks` is the authoritative CI entrypoint.
+- The GitHub Actions quality job installs `uv sync --locked --dev --extra local-cpu` so `ty` can resolve the optional FunASR dependency tree.
+- If your local environment was created with plain `uv sync`, rerun `uv sync --extra local-cpu` before `uv run ty check` when you need CI parity for the local STT typing paths.
 - CI also runs Windows-specific validation, including a CLI smoke test.
 
 ## Opt-in integration and live checks

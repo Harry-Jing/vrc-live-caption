@@ -20,6 +20,12 @@ def _iflytek_env() -> dict[str, str]:
     }
 
 
+def _openai_env() -> dict[str, str]:
+    return {
+        "OPENAI_API_KEY": "test-key",
+    }
+
+
 class TestDoctorCommand:
     def test_when_config_is_missing__then_it_warns_and_continues(
         self,
@@ -42,7 +48,7 @@ class TestDoctorCommand:
         result = cli_runner.invoke(
             app,
             ["doctor", "--config", str(missing_config)],
-            env=_iflytek_env(),
+            env=_openai_env(),
         )
 
         assert result.exit_code == 0

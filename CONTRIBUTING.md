@@ -26,6 +26,8 @@ uv run ruff format --check
 uv run ty check
 ```
 
+If you created your environment with plain `uv sync`, rerun `uv sync --extra local-cpu` before `uv run ty check` so local typing matches the GitHub Actions quality job for the optional FunASR paths.
+
 ## Commit Messages
 
 Use [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) with the same type list as [`@commitlint/config-conventional`](https://github.com/conventional-changelog/commitlint/tree/master/%40commitlint/config-conventional), and add a matching [gitmoji](https://gitmoji.dev/) after `: `.
