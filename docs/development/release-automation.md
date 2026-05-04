@@ -6,9 +6,11 @@ How `VRC Live Caption` publishes versions, changelogs, tags, and GitHub Releases
 
 - `main` is the only automated release branch.
 - GitHub Actions runs `.github/workflows/release-please.yml` on pushes to `main` and on manual dispatch.
+- GitHub Actions runs `.github/workflows/pr-title.yml` on pull requests to validate Conventional PR titles.
 - The workflow uses `googleapis/release-please-action@v4` with:
   - `release-please-config.json`
   - `.release-please-manifest.json`
+- Release Please PR titles use `chore(release): 🔧 release ${version}` from `release-please-config.json`.
 - `release-please` manages:
   - `pyproject.toml` version updates
   - `CHANGELOG.md`
@@ -20,6 +22,7 @@ How `VRC Live Caption` publishes versions, changelogs, tags, and GitHub Releases
 - Configure a repository secret named `RELEASE_PLEASE_TOKEN`.
 - Use a PAT for `RELEASE_PLEASE_TOKEN` so release PRs, tags, and releases can trigger other workflows.
 - In GitHub repository settings, enable **Allow GitHub Actions to create and approve pull requests**.
+- If you use squash merges, enable **Default to PR title for squash merge commits** so merged PRs keep the validated Conventional title.
 
 ## First release baseline
 
@@ -32,6 +35,9 @@ How `VRC Live Caption` publishes versions, changelogs, tags, and GitHub Releases
 ## Working rules
 
 - Use Conventional Commits so `release-please` can derive the next version and changelog entries.
+- Human-authored PR titles use the same `<type>[optional scope][!]: <emoji> <description>` format as local commit messages.
+- PR title and commit-message validation expect gitmoji.dev's canonical forms, for example `📦️`, `⚡️`, `♻️`, and `⏪️`.
+- Release Please PRs are exempt from PR title validation when GitHub applies `autorelease: pending` or `autorelease: triggered`.
 - For the first release, an empty manifest is expected and correct.
 - If you squash merge release-worthy work into `main`, keep the squash commit releasable, for example `feat`, `fix`, or `docs`.
 - `release-please-config.json` controls changelog presentation only; changelog sections do not change which commit types trigger a release PR.

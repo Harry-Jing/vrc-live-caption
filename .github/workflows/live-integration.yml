@@ -1,0 +1,94 @@
+name: Live Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Live integration suite to run
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - openai
+          - iflytek
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-integration-${{ github.workflow }}-${{ inputs.provider }}
+  cancel-in-progress: false
+
+jobs:
+  openai-live:
+    name: openai live integration
+    if: ${{ inputs.provider == 'all' || inputs.provider == 'openai' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
+        with:
+          enable-cache: true
+
+      - name: Check required secret
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY is not set"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run OpenAI live integration test
+        run: uv run pytest -q tests/integration -m "integration and openai_live"
+
+  iflytek-live:
+    name: iflytek live integration
+    if: ${{ inputs.provider == 'all' || inputs.provider == 'iflytek' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IFLYTEK_APP_ID: ${{ secrets.IFLYTEK_APP_ID }}
+      IFLYTEK_API_KEY: ${{ secrets.IFLYTEK_API_KEY }}
+      IFLYTEK_API_SECRET: ${{ secrets.IFLYTEK_API_SECRET }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
+        with:
+          enable-cache: true
+
+      - name: Check required secrets
+        run: |
+          if [ -z "${IFLYTEK_APP_ID}" ] || [ -z "${IFLYTEK_API_KEY}" ] || [ -z "${IFLYTEK_API_SECRET}" ]; then
+            echo "IFLYTEK_APP_ID / IFLYTEK_API_KEY / IFLYTEK_API_SECRET must all be set"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run iFLYTEK live integration test
+        run: uv run pytest -q tests/integration -m "integration and iflytek_live"

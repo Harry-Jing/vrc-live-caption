@@ -54,6 +54,7 @@ Notes:
 
 - Use `!` for breaking changes, for example `feat(api)!: 💥 remove legacy auth`.
 - Keep the emoji aligned with the intent of the type. The list above is the repository's recommended type-to-gitmoji pairing.
+- Use gitmoji.dev's canonical forms in commit messages and PR titles, especially `📦️`, `⚡️`, `♻️`, and `⏪️`.
 
 Example commit messages:
 
@@ -75,5 +76,19 @@ Release automation notes:
 ## Pull Requests
 
 - Keep PRs small and focused.
+- Use the same Conventional Commit + gitmoji format for PR titles:
+
+  ```text
+  <type>[optional scope][!]: <emoji> <description>
+  ```
+
+  Examples:
+
+  - `feat(chatbox): ✨ add source-target layout mode`
+  - `fix(config): 🐛 handle missing .env file`
+  - `ci(release): 👷 add semantic PR title validation`
+
+- Repository automation validates PR titles with `amannn/action-semantic-pull-request`.
+- Release Please PRs are skipped automatically via their `autorelease:*` labels.
 - Explain why the change is needed.
 - Make sure checks pass.

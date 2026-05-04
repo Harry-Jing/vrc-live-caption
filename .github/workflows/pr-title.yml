@@ -1,0 +1,49 @@
+name: PR Title
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: pr-title-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  semantic-pr-title:
+    name: semantic PR title
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate PR title
+        uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            build
+            chore
+            ci
+            docs
+            feat
+            fix
+            perf
+            refactor
+            revert
+            style
+            test
+          ignoreLabels: |
+            autorelease: pending
+            autorelease: triggered
+          subjectPattern: '^(?:📦️|🔧|👷|📝|✨|🐛|⚡️|♻️|⏪️|🎨|✅|💥) .+$'
+          subjectPatternError: >-
+            PR titles must match "<type>[optional scope][!]: <emoji> <description>".
+            Example: "feat(chatbox): ✨ add source-target layout mode".
