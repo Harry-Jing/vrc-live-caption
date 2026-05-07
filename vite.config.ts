@@ -2,8 +2,6 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import ui from "@nuxt/ui/vite";
 
-const host = process.env["TAURI_DEV_HOST"];
-
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
@@ -14,27 +12,14 @@ export default defineConfig({
     }),
   ],
 
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent vite from obscuring rust errors
+  // Keep Rust/Tauri errors visible in the same terminal.
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 1420,
+    // Must match `build.devUrl` in `src-tauri/tauri.conf.json`.
+    port: 5173,
     strictPort: true,
-    host: host || false,
     watch: {
-      // 3. tell vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
-    ...(host
-      ? {
-          hmr: {
-            protocol: "ws",
-            host,
-            port: 1421,
-          },
-        }
-      : {}),
   },
 });
