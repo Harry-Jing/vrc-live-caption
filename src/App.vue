@@ -8,13 +8,16 @@ import { useRuntime } from "./runtime/useRuntime";
 const {
   actionError,
   activeCaptionText,
+  audioInputDevices,
   config,
   diagnostics,
   finalTranscripts,
   isBusy,
+  loadAudioInputDevices,
   partialTranscript,
   runCommand,
   runtimeStatus,
+  saveConfig,
 } = useRuntime();
 
 const captionMode = computed(() =>
@@ -40,7 +43,7 @@ const captionMode = computed(() =>
             <h1
               class="mt-1 text-2xl font-semibold tracking-tight text-highlighted"
             >
-              Runtime Foundation
+              Outgoing MVP-A
             </h1>
           </div>
 
@@ -62,10 +65,13 @@ const captionMode = computed(() =>
         >
           <ControlPanel
             :action-error="actionError"
+            :audio-input-devices="audioInputDevices"
             :config="config"
             :is-busy="isBusy"
             :runtime-status="runtimeStatus"
+            @refresh-devices="loadAudioInputDevices"
             @run="runCommand"
+            @save-config="saveConfig"
           />
           <EventFeed
             :diagnostics="diagnostics"

@@ -4,12 +4,14 @@ export type RuntimeStatus =
   | "running"
   | "stopped"
   | "error";
-export type SttProvider = "mock" | "cloud";
+export type SttProvider = "mock" | "openai";
 export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";
 export type DiagnosticSeverity = "info" | "warning" | "error";
 export type TranscriptKind = "partial" | "stable" | "final";
 
 export type RuntimeCommand =
+  | "start_runtime"
+  | "stop_runtime"
   | "start_mock_runtime"
   | "emit_mock_transcript"
   | "emit_mock_diagnostic"
@@ -29,15 +31,23 @@ export type AppConfig = {
   stt: {
     provider: SttProvider;
     language: string;
+    model: string;
   };
   osc: {
     host: string;
     port: number;
     enabled: boolean;
+    minIntervalMs: number;
   };
   ui: {
     showPartial: boolean;
   };
+};
+
+export type AudioInputDevice = {
+  id: string;
+  name: string;
+  isDefault: boolean;
 };
 
 export type RuntimeStatusEvent = {

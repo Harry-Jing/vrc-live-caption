@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   RUNTIME_EVENTS,
+  type AudioInputDevice,
   type AppConfig,
   type DiagnosticEvent,
   type RuntimeCommand,
@@ -28,6 +29,7 @@ function normalizeError(error: unknown) {
 }
 
 export function useRuntime() {
+  const audioInputDevices = ref<AudioInputDevice[]>([]);
   const config = ref<AppConfig | null>(null);
   const runtimeStatus = ref<RuntimeStatusEvent>({
     status: "idle",
@@ -69,11 +71,38 @@ export function useRuntime() {
     }
   }
 
+  async function saveConfig(nextConfig: AppConfig) {
+    actionError.value = "";
+    isBusy.value = true;
+
+    try {
+      config.value = await invoke<AppConfig>("save_app_config", {
+        config: nextConfig,
+      });
+    } catch (error) {
+      actionError.value = normalizeError(error);
+    } finally {
+      isBusy.value = false;
+    }
+  }
+
   async function loadConfig() {
     actionError.value = "";
 
     try {
       config.value = await invoke<AppConfig>("get_app_config");
+    } catch (error) {
+      actionError.value = normalizeError(error);
+    }
+  }
+
+  async function loadAudioInputDevices() {
+    actionError.value = "";
+
+    try {
+      audioInputDevices.value = await invoke<AudioInputDevice[]>(
+        "list_audio_input_devices",
+      );
     } catch (error) {
       actionError.value = normalizeError(error);
     }
@@ -139,6 +168,7 @@ export function useRuntime() {
     try {
       await registerRuntimeListeners();
       await loadConfig();
+      await loadAudioInputDevices();
     } catch (error) {
       actionError.value = normalizeError(error);
     }
@@ -152,12 +182,15 @@ export function useRuntime() {
   return {
     actionError,
     activeCaptionText,
+    audioInputDevices,
     config,
     diagnostics,
     finalTranscripts,
     isBusy,
+    loadAudioInputDevices,
     partialTranscript,
     runCommand,
+    saveConfig,
     runtimeStatus,
   };
 }

@@ -7,6 +7,15 @@ pub(crate) type AppResult<T> = Result<T, AppError>;
 
 #[derive(Debug)]
 pub(crate) enum AppError {
+    Audio {
+        message: String,
+    },
+    Config {
+        message: String,
+    },
+    ConfigIo {
+        message: String,
+    },
     EventEmit {
         source: tauri::Error,
     },
@@ -25,12 +34,39 @@ pub(crate) enum AppError {
         expected: usize,
         sent: usize,
     },
-    RuntimeState {
+    Runtime {
+        message: String,
+    },
+    State {
+        message: String,
+    },
+    Stt {
+        message: String,
+    },
+    Wav {
         message: String,
     },
 }
 
 impl AppError {
+    pub(crate) fn audio(message: impl Into<String>) -> Self {
+        Self::Audio {
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn config(message: impl Into<String>) -> Self {
+        Self::Config {
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn config_io(message: impl Into<String>) -> Self {
+        Self::ConfigIo {
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn emit(error: tauri::Error) -> Self {
         Self::EventEmit { source: error }
     }
@@ -58,23 +94,52 @@ impl AppError {
         }
     }
 
-    pub(crate) fn runtime_state(message: String) -> Self {
-        Self::RuntimeState { message }
+    pub(crate) fn runtime(message: impl Into<String>) -> Self {
+        Self::Runtime {
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn state(message: impl Into<String>) -> Self {
+        Self::State {
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn stt(message: impl Into<String>) -> Self {
+        Self::Stt {
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn wav(message: impl Into<String>) -> Self {
+        Self::Wav {
+            message: format!("Failed to encode captured audio as WAV: {}", message.into()),
+        }
     }
 
     pub(crate) fn code(&self) -> &'static str {
         match self {
+            Self::Audio { .. } => "audio_failed",
+            Self::Config { .. } => "config_invalid",
+            Self::ConfigIo { .. } => "config_io_failed",
             Self::EventEmit { .. } => "event_emit_failed",
             Self::OscEncode { .. } => "osc_encode_failed",
             Self::OscBind { .. } => "osc_bind_failed",
             Self::OscSend { .. } => "osc_send_failed",
             Self::OscSendIncomplete { .. } => "osc_send_incomplete",
-            Self::RuntimeState { .. } => "runtime_state_failed",
+            Self::Runtime { .. } => "runtime_failed",
+            Self::State { .. } => "state_failed",
+            Self::Stt { .. } => "stt_failed",
+            Self::Wav { .. } => "wav_encode_failed",
         }
     }
 
     fn message(&self) -> String {
         match self {
+            Self::Audio { message } => message.clone(),
+            Self::Config { message } => message.clone(),
+            Self::ConfigIo { message } => message.clone(),
             Self::EventEmit { source } => {
                 format!("Failed to emit runtime event: {source}")
             }
@@ -92,9 +157,10 @@ impl AppError {
                 expected,
                 sent,
             } => format!("Sent an incomplete OSC datagram to {target}: {sent} of {expected} bytes"),
-            Self::RuntimeState { message } => {
-                format!("Runtime state is unavailable: {message}")
-            }
+            Self::Runtime { message } => message.clone(),
+            Self::State { message } => message.clone(),
+            Self::Stt { message } => message.clone(),
+            Self::Wav { message } => message.clone(),
         }
     }
 }

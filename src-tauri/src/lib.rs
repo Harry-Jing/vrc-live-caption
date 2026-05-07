@@ -1,17 +1,25 @@
+mod audio;
 mod commands;
 mod config;
 mod error;
 mod events;
 mod osc;
 mod runtime;
+mod segmenter;
+mod state;
+mod stt;
 
 pub fn run() {
     let _ = tracing_subscriber::fmt().with_target(false).try_init();
 
     tauri::Builder::default()
-        .manage(runtime::RuntimeState::default())
+        .manage(state::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_app_config,
+            commands::save_app_config,
+            commands::list_audio_input_devices,
+            commands::start_runtime,
+            commands::stop_runtime,
             commands::start_mock_runtime,
             commands::emit_mock_transcript,
             commands::emit_mock_diagnostic,
