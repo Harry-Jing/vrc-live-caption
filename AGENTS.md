@@ -76,17 +76,28 @@
   for App preview, diagnostics, and future workflows.
 
 ## Build And Test
-- After Rust or Tauri code changes, run:
-  - `cargo fmt --manifest-path src-tauri/Cargo.toml --all`
-  - `cargo check --manifest-path src-tauri/Cargo.toml --workspace --all-targets`
-  - `cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets -- -D warnings`
-  - `cargo test --manifest-path src-tauri/Cargo.toml --workspace`
-- After frontend, Vue, TypeScript, package, or Tauri/frontend contract changes,
-  run:
-  - `pnpm build`
+- Use the package scripts as the normal quality gates:
+  - `pnpm check:frontend` for Prettier, ESLint, Vue typecheck, and Vite build.
+  - `pnpm check:rust` for Rust fmt, check, clippy, and tests.
+  - `pnpm check` before pushing or when a change crosses frontend/Rust/Tauri
+    contracts.
+- When running Cargo directly, work from the Tauri Rust project directory:
+  - `cd src-tauri && cargo fmt --all`
+  - `cd src-tauri && cargo check --workspace --all-targets`
+  - `cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings`
+  - `cd src-tauri && cargo test --workspace`
+- Pre-commit hooks should stay fast enough to run on every commit. Pre-push and
+  CI should run the full quality gate.
+- In CI, prefer locked installs and locked Cargo resolution:
+  - `pnpm install --frozen-lockfile`
+  - `cd src-tauri && cargo check --workspace --all-targets --locked`
+  - `cd src-tauri && cargo test --workspace --locked`
 - Do not require `npm run typecheck` or `npm run lint` until matching package
   scripts exist. `pnpm build` is the current frontend typecheck path because it
   runs `vue-tsc --noEmit`.
 - For docs-only changes, run no build checks unless the change affects commands,
   configuration, or documented behavior; state that checks were skipped because
   the change was docs-only.
+- Markdown files are prose and project guidance. Keep them clear and readable,
+  but do not add Markdown formatting to automated checks unless explicitly
+  requested.
