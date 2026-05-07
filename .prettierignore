@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+src-tauri/target/
+
+# Generated files
+src-tauri/gen/
+auto-imports.d.ts
+components.d.ts
+
+# Tool-managed or prose-heavy files
+pnpm-lock.yaml
+*.md
+
+# Local scratch and logs
+.tmp/
+logs/
+*.log
+*.local
+
+# OS files
+.DS_Store
