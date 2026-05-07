@@ -1,3 +1,10 @@
+//! Runtime lifecycle for Phase 1 outgoing captions.
+//!
+//! The capture loop drains microphone samples and never performs blocking STT
+//! upload work. Completed speech segments are sent to a bounded STT worker queue;
+//! per-segment STT or OSC failures emit diagnostics and keep the runtime alive.
+//! Startup failures such as invalid config or unavailable microphone remain fatal.
+
 use crate::audio::{open_input_capture, receive_audio};
 use crate::config::{AppConfig, SttProvider};
 use crate::error::{AppError, AppResult};

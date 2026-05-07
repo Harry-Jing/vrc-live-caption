@@ -1,3 +1,10 @@
+//! Normalized runtime events emitted to the Vue frontend.
+//!
+//! These events are the UI-facing contract for status, transcripts, and
+//! diagnostics. Provider-specific raw events should be normalized before they
+//! reach this module so Vue components and output sinks do not depend on STT
+//! provider protocols.
+
 use crate::error::{AppError, AppResult};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};

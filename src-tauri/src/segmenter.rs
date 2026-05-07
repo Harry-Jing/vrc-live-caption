@@ -1,3 +1,10 @@
+//! Speech segmentation for mono microphone samples.
+//!
+//! `SpeechSegmenter` owns the VAD threshold, silence timeout, and min/max segment
+//! duration rules. It is deliberately independent of Tauri, CPAL, STT providers,
+//! and OSC so the capture framing behavior can be tested without live devices or
+//! network calls.
+
 use std::time::{Duration, Instant};
 
 pub(crate) struct SpeechSegmenter {

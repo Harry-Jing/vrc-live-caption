@@ -1,3 +1,10 @@
+//! Microphone discovery and capture for the outgoing caption path.
+//!
+//! Device ids are CPAL 0.17 `DeviceId` strings, not display names. Persisting
+//! names is fragile because duplicate names and reconnects are common on Windows.
+//! Captured samples are converted to mono `f32` frames before reaching runtime
+//! code; the frontend never sees raw audio.
+
 use crate::config::AudioConfig;
 use crate::error::{AppError, AppResult};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};

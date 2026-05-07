@@ -1,3 +1,10 @@
+//! Non-secret app configuration shared by Tauri commands and the runtime.
+//!
+//! This module intentionally stores only ordinary settings such as device ids,
+//! STT model names, OSC target, and UI preferences. Provider API keys must come
+//! from the environment or a future secure secret store, not this config file.
+//! Serde defaults keep older config files loadable as Phase 1 fields evolve.
+
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 
