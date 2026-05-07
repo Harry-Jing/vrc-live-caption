@@ -29,7 +29,11 @@ struct RuntimeStatusEvent {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+// Keep all statuses in the UI contract even before every lifecycle branch is emitted.
+#[expect(
+    dead_code,
+    reason = "runtime status contract includes future lifecycle states"
+)]
 pub(crate) enum RuntimeStatus {
     Idle,
     Starting,
@@ -55,7 +59,11 @@ struct TranscriptEvent {
 #[serde(rename_all = "camelCase")]
 pub(crate) enum TranscriptKind {
     Partial,
-    #[allow(dead_code)]
+    // Stable is part of the normalized transcript contract for future providers.
+    #[expect(
+        dead_code,
+        reason = "stable transcript events are not emitted in the MVP yet"
+    )]
     Stable,
     Final,
 }
@@ -92,7 +100,6 @@ pub(crate) struct DiagnosticUpdate {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub(crate) enum DiagnosticCategory {
     Audio,
     Config,
@@ -103,7 +110,6 @@ pub(crate) enum DiagnosticCategory {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub(crate) enum DiagnosticSeverity {
     Error,
     Info,

@@ -7,8 +7,14 @@ pre-commit:
     - name: lint
       run: pnpm lint
 
+    - name: frontend build
+      run: pnpm build
+
     - name: rust format check
       run: cd src-tauri && cargo fmt --all -- --check
+
+    - name: rust check
+      run: cd src-tauri && cargo check --workspace --all-targets
 
 commit-msg:
   jobs:

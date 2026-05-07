@@ -81,6 +81,7 @@
   - `pnpm check:rust` for Rust fmt, check, clippy, and tests.
   - `pnpm check` before pushing or when a change crosses frontend/Rust/Tauri
     contracts.
+  - `pnpm check:ci` for CI-style locked dependency checks.
 - When running Cargo directly, work from the Tauri Rust project directory:
   - `cd src-tauri && cargo fmt --all`
   - `cd src-tauri && cargo check --workspace --all-targets`
@@ -88,10 +89,11 @@
   - `cd src-tauri && cargo test --workspace`
 - Pre-commit hooks should stay fast enough to run on every commit. Pre-push and
   CI should run the full quality gate.
-- In CI, prefer locked installs and locked Cargo resolution:
+- Rust lint policy lives in `src-tauri/Cargo.toml` under `[lints]`. Do not
+  weaken those lints unless the project rule itself changes.
+- In CI, use locked installs and locked Cargo resolution:
   - `pnpm install --frozen-lockfile`
-  - `cd src-tauri && cargo check --workspace --all-targets --locked`
-  - `cd src-tauri && cargo test --workspace --locked`
+  - `pnpm check:ci`
 - Do not require `npm run typecheck` or `npm run lint` until matching package
   scripts exist. `pnpm build` is the current frontend typecheck path because it
   runs `vue-tsc --noEmit`.

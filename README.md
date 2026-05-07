@@ -22,11 +22,16 @@ work:
 pnpm check:frontend
 pnpm check:rust
 pnpm check
+pnpm check:ci
 ```
 
 Git hooks are managed by Lefthook. `prepare` installs the hooks after dependency
-installation, `commit-msg` enforces Conventional Commits, and `pre-push` runs
-the full quality gate.
+installation, `pre-commit` runs the fast local gate, `commit-msg` enforces
+Conventional Commits, and `pre-push` runs the full quality gate.
+
+GitHub Actions runs the CI gate on push and pull request. CI uses frozen pnpm
+installs, locked Cargo resolution, dependency caching, frontend checks, and Rust
+checks.
 
 Direct Cargo commands should be run from `src-tauri`, following the Tauri
 project layout:
@@ -38,6 +43,9 @@ cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+Rust lint policy is configured in `src-tauri/Cargo.toml` under `[lints]` so the
+same restrictions apply locally and in CI.
 
 Markdown documentation is intentionally kept out of automated formatting checks.
 Keep docs concise and readable, and reserve build checks for docs changes that

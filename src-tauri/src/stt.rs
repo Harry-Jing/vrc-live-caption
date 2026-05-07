@@ -136,10 +136,12 @@ mod tests {
     }
 
     #[test]
-    fn wav_encoder_outputs_non_empty_wav() {
-        let wav = encode_wav(16_000, &[0.0, 0.25, -0.25]).expect("test WAV should encode");
+    fn wav_encoder_outputs_non_empty_wav() -> AppResult<()> {
+        let wav = encode_wav(16_000, &[0.0, 0.25, -0.25])?;
 
         assert!(wav.starts_with(b"RIFF"));
         assert!(wav.len() > 44);
+
+        Ok(())
     }
 }

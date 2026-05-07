@@ -9,6 +9,10 @@ mod segmenter;
 mod state;
 mod stt;
 
+#[expect(
+    clippy::expect_used,
+    reason = "Tauri startup failure is unrecoverable and should include the canonical startup context."
+)]
 pub fn run() {
     let _ = tracing_subscriber::fmt().with_target(false).try_init();
 
