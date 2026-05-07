@@ -1,49 +1,146 @@
 use serde::Serialize;
+use serde::ser::{SerializeStruct, Serializer};
+use std::error::Error;
+use std::fmt;
 
 pub(crate) type AppResult<T> = Result<T, AppError>;
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AppError {
-    pub(crate) code: &'static str,
-    pub(crate) message: String,
+#[derive(Debug)]
+pub(crate) enum AppError {
+    EventEmit {
+        source: tauri::Error,
+    },
+    OscEncode {
+        message: String,
+    },
+    OscBind {
+        message: String,
+    },
+    OscSend {
+        target: String,
+        message: String,
+    },
+    OscSendIncomplete {
+        target: String,
+        expected: usize,
+        sent: usize,
+    },
+    RuntimeState {
+        message: String,
+    },
 }
 
 impl AppError {
     pub(crate) fn emit(error: tauri::Error) -> Self {
-        Self {
-            code: "event_emit_failed",
-            message: format!("Failed to emit runtime event: {error}"),
-        }
+        Self::EventEmit { source: error }
     }
 
     pub(crate) fn osc_encode(message: String) -> Self {
-        Self {
-            code: "osc_encode_failed",
-            message: format!("Failed to encode OSC Chatbox message: {message}"),
-        }
+        Self::OscEncode { message }
     }
 
     pub(crate) fn osc_bind(message: String) -> Self {
-        Self {
-            code: "osc_bind_failed",
-            message: format!("Failed to open local UDP socket for OSC: {message}"),
-        }
+        Self::OscBind { message }
     }
 
     pub(crate) fn osc_send(target: &str, message: String) -> Self {
-        Self {
-            code: "osc_send_failed",
-            message: format!("Failed to send OSC Chatbox message to {target}: {message}"),
+        Self::OscSend {
+            target: target.to_string(),
+            message,
         }
     }
 
     pub(crate) fn osc_send_incomplete(target: &str, expected: usize, sent: usize) -> Self {
-        Self {
-            code: "osc_send_incomplete",
-            message: format!(
-                "Sent an incomplete OSC datagram to {target}: {sent} of {expected} bytes"
-            ),
+        Self::OscSendIncomplete {
+            target: target.to_string(),
+            expected,
+            sent,
         }
+    }
+
+    pub(crate) fn runtime_state(message: String) -> Self {
+        Self::RuntimeState { message }
+    }
+
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            Self::EventEmit { .. } => "event_emit_failed",
+            Self::OscEncode { .. } => "osc_encode_failed",
+            Self::OscBind { .. } => "osc_bind_failed",
+            Self::OscSend { .. } => "osc_send_failed",
+            Self::OscSendIncomplete { .. } => "osc_send_incomplete",
+            Self::RuntimeState { .. } => "runtime_state_failed",
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::EventEmit { source } => {
+                format!("Failed to emit runtime event: {source}")
+            }
+            Self::OscEncode { message } => {
+                format!("Failed to encode OSC Chatbox message: {message}")
+            }
+            Self::OscBind { message } => {
+                format!("Failed to open local UDP socket for OSC: {message}")
+            }
+            Self::OscSend { target, message } => {
+                format!("Failed to send OSC Chatbox message to {target}: {message}")
+            }
+            Self::OscSendIncomplete {
+                target,
+                expected,
+                sent,
+            } => format!("Sent an incomplete OSC datagram to {target}: {sent} of {expected} bytes"),
+            Self::RuntimeState { message } => {
+                format!("Runtime state is unavailable: {message}")
+            }
+        }
+    }
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message())
+    }
+}
+
+impl Error for AppError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::EventEmit { source } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for AppError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("AppError", 2)?;
+        state.serialize_field("code", self.code())?;
+        state.serialize_field("message", &self.message())?;
+        state.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn osc_error_serializes_with_stable_code_and_message() {
+        let error = AppError::osc_send("127.0.0.1:9000", "network unreachable".to_string());
+        let value = serde_json::to_value(&error).unwrap_or_else(|serialization_error| {
+            serde_json::json!({ "serializationError": serialization_error.to_string() })
+        });
+
+        assert_eq!(value["code"], "osc_send_failed");
+        assert_eq!(
+            value["message"],
+            "Failed to send OSC Chatbox message to 127.0.0.1:9000: network unreachable"
+        );
     }
 }

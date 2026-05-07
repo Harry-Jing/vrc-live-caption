@@ -1,0 +1,201 @@
+use crate::config::AppConfig;
+use crate::error::{AppError, AppResult};
+use crate::events::{
+    DiagnosticCategory, DiagnosticSeverity, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate,
+    emit_diagnostic, emit_status, emit_transcript_final, emit_transcript_partial,
+    next_utterance_id,
+};
+use crate::osc::{OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE, send_chatbox_osc};
+use std::sync::{Mutex, MutexGuard};
+use tauri::AppHandle;
+
+pub(crate) struct RuntimeState {
+    controller: Mutex<RuntimeController>,
+}
+
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self {
+            controller: Mutex::new(RuntimeController::default()),
+        }
+    }
+}
+
+impl RuntimeState {
+    pub(crate) fn app_config(&self) -> AppResult<AppConfig> {
+        Ok(self.controller()?.app_config())
+    }
+
+    pub(crate) fn start_mock_runtime(&self, app: &AppHandle) -> AppResult<()> {
+        self.set_status(RuntimeStatus::Starting)?;
+        emit_status(
+            app,
+            RuntimeStatus::Starting,
+            Some("Starting mock runtime".to_string()),
+        )?;
+
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate {
+                category: DiagnosticCategory::Runtime,
+                severity: DiagnosticSeverity::Info,
+                code: "runtime.mock_started",
+                message: "Mock runtime started".to_string(),
+                detail: Some("Runtime foundation path is active.".to_string()),
+            },
+        )?;
+
+        self.set_status(RuntimeStatus::Running)?;
+        emit_status(
+            app,
+            RuntimeStatus::Running,
+            Some("Mock runtime is running".to_string()),
+        )
+    }
+
+    pub(crate) fn emit_mock_transcript(&self, app: &AppHandle) -> AppResult<()> {
+        let config = self.app_config()?;
+        let utterance_id = next_utterance_id("mock");
+        let language = config.stt.language.clone();
+        let provider = config.stt.provider.as_str().to_string();
+
+        tracing::info!(utterance_id = %utterance_id, "emitting mock transcript");
+
+        emit_transcript_partial(
+            app,
+            TranscriptUpdate {
+                utterance_id: utterance_id.clone(),
+                text: "Testing live caption preview...".to_string(),
+                language: language.clone(),
+                provider: provider.clone(),
+                revision: 1,
+            },
+        )?;
+        emit_transcript_final(
+            app,
+            TranscriptUpdate {
+                utterance_id,
+                text: "Testing live caption preview from the mock runtime.".to_string(),
+                language,
+                provider,
+                revision: 2,
+            },
+        )?;
+
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate {
+                category: DiagnosticCategory::Stt,
+                severity: DiagnosticSeverity::Info,
+                code: "stt.mock_transcript_emitted",
+                message: "Mock transcript emitted".to_string(),
+                detail: Some(
+                    "The UI received normalized partial and final transcript events.".to_string(),
+                ),
+            },
+        )
+    }
+
+    pub(crate) fn emit_mock_diagnostic(&self, app: &AppHandle) -> AppResult<()> {
+        tracing::info!("emitting mock diagnostic");
+
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate {
+                category: DiagnosticCategory::Config,
+                severity: DiagnosticSeverity::Info,
+                code: "config.shape_loaded",
+                message: "Config shape loaded".to_string(),
+                detail: Some(
+                    "No API keys or provider secrets are stored in app config.".to_string(),
+                ),
+            },
+        )
+    }
+
+    pub(crate) fn send_osc_test_message(&self, app: &AppHandle) -> AppResult<()> {
+        let config = self.app_config()?;
+
+        match send_chatbox_osc(&config.osc, OSC_TEST_MESSAGE) {
+            Ok(result) => {
+                tracing::info!(
+                    target = result.target,
+                    byte_count = result.byte_count,
+                    "sent OSC Chatbox test message"
+                );
+
+                emit_diagnostic(
+                    app,
+                    DiagnosticUpdate {
+                        category: DiagnosticCategory::Osc,
+                        severity: DiagnosticSeverity::Info,
+                        code: "osc.test_sent",
+                        message: "OSC Chatbox test sent".to_string(),
+                        detail: Some(format!(
+                            "Sent final-only test text to {} with {}.",
+                            result.target, OSC_CHATBOX_INPUT_ADDRESS
+                        )),
+                    },
+                )
+            }
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code(),
+                    error_message = %error,
+                    "OSC test failed"
+                );
+                let diagnostic_detail = error.to_string();
+                let diagnostic_code = error.code();
+
+                emit_diagnostic(
+                    app,
+                    DiagnosticUpdate {
+                        category: DiagnosticCategory::Osc,
+                        severity: DiagnosticSeverity::Error,
+                        code: diagnostic_code,
+                        message: "OSC Chatbox test failed".to_string(),
+                        detail: Some(diagnostic_detail),
+                    },
+                )?;
+
+                Err(error)
+            }
+        }
+    }
+
+    fn controller(&self) -> AppResult<MutexGuard<'_, RuntimeController>> {
+        self.controller
+            .lock()
+            .map_err(|error| AppError::runtime_state(error.to_string()))
+    }
+
+    fn set_status(&self, status: RuntimeStatus) -> AppResult<()> {
+        self.controller()?.set_status(status);
+        Ok(())
+    }
+}
+
+struct RuntimeController {
+    config: AppConfig,
+    status: RuntimeStatus,
+}
+
+impl Default for RuntimeController {
+    fn default() -> Self {
+        Self {
+            config: AppConfig::default(),
+            status: RuntimeStatus::Idle,
+        }
+    }
+}
+
+impl RuntimeController {
+    fn app_config(&self) -> AppConfig {
+        self.config.clone()
+    }
+
+    fn set_status(&mut self, status: RuntimeStatus) {
+        tracing::debug!(from = ?self.status, to = ?status, "runtime status updated");
+        self.status = status;
+    }
+}

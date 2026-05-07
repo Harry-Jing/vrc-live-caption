@@ -3,11 +3,13 @@ mod config;
 mod error;
 mod events;
 mod osc;
+mod runtime;
 
 pub fn run() {
     let _ = tracing_subscriber::fmt().with_target(false).try_init();
 
     tauri::Builder::default()
+        .manage(runtime::RuntimeState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_app_config,
             commands::start_mock_runtime,

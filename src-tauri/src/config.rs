@@ -49,6 +49,15 @@ pub(crate) enum SttProvider {
     Cloud,
 }
 
+impl SttProvider {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Mock => "mock",
+            Self::Cloud => "cloud",
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OscConfig {

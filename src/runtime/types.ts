@@ -7,6 +7,7 @@ export type RuntimeStatus =
 export type SttProvider = "mock" | "cloud";
 export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";
 export type DiagnosticSeverity = "info" | "warning" | "error";
+export type TranscriptKind = "partial" | "stable" | "final";
 
 export type RuntimeCommand =
   | "start_mock_runtime"
@@ -47,7 +48,12 @@ export type RuntimeStatusEvent = {
 
 export type TranscriptEvent = {
   id: string;
+  utteranceId: string;
+  kind: TranscriptKind;
   text: string;
+  language: string;
+  provider: string;
+  revision: number;
   timestampMs: number;
 };
 
@@ -55,6 +61,7 @@ export type DiagnosticEvent = {
   id: string;
   category: DiagnosticCategory;
   severity: DiagnosticSeverity;
+  code: string;
   message: string;
   detail?: string;
   timestampMs: number;

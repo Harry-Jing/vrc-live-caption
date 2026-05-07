@@ -40,6 +40,7 @@ export function useRuntime() {
   const actionError = ref("");
   const isBusy = ref(false);
   const unlisteners: UnlistenFn[] = [];
+  let isUnmounted = false;
 
   const latestFinalTranscript = computed<TranscriptEvent | null>(
     () => finalTranscripts.value.at(0) ?? null,
@@ -78,36 +79,74 @@ export function useRuntime() {
     }
   }
 
-  onMounted(async () => {
-    unlisteners.push(
-      await listen<RuntimeStatusEvent>(RUNTIME_EVENTS.status, (event) => {
-        runtimeStatus.value = event.payload;
-      }),
-      await listen<TranscriptEvent>(
-        RUNTIME_EVENTS.transcriptPartial,
-        (event) => {
-          partialTranscript.value = event.payload;
-        },
-      ),
-      await listen<TranscriptEvent>(RUNTIME_EVENTS.transcriptFinal, (event) => {
-        partialTranscript.value = null;
-        finalTranscripts.value = [
-          event.payload,
-          ...finalTranscripts.value,
-        ].slice(0, 5);
-      }),
-      await listen<DiagnosticEvent>(RUNTIME_EVENTS.diagnostic, (event) => {
-        diagnostics.value = [event.payload, ...diagnostics.value].slice(0, 8);
-      }),
-    );
+  function addUnlistener(unlisten: UnlistenFn) {
+    if (isUnmounted) {
+      unlisten();
+      return;
+    }
 
-    await loadConfig();
+    unlisteners.push(unlisten);
+  }
+
+  function cleanupListeners() {
+    for (const unlisten of unlisteners.splice(0)) {
+      unlisten();
+    }
+  }
+
+  async function registerRuntimeListeners() {
+    try {
+      addUnlistener(
+        await listen<RuntimeStatusEvent>(RUNTIME_EVENTS.status, (event) => {
+          runtimeStatus.value = event.payload;
+        }),
+      );
+
+      addUnlistener(
+        await listen<TranscriptEvent>(
+          RUNTIME_EVENTS.transcriptPartial,
+          (event) => {
+            partialTranscript.value = event.payload;
+          },
+        ),
+      );
+
+      addUnlistener(
+        await listen<TranscriptEvent>(
+          RUNTIME_EVENTS.transcriptFinal,
+          (event) => {
+            partialTranscript.value = null;
+            finalTranscripts.value = [
+              event.payload,
+              ...finalTranscripts.value,
+            ].slice(0, 5);
+          },
+        ),
+      );
+
+      addUnlistener(
+        await listen<DiagnosticEvent>(RUNTIME_EVENTS.diagnostic, (event) => {
+          diagnostics.value = [event.payload, ...diagnostics.value].slice(0, 8);
+        }),
+      );
+    } catch (error) {
+      cleanupListeners();
+      throw error;
+    }
+  }
+
+  onMounted(async () => {
+    try {
+      await registerRuntimeListeners();
+      await loadConfig();
+    } catch (error) {
+      actionError.value = normalizeError(error);
+    }
   });
 
   onBeforeUnmount(() => {
-    for (const unlisten of unlisteners) {
-      unlisten();
-    }
+    isUnmounted = true;
+    cleanupListeners();
   });
 
   return {
