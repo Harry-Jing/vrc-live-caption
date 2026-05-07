@@ -26,14 +26,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential \
+            pkg-config \
             curl \
             file \
+            wget \
+            libasound2-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            wget
+            libxdo-dev
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
