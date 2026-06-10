@@ -12,7 +12,11 @@ const emit = defineEmits<{
   run: [command: RuntimeCommand];
 }>();
 
-const isRunning = computed(() => props.runtimeStatus.status === "running");
+const isStopping = computed(() => props.runtimeStatus.status === "stopping");
+const canStart = computed(
+  () =>
+    !["starting", "running", "stopping"].includes(props.runtimeStatus.status),
+);
 const canStop = computed(() =>
   ["starting", "running", "error"].includes(props.runtimeStatus.status),
 );
@@ -40,10 +44,10 @@ function run(command: RuntimeCommand) {
 
     <div class="grid gap-3 sm:grid-cols-2">
       <UButton
-        :disabled="isBusy || isRunning"
+        :disabled="isBusy || !canStart"
         icon="i-lucide-play"
         label="Start"
-        :loading="isBusy && !isRunning"
+        :loading="isBusy && canStart"
         block
         @click="run('start_runtime')"
       />
@@ -51,6 +55,7 @@ function run(command: RuntimeCommand) {
         :disabled="isBusy || !canStop"
         icon="i-lucide-square"
         label="Stop"
+        :loading="isStopping"
         variant="subtle"
         block
         @click="run('stop_runtime')"

@@ -2,6 +2,7 @@ export type RuntimeStatus =
   | "idle"
   | "starting"
   | "running"
+  | "stopping"
   | "stopped"
   | "error";
 export type SttProvider = "mock" | "openai";

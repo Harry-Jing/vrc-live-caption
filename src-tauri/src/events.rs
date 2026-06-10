@@ -38,6 +38,7 @@ pub(crate) enum RuntimeStatus {
     Idle,
     Starting,
     Running,
+    Stopping,
     Stopped,
     Error,
 }

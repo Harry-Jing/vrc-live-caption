@@ -4,6 +4,12 @@
 //! upload work. Completed speech segments are sent to a bounded STT worker queue;
 //! per-segment STT or OSC failures emit diagnostics and keep the runtime alive.
 //! Startup failures such as invalid config or unavailable microphone remain fatal.
+//!
+//! Stop is a hard cutoff: the microphone is released within one receive timeout,
+//! buffered and queued speech is discarded instead of drained, and no Chatbox
+//! output is sent after the stop request. Stop still waits for an STT request
+//! that is already in flight, so runtime commands must run off the main thread
+//! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
 
 use crate::audio::{open_input_capture, receive_audio};
 use crate::config::{AppConfig, SttProvider};
@@ -109,16 +115,14 @@ impl RuntimeManager {
     }
 
     pub(crate) fn stop(&self, app: &AppHandle) -> AppResult<()> {
-        let handle = {
-            let mut guard = self
-                .handle
-                .lock()
-                .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
+        // Hold the lock through the join so a concurrent start cannot spawn a
+        // new runtime while the old worker is still finishing its last request.
+        let mut guard = self
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
 
-            guard.take()
-        };
-
-        let Some(handle) = handle else {
+        let Some(handle) = guard.take() else {
             emit_status(
                 app,
                 RuntimeStatus::Stopped,
@@ -128,10 +132,18 @@ impl RuntimeManager {
         };
 
         handle.stop_requested.store(true, Ordering::Relaxed);
-        handle
-            .join_handle
-            .join()
-            .map_err(|_| AppError::runtime("Runtime thread panicked while stopping."))?;
+        emit_status(
+            app,
+            RuntimeStatus::Stopping,
+            Some("Stopping runtime and discarding pending speech".to_string()),
+        )?;
+
+        if handle.join_handle.join().is_err() {
+            let error = AppError::runtime("Runtime thread panicked while stopping.");
+            let _ = emit_status(app, RuntimeStatus::Error, Some(error.to_string()));
+            return Err(error);
+        }
+
         emit_status(
             app,
             RuntimeStatus::Stopped,
@@ -273,6 +285,7 @@ fn run_openai_runtime(
         config.clone(),
         openai_api_key,
         segment_receiver,
+        Arc::clone(&stop_requested),
     )?;
     let mut segmenter = SpeechSegmenter::new(
         sample_rate,
@@ -282,7 +295,7 @@ fn run_openai_runtime(
         MAX_SEGMENT_SECONDS,
     );
     let mut utterance_id: Option<String> = None;
-    let _stream = capture.stream;
+    let stream = capture.stream;
 
     emit_status(
         &app,
@@ -342,20 +355,33 @@ fn run_openai_runtime(
         }
     }
 
-    if let Some(samples) = segmenter.finish() {
-        queue_speech_segment(
-            &app,
-            segmenter.sample_rate(),
-            samples,
-            &mut utterance_id,
-            &segment_sender,
-        )?;
-    }
+    // Stop path: release the microphone before waiting on the worker, and
+    // discard buffered tail speech instead of sending it to STT after stop.
+    drop(stream);
+    let tail_speech_discarded = segmenter.finish().is_some();
 
     drop(segment_sender);
     stt_worker
         .join()
-        .map_err(|_| AppError::runtime("STT worker thread panicked while stopping."))
+        .map_err(|_| AppError::runtime("STT worker thread panicked while stopping."))?;
+
+    if tail_speech_discarded {
+        emit_diagnostic(
+            &app,
+            DiagnosticUpdate {
+                category: DiagnosticCategory::Stt,
+                severity: DiagnosticSeverity::Info,
+                code: "stt.tail_speech_discarded",
+                message: "Unsent speech discarded".to_string(),
+                detail: Some(
+                    "Speech captured just before stop was discarded without transcription."
+                        .to_string(),
+                ),
+            },
+        )?;
+    }
+
+    Ok(())
 }
 
 fn queue_speech_segment(
@@ -399,10 +425,19 @@ fn spawn_stt_worker(
     config: AppConfig,
     openai_api_key: SecretString,
     segment_receiver: Receiver<SpeechSegment>,
+    stop_requested: Arc<AtomicBool>,
 ) -> AppResult<JoinHandle<()>> {
     thread::Builder::new()
         .name("vrc-live-caption-stt-worker".to_string())
-        .spawn(move || run_stt_worker(app, config, openai_api_key, segment_receiver))
+        .spawn(move || {
+            run_stt_worker(
+                app,
+                config,
+                openai_api_key,
+                segment_receiver,
+                stop_requested,
+            )
+        })
         .map_err(|error| AppError::runtime(format!("Failed to start STT worker thread: {error}")))
 }
 
@@ -411,18 +446,24 @@ fn run_stt_worker(
     config: AppConfig,
     openai_api_key: SecretString,
     segment_receiver: Receiver<SpeechSegment>,
+    stop_requested: Arc<AtomicBool>,
 ) {
     let mut last_osc_send: Option<Instant> = None;
+    let mut discarded_segments: usize = 0;
 
     while let Ok(segment) = segment_receiver.recv() {
+        if stop_requested.load(Ordering::Relaxed) {
+            discarded_segments += 1;
+            continue;
+        }
+
         if let Err(error) = transcribe_and_emit_final(
             &app,
             &config,
             &openai_api_key,
-            segment.utterance_id,
-            segment.sample_rate,
-            &segment.samples,
+            segment,
             &mut last_osc_send,
+            &stop_requested,
         ) {
             tracing::warn!(
                 code = error.code(),
@@ -442,16 +483,32 @@ fn run_stt_worker(
             );
         }
     }
+
+    if discarded_segments > 0 {
+        tracing::info!(discarded_segments, "discarded queued speech on stop");
+
+        let _ = emit_diagnostic(
+            &app,
+            DiagnosticUpdate {
+                category: DiagnosticCategory::Stt,
+                severity: DiagnosticSeverity::Info,
+                code: "stt.queued_speech_discarded",
+                message: "Queued speech discarded".to_string(),
+                detail: Some(format!(
+                    "Discarded {discarded_segments} speech segment(s) that were still waiting for STT when the runtime stopped."
+                )),
+            },
+        );
+    }
 }
 
 fn transcribe_and_emit_final(
     app: &AppHandle,
     config: &AppConfig,
     openai_api_key: &SecretString,
-    utterance_id: String,
-    sample_rate: u32,
-    samples: &[f32],
+    segment: SpeechSegment,
     last_osc_send: &mut Option<Instant>,
+    stop_requested: &AtomicBool,
 ) -> AppResult<()> {
     emit_diagnostic(
         app,
@@ -462,12 +519,17 @@ fn transcribe_and_emit_final(
             message: "Sending speech segment to STT".to_string(),
             detail: Some(format!(
                 "Captured {:.1} seconds for final transcription.",
-                samples.len() as f32 / sample_rate as f32
+                segment.samples.len() as f32 / segment.sample_rate as f32
             )),
         },
     )?;
 
-    let text = transcribe_openai_wav(&config.stt, openai_api_key, sample_rate, samples)?;
+    let text = transcribe_openai_wav(
+        &config.stt,
+        openai_api_key,
+        segment.sample_rate,
+        &segment.samples,
+    )?;
 
     if text.is_empty() {
         return emit_diagnostic(
@@ -485,13 +547,30 @@ fn transcribe_and_emit_final(
     emit_transcript_final(
         app,
         TranscriptUpdate {
-            utterance_id,
+            utterance_id: segment.utterance_id,
             text: text.clone(),
             language: config.stt.language.clone(),
             provider: config.stt.provider.as_str().to_string(),
             revision: 2,
         },
     )?;
+
+    // This segment was transcribed while stop was requested: keep the App
+    // preview, but never send Chatbox output after the user asked to stop.
+    if stop_requested.load(Ordering::Relaxed) {
+        return emit_diagnostic(
+            app,
+            DiagnosticUpdate {
+                category: DiagnosticCategory::Osc,
+                severity: DiagnosticSeverity::Info,
+                code: "osc.send_skipped_on_stop",
+                message: "Chatbox send skipped".to_string(),
+                detail: Some(
+                    "Runtime stop was requested before this transcript could be sent.".to_string(),
+                ),
+            },
+        );
+    }
 
     if !config.osc.enabled {
         return emit_diagnostic(

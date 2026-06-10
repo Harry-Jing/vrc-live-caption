@@ -1,3 +1,10 @@
+//! Tauri commands exposed to the frontend.
+//!
+//! Every command is `#[tauri::command(async)]` so it runs off the main thread:
+//! these handlers block on file I/O, the OS credential store, audio device
+//! enumeration, UDP sends, or runtime thread joins, and a plain sync command
+//! would freeze the window for that duration.
+
 use crate::audio::{AudioInputDevice, list_input_devices};
 use crate::config::{AppConfig, SttProvider};
 use crate::error::AppResult;
@@ -14,12 +21,12 @@ use crate::secrets::{
 use crate::state::AppState;
 use tauri::{AppHandle, State};
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_app_config(app: AppHandle, state: State<'_, AppState>) -> AppResult<AppConfig> {
     state.load_config(&app)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_app_config(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -41,7 +48,7 @@ pub(crate) fn save_app_config(
     Ok(saved_config)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_audio_input_devices(app: AppHandle) -> AppResult<Vec<AudioInputDevice>> {
     let devices = list_input_devices()?;
 
@@ -62,7 +69,7 @@ pub(crate) fn list_audio_input_devices(app: AppHandle) -> AppResult<Vec<AudioInp
     Ok(devices)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn start_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let config = state.config()?;
 
@@ -70,13 +77,13 @@ pub(crate) fn start_runtime(app: AppHandle, state: State<'_, AppState>) -> AppRe
     state.runtime.start(app, config)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn stop_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     tracing::info!("stopping outgoing caption runtime");
     state.runtime.stop(&app)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn start_mock_runtime(app: AppHandle) -> AppResult<()> {
     tracing::info!("starting mock runtime");
 
@@ -102,7 +109,7 @@ pub(crate) fn start_mock_runtime(app: AppHandle) -> AppResult<()> {
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let config = state.config()?;
     let utterance_id = next_utterance_id("mock");
@@ -146,7 +153,7 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn emit_mock_diagnostic(app: AppHandle) -> AppResult<()> {
     tracing::info!("emitting mock diagnostic");
 
@@ -162,7 +169,7 @@ pub(crate) fn emit_mock_diagnostic(app: AppHandle) -> AppResult<()> {
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let config = state.config()?;
 
@@ -211,12 +218,12 @@ pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) 
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_provider_secret_status(provider: SttProvider) -> AppResult<ProviderSecretStatus> {
     Ok(provider_secret_status(provider))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_provider_secret(
     app: AppHandle,
     provider: SttProvider,
@@ -240,7 +247,7 @@ pub(crate) fn save_provider_secret(
     Ok(provider_secret_status(provider))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_provider_secret(
     app: AppHandle,
     provider: SttProvider,

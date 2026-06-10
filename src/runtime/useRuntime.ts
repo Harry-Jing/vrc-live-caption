@@ -286,6 +286,13 @@ export function useRuntime() {
       addUnlistener(
         await listen<RuntimeStatusEvent>(RUNTIME_EVENTS.status, (event) => {
           runtimeStatus.value = event.payload;
+
+          if (
+            event.payload.status === "stopped" ||
+            event.payload.status === "error"
+          ) {
+            partialTranscript.value = null;
+          }
         }),
       );
 
