@@ -35,8 +35,11 @@ const RECEIVE_TIMEOUT: Duration = Duration::from_millis(100);
 const STT_QUEUE_CAPACITY: usize = 2;
 const SPEECH_RMS_THRESHOLD: f32 = 0.012;
 const SILENCE_TIMEOUT: Duration = Duration::from_millis(1200);
-const MIN_SEGMENT_SECONDS: f32 = 0.7;
+// Voiced audio only; long enough to drop clicks and pops, short enough to
+// keep one-word utterances such as "Yes".
+const MIN_VOICED_SECONDS: f32 = 0.3;
 const MAX_SEGMENT_SECONDS: f32 = 12.0;
+const PREROLL_SECONDS: f32 = 0.25;
 
 pub(crate) struct RuntimeManager {
     handle: Mutex<Option<RuntimeHandle>>,
@@ -291,8 +294,9 @@ fn run_openai_runtime(
         sample_rate,
         SPEECH_RMS_THRESHOLD,
         SILENCE_TIMEOUT,
-        MIN_SEGMENT_SECONDS,
+        MIN_VOICED_SECONDS,
         MAX_SEGMENT_SECONDS,
+        PREROLL_SECONDS,
     );
     let mut utterance_id: Option<String> = None;
     let stream = capture.stream;
