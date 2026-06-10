@@ -1,13 +1,12 @@
 use crate::config::SttConfig;
 use crate::error::{AppError, AppResult};
 use reqwest::blocking::multipart::{Form, Part};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
-use std::env;
 use std::io::Cursor;
 use std::time::Duration;
 
 const OPENAI_TRANSCRIPTIONS_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
-const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
 #[derive(Deserialize)]
 struct OpenAiTranscriptionResponse {
@@ -16,10 +15,10 @@ struct OpenAiTranscriptionResponse {
 
 pub(crate) fn transcribe_openai_wav(
     config: &SttConfig,
+    api_key: &SecretString,
     sample_rate: u32,
     samples: &[f32],
 ) -> AppResult<String> {
-    let api_key = openai_api_key()?;
     let wav_bytes = encode_wav(sample_rate, samples)?;
     let part = Part::bytes(wav_bytes)
         .file_name("speech.wav")
@@ -36,7 +35,7 @@ pub(crate) fn transcribe_openai_wav(
         .map_err(|error| AppError::stt(format!("Failed to create STT client: {error}")))?;
     let response = client
         .post(OPENAI_TRANSCRIPTIONS_URL)
-        .bearer_auth(api_key)
+        .bearer_auth(api_key.expose_secret())
         .multipart(form)
         .send()
         .map_err(|error| AppError::stt(format!("STT request failed: {error}")))?;
@@ -56,18 +55,6 @@ pub(crate) fn transcribe_openai_wav(
         .map_err(|error| AppError::stt(format!("Failed to parse STT response: {error}")))?;
 
     Ok(parsed.text.trim().to_string())
-}
-
-pub(crate) fn ensure_openai_api_key() -> AppResult<()> {
-    openai_api_key().map(|_| ())
-}
-
-fn openai_api_key() -> AppResult<String> {
-    env::var(OPENAI_API_KEY_ENV).map_err(|_| {
-        AppError::stt(format!(
-            "Missing {OPENAI_API_KEY_ENV}. Set it in the environment before starting cloud STT."
-        ))
-    })
 }
 
 fn encode_wav(sample_rate: u32, samples: &[f32]) -> AppResult<Vec<u8>> {

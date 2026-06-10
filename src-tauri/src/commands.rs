@@ -1,5 +1,5 @@
 use crate::audio::{AudioInputDevice, list_input_devices};
-use crate::config::AppConfig;
+use crate::config::{AppConfig, SttProvider};
 use crate::error::AppResult;
 use crate::events::{
     DiagnosticCategory, DiagnosticSeverity, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate,
@@ -7,6 +7,10 @@ use crate::events::{
     next_utterance_id,
 };
 use crate::osc::{OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE, send_chatbox_osc};
+use crate::secrets::{
+    ProviderSecretStatus, delete_provider_secret as delete_secret, provider_secret_status,
+    save_provider_secret as save_secret,
+};
 use crate::state::AppState;
 use tauri::{AppHandle, State};
 
@@ -205,4 +209,54 @@ pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) 
             Err(error)
         }
     }
+}
+
+#[tauri::command]
+pub(crate) fn get_provider_secret_status(provider: SttProvider) -> AppResult<ProviderSecretStatus> {
+    Ok(provider_secret_status(provider))
+}
+
+#[tauri::command]
+pub(crate) fn save_provider_secret(
+    app: AppHandle,
+    provider: SttProvider,
+    secret: String,
+) -> AppResult<ProviderSecretStatus> {
+    save_secret(provider, secret)?;
+
+    emit_diagnostic(
+        &app,
+        DiagnosticUpdate {
+            category: DiagnosticCategory::Config,
+            severity: DiagnosticSeverity::Info,
+            code: "config.provider_secret_saved",
+            message: "Provider API key saved".to_string(),
+            detail: Some(
+                "The API key was saved in the system credential store, not app config.".to_string(),
+            ),
+        },
+    )?;
+
+    Ok(provider_secret_status(provider))
+}
+
+#[tauri::command]
+pub(crate) fn delete_provider_secret(
+    app: AppHandle,
+    provider: SttProvider,
+) -> AppResult<ProviderSecretStatus> {
+    delete_secret(provider)?;
+
+    emit_diagnostic(
+        &app,
+        DiagnosticUpdate {
+            category: DiagnosticCategory::Config,
+            severity: DiagnosticSeverity::Info,
+            code: "config.provider_secret_deleted",
+            message: "Provider API key removed".to_string(),
+            detail: Some("The saved provider API key was removed from secure storage.".to_string()),
+        },
+    )?;
+
+    Ok(provider_secret_status(provider))
 }

@@ -20,6 +20,9 @@ importers:
       vue:
         specifier: ^3.5.34
         version: 3.5.34(typescript@6.0.3)
+      vue-router:
+        specifier: ^5.0.6
+        version: 5.0.6(@vue/compiler-sfc@3.5.34)(vue@3.5.34(typescript@6.0.3))
     devDependencies:
       '@commitlint/cli':
         specifier: ^20.5.3
@@ -2856,7 +2859,6 @@ snapshots:
       '@jridgewell/gen-mapping': 0.3.13
       '@jridgewell/trace-mapping': 0.3.31
       jsesc: 3.1.0
-    optional: true
 
   '@babel/helper-string-parser@7.27.1': {}
 
@@ -4046,7 +4048,6 @@ snapshots:
       unplugin-utils: 0.3.1
     optionalDependencies:
       vue: 3.5.34(typescript@6.0.3)
-    optional: true
 
   '@vue/compiler-core@3.5.33':
     dependencies:
@@ -4094,7 +4095,6 @@ snapshots:
   '@vue/devtools-api@8.1.1':
     dependencies:
       '@vue/devtools-kit': 8.1.1
-    optional: true
 
   '@vue/devtools-kit@8.1.1':
     dependencies:
@@ -4102,10 +4102,8 @@ snapshots:
       birpc: 2.9.0
       hookable: 5.5.3
       perfect-debounce: 2.1.0
-    optional: true
 
-  '@vue/devtools-shared@8.1.1':
-    optional: true
+  '@vue/devtools-shared@8.1.1': {}
 
   '@vue/eslint-config-typescript@14.7.0(eslint-plugin-vue@10.9.1(@typescript-eslint/parser@8.59.2(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3))(eslint@10.3.0(jiti@2.7.0))(vue-eslint-parser@10.4.0(eslint@10.3.0(jiti@2.7.0))))(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)':
     dependencies:
@@ -4246,18 +4244,15 @@ snapshots:
     dependencies:
       '@babel/parser': 7.29.3
       pathe: 2.0.3
-    optional: true
 
   ast-walker-scope@0.8.3:
     dependencies:
       '@babel/parser': 7.29.3
       ast-kit: 2.2.0
-    optional: true
 
   balanced-match@4.0.4: {}
 
-  birpc@2.9.0:
-    optional: true
+  birpc@2.9.0: {}
 
   boolbase@1.0.0: {}
 
@@ -4730,8 +4725,7 @@ snapshots:
 
   hey-listen@1.0.8: {}
 
-  hookable@5.5.3:
-    optional: true
+  hookable@5.5.3: {}
 
   hookable@6.1.1: {}
 
@@ -4788,8 +4782,7 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
-  jsesc@3.1.0:
-    optional: true
+  jsesc@3.1.0: {}
 
   json-buffer@3.0.1: {}
 
@@ -4801,8 +4794,7 @@ snapshots:
 
   json-stable-stringify-without-jsonify@1.0.1: {}
 
-  json5@2.2.3:
-    optional: true
+  json5@2.2.3: {}
 
   keyv@4.5.4:
     dependencies:
@@ -4942,7 +4934,6 @@ snapshots:
   magic-string-ast@1.0.3:
     dependencies:
       magic-string: 0.30.21
-    optional: true
 
   magic-string@0.30.21:
     dependencies:
@@ -5521,7 +5512,6 @@ snapshots:
       yaml: 2.8.4
     optionalDependencies:
       '@vue/compiler-sfc': 3.5.34
-    optional: true
 
   vue-tsc@3.2.8(typescript@6.0.3):
     dependencies:
@@ -5566,8 +5556,7 @@ snapshots:
 
   y18n@5.0.8: {}
 
-  yaml@2.8.4:
-    optional: true
+  yaml@2.8.4: {}
 
   yargs-parser@21.1.1: {}
 

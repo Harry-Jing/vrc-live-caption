@@ -8,7 +8,6 @@ export default defineConfig({
     vue(),
     ui({
       dts: false,
-      router: false,
     }),
   ],
 

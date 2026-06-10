@@ -5,6 +5,7 @@ export type RuntimeStatus =
   | "stopped"
   | "error";
 export type SttProvider = "mock" | "openai";
+export type ProviderSecretStorage = "systemCredentialStore" | "environment";
 export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";
 export type DiagnosticSeverity = "info" | "warning" | "error";
 export type TranscriptKind = "partial" | "stable" | "final";
@@ -48,6 +49,14 @@ export type AudioInputDevice = {
   id: string;
   name: string;
   isDefault: boolean;
+};
+
+export type ProviderSecretStatus = {
+  provider: SttProvider;
+  configured: boolean;
+  storage: ProviderSecretStorage | null;
+  displaySuffix: string | null;
+  error: string | null;
 };
 
 export type RuntimeStatusEvent = {

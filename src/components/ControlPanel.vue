@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from "vue";
-import { formatTime } from "../runtime/format";
+import { computed, reactive, ref, watch } from "vue";
 import type {
   AppConfig,
   AudioInputDevice,
-  RuntimeCommand,
-  RuntimeStatusEvent,
+  ProviderSecretStatus,
   SttProvider,
 } from "../runtime/types";
 
@@ -14,13 +12,14 @@ const props = defineProps<{
   audioInputDevices: AudioInputDevice[];
   config: AppConfig | null;
   isBusy: boolean;
-  runtimeStatus: RuntimeStatusEvent;
+  openAiSecretStatus: ProviderSecretStatus | null;
 }>();
 
 const emit = defineEmits<{
+  deleteProviderSecret: [provider: SttProvider];
   refreshDevices: [];
-  run: [command: RuntimeCommand];
   saveConfig: [config: AppConfig];
+  saveProviderSecret: [provider: SttProvider, secret: string];
 }>();
 
 const form = reactive<AppConfig>({
@@ -42,11 +41,30 @@ const form = reactive<AppConfig>({
     showPartial: true,
   },
 });
+const apiKeyInput = ref("");
 
-const isRunning = computed(() => props.runtimeStatus.status === "running");
-const canStop = computed(() =>
-  ["starting", "running", "error"].includes(props.runtimeStatus.status),
+const canSaveOpenAiApiKey = computed(
+  () => form.stt.provider === "openai" && apiKeyInput.value.trim().length > 0,
 );
+const openAiSecretLabel = computed(() => {
+  const status = props.openAiSecretStatus;
+
+  if (!status) {
+    return "Checking";
+  }
+
+  if (!status.configured) {
+    return "Not saved";
+  }
+
+  const suffix = status.displaySuffix ? `...${status.displaySuffix}` : "saved";
+
+  if (status.storage === "environment") {
+    return `Env ${suffix}`;
+  }
+
+  return `System ${suffix}`;
+});
 const selectedInputDevice = computed({
   get() {
     return form.audio.inputDeviceId ?? "";
@@ -76,9 +94,14 @@ watch(
   { immediate: true },
 );
 
-function run(command: RuntimeCommand) {
-  emit("run", command);
-}
+watch(
+  () => props.openAiSecretStatus,
+  (status) => {
+    if (status?.configured) {
+      apiKeyInput.value = "";
+    }
+  },
+);
 
 function save() {
   emit("saveConfig", {
@@ -105,6 +128,14 @@ function save() {
 function setProvider(event: Event) {
   form.stt.provider = (event.target as HTMLSelectElement).value as SttProvider;
 }
+
+function saveOpenAiApiKey() {
+  emit("saveProviderSecret", "openai", apiKeyInput.value);
+}
+
+function deleteOpenAiApiKey() {
+  emit("deleteProviderSecret", "openai");
+}
 </script>
 
 <template>
@@ -112,57 +143,25 @@ function setProvider(event: Event) {
     <template #header>
       <div class="flex items-start justify-between gap-4">
         <div>
-          <h2 class="text-base font-semibold text-highlighted">
-            Outgoing Caption
-          </h2>
+          <h2 class="text-base font-semibold text-highlighted">Settings</h2>
           <p class="mt-1 text-sm text-muted">
-            {{ runtimeStatus.message ?? "No runtime status message." }}
+            Configure capture, provider credentials, and Chatbox output.
           </p>
         </div>
-        <UBadge color="primary" variant="subtle" class="capitalize">
-          {{ runtimeStatus.status }}
-        </UBadge>
+        <UButton
+          :disabled="isBusy"
+          icon="i-lucide-refresh-cw"
+          label="Devices"
+          size="sm"
+          variant="ghost"
+          @click="emit('refreshDevices')"
+        />
       </div>
     </template>
 
-    <div class="grid gap-3 sm:grid-cols-2">
-      <UButton
-        :disabled="isBusy || isRunning"
-        icon="i-lucide-play"
-        label="Start"
-        :loading="isBusy && !isRunning"
-        block
-        @click="run('start_runtime')"
-      />
-      <UButton
-        :disabled="isBusy || !canStop"
-        icon="i-lucide-square"
-        label="Stop"
-        variant="subtle"
-        block
-        @click="run('stop_runtime')"
-      />
-      <UButton
-        :disabled="isBusy"
-        icon="i-lucide-message-square-text"
-        label="Mock Transcript"
-        variant="subtle"
-        block
-        @click="run('emit_mock_transcript')"
-      />
-      <UButton
-        :disabled="isBusy"
-        icon="i-lucide-radio"
-        label="OSC Test"
-        variant="subtle"
-        block
-        @click="run('send_osc_test_message')"
-      />
-    </div>
-
     <UAlert
       v-if="actionError"
-      class="mt-4"
+      class="mb-4"
       color="error"
       icon="i-lucide-circle-alert"
       title="Action failed"
@@ -170,141 +169,202 @@ function setProvider(event: Event) {
       variant="subtle"
     />
 
-    <USeparator class="my-5" />
+    <form class="grid gap-5" @submit.prevent="save">
+      <section class="grid gap-4">
+        <h3 class="text-sm font-semibold text-highlighted">Audio</h3>
 
-    <form class="grid gap-4" @submit.prevent="save">
-      <div class="grid gap-2">
-        <div class="flex items-center justify-between gap-3">
+        <div class="grid gap-2">
           <label class="text-sm font-medium text-highlighted" for="audio-input">
             Microphone
           </label>
-          <UButton
-            :disabled="isBusy"
-            icon="i-lucide-refresh-cw"
-            size="xs"
-            variant="ghost"
-            @click="emit('refreshDevices')"
+          <select
+            id="audio-input"
+            v-model="selectedInputDevice"
+            class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
+          >
+            <option value="">Default input device</option>
+            <option
+              v-for="device in audioInputDevices"
+              :key="device.id"
+              :value="device.id"
+            >
+              {{ device.name }}{{ device.isDefault ? " (default)" : "" }}
+            </option>
+          </select>
+        </div>
+      </section>
+
+      <USeparator />
+
+      <section class="grid gap-4">
+        <h3 class="text-sm font-semibold text-highlighted">Speech provider</h3>
+
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="grid gap-2">
+            <label
+              class="text-sm font-medium text-highlighted"
+              for="stt-provider"
+            >
+              Provider
+            </label>
+            <select
+              id="stt-provider"
+              :value="form.stt.provider"
+              class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
+              @change="setProvider"
+            >
+              <option value="openai">OpenAI</option>
+              <option value="mock">Mock</option>
+            </select>
+          </div>
+
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-highlighted" for="language">
+              Language
+            </label>
+            <input
+              id="language"
+              v-model="form.stt.language"
+              class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
+              type="text"
+            />
+          </div>
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-sm font-medium text-highlighted" for="stt-model">
+            STT model
+          </label>
+          <input
+            id="stt-model"
+            v-model="form.stt.model"
+            class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
+            type="text"
           />
         </div>
-        <select
-          id="audio-input"
-          v-model="selectedInputDevice"
-          class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-        >
-          <option value="">Default input device</option>
-          <option
-            v-for="device in audioInputDevices"
-            :key="device.id"
-            :value="device.id"
-          >
-            {{ device.name }}{{ device.isDefault ? " (default)" : "" }}
-          </option>
-        </select>
-      </div>
 
-      <div class="grid gap-3 sm:grid-cols-2">
+        <div
+          v-if="form.stt.provider === 'openai'"
+          class="grid gap-3 rounded-md border border-default bg-muted/30 p-3"
+        >
+          <div class="flex items-center justify-between gap-3">
+            <label
+              class="text-sm font-medium text-highlighted"
+              for="openai-api-key"
+            >
+              OpenAI API key
+            </label>
+            <UBadge color="primary" variant="subtle">
+              {{ openAiSecretLabel }}
+            </UBadge>
+          </div>
+
+          <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+            <input
+              id="openai-api-key"
+              v-model="apiKeyInput"
+              autocomplete="off"
+              autocapitalize="off"
+              class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
+              inputmode="text"
+              placeholder="sk-..."
+              spellcheck="false"
+              type="password"
+            />
+            <UButton
+              :disabled="isBusy || !canSaveOpenAiApiKey"
+              icon="i-lucide-key-round"
+              label="Save Key"
+              type="button"
+              variant="subtle"
+              @click="saveOpenAiApiKey"
+            />
+            <UButton
+              v-if="openAiSecretStatus?.storage === 'systemCredentialStore'"
+              :disabled="isBusy"
+              color="neutral"
+              icon="i-lucide-trash-2"
+              label="Remove"
+              type="button"
+              variant="ghost"
+              @click="deleteOpenAiApiKey"
+            />
+          </div>
+
+          <p v-if="openAiSecretStatus?.error" class="text-xs text-error">
+            {{ openAiSecretStatus.error }}
+          </p>
+        </div>
+      </section>
+
+      <USeparator />
+
+      <section class="grid gap-4">
+        <h3 class="text-sm font-semibold text-highlighted">Chatbox output</h3>
+
+        <div class="grid gap-3 sm:grid-cols-[1fr_96px]">
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-highlighted" for="osc-host">
+              OSC host
+            </label>
+            <input
+              id="osc-host"
+              v-model="form.osc.host"
+              class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
+              type="text"
+            />
+          </div>
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-highlighted" for="osc-port">
+              Port
+            </label>
+            <input
+              id="osc-port"
+              v-model.number="form.osc.port"
+              class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
+              min="1"
+              max="65535"
+              type="number"
+            />
+          </div>
+        </div>
+
         <div class="grid gap-2">
           <label
             class="text-sm font-medium text-highlighted"
-            for="stt-provider"
+            for="osc-interval"
           >
-            STT provider
-          </label>
-          <select
-            id="stt-provider"
-            :value="form.stt.provider"
-            class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-            @change="setProvider"
-          >
-            <option value="openai">OpenAI</option>
-            <option value="mock">Mock</option>
-          </select>
-        </div>
-
-        <div class="grid gap-2">
-          <label class="text-sm font-medium text-highlighted" for="language">
-            Language
+            OSC interval (ms)
           </label>
           <input
-            id="language"
-            v-model="form.stt.language"
+            id="osc-interval"
+            v-model.number="form.osc.minIntervalMs"
             class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-            type="text"
-          />
-        </div>
-      </div>
-
-      <div class="grid gap-2">
-        <label class="text-sm font-medium text-highlighted" for="stt-model">
-          STT model
-        </label>
-        <input
-          id="stt-model"
-          v-model="form.stt.model"
-          class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-          type="text"
-        />
-      </div>
-
-      <div class="grid gap-3 sm:grid-cols-[1fr_96px]">
-        <div class="grid gap-2">
-          <label class="text-sm font-medium text-highlighted" for="osc-host">
-            OSC host
-          </label>
-          <input
-            id="osc-host"
-            v-model="form.osc.host"
-            class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-            type="text"
-          />
-        </div>
-        <div class="grid gap-2">
-          <label class="text-sm font-medium text-highlighted" for="osc-port">
-            Port
-          </label>
-          <input
-            id="osc-port"
-            v-model.number="form.osc.port"
-            class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-            min="1"
-            max="65535"
+            min="500"
+            step="100"
             type="number"
           />
         </div>
-      </div>
 
-      <div class="grid gap-3 sm:grid-cols-2">
-        <label class="flex items-center gap-2 text-sm text-highlighted">
-          <input
-            v-model="form.osc.enabled"
-            class="size-4 accent-primary"
-            type="checkbox"
-          />
-          Chatbox output
-        </label>
-        <label class="flex items-center gap-2 text-sm text-highlighted">
-          <input
-            v-model="form.ui.showPartial"
-            class="size-4 accent-primary"
-            type="checkbox"
-          />
-          App partial preview
-        </label>
-      </div>
-
-      <div class="grid gap-2">
-        <label class="text-sm font-medium text-highlighted" for="osc-interval">
-          OSC interval (ms)
-        </label>
-        <input
-          id="osc-interval"
-          v-model.number="form.osc.minIntervalMs"
-          class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-          min="500"
-          step="100"
-          type="number"
-        />
-      </div>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="flex items-center gap-2 text-sm text-highlighted">
+            <input
+              v-model="form.osc.enabled"
+              class="size-4 accent-primary"
+              type="checkbox"
+            />
+            Chatbox output
+          </label>
+          <label class="flex items-center gap-2 text-sm text-highlighted">
+            <input
+              v-model="form.ui.showPartial"
+              class="size-4 accent-primary"
+              type="checkbox"
+            />
+            App partial preview
+          </label>
+        </div>
+      </section>
 
       <UButton
         :disabled="isBusy || !config"
@@ -315,28 +375,5 @@ function setProvider(event: Event) {
         block
       />
     </form>
-
-    <USeparator class="my-5" />
-
-    <div class="grid gap-3 text-sm">
-      <div class="flex items-center justify-between gap-4">
-        <span class="text-muted">Last status update</span>
-        <span class="font-medium text-highlighted">
-          {{ formatTime(runtimeStatus.timestampMs) }}
-        </span>
-      </div>
-      <div class="flex items-center justify-between gap-4">
-        <span class="text-muted">Audio input</span>
-        <span class="text-right font-medium text-highlighted">
-          {{ config?.audio.inputDeviceId ?? "Default device" }}
-        </span>
-      </div>
-      <div class="flex items-center justify-between gap-4">
-        <span class="text-muted">OSC target</span>
-        <span class="font-medium text-highlighted">
-          {{ config ? `${config.osc.host}:${config.osc.port}` : "loading" }}
-        </span>
-      </div>
-    </div>
   </UCard>
 </template>

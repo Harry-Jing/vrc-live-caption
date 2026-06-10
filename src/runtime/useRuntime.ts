@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
@@ -6,10 +6,32 @@ import {
   type AudioInputDevice,
   type AppConfig,
   type DiagnosticEvent,
+  type ProviderSecretStatus,
   type RuntimeCommand,
   type RuntimeStatusEvent,
+  type SttProvider,
   type TranscriptEvent,
 } from "./types";
+
+const defaultConfig: AppConfig = {
+  audio: {
+    inputDeviceId: null,
+  },
+  stt: {
+    provider: "openai",
+    language: "en",
+    model: "gpt-4o-mini-transcribe",
+  },
+  osc: {
+    host: "127.0.0.1",
+    port: 9000,
+    enabled: true,
+    minIntervalMs: 1200,
+  },
+  ui: {
+    showPartial: true,
+  },
+};
 
 function normalizeError(error: unknown) {
   if (typeof error === "string") {
@@ -28,9 +50,16 @@ function normalizeError(error: unknown) {
   return "Action failed.";
 }
 
+function desktopAppRequiredError() {
+  return new Error("This feature requires the Tauri desktop app.");
+}
+
 export function useRuntime() {
+  const isTauriApp = isTauri();
+  const browserPreviewEnabled = import.meta.env.DEV && !isTauriApp;
   const audioInputDevices = ref<AudioInputDevice[]>([]);
   const config = ref<AppConfig | null>(null);
+  const openAiSecretStatus = ref<ProviderSecretStatus | null>(null);
   const runtimeStatus = ref<RuntimeStatusEvent>({
     status: "idle",
     message: "Runtime is idle",
@@ -63,6 +92,15 @@ export function useRuntime() {
     isBusy.value = true;
 
     try {
+      if (!isTauriApp) {
+        if (browserPreviewEnabled) {
+          runBrowserPreviewCommand(command);
+          return;
+        }
+
+        throw desktopAppRequiredError();
+      }
+
       await invoke(command);
     } catch (error) {
       actionError.value = normalizeError(error);
@@ -76,9 +114,97 @@ export function useRuntime() {
     isBusy.value = true;
 
     try {
+      if (!isTauriApp) {
+        if (browserPreviewEnabled) {
+          config.value = nextConfig;
+          return;
+        }
+
+        throw desktopAppRequiredError();
+      }
+
       config.value = await invoke<AppConfig>("save_app_config", {
         config: nextConfig,
       });
+    } catch (error) {
+      actionError.value = normalizeError(error);
+    } finally {
+      isBusy.value = false;
+    }
+  }
+
+  async function loadProviderSecretStatus(provider: SttProvider) {
+    actionError.value = "";
+
+    try {
+      if (!isTauriApp) {
+        if (browserPreviewEnabled) {
+          setBrowserPreviewSecretStatus(provider);
+          return;
+        }
+
+        throw desktopAppRequiredError();
+      }
+
+      const status = await invoke<ProviderSecretStatus>(
+        "get_provider_secret_status",
+        { provider },
+      );
+
+      if (provider === "openai") {
+        openAiSecretStatus.value = status;
+      }
+    } catch (error) {
+      actionError.value = normalizeError(error);
+    }
+  }
+
+  async function saveProviderSecret(provider: SttProvider, secret: string) {
+    actionError.value = "";
+    isBusy.value = true;
+
+    try {
+      if (!isTauriApp) {
+        throw desktopAppRequiredError();
+      }
+
+      const status = await invoke<ProviderSecretStatus>(
+        "save_provider_secret",
+        { provider, secret },
+      );
+
+      if (provider === "openai") {
+        openAiSecretStatus.value = status;
+      }
+    } catch (error) {
+      actionError.value = normalizeError(error);
+    } finally {
+      isBusy.value = false;
+    }
+  }
+
+  async function deleteProviderSecret(provider: SttProvider) {
+    actionError.value = "";
+    isBusy.value = true;
+
+    try {
+      if (!isTauriApp) {
+        if (browserPreviewEnabled) {
+          setBrowserPreviewSecretStatus(provider);
+          return;
+        }
+
+        throw desktopAppRequiredError();
+      }
+
+      const status = await invoke<ProviderSecretStatus>(
+        "delete_provider_secret",
+        { provider },
+      );
+
+      if (provider === "openai") {
+        openAiSecretStatus.value = status;
+      }
     } catch (error) {
       actionError.value = normalizeError(error);
     } finally {
@@ -90,6 +216,15 @@ export function useRuntime() {
     actionError.value = "";
 
     try {
+      if (!isTauriApp) {
+        if (browserPreviewEnabled) {
+          config.value = { ...defaultConfig };
+          return;
+        }
+
+        throw desktopAppRequiredError();
+      }
+
       config.value = await invoke<AppConfig>("get_app_config");
     } catch (error) {
       actionError.value = normalizeError(error);
@@ -100,6 +235,21 @@ export function useRuntime() {
     actionError.value = "";
 
     try {
+      if (!isTauriApp) {
+        if (browserPreviewEnabled) {
+          audioInputDevices.value = [
+            {
+              id: "browser-preview-default",
+              name: "Browser preview device",
+              isDefault: true,
+            },
+          ];
+          return;
+        }
+
+        throw desktopAppRequiredError();
+      }
+
       audioInputDevices.value = await invoke<AudioInputDevice[]>(
         "list_audio_input_devices",
       );
@@ -124,6 +274,14 @@ export function useRuntime() {
   }
 
   async function registerRuntimeListeners() {
+    if (!isTauriApp) {
+      if (browserPreviewEnabled) {
+        return;
+      }
+
+      throw desktopAppRequiredError();
+    }
+
     try {
       addUnlistener(
         await listen<RuntimeStatusEvent>(RUNTIME_EVENTS.status, (event) => {
@@ -168,11 +326,81 @@ export function useRuntime() {
     try {
       await registerRuntimeListeners();
       await loadConfig();
+      await loadProviderSecretStatus("openai");
       await loadAudioInputDevices();
     } catch (error) {
       actionError.value = normalizeError(error);
     }
   });
+
+  function runBrowserPreviewCommand(command: RuntimeCommand) {
+    const timestampMs = Date.now();
+    const timestampId = String(timestampMs);
+
+    if (command === "start_runtime" || command === "start_mock_runtime") {
+      runtimeStatus.value = {
+        status: "running",
+        message: "Browser preview runtime is running",
+        timestampMs,
+      };
+      return;
+    }
+
+    if (command === "stop_runtime") {
+      runtimeStatus.value = {
+        status: "stopped",
+        message: "Browser preview runtime stopped",
+        timestampMs,
+      };
+      return;
+    }
+
+    if (command === "emit_mock_transcript") {
+      const transcript: TranscriptEvent = {
+        id: `browser-transcript-${timestampId}`,
+        utteranceId: `browser-${timestampId}`,
+        kind: "final",
+        text: "Testing live caption preview from the browser UI.",
+        language: config.value?.stt.language ?? "en",
+        provider: config.value?.stt.provider ?? "mock",
+        revision: 1,
+        timestampMs,
+      };
+
+      partialTranscript.value = null;
+      finalTranscripts.value = [transcript, ...finalTranscripts.value].slice(
+        0,
+        5,
+      );
+      return;
+    }
+
+    const diagnostic: DiagnosticEvent = {
+      id: `browser-diagnostic-${timestampId}`,
+      category: "osc",
+      severity: "info",
+      code: "browser.preview_action",
+      message: "Browser preview action",
+      detail: "Desktop-only command was simulated for UI preview.",
+      timestampMs,
+    };
+
+    diagnostics.value = [diagnostic, ...diagnostics.value].slice(0, 8);
+  }
+
+  function setBrowserPreviewSecretStatus(provider: SttProvider) {
+    if (provider !== "openai") {
+      return;
+    }
+
+    openAiSecretStatus.value = {
+      provider,
+      configured: false,
+      storage: null,
+      displaySuffix: null,
+      error: null,
+    };
+  }
 
   onBeforeUnmount(() => {
     isUnmounted = true;
@@ -188,9 +416,13 @@ export function useRuntime() {
     finalTranscripts,
     isBusy,
     loadAudioInputDevices,
+    loadProviderSecretStatus,
+    openAiSecretStatus,
     partialTranscript,
+    deleteProviderSecret,
     runCommand,
     saveConfig,
+    saveProviderSecret,
     runtimeStatus,
   };
 }

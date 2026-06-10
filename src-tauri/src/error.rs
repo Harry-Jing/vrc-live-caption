@@ -37,6 +37,9 @@ pub(crate) enum AppError {
     Runtime {
         message: String,
     },
+    Secret {
+        message: String,
+    },
     State {
         message: String,
     },
@@ -100,6 +103,12 @@ impl AppError {
         }
     }
 
+    pub(crate) fn secret(message: impl Into<String>) -> Self {
+        Self::Secret {
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn state(message: impl Into<String>) -> Self {
         Self::State {
             message: message.into(),
@@ -129,6 +138,7 @@ impl AppError {
             Self::OscSend { .. } => "osc_send_failed",
             Self::OscSendIncomplete { .. } => "osc_send_incomplete",
             Self::Runtime { .. } => "runtime_failed",
+            Self::Secret { .. } => "secret_failed",
             Self::State { .. } => "state_failed",
             Self::Stt { .. } => "stt_failed",
             Self::Wav { .. } => "wav_encode_failed",
@@ -158,6 +168,7 @@ impl AppError {
                 sent,
             } => format!("Sent an incomplete OSC datagram to {target}: {sent} of {expected} bytes"),
             Self::Runtime { message } => message.clone(),
+            Self::Secret { message } => message.clone(),
             Self::State { message } => message.clone(),
             Self::Stt { message } => message.clone(),
             Self::Wav { message } => message.clone(),

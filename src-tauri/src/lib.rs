@@ -5,6 +5,7 @@ mod error;
 mod events;
 mod osc;
 mod runtime;
+mod secrets;
 mod segmenter;
 mod state;
 mod stt;
@@ -27,7 +28,10 @@ pub fn run() {
             commands::start_mock_runtime,
             commands::emit_mock_transcript,
             commands::emit_mock_diagnostic,
-            commands::send_osc_test_message
+            commands::send_osc_test_message,
+            commands::get_provider_secret_status,
+            commands::save_provider_secret,
+            commands::delete_provider_secret
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

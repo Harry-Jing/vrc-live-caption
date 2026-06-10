@@ -14,8 +14,10 @@ use crate::events::{
     next_utterance_id,
 };
 use crate::osc::send_paced_chatbox_osc;
+use crate::secrets::openai_api_key as load_openai_api_key;
 use crate::segmenter::SpeechSegmenter;
-use crate::stt::{ensure_openai_api_key, transcribe_openai_wav};
+use crate::stt::transcribe_openai_wav;
+use secrecy::SecretString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
@@ -57,23 +59,6 @@ impl RuntimeManager {
     pub(crate) fn start(&self, app: AppHandle, config: AppConfig) -> AppResult<()> {
         config.validate()?;
 
-        if matches!(config.stt.provider, SttProvider::OpenAi) {
-            if let Err(error) = ensure_openai_api_key() {
-                let _ = emit_diagnostic(
-                    &app,
-                    DiagnosticUpdate {
-                        category: DiagnosticCategory::Config,
-                        severity: DiagnosticSeverity::Error,
-                        code: "config.openai_api_key_missing",
-                        message: "Cloud STT is not configured".to_string(),
-                        detail: Some(error.to_string()),
-                    },
-                );
-
-                return Err(error);
-            }
-        }
-
         let mut guard = self
             .handle
             .lock()
@@ -84,11 +69,33 @@ impl RuntimeManager {
             return Err(AppError::runtime("Runtime is already running."));
         }
 
+        let openai_api_key = if matches!(config.stt.provider, SttProvider::OpenAi) {
+            match load_openai_api_key() {
+                Ok(api_key) => Some(api_key),
+                Err(error) => {
+                    let _ = emit_diagnostic(
+                        &app,
+                        DiagnosticUpdate {
+                            category: DiagnosticCategory::Config,
+                            severity: DiagnosticSeverity::Error,
+                            code: "config.openai_api_key_missing",
+                            message: "Cloud STT is not configured".to_string(),
+                            detail: Some(error.to_string()),
+                        },
+                    );
+
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
+
         let stop_requested = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop_requested);
         let join_handle = thread::Builder::new()
             .name("vrc-live-caption-runtime".to_string())
-            .spawn(move || run_runtime_thread(app, config, thread_stop))
+            .spawn(move || run_runtime_thread(app, config, openai_api_key, thread_stop))
             .map_err(|error| {
                 AppError::runtime(format!("Failed to start runtime thread: {error}"))
             })?;
@@ -163,8 +170,13 @@ fn clear_finished_runtime(handle: &mut Option<RuntimeHandle>) -> AppResult<()> {
         .map_err(|_| AppError::runtime("Runtime thread panicked after stopping."))
 }
 
-fn run_runtime_thread(app: AppHandle, config: AppConfig, stop_requested: Arc<AtomicBool>) {
-    if let Err(error) = run_runtime(app.clone(), config, stop_requested) {
+fn run_runtime_thread(
+    app: AppHandle,
+    config: AppConfig,
+    openai_api_key: Option<SecretString>,
+    stop_requested: Arc<AtomicBool>,
+) {
+    if let Err(error) = run_runtime(app.clone(), config, openai_api_key, stop_requested) {
         tracing::warn!(
             code = error.code(),
             error_message = %error,
@@ -188,7 +200,7 @@ fn run_runtime_thread(app: AppHandle, config: AppConfig, stop_requested: Arc<Ato
 fn diagnostic_category_for_error(code: &str) -> DiagnosticCategory {
     if code.starts_with("audio_") {
         DiagnosticCategory::Audio
-    } else if code.starts_with("config_") {
+    } else if code.starts_with("config_") || code.starts_with("secret_") {
         DiagnosticCategory::Config
     } else if code.starts_with("osc_") {
         DiagnosticCategory::Osc
@@ -202,6 +214,7 @@ fn diagnostic_category_for_error(code: &str) -> DiagnosticCategory {
 fn run_runtime(
     app: AppHandle,
     config: AppConfig,
+    openai_api_key: Option<SecretString>,
     stop_requested: Arc<AtomicBool>,
 ) -> AppResult<()> {
     emit_status(
@@ -212,7 +225,13 @@ fn run_runtime(
 
     match config.stt.provider {
         SttProvider::Mock => run_mock_runtime(app, stop_requested),
-        SttProvider::OpenAi => run_openai_runtime(app, config, stop_requested),
+        SttProvider::OpenAi => {
+            let api_key = openai_api_key.ok_or_else(|| {
+                AppError::secret("OpenAI API key was not loaded before runtime startup.")
+            })?;
+
+            run_openai_runtime(app, config, api_key, stop_requested)
+        }
     }
 }
 
@@ -243,12 +262,18 @@ fn run_mock_runtime(app: AppHandle, stop_requested: Arc<AtomicBool>) -> AppResul
 fn run_openai_runtime(
     app: AppHandle,
     config: AppConfig,
+    openai_api_key: SecretString,
     stop_requested: Arc<AtomicBool>,
 ) -> AppResult<()> {
     let capture = open_input_capture(&config.audio)?;
     let sample_rate = capture.sample_rate;
     let (segment_sender, segment_receiver) = sync_channel(STT_QUEUE_CAPACITY);
-    let stt_worker = spawn_stt_worker(app.clone(), config.clone(), segment_receiver)?;
+    let stt_worker = spawn_stt_worker(
+        app.clone(),
+        config.clone(),
+        openai_api_key,
+        segment_receiver,
+    )?;
     let mut segmenter = SpeechSegmenter::new(
         sample_rate,
         SPEECH_RMS_THRESHOLD,
@@ -372,21 +397,28 @@ fn queue_speech_segment(
 fn spawn_stt_worker(
     app: AppHandle,
     config: AppConfig,
+    openai_api_key: SecretString,
     segment_receiver: Receiver<SpeechSegment>,
 ) -> AppResult<JoinHandle<()>> {
     thread::Builder::new()
         .name("vrc-live-caption-stt-worker".to_string())
-        .spawn(move || run_stt_worker(app, config, segment_receiver))
+        .spawn(move || run_stt_worker(app, config, openai_api_key, segment_receiver))
         .map_err(|error| AppError::runtime(format!("Failed to start STT worker thread: {error}")))
 }
 
-fn run_stt_worker(app: AppHandle, config: AppConfig, segment_receiver: Receiver<SpeechSegment>) {
+fn run_stt_worker(
+    app: AppHandle,
+    config: AppConfig,
+    openai_api_key: SecretString,
+    segment_receiver: Receiver<SpeechSegment>,
+) {
     let mut last_osc_send: Option<Instant> = None;
 
     while let Ok(segment) = segment_receiver.recv() {
         if let Err(error) = transcribe_and_emit_final(
             &app,
             &config,
+            &openai_api_key,
             segment.utterance_id,
             segment.sample_rate,
             &segment.samples,
@@ -415,6 +447,7 @@ fn run_stt_worker(app: AppHandle, config: AppConfig, segment_receiver: Receiver<
 fn transcribe_and_emit_final(
     app: &AppHandle,
     config: &AppConfig,
+    openai_api_key: &SecretString,
     utterance_id: String,
     sample_rate: u32,
     samples: &[f32],
@@ -434,7 +467,7 @@ fn transcribe_and_emit_final(
         },
     )?;
 
-    let text = transcribe_openai_wav(&config.stt, sample_rate, samples)?;
+    let text = transcribe_openai_wav(&config.stt, openai_api_key, sample_rate, samples)?;
 
     if text.is_empty() {
         return emit_diagnostic(
