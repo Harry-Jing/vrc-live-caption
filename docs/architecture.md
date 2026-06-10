@@ -48,6 +48,9 @@ The runtime event model supports:
 - `transcript.partial`: temporary recognition text that may change.
 - `transcript.stable`: text that is likely to remain but is not final.
 - `transcript.final`: finalized recognition text.
+- `utterance.ended`: end of an utterance that will not produce a final
+  transcript, with a reason such as no recognized speech, a failed STT
+  request, or a discarded segment.
 - `translation.draft`: optional temporary translation text.
 - `translation.final`: finalized translation text.
 

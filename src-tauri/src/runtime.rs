@@ -5,6 +5,10 @@
 //! per-segment STT or OSC failures emit diagnostics and keep the runtime alive.
 //! Startup failures such as invalid config or unavailable microphone remain fatal.
 //!
+//! Every announced utterance resolves with either a final transcript or an
+//! `utterance-ended` event, so the UI never waits on a transcript that cannot
+//! arrive.
+//!
 //! Stop is a hard cutoff: the microphone is released within one receive timeout,
 //! buffered and queued speech is discarded instead of drained, and no Chatbox
 //! output is sent after the stop request. Stop still waits for an STT request
@@ -16,8 +20,8 @@ use crate::config::{AppConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
     DiagnosticCategory, DiagnosticSeverity, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate,
-    emit_diagnostic, emit_status, emit_transcript_final, emit_transcript_partial,
-    next_utterance_id,
+    UtteranceEndReason, emit_diagnostic, emit_status, emit_transcript_final,
+    emit_transcript_partial, emit_utterance_ended, next_utterance_id,
 };
 use crate::osc::send_paced_chatbox_osc;
 use crate::secrets::openai_api_key as load_openai_api_key;
@@ -370,6 +374,10 @@ fn run_openai_runtime(
         .map_err(|_| AppError::runtime("STT worker thread panicked while stopping."))?;
 
     if tail_speech_discarded {
+        if let Some(utterance_id) = utterance_id {
+            emit_utterance_ended(&app, utterance_id, UtteranceEndReason::Discarded)?;
+        }
+
         emit_diagnostic(
             &app,
             DiagnosticUpdate {
@@ -405,19 +413,23 @@ fn queue_speech_segment(
         samples,
     }) {
         Ok(()) => Ok(()),
-        Err(TrySendError::Full(segment)) => emit_diagnostic(
-            app,
-            DiagnosticUpdate {
-                category: DiagnosticCategory::Stt,
-                severity: DiagnosticSeverity::Warning,
-                code: "stt.segment_dropped",
-                message: "Speech segment dropped".to_string(),
-                detail: Some(format!(
-                    "STT is still processing earlier audio, so {:.1} seconds of captured speech was skipped.",
-                    segment.samples.len() as f32 / segment.sample_rate as f32
-                )),
-            },
-        ),
+        Err(TrySendError::Full(segment)) => {
+            emit_diagnostic(
+                app,
+                DiagnosticUpdate {
+                    category: DiagnosticCategory::Stt,
+                    severity: DiagnosticSeverity::Warning,
+                    code: "stt.segment_dropped",
+                    message: "Speech segment dropped".to_string(),
+                    detail: Some(format!(
+                        "STT is still processing earlier audio, so {:.1} seconds of captured speech was skipped.",
+                        segment.samples.len() as f32 / segment.sample_rate as f32
+                    )),
+                },
+            )?;
+
+            emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::Discarded)
+        }
         Err(TrySendError::Disconnected(_)) => Err(AppError::runtime(
             "STT worker stopped unexpectedly while the runtime was still capturing audio.",
         )),
@@ -458,6 +470,7 @@ fn run_stt_worker(
     while let Ok(segment) = segment_receiver.recv() {
         if stop_requested.load(Ordering::Relaxed) {
             discarded_segments += 1;
+            let _ = emit_utterance_ended(&app, segment.utterance_id, UtteranceEndReason::Discarded);
             continue;
         }
 
@@ -528,14 +541,24 @@ fn transcribe_and_emit_final(
         },
     )?;
 
-    let text = transcribe_openai_wav(
+    let text = match transcribe_openai_wav(
         &config.stt,
         openai_api_key,
         segment.sample_rate,
         &segment.samples,
-    )?;
+    ) {
+        Ok(text) => text,
+        Err(error) => {
+            // Resolve the utterance for the UI; the caller reports error details.
+            let _ = emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::SttFailed);
+
+            return Err(error);
+        }
+    };
 
     if text.is_empty() {
+        emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::NoSpeech)?;
+
         return emit_diagnostic(
             app,
             DiagnosticUpdate {

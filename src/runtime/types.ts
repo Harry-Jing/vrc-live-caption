@@ -10,6 +10,7 @@ export type ProviderSecretStorage = "systemCredentialStore" | "environment";
 export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";
 export type DiagnosticSeverity = "info" | "warning" | "error";
 export type TranscriptKind = "partial" | "stable" | "final";
+export type UtteranceEndReason = "noSpeech" | "sttFailed" | "discarded";
 
 export type RuntimeCommand =
   | "start_runtime"
@@ -23,6 +24,7 @@ export const RUNTIME_EVENTS = {
   status: "runtime-status",
   transcriptPartial: "transcript-partial",
   transcriptFinal: "transcript-final",
+  utteranceEnded: "utterance-ended",
   diagnostic: "diagnostic-event",
 } as const;
 
@@ -74,6 +76,13 @@ export type TranscriptEvent = {
   language: string;
   provider: string;
   revision: number;
+  timestampMs: number;
+};
+
+export type UtteranceEndedEvent = {
+  id: string;
+  utteranceId: string;
+  reason: UtteranceEndReason;
   timestampMs: number;
 };
 

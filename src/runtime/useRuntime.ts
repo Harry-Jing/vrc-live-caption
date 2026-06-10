@@ -11,6 +11,7 @@ import {
   type RuntimeStatusEvent,
   type SttProvider,
   type TranscriptEvent,
+  type UtteranceEndedEvent,
 } from "./types";
 
 const defaultConfig: AppConfig = {
@@ -258,6 +259,14 @@ export function useRuntime() {
     }
   }
 
+  // Only the utterance that owns the partial may clear it; a final or
+  // utterance-end for an older utterance must not wipe a newer "Listening...".
+  function clearPartialForUtterance(utteranceId: string) {
+    if (partialTranscript.value?.utteranceId === utteranceId) {
+      partialTranscript.value = null;
+    }
+  }
+
   function addUnlistener(unlisten: UnlistenFn) {
     if (isUnmounted) {
       unlisten();
@@ -309,11 +318,20 @@ export function useRuntime() {
         await listen<TranscriptEvent>(
           RUNTIME_EVENTS.transcriptFinal,
           (event) => {
-            partialTranscript.value = null;
+            clearPartialForUtterance(event.payload.utteranceId);
             finalTranscripts.value = [
               event.payload,
               ...finalTranscripts.value,
             ].slice(0, 5);
+          },
+        ),
+      );
+
+      addUnlistener(
+        await listen<UtteranceEndedEvent>(
+          RUNTIME_EVENTS.utteranceEnded,
+          (event) => {
+            clearPartialForUtterance(event.payload.utteranceId);
           },
         ),
       );

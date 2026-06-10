@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter};
 const EVENT_RUNTIME_STATUS: &str = "runtime-status";
 const EVENT_TRANSCRIPT_PARTIAL: &str = "transcript-partial";
 const EVENT_TRANSCRIPT_FINAL: &str = "transcript-final";
+const EVENT_UTTERANCE_ENDED: &str = "utterance-ended";
 const EVENT_DIAGNOSTIC: &str = "diagnostic-event";
 
 static NEXT_EVENT_ID: AtomicU64 = AtomicU64::new(1);
@@ -76,6 +77,28 @@ pub(crate) struct TranscriptUpdate {
     pub(crate) language: String,
     pub(crate) provider: String,
     pub(crate) revision: u32,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UtteranceEndedEvent {
+    id: String,
+    utterance_id: String,
+    reason: UtteranceEndReason,
+    timestamp_ms: u64,
+}
+
+/// Why an utterance terminated without a final transcript. Successful
+/// utterances end with `transcript-final` instead of this event.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum UtteranceEndReason {
+    /// STT finished but recognized no words.
+    NoSpeech,
+    /// The STT request failed; details arrive as a diagnostic event.
+    SttFailed,
+    /// The captured segment was dropped before reaching STT.
+    Discarded,
 }
 
 #[derive(Clone, Serialize)]
@@ -144,6 +167,23 @@ pub(crate) fn emit_transcript_partial(app: &AppHandle, update: TranscriptUpdate)
 
 pub(crate) fn emit_transcript_final(app: &AppHandle, update: TranscriptUpdate) -> AppResult<()> {
     emit_transcript(app, EVENT_TRANSCRIPT_FINAL, TranscriptKind::Final, update)
+}
+
+pub(crate) fn emit_utterance_ended(
+    app: &AppHandle,
+    utterance_id: String,
+    reason: UtteranceEndReason,
+) -> AppResult<()> {
+    app.emit(
+        EVENT_UTTERANCE_ENDED,
+        UtteranceEndedEvent {
+            id: next_event_id("utterance-end"),
+            utterance_id,
+            reason,
+            timestamp_ms: now_ms(),
+        },
+    )
+    .map_err(AppError::emit)
 }
 
 pub(crate) fn emit_diagnostic(app: &AppHandle, update: DiagnosticUpdate) -> AppResult<()> {
@@ -227,6 +267,36 @@ mod tests {
         assert_eq!(value["language"], "en-US");
         assert_eq!(value["provider"], "mock");
         assert_eq!(value["revision"], 1);
+    }
+
+    #[test]
+    fn utterance_ended_payload_uses_stable_wire_format() {
+        let event = UtteranceEndedEvent {
+            id: "utterance-end-1".to_string(),
+            utterance_id: "speech-1".to_string(),
+            reason: UtteranceEndReason::NoSpeech,
+            timestamp_ms: 42,
+        };
+        let value = serde_json::to_value(event).unwrap_or_else(|serialization_error| {
+            serde_json::json!({ "serializationError": serialization_error.to_string() })
+        });
+
+        assert_eq!(value["utteranceId"], "speech-1");
+        assert_eq!(value["reason"], "noSpeech");
+
+        let reasons = [
+            (UtteranceEndReason::NoSpeech, "noSpeech"),
+            (UtteranceEndReason::SttFailed, "sttFailed"),
+            (UtteranceEndReason::Discarded, "discarded"),
+        ];
+
+        for (reason, expected) in reasons {
+            let value = serde_json::to_value(reason).unwrap_or_else(|serialization_error| {
+                serde_json::json!({ "serializationError": serialization_error.to_string() })
+            });
+
+            assert_eq!(value, expected);
+        }
     }
 
     #[test]
