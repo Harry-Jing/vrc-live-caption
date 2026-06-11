@@ -6,11 +6,11 @@
 //! behavior can be tested without live devices or network calls.
 //!
 //! Only *voiced* audio counts toward the minimum segment duration; trailing
-//! silence does not. Buffers that never reach the voiced minimum before the
-//! silence timeout are discarded as noise blips instead of being padded with
-//! silence and uploaded to STT. A short pre-roll captured just before voice
-//! onset is prepended to each segment so quiet first syllables survive the
-//! RMS gate.
+//! silence does not. Every segment exit path (silence timeout, max segment
+//! duration, and finish) enforces the voiced minimum: buffers that never
+//! reach it are discarded as noise instead of being uploaded to STT. A short
+//! pre-roll captured just before voice onset is prepended to each segment so
+//! quiet first syllables survive the RMS gate.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -88,7 +88,7 @@ impl SpeechSegmenter {
         let speech_started = voiced_before < self.min_voiced_samples
             && self.voiced_samples >= self.min_voiced_samples;
         let ready_segment = if self.samples.len() >= self.max_samples {
-            self.take_ready_segment()
+            self.take_voiced_segment()
         } else {
             self.ready_after_silence(now)
         };
@@ -104,12 +104,7 @@ impl SpeechSegmenter {
     }
 
     pub(crate) fn finish(&mut self) -> Option<Vec<f32>> {
-        if self.voiced_samples >= self.min_voiced_samples {
-            self.take_ready_segment()
-        } else {
-            self.discard_buffer();
-            None
-        }
+        self.take_voiced_segment()
     }
 
     pub(crate) fn sample_rate(&self) -> u32 {
@@ -140,12 +135,17 @@ impl SpeechSegmenter {
             return None;
         }
 
+        self.take_voiced_segment()
+    }
+
+    /// Single gate for every segment exit path (silence timeout, max segment
+    /// duration, and finish): a buffer below the voiced minimum was noise, not
+    /// speech, so it is discarded and must not reach STT.
+    fn take_voiced_segment(&mut self) -> Option<Vec<f32>> {
         if self.voiced_samples >= self.min_voiced_samples {
             return self.take_ready_segment();
         }
 
-        // The buffer went quiet before reaching the voiced minimum: this was
-        // a noise blip, not speech, so it must not reach STT.
         self.discard_buffer();
 
         None
@@ -296,5 +296,29 @@ mod tests {
         let update = segmenter.push_samples(vec![0.2, 0.2, 0.2], Instant::now());
 
         assert_eq!(update.ready_segment, Some(vec![0.2, 0.2, 0.2]));
+    }
+
+    #[test]
+    fn discards_max_duration_buffer_below_voiced_minimum() {
+        let mut segmenter = segmenter(0.3, 0.5, NO_PREROLL);
+        let now = Instant::now();
+
+        // Sparse clicks keep the buffer active without ever reaching the
+        // voiced minimum, so the buffer fills to the max segment duration.
+        segmenter.push_samples(vec![0.2, 0.2], now);
+        segmenter.push_samples(vec![0.0, 0.0], now + Duration::from_millis(10));
+        let update = segmenter.push_samples(vec![0.0], now + Duration::from_millis(20));
+
+        assert!(!update.speech_started);
+        assert_eq!(update.ready_segment, None);
+
+        // The discarded noise must not leak into the next utterance.
+        let later = now + Duration::from_millis(500);
+        let update = segmenter.push_samples(vec![0.3, 0.3, 0.3], later);
+        assert!(update.speech_started);
+        assert_eq!(
+            segmenter.tick(later + Duration::from_millis(120)),
+            Some(vec![0.3, 0.3, 0.3])
+        );
     }
 }

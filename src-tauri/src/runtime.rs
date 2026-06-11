@@ -395,9 +395,14 @@ fn queue_speech_segment(
     utterance_id: &mut Option<String>,
     segment_sender: &SyncSender<SpeechSegment>,
 ) -> AppResult<()> {
-    let utterance_id = utterance_id
-        .take()
-        .unwrap_or_else(|| next_utterance_id("speech"));
+    // The segmenter only yields segments that reached the voiced minimum, and
+    // crossing the voiced minimum announces the utterance first, so an id is
+    // always present here. A missing id means segmentation broke that
+    // invariant, and silently minting a fresh id would send the UI a
+    // transcript for an utterance that was never announced.
+    let utterance_id = utterance_id.take().ok_or_else(|| {
+        AppError::runtime("Speech segment was ready without an announced utterance.")
+    })?;
 
     match segment_sender.try_send(SpeechSegment {
         utterance_id,
