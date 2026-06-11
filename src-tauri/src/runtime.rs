@@ -207,27 +207,13 @@ fn run_runtime_thread(
         let _ = emit_diagnostic(
             &app,
             DiagnosticUpdate {
-                category: diagnostic_category_for_error(error.code()),
+                category: DiagnosticCategory::for_error(&error),
                 severity: DiagnosticSeverity::Error,
                 code: error.code(),
                 message: "Runtime stopped with an error".to_string(),
                 detail: Some(error.to_string()),
             },
         );
-    }
-}
-
-fn diagnostic_category_for_error(code: &str) -> DiagnosticCategory {
-    if code.starts_with("audio_") {
-        DiagnosticCategory::Audio
-    } else if code.starts_with("config_") || code.starts_with("secret_") {
-        DiagnosticCategory::Config
-    } else if code.starts_with("osc_") {
-        DiagnosticCategory::Osc
-    } else if code.starts_with("stt_") || code.starts_with("wav_") {
-        DiagnosticCategory::Stt
-    } else {
-        DiagnosticCategory::Runtime
     }
 }
 
@@ -488,7 +474,7 @@ fn run_stt_worker(
             let _ = emit_diagnostic(
                 &app,
                 DiagnosticUpdate {
-                    category: diagnostic_category_for_error(error.code()),
+                    category: DiagnosticCategory::for_error(&error),
                     severity: DiagnosticSeverity::Error,
                     code: error.code(),
                     message: "Speech segment failed".to_string(),

@@ -125,7 +125,7 @@ export function createPreviewBackend(): RuntimeBackend {
           id: eventId("diagnostic"),
           category: "osc",
           severity: "info",
-          code: "preview.osc_test_simulated",
+          code: "osc.test_simulated",
           message: "OSC test simulated",
           detail: "Desktop-only command was simulated for UI preview.",
           timestampMs: Date.now(),

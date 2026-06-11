@@ -127,21 +127,25 @@ impl AppError {
         }
     }
 
+    /// Machine-readable code for logs and diagnostic events. Codes follow the
+    /// diagnostic naming convention `<category>.<detail>`, where the prefix
+    /// matches the serialized category chosen by
+    /// `DiagnosticCategory::for_error`.
     pub(crate) fn code(&self) -> &'static str {
         match self {
-            Self::Audio { .. } => "audio_failed",
-            Self::Config { .. } => "config_invalid",
-            Self::ConfigIo { .. } => "config_io_failed",
-            Self::EventEmit { .. } => "event_emit_failed",
-            Self::OscEncode { .. } => "osc_encode_failed",
-            Self::OscBind { .. } => "osc_bind_failed",
-            Self::OscSend { .. } => "osc_send_failed",
-            Self::OscSendIncomplete { .. } => "osc_send_incomplete",
-            Self::Runtime { .. } => "runtime_failed",
-            Self::Secret { .. } => "secret_failed",
-            Self::State { .. } => "state_failed",
-            Self::Stt { .. } => "stt_failed",
-            Self::Wav { .. } => "wav_encode_failed",
+            Self::Audio { .. } => "audio.failed",
+            Self::Config { .. } => "config.invalid",
+            Self::ConfigIo { .. } => "config.io_failed",
+            Self::EventEmit { .. } => "runtime.event_emit_failed",
+            Self::OscEncode { .. } => "osc.encode_failed",
+            Self::OscBind { .. } => "osc.bind_failed",
+            Self::OscSend { .. } => "osc.send_failed",
+            Self::OscSendIncomplete { .. } => "osc.send_incomplete",
+            Self::Runtime { .. } => "runtime.failed",
+            Self::Secret { .. } => "config.secret_failed",
+            Self::State { .. } => "runtime.state_failed",
+            Self::Stt { .. } => "stt.failed",
+            Self::Wav { .. } => "stt.wav_encode_failed",
         }
     }
 
@@ -214,7 +218,7 @@ mod tests {
             serde_json::json!({ "serializationError": serialization_error.to_string() })
         });
 
-        assert_eq!(value["code"], "osc_send_failed");
+        assert_eq!(value["code"], "osc.send_failed");
         assert_eq!(
             value["message"],
             "Failed to send OSC Chatbox message to 127.0.0.1:9000: network unreachable"

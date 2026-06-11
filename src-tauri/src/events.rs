@@ -4,6 +4,11 @@
 //! diagnostics. Provider-specific raw events should be normalized before they
 //! reach this module so Vue components and output sinks do not depend on STT
 //! provider protocols.
+//!
+//! Diagnostic `code` values are machine-readable and follow one naming
+//! convention: `<category>.<detail>` in snake case, where the prefix equals
+//! the serialized `DiagnosticCategory` of the event. This applies both to
+//! codes written inline at emit sites and to codes from `AppError::code`.
 
 use crate::error::{AppError, AppResult};
 use serde::Serialize;
@@ -142,6 +147,28 @@ pub(crate) enum DiagnosticCategory {
     Osc,
     Runtime,
     Stt,
+}
+
+impl DiagnosticCategory {
+    /// Category for diagnostics built from an `AppError`. The match is
+    /// exhaustive on purpose: adding an error variant must force an explicit
+    /// category decision here instead of falling back silently.
+    pub(crate) fn for_error(error: &AppError) -> Self {
+        match error {
+            AppError::Audio { .. } => Self::Audio,
+            AppError::Config { .. } | AppError::ConfigIo { .. } | AppError::Secret { .. } => {
+                Self::Config
+            }
+            AppError::OscEncode { .. }
+            | AppError::OscBind { .. }
+            | AppError::OscSend { .. }
+            | AppError::OscSendIncomplete { .. } => Self::Osc,
+            AppError::EventEmit { .. } | AppError::Runtime { .. } | AppError::State { .. } => {
+                Self::Runtime
+            }
+            AppError::Stt { .. } | AppError::Wav { .. } => Self::Stt,
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -344,7 +371,7 @@ mod tests {
             id: "diagnostic-1".to_string(),
             category: DiagnosticCategory::Osc,
             severity: DiagnosticSeverity::Error,
-            code: "osc_send_failed",
+            code: "osc.send_failed",
             message: "OSC send failed".to_string(),
             detail: None,
             timestamp_ms: 42,
@@ -355,8 +382,41 @@ mod tests {
 
         assert_eq!(value["category"], "osc");
         assert_eq!(value["severity"], "error");
-        assert_eq!(value["code"], "osc_send_failed");
+        assert_eq!(value["code"], "osc.send_failed");
         assert_eq!(value["message"], "OSC send failed");
         assert!(value.get("detail").is_none());
+    }
+
+    #[test]
+    fn error_codes_share_the_prefix_of_their_diagnostic_category() {
+        let errors = [
+            AppError::audio("x"),
+            AppError::config("x"),
+            AppError::config_io("x"),
+            AppError::emit(tauri::Error::Io(std::io::Error::other("x"))),
+            AppError::osc_encode("x".to_string()),
+            AppError::osc_bind("x".to_string()),
+            AppError::osc_send("127.0.0.1:9000", "x".to_string()),
+            AppError::osc_send_incomplete("127.0.0.1:9000", 2, 1),
+            AppError::runtime("x"),
+            AppError::secret("x"),
+            AppError::state("x"),
+            AppError::stt("x"),
+            AppError::wav("x"),
+        ];
+
+        for error in errors {
+            let category = serde_json::to_value(DiagnosticCategory::for_error(&error))
+                .unwrap_or_else(|serialization_error| {
+                    serde_json::json!({ "serializationError": serialization_error.to_string() })
+                });
+            let prefix = format!("{}.", category.as_str().unwrap_or_default());
+
+            assert!(
+                error.code().starts_with(&prefix),
+                "code `{}` should start with `{prefix}`",
+                error.code()
+            );
+        }
     }
 }
