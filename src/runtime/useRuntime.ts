@@ -85,12 +85,11 @@ export function useRuntime() {
     () => finalTranscripts.value.at(0) ?? null,
   );
 
+  // showPartial only gates partial transcript text. The listening indicator
+  // stays active regardless: it is the only feedback between speaking and the
+  // final transcript, and the only in-app signal that the microphone is live.
   const captionMode = computed<CaptionMode>(() => {
-    if (!config.value?.ui.showPartial) {
-      return "final";
-    }
-
-    if (partialTranscript.value) {
+    if (partialTranscript.value && config.value?.ui.showPartial) {
       return "partial";
     }
 
