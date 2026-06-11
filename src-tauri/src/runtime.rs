@@ -559,15 +559,7 @@ fn transcribe_and_emit_final(
     // This segment was transcribed while stop was requested: keep the App
     // preview, but never send Chatbox output after the user asked to stop.
     if stop_requested.load(Ordering::Relaxed) {
-        return emit_diagnostic(
-            app,
-            DiagnosticUpdate::info(
-                DiagnosticCategory::Osc,
-                "osc.send_skipped_on_stop",
-                "Chatbox send skipped",
-                "Runtime stop was requested before this transcript could be sent.",
-            ),
-        );
+        return emit_chatbox_send_skipped_on_stop(app);
     }
 
     if !config.osc.enabled {
@@ -582,8 +574,11 @@ fn transcribe_and_emit_final(
         );
     }
 
-    match osc_sender.send_paced(&text) {
-        Ok(result) => {
+    // The paced send also watches the stop flag itself: a stop requested
+    // while the send is waiting out the pacing interval cancels the send
+    // instead of flushing one more Chatbox message.
+    match osc_sender.send_paced(&text, stop_requested) {
+        Ok(Some(result)) => {
             let clipped_note = if result.clipped {
                 " Text was clipped to fit the VRChat Chatbox layout."
             } else {
@@ -603,6 +598,7 @@ fn transcribe_and_emit_final(
                 ),
             )
         }
+        Ok(None) => emit_chatbox_send_skipped_on_stop(app),
         Err(error) => {
             emit_diagnostic(
                 app,
@@ -612,4 +608,16 @@ fn transcribe_and_emit_final(
             Err(error)
         }
     }
+}
+
+fn emit_chatbox_send_skipped_on_stop(app: &AppHandle) -> AppResult<()> {
+    emit_diagnostic(
+        app,
+        DiagnosticUpdate::info(
+            DiagnosticCategory::Osc,
+            "osc.send_skipped_on_stop",
+            "Chatbox send skipped",
+            "Runtime stop was requested before this transcript could be sent.",
+        ),
+    )
 }

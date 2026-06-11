@@ -15,6 +15,7 @@ use crate::config::OscConfig;
 use crate::error::{AppError, AppResult};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
 use std::net::UdpSocket;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
@@ -24,6 +25,9 @@ pub(crate) const OSC_TEST_MESSAGE: &str = "VRC Live Caption OSC test.";
 // ChatText rectangle minus margins; see the module docs for the source.
 const CHATBOX_WIDTH_PX: f32 = 280.0;
 const CHATBOX_MAX_LINES: usize = 9;
+// Upper bound on one pacing sleep slice so a cancel request interrupts the
+// wait quickly instead of after the full minimum interval.
+const PACING_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct OscSendResult {
     pub(crate) target: String,
@@ -64,20 +68,41 @@ impl ChatboxOscSender {
     }
 
     /// Like [`Self::send`], but first waits out the configured minimum
-    /// interval since the previous paced send.
-    pub(crate) fn send_paced(&mut self, text: &str) -> AppResult<OscSendResult> {
-        if let Some(last_send) = self.last_send {
-            let elapsed = last_send.elapsed();
-
-            if elapsed < self.min_interval {
-                thread::sleep(self.min_interval - elapsed);
+    /// interval since the previous paced send. The wait polls `cancel`, so a
+    /// runtime stop aborts the send instead of flushing one more Chatbox
+    /// message after the user asked to stop; a cancelled call returns
+    /// `Ok(None)` and leaves the pacing state untouched.
+    pub(crate) fn send_paced(
+        &mut self,
+        text: &str,
+        cancel: &AtomicBool,
+    ) -> AppResult<Option<OscSendResult>> {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
             }
+
+            let Some(remaining) = self.remaining_pacing_wait() else {
+                break;
+            };
+
+            thread::sleep(remaining.min(PACING_POLL_INTERVAL));
         }
 
         let result = self.send(text)?;
         self.last_send = Some(Instant::now());
 
-        Ok(result)
+        Ok(Some(result))
+    }
+
+    fn remaining_pacing_wait(&self) -> Option<Duration> {
+        let elapsed = self.last_send?.elapsed();
+
+        if elapsed >= self.min_interval {
+            return None;
+        }
+
+        Some(self.min_interval - elapsed)
     }
 
     fn send_rendered(&self, text: &str) -> AppResult<OscSendResult> {
@@ -245,5 +270,53 @@ mod tests {
 
         assert_eq!(lines[0].chars().count(), 29);
         assert_eq!(lines[1].chars().count(), 11);
+    }
+
+    fn local_test_config(port: u16, min_interval_ms: u64) -> OscConfig {
+        OscConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            enabled: true,
+            min_interval_ms,
+        }
+    }
+
+    #[test]
+    fn paced_send_is_cancelled_instead_of_waiting_out_the_interval() -> AppResult<()> {
+        let mut sender = ChatboxOscSender::new(&local_test_config(9000, 60_000))?;
+        // A fresh last_send forces the full one-minute pacing wait; the test
+        // only finishes quickly if cancellation beats that wait.
+        sender.last_send = Some(Instant::now());
+        let last_send_before = sender.last_send;
+        let cancel = AtomicBool::new(true);
+
+        let result = sender.send_paced("cancelled", &cancel)?;
+
+        assert!(result.is_none());
+        assert_eq!(sender.last_send, last_send_before);
+
+        Ok(())
+    }
+
+    #[test]
+    fn paced_send_sends_and_tracks_pacing_when_not_cancelled() -> AppResult<()> {
+        let receiver = UdpSocket::bind("127.0.0.1:0")
+            .map_err(|error| AppError::osc_bind(error.to_string()))?;
+        let port = receiver
+            .local_addr()
+            .map_err(|error| AppError::osc_bind(error.to_string()))?
+            .port();
+        let mut sender = ChatboxOscSender::new(&local_test_config(port, 500))?;
+        let cancel = AtomicBool::new(false);
+
+        let result = sender
+            .send_paced(OSC_TEST_MESSAGE, &cancel)?
+            .ok_or_else(|| AppError::osc_send("test", "send was skipped".to_string()))?;
+
+        assert!(result.byte_count > 0);
+        assert!(!result.clipped);
+        assert!(sender.last_send.is_some());
+
+        Ok(())
     }
 }
