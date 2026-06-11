@@ -17,7 +17,7 @@ import type {
 } from "./types";
 
 const FINAL_TRANSCRIPT_LIMIT = 5;
-const DIAGNOSTIC_LIMIT = 8;
+const DIAGNOSTIC_LIMIT = 50;
 
 function normalizeError(error: unknown) {
   if (typeof error === "string") {

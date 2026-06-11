@@ -3,6 +3,7 @@ name = "vrc-live-caption"
 version = "0.1.0"
 description = "Desktop live caption tool for VRChat"
 authors = ["VRC Live Caption contributors"]
+license = "MIT"
 edition = "2024"
 rust-version = "1.95"
 
