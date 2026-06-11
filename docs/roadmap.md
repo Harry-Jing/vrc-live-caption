@@ -112,9 +112,10 @@ Status: not started.
 
 Goal: make local STT the default path (see [decisions.md](./decisions.md)).
 
-- engine research: candidate engines, accuracy for English and Chinese,
-  streaming versus segmented input, and resource usage measured on a Windows
-  machine that is also running VRChat
+- engine research: candidate engines (see
+  [research/local-inference-notes.md](./research/local-inference-notes.md)),
+  accuracy for English and Chinese, streaming versus segmented input, and
+  resource usage measured on a Windows machine that is also running VRChat
 - input-side provider contract: where segmentation lives once a provider
   consumes a continuous audio stream
 - model distribution: bundled with the installer versus first-run download

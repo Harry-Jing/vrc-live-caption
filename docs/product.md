@@ -95,6 +95,9 @@ SHOULD:
 - Translation should use final transcript text by default.
 - Diagnostics should separate audio, STT, translation, OSC, config, network, and
   local worker failure areas.
+- Ordinary config should carry a schema version so later migrations stay cheap.
+- Diagnostics should be exportable as a redacted report that never contains
+  secrets.
 - The default path should work without local model downloads.
 - The App UI should be localizable; English and Chinese are the first targets.
 
@@ -143,7 +146,8 @@ Resolved questions move to [decisions.md](./decisions.md).
   engine changes the latency profile.
 
 - Does the local-first default direction extend to translation in MVP-B, or
-  does translation stay cloud-first?
+  does translation stay cloud-first? Candidate directions live in
+  [research/local-inference-notes.md](./research/local-inference-notes.md).
 
 - How do VR users, who cannot see the desktop App while wearing the headset,
   start, stop, and monitor captioning? Candidates include OVR overlays, global
