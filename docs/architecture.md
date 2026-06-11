@@ -45,6 +45,8 @@ Microphone
 
 The runtime event model supports:
 
+- `utterance.started`: start of a confirmed utterance, before any transcript
+  text exists.
 - `transcript.partial`: temporary recognition text that may change.
 - `transcript.stable`: text that is likely to remain but is not final.
 - `transcript.final`: finalized recognition text.
@@ -57,6 +59,10 @@ The runtime event model supports:
 MVP providers may emit only `partial` and `final`. `stable` is part of the
 architecture so later two-pass, incoming caption, and interpretation work does
 not require a new event model.
+
+Transcript events carry recognition text only. Placeholder text such as a
+listening indicator is presentation state that the UI derives from utterance
+lifecycle events, never transcript text.
 
 ## Output Strategy
 

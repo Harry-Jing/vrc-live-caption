@@ -11,7 +11,7 @@ use crate::error::AppResult;
 use crate::events::{
     DiagnosticCategory, DiagnosticSeverity, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate,
     emit_diagnostic, emit_status, emit_transcript_final, emit_transcript_partial,
-    next_utterance_id,
+    emit_utterance_started, next_utterance_id,
 };
 use crate::osc::{OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE, send_chatbox_osc};
 use crate::secrets::{
@@ -118,6 +118,7 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
 
     tracing::info!(utterance_id = %utterance_id, "emitting mock transcript");
 
+    emit_utterance_started(&app, utterance_id.clone())?;
     emit_transcript_partial(
         &app,
         TranscriptUpdate {

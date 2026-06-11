@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter};
 const EVENT_RUNTIME_STATUS: &str = "runtime-status";
 const EVENT_TRANSCRIPT_PARTIAL: &str = "transcript-partial";
 const EVENT_TRANSCRIPT_FINAL: &str = "transcript-final";
+const EVENT_UTTERANCE_STARTED: &str = "utterance-started";
 const EVENT_UTTERANCE_ENDED: &str = "utterance-ended";
 const EVENT_DIAGNOSTIC: &str = "diagnostic-event";
 
@@ -77,6 +78,17 @@ pub(crate) struct TranscriptUpdate {
     pub(crate) language: String,
     pub(crate) provider: String,
     pub(crate) revision: u32,
+}
+
+/// Start of a confirmed utterance. Emitted before any transcript text exists,
+/// so transcript events never carry placeholder text such as a listening
+/// indicator.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UtteranceStartedEvent {
+    id: String,
+    utterance_id: String,
+    timestamp_ms: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -167,6 +179,18 @@ pub(crate) fn emit_transcript_partial(app: &AppHandle, update: TranscriptUpdate)
 
 pub(crate) fn emit_transcript_final(app: &AppHandle, update: TranscriptUpdate) -> AppResult<()> {
     emit_transcript(app, EVENT_TRANSCRIPT_FINAL, TranscriptKind::Final, update)
+}
+
+pub(crate) fn emit_utterance_started(app: &AppHandle, utterance_id: String) -> AppResult<()> {
+    app.emit(
+        EVENT_UTTERANCE_STARTED,
+        UtteranceStartedEvent {
+            id: next_event_id("utterance-start"),
+            utterance_id,
+            timestamp_ms: now_ms(),
+        },
+    )
+    .map_err(AppError::emit)
 }
 
 pub(crate) fn emit_utterance_ended(
@@ -267,6 +291,21 @@ mod tests {
         assert_eq!(value["language"], "en-US");
         assert_eq!(value["provider"], "mock");
         assert_eq!(value["revision"], 1);
+    }
+
+    #[test]
+    fn utterance_started_payload_uses_stable_wire_format() {
+        let event = UtteranceStartedEvent {
+            id: "utterance-start-1".to_string(),
+            utterance_id: "speech-1".to_string(),
+            timestamp_ms: 42,
+        };
+        let value = serde_json::to_value(event).unwrap_or_else(|serialization_error| {
+            serde_json::json!({ "serializationError": serialization_error.to_string() })
+        });
+
+        assert_eq!(value["utteranceId"], "speech-1");
+        assert_eq!(value["timestampMs"], 42);
     }
 
     #[test]

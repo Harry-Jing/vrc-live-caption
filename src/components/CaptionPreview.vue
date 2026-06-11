@@ -1,8 +1,16 @@
 <script setup lang="ts">
+import type { CaptionMode } from "../runtime/types";
+
 defineProps<{
-  mode: "partial" | "final";
+  mode: CaptionMode;
   text: string;
 }>();
+
+const modeColors = {
+  listening: "info",
+  partial: "warning",
+  final: "success",
+} as const;
 </script>
 
 <template>
@@ -14,10 +22,7 @@ defineProps<{
         </p>
         <h2 class="text-base font-semibold text-highlighted">Current output</h2>
       </div>
-      <UBadge
-        :color="mode === 'partial' ? 'warning' : 'success'"
-        variant="subtle"
-      >
+      <UBadge :color="modeColors[mode]" variant="subtle">
         {{ mode }}
       </UBadge>
     </div>

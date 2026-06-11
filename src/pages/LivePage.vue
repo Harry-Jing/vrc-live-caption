@@ -9,18 +9,15 @@ import { useRuntimeContext } from "../runtime/context";
 const {
   actionError,
   activeCaptionText,
+  captionMode,
   config,
   diagnostics,
   finalTranscripts,
   isBusy,
-  partialTranscript,
   runCommand,
   runtimeStatus,
 } = useRuntimeContext();
 
-const captionMode = computed(() =>
-  partialTranscript.value ? "partial" : "final",
-);
 const latestDiagnostic = computed(() => diagnostics.value.at(0) ?? null);
 const latestFinalTranscript = computed(
   () => finalTranscripts.value.at(0) ?? null,

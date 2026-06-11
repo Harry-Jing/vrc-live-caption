@@ -5,9 +5,10 @@
 //! per-segment STT or OSC failures emit diagnostics and keep the runtime alive.
 //! Startup failures such as invalid config or unavailable microphone remain fatal.
 //!
-//! Every announced utterance resolves with either a final transcript or an
-//! `utterance-ended` event, so the UI never waits on a transcript that cannot
-//! arrive.
+//! Every utterance announced with `utterance-started` resolves with either a
+//! final transcript or an `utterance-ended` event, so the UI never waits on a
+//! transcript that cannot arrive. Transcript events carry recognition text
+//! only; listening indicators are derived from lifecycle events in the UI.
 //!
 //! Stop is a hard cutoff: the microphone is released within one receive timeout,
 //! buffered and queued speech is discarded instead of drained, and no Chatbox
@@ -20,8 +21,8 @@ use crate::config::{AppConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
     DiagnosticCategory, DiagnosticSeverity, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate,
-    UtteranceEndReason, emit_diagnostic, emit_status, emit_transcript_final,
-    emit_transcript_partial, emit_utterance_ended, next_utterance_id,
+    UtteranceEndReason, emit_diagnostic, emit_status, emit_transcript_final, emit_utterance_ended,
+    emit_utterance_started, next_utterance_id,
 };
 use crate::osc::send_paced_chatbox_osc;
 use crate::secrets::openai_api_key as load_openai_api_key;
@@ -340,16 +341,7 @@ fn run_openai_runtime(
         if update.speech_started {
             let next_utterance = next_utterance_id("speech");
             utterance_id = Some(next_utterance.clone());
-            emit_transcript_partial(
-                &app,
-                TranscriptUpdate {
-                    utterance_id: next_utterance,
-                    text: "Listening...".to_string(),
-                    language: config.stt.language.clone(),
-                    provider: config.stt.provider.as_str().to_string(),
-                    revision: 1,
-                },
-            )?;
+            emit_utterance_started(&app, next_utterance)?;
         }
 
         if let Some(samples) = update.ready_segment {
@@ -578,7 +570,7 @@ fn transcribe_and_emit_final(
             text: text.clone(),
             language: config.stt.language.clone(),
             provider: config.stt.provider.as_str().to_string(),
-            revision: 2,
+            revision: 1,
         },
     )?;
 

@@ -11,6 +11,7 @@ export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";
 export type DiagnosticSeverity = "info" | "warning" | "error";
 export type TranscriptKind = "partial" | "stable" | "final";
 export type UtteranceEndReason = "noSpeech" | "sttFailed" | "discarded";
+export type CaptionMode = "listening" | "partial" | "final";
 
 export type RuntimeCommand =
   | "start_runtime"
@@ -24,6 +25,7 @@ export const RUNTIME_EVENTS = {
   status: "runtime-status",
   transcriptPartial: "transcript-partial",
   transcriptFinal: "transcript-final",
+  utteranceStarted: "utterance-started",
   utteranceEnded: "utterance-ended",
   diagnostic: "diagnostic-event",
 } as const;
@@ -76,6 +78,12 @@ export type TranscriptEvent = {
   language: string;
   provider: string;
   revision: number;
+  timestampMs: number;
+};
+
+export type UtteranceStartedEvent = {
+  id: string;
+  utteranceId: string;
   timestampMs: number;
 };
 

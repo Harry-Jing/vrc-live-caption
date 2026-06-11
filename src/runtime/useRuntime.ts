@@ -5,6 +5,7 @@ import {
   RUNTIME_EVENTS,
   type AudioInputDevice,
   type AppConfig,
+  type CaptionMode,
   type DiagnosticEvent,
   type ProviderSecretStatus,
   type RuntimeCommand,
@@ -12,6 +13,7 @@ import {
   type SttProvider,
   type TranscriptEvent,
   type UtteranceEndedEvent,
+  type UtteranceStartedEvent,
 } from "./types";
 
 const defaultConfig: AppConfig = {
@@ -66,6 +68,7 @@ export function useRuntime() {
     message: "Runtime is idle",
     timestampMs: Date.now(),
   });
+  const activeUtteranceId = ref<string | null>(null);
   const partialTranscript = ref<TranscriptEvent | null>(null);
   const finalTranscripts = ref<TranscriptEvent[]>([]);
   const diagnostics = ref<DiagnosticEvent[]>([]);
@@ -78,9 +81,29 @@ export function useRuntime() {
     () => finalTranscripts.value.at(0) ?? null,
   );
 
+  const captionMode = computed<CaptionMode>(() => {
+    if (!config.value?.ui.showPartial) {
+      return "final";
+    }
+
+    if (partialTranscript.value) {
+      return "partial";
+    }
+
+    if (activeUtteranceId.value) {
+      return "listening";
+    }
+
+    return "final";
+  });
+
   const activeCaptionText = computed(() => {
-    if (config.value?.ui.showPartial && partialTranscript.value) {
+    if (captionMode.value === "partial" && partialTranscript.value) {
       return partialTranscript.value.text;
+    }
+
+    if (captionMode.value === "listening") {
+      return "Listening...";
     }
 
     return (
@@ -259,9 +282,13 @@ export function useRuntime() {
     }
   }
 
-  // Only the utterance that owns the partial may clear it; a final or
-  // utterance-end for an older utterance must not wipe a newer "Listening...".
-  function clearPartialForUtterance(utteranceId: string) {
+  // Only the utterance that owns the live caption state may clear it; a final
+  // or utterance-end for an older utterance must not wipe a newer one.
+  function clearUtteranceState(utteranceId: string) {
+    if (activeUtteranceId.value === utteranceId) {
+      activeUtteranceId.value = null;
+    }
+
     if (partialTranscript.value?.utteranceId === utteranceId) {
       partialTranscript.value = null;
     }
@@ -300,9 +327,19 @@ export function useRuntime() {
             event.payload.status === "stopped" ||
             event.payload.status === "error"
           ) {
+            activeUtteranceId.value = null;
             partialTranscript.value = null;
           }
         }),
+      );
+
+      addUnlistener(
+        await listen<UtteranceStartedEvent>(
+          RUNTIME_EVENTS.utteranceStarted,
+          (event) => {
+            activeUtteranceId.value = event.payload.utteranceId;
+          },
+        ),
       );
 
       addUnlistener(
@@ -318,7 +355,7 @@ export function useRuntime() {
         await listen<TranscriptEvent>(
           RUNTIME_EVENTS.transcriptFinal,
           (event) => {
-            clearPartialForUtterance(event.payload.utteranceId);
+            clearUtteranceState(event.payload.utteranceId);
             finalTranscripts.value = [
               event.payload,
               ...finalTranscripts.value,
@@ -331,7 +368,7 @@ export function useRuntime() {
         await listen<UtteranceEndedEvent>(
           RUNTIME_EVENTS.utteranceEnded,
           (event) => {
-            clearPartialForUtterance(event.payload.utteranceId);
+            clearUtteranceState(event.payload.utteranceId);
           },
         ),
       );
@@ -392,6 +429,7 @@ export function useRuntime() {
         timestampMs,
       };
 
+      activeUtteranceId.value = null;
       partialTranscript.value = null;
       finalTranscripts.value = [transcript, ...finalTranscripts.value].slice(
         0,
@@ -436,6 +474,7 @@ export function useRuntime() {
     actionError,
     activeCaptionText,
     audioInputDevices,
+    captionMode,
     config,
     diagnostics,
     finalTranscripts,
