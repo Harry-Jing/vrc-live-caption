@@ -41,7 +41,7 @@ pub(crate) fn save_app_config(
             "Settings saved",
             "Only non-sensitive settings are stored in app config.",
         ),
-    )?;
+    );
 
     Ok(saved_config)
 }
@@ -58,7 +58,7 @@ pub(crate) fn list_audio_input_devices(app: AppHandle) -> AppResult<Vec<AudioInp
             "Audio input devices refreshed",
             format!("Found {} microphone input device(s).", devices.len()),
         ),
-    )?;
+    );
 
     Ok(devices)
 }
@@ -86,7 +86,7 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
 
     tracing::info!(utterance_id = %utterance_id, "emitting mock transcript");
 
-    emit_utterance_started(&app, utterance_id.clone())?;
+    emit_utterance_started(&app, utterance_id.clone());
     emit_transcript_partial(
         &app,
         TranscriptUpdate {
@@ -96,7 +96,7 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
             provider: provider.clone(),
             revision: 1,
         },
-    )?;
+    );
     emit_transcript_final(
         &app,
         TranscriptUpdate {
@@ -106,7 +106,7 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
             provider,
             revision: 2,
         },
-    )?;
+    );
 
     emit_diagnostic(
         &app,
@@ -116,7 +116,9 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
             "Mock transcript emitted",
             "The UI received normalized partial and final transcript events.",
         ),
-    )
+    );
+
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -142,7 +144,9 @@ pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) 
                         result.target, OSC_CHATBOX_INPUT_ADDRESS
                     ),
                 ),
-            )
+            );
+
+            Ok(())
         }
         Err(error) => {
             tracing::warn!(
@@ -154,7 +158,7 @@ pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) 
             emit_diagnostic(
                 &app,
                 DiagnosticUpdate::from_error(&error, "OSC Chatbox test failed"),
-            )?;
+            );
 
             Err(error)
         }
@@ -182,7 +186,7 @@ pub(crate) fn save_provider_secret(
             "Provider API key saved",
             "The API key was saved in the system credential store, not app config.",
         ),
-    )?;
+    );
 
     Ok(provider_secret_status(provider))
 }
@@ -202,7 +206,7 @@ pub(crate) fn delete_provider_secret(
             "Provider API key removed",
             "The saved provider API key was removed from secure storage.",
         ),
-    )?;
+    );
 
     Ok(provider_secret_status(provider))
 }

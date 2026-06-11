@@ -4,7 +4,7 @@
 //! stable machine-readable identifier following the diagnostic naming
 //! convention documented in `events`, and `message` is human-readable text.
 //! Variants flatten their causes into the message because the error crosses
-//! the IPC boundary as JSON; only `EventEmit` keeps a typed source.
+//! the IPC boundary as JSON.
 
 use serde::Serialize;
 use serde::ser::{SerializeStruct, Serializer};
@@ -23,9 +23,6 @@ pub(crate) enum AppError {
     },
     ConfigIo {
         message: String,
-    },
-    EventEmit {
-        source: tauri::Error,
     },
     OscEncode {
         message: String,
@@ -76,10 +73,6 @@ impl AppError {
         Self::ConfigIo {
             message: message.into(),
         }
-    }
-
-    pub(crate) fn emit(error: tauri::Error) -> Self {
-        Self::EventEmit { source: error }
     }
 
     pub(crate) fn osc_encode(message: String) -> Self {
@@ -144,7 +137,6 @@ impl AppError {
             Self::Audio { .. } => "audio.failed",
             Self::Config { .. } => "config.invalid",
             Self::ConfigIo { .. } => "config.io_failed",
-            Self::EventEmit { .. } => "runtime.event_emit_failed",
             Self::OscEncode { .. } => "osc.encode_failed",
             Self::OscBind { .. } => "osc.bind_failed",
             Self::OscSend { .. } => "osc.send_failed",
@@ -162,9 +154,6 @@ impl AppError {
             Self::Audio { message } => message.clone(),
             Self::Config { message } => message.clone(),
             Self::ConfigIo { message } => message.clone(),
-            Self::EventEmit { source } => {
-                format!("Failed to emit runtime event: {source}")
-            }
             Self::OscEncode { message } => {
                 format!("Failed to encode OSC Chatbox message: {message}")
             }
@@ -194,14 +183,7 @@ impl fmt::Display for AppError {
     }
 }
 
-impl Error for AppError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::EventEmit { source } => Some(source),
-            _ => None,
-        }
-    }
-}
+impl Error for AppError {}
 
 impl Serialize for AppError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

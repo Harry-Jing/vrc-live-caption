@@ -88,7 +88,7 @@ impl RuntimeManager {
             match load_openai_api_key() {
                 Ok(api_key) => Some(api_key),
                 Err(error) => {
-                    let _ = emit_diagnostic(
+                    emit_diagnostic(
                         &app,
                         DiagnosticUpdate::error(
                             DiagnosticCategory::Config,
@@ -135,7 +135,7 @@ impl RuntimeManager {
                 app,
                 RuntimeStatus::Stopped,
                 Some("Runtime is already stopped".to_string()),
-            )?;
+            );
             return Ok(());
         };
 
@@ -144,11 +144,11 @@ impl RuntimeManager {
             app,
             RuntimeStatus::Stopping,
             Some("Stopping runtime and discarding pending speech".to_string()),
-        )?;
+        );
 
         if handle.join_handle.join().is_err() {
             let error = AppError::runtime("Runtime thread panicked while stopping.");
-            let _ = emit_status(app, RuntimeStatus::Error, Some(error.to_string()));
+            emit_status(app, RuntimeStatus::Error, Some(error.to_string()));
             return Err(error);
         }
 
@@ -156,7 +156,7 @@ impl RuntimeManager {
             app,
             RuntimeStatus::Stopped,
             Some("Runtime stopped".to_string()),
-        )?;
+        );
         emit_diagnostic(
             app,
             DiagnosticUpdate::info(
@@ -165,7 +165,9 @@ impl RuntimeManager {
                 "Runtime stopped",
                 "Microphone capture has been released.",
             ),
-        )
+        );
+
+        Ok(())
     }
 }
 
@@ -202,8 +204,8 @@ fn run_runtime_thread(
             "runtime stopped with error"
         );
 
-        let _ = emit_status(&app, RuntimeStatus::Error, Some(error.to_string()));
-        let _ = emit_diagnostic(
+        emit_status(&app, RuntimeStatus::Error, Some(error.to_string()));
+        emit_diagnostic(
             &app,
             DiagnosticUpdate::from_error(&error, "Runtime stopped with an error"),
         );
@@ -220,7 +222,7 @@ fn run_runtime(
         &app,
         RuntimeStatus::Starting,
         Some("Starting outgoing caption runtime".to_string()),
-    )?;
+    );
 
     match config.stt.provider {
         SttProvider::Mock => run_mock_runtime(app, stop_requested),
@@ -239,7 +241,7 @@ fn run_mock_runtime(app: AppHandle, stop_requested: Arc<AtomicBool>) -> AppResul
         &app,
         RuntimeStatus::Running,
         Some("Mock runtime is running".to_string()),
-    )?;
+    );
     emit_diagnostic(
         &app,
         DiagnosticUpdate::info(
@@ -248,7 +250,7 @@ fn run_mock_runtime(app: AppHandle, stop_requested: Arc<AtomicBool>) -> AppResul
             "Mock runtime started",
             "Use Mock Transcript to test normalized runtime events.",
         ),
-    )?;
+    );
 
     while !stop_requested.load(Ordering::Relaxed) {
         thread::sleep(RECEIVE_TIMEOUT);
@@ -294,7 +296,7 @@ fn run_openai_runtime(
         &app,
         RuntimeStatus::Running,
         Some("Listening for microphone speech".to_string()),
-    )?;
+    );
     emit_diagnostic(
         &app,
         DiagnosticUpdate::info(
@@ -303,7 +305,7 @@ fn run_openai_runtime(
             "Microphone capture started",
             format!("Capturing mono audio at {sample_rate} Hz."),
         ),
-    )?;
+    );
 
     while !stop_requested.load(Ordering::Relaxed) {
         let Some(samples) = receive_audio(&capture.receiver, RECEIVE_TIMEOUT)? else {
@@ -324,7 +326,7 @@ fn run_openai_runtime(
         if update.speech_started {
             let next_utterance = next_utterance_id("speech");
             utterance_id = Some(next_utterance.clone());
-            emit_utterance_started(&app, next_utterance)?;
+            emit_utterance_started(&app, next_utterance);
         }
 
         if let Some(samples) = update.ready_segment {
@@ -350,7 +352,7 @@ fn run_openai_runtime(
 
     if tail_speech_discarded {
         if let Some(utterance_id) = utterance_id {
-            emit_utterance_ended(&app, utterance_id, UtteranceEndReason::Discarded)?;
+            emit_utterance_ended(&app, utterance_id, UtteranceEndReason::Discarded);
         }
 
         emit_diagnostic(
@@ -361,7 +363,7 @@ fn run_openai_runtime(
                 "Unsent speech discarded",
                 "Speech captured just before stop was discarded without transcription.",
             ),
-        )?;
+        );
     }
 
     Ok(())
@@ -401,9 +403,10 @@ fn queue_speech_segment(
                         segment.samples.len() as f32 / segment.sample_rate as f32
                     ),
                 ),
-            )?;
+            );
+            emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::Discarded);
 
-            emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::Discarded)
+            Ok(())
         }
         Err(TrySendError::Disconnected(_)) => Err(AppError::runtime(
             "STT worker stopped unexpectedly while the runtime was still capturing audio.",
@@ -450,7 +453,7 @@ fn run_stt_worker(
     while let Ok(segment) = segment_receiver.recv() {
         if stop_requested.load(Ordering::Relaxed) {
             discarded_segments += 1;
-            let _ = emit_utterance_ended(&app, segment.utterance_id, UtteranceEndReason::Discarded);
+            emit_utterance_ended(&app, segment.utterance_id, UtteranceEndReason::Discarded);
             continue;
         }
 
@@ -469,7 +472,7 @@ fn run_stt_worker(
                 "speech segment failed"
             );
 
-            let _ = emit_diagnostic(
+            emit_diagnostic(
                 &app,
                 DiagnosticUpdate::from_error(&error, "Speech segment failed"),
             );
@@ -479,7 +482,7 @@ fn run_stt_worker(
     if discarded_segments > 0 {
         tracing::info!(discarded_segments, "discarded queued speech on stop");
 
-        let _ = emit_diagnostic(
+        emit_diagnostic(
             &app,
             DiagnosticUpdate::info(
                 DiagnosticCategory::Stt,
@@ -513,7 +516,7 @@ fn transcribe_and_emit_final(
                 segment.samples.len() as f32 / segment.sample_rate as f32
             ),
         ),
-    )?;
+    );
 
     let text = match transcribe_openai_wav(
         http_client,
@@ -525,16 +528,15 @@ fn transcribe_and_emit_final(
         Ok(text) => text,
         Err(error) => {
             // Resolve the utterance for the UI; the caller reports error details.
-            let _ = emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::SttFailed);
+            emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::SttFailed);
 
             return Err(error);
         }
     };
 
     if text.is_empty() {
-        emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::NoSpeech)?;
-
-        return emit_diagnostic(
+        emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::NoSpeech);
+        emit_diagnostic(
             app,
             DiagnosticUpdate::info(
                 DiagnosticCategory::Stt,
@@ -543,6 +545,8 @@ fn transcribe_and_emit_final(
                 "The captured segment did not contain recognized words.",
             ),
         );
+
+        return Ok(());
     }
 
     emit_transcript_final(
@@ -554,16 +558,18 @@ fn transcribe_and_emit_final(
             provider: config.stt.provider.as_str().to_string(),
             revision: 1,
         },
-    )?;
+    );
 
     // This segment was transcribed while stop was requested: keep the App
     // preview, but never send Chatbox output after the user asked to stop.
     if stop_requested.load(Ordering::Relaxed) {
-        return emit_chatbox_send_skipped_on_stop(app);
+        emit_chatbox_send_skipped_on_stop(app);
+
+        return Ok(());
     }
 
     if !config.osc.enabled {
-        return emit_diagnostic(
+        emit_diagnostic(
             app,
             DiagnosticUpdate::info(
                 DiagnosticCategory::Osc,
@@ -572,6 +578,8 @@ fn transcribe_and_emit_final(
                 "OSC output is disabled in settings.",
             ),
         );
+
+        return Ok(());
     }
 
     // The paced send also watches the stop flag itself: a stop requested
@@ -596,21 +604,27 @@ fn transcribe_and_emit_final(
                         result.byte_count, result.target, clipped_note
                     ),
                 ),
-            )
+            );
+
+            Ok(())
         }
-        Ok(None) => emit_chatbox_send_skipped_on_stop(app),
+        Ok(None) => {
+            emit_chatbox_send_skipped_on_stop(app);
+
+            Ok(())
+        }
         Err(error) => {
             emit_diagnostic(
                 app,
                 DiagnosticUpdate::from_error(&error, "Chatbox output failed"),
-            )?;
+            );
 
             Err(error)
         }
     }
 }
 
-fn emit_chatbox_send_skipped_on_stop(app: &AppHandle) -> AppResult<()> {
+fn emit_chatbox_send_skipped_on_stop(app: &AppHandle) {
     emit_diagnostic(
         app,
         DiagnosticUpdate::info(
@@ -619,5 +633,5 @@ fn emit_chatbox_send_skipped_on_stop(app: &AppHandle) -> AppResult<()> {
             "Chatbox send skipped",
             "Runtime stop was requested before this transcript could be sent.",
         ),
-    )
+    );
 }

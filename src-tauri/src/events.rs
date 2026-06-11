@@ -9,8 +9,13 @@
 //! convention: `<category>.<detail>` in snake case, where the prefix equals
 //! the serialized `DiagnosticCategory` of the event. This applies both to
 //! codes written inline at emit sites and to codes from `AppError::code`.
+//!
+//! Event delivery is best-effort: Tauri events are at-most-once, so the UI
+//! must already tolerate missed events, and emit failures are logged here
+//! rather than propagated. The runtime's lifecycle never depends on whether
+//! an event reached the webview.
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppError;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -220,9 +225,7 @@ impl DiagnosticCategory {
             | AppError::OscBind { .. }
             | AppError::OscSend { .. }
             | AppError::OscSendIncomplete { .. } => Self::Osc,
-            AppError::EventEmit { .. } | AppError::Runtime { .. } | AppError::State { .. } => {
-                Self::Runtime
-            }
+            AppError::Runtime { .. } | AppError::State { .. } => Self::Runtime,
             AppError::Stt { .. } | AppError::Wav { .. } => Self::Stt,
         }
     }
@@ -236,53 +239,50 @@ pub(crate) enum DiagnosticSeverity {
     Warning,
 }
 
-pub(crate) fn emit_status(
-    app: &AppHandle,
-    status: RuntimeStatus,
-    message: Option<String>,
-) -> AppResult<()> {
-    app.emit(
+pub(crate) fn emit_status(app: &AppHandle, status: RuntimeStatus, message: Option<String>) {
+    emit_event(
+        app,
         EVENT_RUNTIME_STATUS,
         RuntimeStatusEvent {
             status,
             message,
             timestamp_ms: now_ms(),
         },
-    )
-    .map_err(AppError::emit)
+    );
 }
 
-pub(crate) fn emit_transcript_partial(app: &AppHandle, update: TranscriptUpdate) -> AppResult<()> {
+pub(crate) fn emit_transcript_partial(app: &AppHandle, update: TranscriptUpdate) {
     emit_transcript(
         app,
         EVENT_TRANSCRIPT_PARTIAL,
         TranscriptKind::Partial,
         update,
-    )
+    );
 }
 
-pub(crate) fn emit_transcript_final(app: &AppHandle, update: TranscriptUpdate) -> AppResult<()> {
-    emit_transcript(app, EVENT_TRANSCRIPT_FINAL, TranscriptKind::Final, update)
+pub(crate) fn emit_transcript_final(app: &AppHandle, update: TranscriptUpdate) {
+    emit_transcript(app, EVENT_TRANSCRIPT_FINAL, TranscriptKind::Final, update);
 }
 
-pub(crate) fn emit_utterance_started(app: &AppHandle, utterance_id: String) -> AppResult<()> {
-    app.emit(
+pub(crate) fn emit_utterance_started(app: &AppHandle, utterance_id: String) {
+    emit_event(
+        app,
         EVENT_UTTERANCE_STARTED,
         UtteranceStartedEvent {
             id: next_event_id("utterance-start"),
             utterance_id,
             timestamp_ms: now_ms(),
         },
-    )
-    .map_err(AppError::emit)
+    );
 }
 
 pub(crate) fn emit_utterance_ended(
     app: &AppHandle,
     utterance_id: String,
     reason: UtteranceEndReason,
-) -> AppResult<()> {
-    app.emit(
+) {
+    emit_event(
+        app,
         EVENT_UTTERANCE_ENDED,
         UtteranceEndedEvent {
             id: next_event_id("utterance-end"),
@@ -290,12 +290,12 @@ pub(crate) fn emit_utterance_ended(
             reason,
             timestamp_ms: now_ms(),
         },
-    )
-    .map_err(AppError::emit)
+    );
 }
 
-pub(crate) fn emit_diagnostic(app: &AppHandle, update: DiagnosticUpdate) -> AppResult<()> {
-    app.emit(
+pub(crate) fn emit_diagnostic(app: &AppHandle, update: DiagnosticUpdate) {
+    emit_event(
+        app,
         EVENT_DIAGNOSTIC,
         DiagnosticEvent {
             id: next_event_id("diagnostic"),
@@ -306,8 +306,7 @@ pub(crate) fn emit_diagnostic(app: &AppHandle, update: DiagnosticUpdate) -> AppR
             detail: update.detail,
             timestamp_ms: now_ms(),
         },
-    )
-    .map_err(AppError::emit)
+    );
 }
 
 pub(crate) fn next_utterance_id(prefix: &str) -> String {
@@ -319,8 +318,9 @@ fn emit_transcript(
     event_name: &str,
     kind: TranscriptKind,
     update: TranscriptUpdate,
-) -> AppResult<()> {
-    app.emit(
+) {
+    emit_event(
+        app,
         event_name,
         TranscriptEvent {
             id: next_event_id("transcript"),
@@ -332,8 +332,21 @@ fn emit_transcript(
             revision: update.revision,
             timestamp_ms: now_ms(),
         },
-    )
-    .map_err(AppError::emit)
+    );
+}
+
+/// Emission is best-effort by design: Tauri events are at-most-once with no
+/// acknowledgement, and in practice an emit only fails while the webview is
+/// being torn down. No caller can act on such a failure, so it is logged here
+/// instead of being propagated.
+fn emit_event<P: Serialize + Clone>(app: &AppHandle, event_name: &str, payload: P) {
+    if let Err(error) = app.emit(event_name, payload) {
+        tracing::warn!(
+            event_name,
+            error_message = %error,
+            "failed to emit runtime event"
+        );
+    }
 }
 
 fn next_event_id(prefix: &str) -> String {
@@ -450,7 +463,6 @@ mod tests {
             AppError::audio("x"),
             AppError::config("x"),
             AppError::config_io("x"),
-            AppError::emit(tauri::Error::Io(std::io::Error::other("x"))),
             AppError::osc_encode("x".to_string()),
             AppError::osc_bind("x".to_string()),
             AppError::osc_send("127.0.0.1:9000", "x".to_string()),

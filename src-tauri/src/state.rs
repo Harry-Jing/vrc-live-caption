@@ -55,7 +55,7 @@ impl AppState {
                         "config file is unusable; defaults loaded"
                     );
 
-                    let _ = emit_diagnostic(
+                    emit_diagnostic(
                         app,
                         DiagnosticUpdate::error(
                             DiagnosticCategory::Config,
