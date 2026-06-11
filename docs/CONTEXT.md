@@ -38,7 +38,3 @@ Principles are not restated here; each has one authoritative home:
 ## Documentation Rules
 
 Authoritative docs are in English. Chinese notes use the `.zh-CN.md` suffix.
-
-The root `PROJECT_REWRITE_BRIEF.zh-CN.md` is retained locally as source
-material and is not tracked in the repository. It is not the authoritative
-project plan after this split.

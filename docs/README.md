@@ -13,7 +13,3 @@ the automated format checks unless that policy is changed explicitly.
 - [roadmap.md](./roadmap.md): near-term implementation phases
 - [decisions.md](./decisions.md): accepted project decisions
 - [research/](./research/): factual notes and experiments
-
-The root `PROJECT_REWRITE_BRIEF.zh-CN.md` is source material, not the
-authoritative project plan. It is kept locally and is not tracked in the
-repository.
