@@ -15,4 +15,5 @@ the automated format checks unless that policy is changed explicitly.
 - [research/](./research/): factual notes and experiments
 
 The root `PROJECT_REWRITE_BRIEF.zh-CN.md` is source material, not the
-authoritative project plan.
+authoritative project plan. It is kept locally and is not tracked in the
+repository.

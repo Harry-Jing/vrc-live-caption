@@ -86,6 +86,7 @@ SHOULD:
 - Diagnostics should separate audio, STT, translation, OSC, config, network, and
   local worker failure areas.
 - The default path should work without local model downloads.
+- The App UI should be localizable; English and Chinese are the first targets.
 
 MAY:
 
@@ -112,9 +113,7 @@ The MVP does not include:
 
 ## Open Questions
 
-- Which cloud STT provider should be the first default?
-  Recommendation: keep the architecture provider-neutral until an implementation
-  spike validates latency, cost, streaming behavior, and credentials handling.
+Resolved questions move to [decisions.md](./decisions.md).
 
 - Should MVP-B support target-only Chatbox output before bilingual output?
   Recommendation: start with target-only output, then add bilingual rendering if
@@ -123,10 +122,6 @@ The MVP does not include:
 - Should users be able to manually approve final text before Chatbox output?
   Recommendation: keep automatic final output as the default MVP path, and treat
   manual approval as an optional mode if it does not slow the core path.
-
-- How much history should the MVP keep?
-  Recommendation: keep only recent in-memory session history for UI state and
-  diagnostics. Persistent searchable history can come later.
 
 - What is the first public release target?
   Recommendation: target Windows first, because VRChat and audio device behavior

@@ -1,6 +1,6 @@
 # VRC Live Caption Context
 
-VRC Live Caption is a desktop app for local real-time speech understanding,
+VRC Live Caption is a local desktop tool for real-time speech understanding,
 caption preview, translation, and output routing for VRChat and desktop voice
 communication.
 
@@ -38,5 +38,6 @@ new architecture.
 
 Authoritative docs are in English.
 
-The root `PROJECT_REWRITE_BRIEF.zh-CN.md` is retained as source material. It is
-not the authoritative project plan after this split.
+The root `PROJECT_REWRITE_BRIEF.zh-CN.md` is retained locally as source
+material and is not tracked in the repository. It is not the authoritative
+project plan after this split.

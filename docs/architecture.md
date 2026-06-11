@@ -45,6 +45,8 @@ Microphone
 
 The runtime event model supports:
 
+- `runtime.status`: runtime lifecycle state (`idle`, `starting`, `running`,
+  `stopping`, `stopped`, `error`) with an optional human-readable message.
 - `utterance.started`: start of a confirmed utterance, before any transcript
   text exists.
 - `transcript.partial`: temporary recognition text that may change.
@@ -53,8 +55,14 @@ The runtime event model supports:
 - `utterance.ended`: end of an utterance that will not produce a final
   transcript, with a reason such as no recognized speech, a failed STT
   request, or a discarded segment.
+- `diagnostic`: a categorized report carrying a stable machine-readable code
+  and English fallback text.
 - `translation.draft`: optional temporary translation text.
 - `translation.final`: finalized translation text.
+
+These are semantic names. The concrete Tauri event names and payload shapes
+live in code (the Rust events module and the frontend event map) and are
+pinned by wire-format tests.
 
 MVP providers may emit only `partial` and `final`. `stable` is part of the
 architecture so later two-pass, incoming caption, and interpretation work does
@@ -63,6 +71,26 @@ not require a new event model.
 Transcript events carry recognition text only. Placeholder text such as a
 listening indicator is presentation state that the UI derives from utterance
 lifecycle events, never transcript text.
+
+Delivery is best-effort and at-most-once. The UI must tolerate missed events
+and derive state from the newest status and lifecycle events; the runtime
+lifecycle never depends on whether an event was delivered.
+
+Diagnostic codes are shaped `<category>.<detail>`, where the prefix equals the
+event's serialized category. Codes are the stable contract for filtering,
+tests, and UI localization; `message` and `detail` are English fallback text
+(see [decisions.md](./decisions.md)).
+
+## Runtime Lifecycle
+
+Start validates config and credentials before capture begins. Startup failures
+such as invalid config or an unavailable microphone are fatal; per-segment STT
+or OSC failures emit diagnostics and keep the runtime alive.
+
+Stop is a hard cutoff: the microphone is released promptly, buffered and
+queued speech is discarded, and nothing is sent to the Chatbox after the stop
+request; only an STT request already in flight is awaited. The app also stops
+the runtime explicitly on exit.
 
 ## Output Strategy
 
