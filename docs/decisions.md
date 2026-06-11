@@ -5,6 +5,8 @@ questions belong in [product.md](./product.md).
 
 ## Use Tauri, Vue, TypeScript, and Rust
 
+Date: 2026-05
+
 Decision: build the rewrite with Tauri 2, Vue 3, TypeScript, Vite, and a Rust
 runtime.
 
@@ -17,6 +19,8 @@ Consequence: the Python prototype is not ported directly.
 Revisit if: Tauri or Rust blocks core audio, packaging, or runtime requirements.
 
 ## Treat The Python Prototype As Reference Only
+
+Date: 2026-05
 
 Decision: use the old Python prototype for behavior and testing lessons, not as
 a new architecture constraint.
@@ -32,6 +36,8 @@ formal compatibility contract.
 
 ## Make Outgoing Caption The MVP
 
+Date: 2026-05
+
 Decision: the MVP is microphone input to App preview to final-only VRChat
 Chatbox output.
 
@@ -45,6 +51,8 @@ Revisit if: user validation shows incoming caption is more important than
 outgoing caption for the first release.
 
 ## Keep Chatbox Final-Only In The MVP
+
+Date: 2026-05
 
 Decision: VRChat Chatbox receives final text only in the MVP.
 
@@ -60,6 +68,8 @@ without causing flicker, spam, or incorrect public text.
 
 ## Default To OpenAI For Cloud STT
 
+Date: 2026-06
+
 Decision: the first default STT provider is the OpenAI transcriptions API with
 `gpt-4o-mini-transcribe`, uploading each completed speech segment as one
 blocking request.
@@ -69,12 +79,16 @@ and no streaming protocol work.
 
 Consequence: the default provider emits final transcripts only; the App
 preview shows listening state and final text. Provider neutrality lives in the
-normalized event contract, not in avoiding a default.
+normalized event contract, not in avoiding a default. Cloud stays the MVP
+default; the long-term default direction is local STT (see "Make Local STT The
+Long-Term Default").
 
 Revisit if: per-segment latency or cost fails real usage, or a streaming
 provider is added.
 
 ## Support partial / stable / final Event Semantics
+
+Date: 2026-05
 
 Decision: the architecture supports `partial`, `stable`, and `final`
 transcript semantics.
@@ -89,6 +103,8 @@ instead of provider raw messages.
 Revisit if: provider behavior makes `stable` impossible to define consistently.
 
 ## Name Diagnostic Codes `<category>.<detail>`
+
+Date: 2026-06
 
 Decision: every diagnostic event and serialized error carries a stable
 machine-readable code shaped `<category>.<detail>`, where the prefix equals
@@ -106,6 +122,8 @@ Revisit if: a consumer needs structured diagnostic payloads beyond a flat code.
 
 ## Treat Event Delivery As Best-Effort
 
+Date: 2026-06
+
 Decision: runtime-to-UI events are at-most-once. Emit failures are logged and
 never propagated, and the runtime lifecycle never depends on whether an event
 reached the webview; the app stops the runtime explicitly on exit instead.
@@ -121,6 +139,8 @@ Revisit if: an event appears whose loss corrupts UI state irrecoverably.
 
 ## Make Runtime Stop A Hard Cutoff
 
+Date: 2026-06
+
 Decision: stop releases the microphone within one receive timeout, discards
 buffered and queued speech, and sends no Chatbox output after the stop
 request; only an STT request already in flight is awaited.
@@ -135,6 +155,8 @@ Revisit if: users ask for a stop mode that finishes the current utterance.
 
 ## Identify Audio Devices By Stable Id
 
+Date: 2026-06
+
 Decision: config stores CPAL device ids, never display names.
 
 Reason: duplicate device names and reconnects are common, especially on
@@ -147,6 +169,8 @@ Revisit if: CPAL ids prove unstable across driver or OS updates.
 
 ## Keep Session History In Memory Only
 
+Date: 2026-06
+
 Decision: the MVP keeps bounded in-memory history only: recent final
 transcripts and diagnostics for UI state. Nothing is persisted.
 
@@ -158,21 +182,26 @@ Later capability.
 
 Revisit if: users need post-session review or export.
 
-## Keep Local Inference Optional And Isolated
+## Keep Local Inference Isolated Behind Sidecars
 
-Decision: local STT and local translation are future optional capabilities that
-run behind sidecars or workers.
+Date: 2026-05
+
+Decision: local STT and local translation run behind sidecars or workers, not
+inside the main app process.
 
 Reason: users should not need Python, PyTorch, CUDA Toolkit, or model-specific
 development dependencies. Model crashes and GPU runtime failures should not
 destabilize the main app.
 
-Consequence: the main app remains small and cloud-capable by default.
+Consequence: the main app stays small and keeps a working cloud path even when
+local inference is missing or broken.
 
 Revisit if: a native local runtime becomes small and stable enough to include in
 the main app without increasing install or support burden.
 
 ## Keep Secrets Out Of Normal Config And Logs
+
+Date: 2026-05
 
 Decision: API keys, tokens, and credentials must not be stored in normal config
 files or printed in logs. Provider keys live in the operating system credential
@@ -189,6 +218,8 @@ storage design.
 
 ## Localize The UI In The Frontend
 
+Date: 2026-06
+
 Decision: the app UI will be localized, starting with English and Chinese. The
 backend never localizes: it emits stable codes plus English fallback text, and
 the frontend owns all user-facing presentation. Effective immediately, new
@@ -204,3 +235,42 @@ Consequence: three language settings stay independent: caption language
 locale switch itself is scheduled separately from this groundwork rule.
 
 Revisit if: a consumer outside the UI needs localized backend text.
+
+## Target Windows As The First Release Platform
+
+Date: 2026-06
+
+Decision: the first public release targets Windows.
+
+Reason: VRChat has no macOS client, so audio devices, OSC, and real VRChat
+sessions can only be validated on Windows. Current macOS development is a
+temporary convenience, not a release target.
+
+Consequence: Windows CI builds and real-machine VRChat validation move ahead of
+release work instead of waiting for the release phase.
+
+Revisit if: VRChat ships on another desktop platform that the user base
+actually plays on.
+
+## Make Local STT The Long-Term Default
+
+Date: 2026-06
+
+Decision: local STT is the long-term default speech path. The MVP keeps cloud
+STT as the default; the default switches to local only after a local engine is
+validated on real Windows machines running VRChat.
+
+Reason: the default path should not require an OpenAI account, payment setup,
+or regional API access. The target community is global, with English and
+Chinese as the first priorities, and cloud key acquisition is a hard barrier
+for many of those users.
+
+Consequence: cloud STT becomes a quality option instead of the only usable
+path. Local STT moves from a Later idea to a planned roadmap phase that starts
+with engine research: accuracy for English and Chinese, streaming versus
+segmented input, model distribution, and resource usage measured while VRChat
+is running. Model download and management become planned work instead of
+non-goals.
+
+Revisit if: no local engine reaches acceptable accuracy and resource usage on
+machines that are also running VRChat.

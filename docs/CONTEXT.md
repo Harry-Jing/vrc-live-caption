@@ -2,7 +2,7 @@
 
 VRC Live Caption is a local desktop tool for real-time speech understanding,
 caption preview, translation, and output routing for VRChat and desktop voice
-communication.
+communication. It is designed for long always-on sessions.
 
 The rewrite is not a direct port of the Python prototype. The old prototype is
 useful for behavior, testing, and product lessons, but it does not define the
@@ -17,26 +17,27 @@ new architecture.
 - MVP-A: microphone input to STT, App preview, and final-only VRChat Chatbox
   output.
 - MVP-B: final-only translation after MVP-A is stable.
+- MVP default STT path: cloud. Long-term default: local STT behind a sidecar
+  (see [decisions.md](./decisions.md)).
+- First release platform: Windows.
 
-## Product Principles
+## Where The Rules Live
 
-- Ordinary users should not need Python, PyTorch, CUDA Toolkit, uv, pip, or a
-  development environment.
-- The main app should stay small and stable.
-- Cloud STT should provide the default usable path.
-- Local inference should be optional and isolated behind sidecars or workers.
-- App preview can use live transcript updates.
-- VRChat Chatbox is not a real-time subtitle terminal and should receive final
-  text by default.
-- Audio input, speech processing, translation, and output sinks should remain
-  separate.
-- Diagnostics should make audio, STT, translation, OSC, config, network, and
-  local worker failures understandable.
-- API keys and secrets must not be written to normal config files or logs.
+Principles are not restated here; each has one authoritative home:
+
+- Product scope, requirements, user scenarios, and open questions:
+  [product.md](./product.md)
+- Runtime boundaries, event semantics, and data flow:
+  [architecture.md](./architecture.md)
+- Accepted decisions, including defaults, security, and platform choices:
+  [decisions.md](./decisions.md)
+- Implementation phases: [roadmap.md](./roadmap.md)
+- VRChat Chatbox layout and OSC facts:
+  [research/vrchat-chatbox-reference.md](./research/vrchat-chatbox-reference.md)
 
 ## Documentation Rules
 
-Authoritative docs are in English.
+Authoritative docs are in English. Chinese notes use the `.zh-CN.md` suffix.
 
 The root `PROJECT_REWRITE_BRIEF.zh-CN.md` is retained locally as source
 material and is not tracked in the repository. It is not the authoritative

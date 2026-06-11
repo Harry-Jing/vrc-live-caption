@@ -11,6 +11,8 @@
 - If a request is unclear or changes project direction, discuss the approach first.
 - Keep edits scoped; do not rewrite unrelated code, docs, or formatting.
 - Preserve existing user changes in the worktree.
+- After making substantive changes to project docs, summarize what changed in
+  Chinese in the conversation so the maintainer can review it quickly.
 - When adding or upgrading a production dependency, explain why it is needed and
   why existing dependencies are not enough. Small dev-only tooling may be added
   when it directly supports checks the project already expects.

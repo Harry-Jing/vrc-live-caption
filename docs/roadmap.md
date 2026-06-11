@@ -39,6 +39,17 @@ Success criteria:
 - Chatbox output does not attempt partial streaming.
 - The App reports common setup failures clearly.
 
+Remaining work:
+
+- typing indicator on `/chatbox/typing` while an utterance is active, so other
+  players see activity before the final text arrives
+- interim hard clip to the 144-character Chatbox input limit
+- full Chatbox wrap model from
+  [research/vrchat-chatbox-reference.md](./research/vrchat-chatbox-reference.md);
+  the current width model is a simplified approximation
+- Windows CI build running the existing quality gates
+- validation in real Windows VRChat sessions
+
 ## Phase 2: Frontend Test Infrastructure
 
 Status: not started.
@@ -50,6 +61,9 @@ has unit tests; the frontend has none.
 - caption state machine extracted into framework-free modules and unit tested
 - one behavior suite run against both the preview backend and the Tauri
   backend gateway so the two cannot drift
+- runtime status snapshot command so a reloaded webview can resync state, as
+  the pull-side companion to best-effort event delivery (see
+  [decisions.md](./decisions.md))
 
 ## Phase 3: Outgoing MVP-B
 
@@ -85,21 +99,38 @@ Goal: ship the UI in English and Chinese (see
 
 Status: not started.
 
-Goal: ship installable builds users can trust.
+Goal: ship installable builds users can trust. The first release platform is
+Windows (see [decisions.md](./decisions.md)).
 
-- decide the first release platform (open question in product.md)
 - code signing and updater key handling
 - versioning and release notes flow
 - validation on real Windows VRChat setups
+
+## Phase 6: Local STT Path
+
+Status: not started.
+
+Goal: make local STT the default path (see [decisions.md](./decisions.md)).
+
+- engine research: candidate engines, accuracy for English and Chinese,
+  streaming versus segmented input, and resource usage measured on a Windows
+  machine that is also running VRChat
+- input-side provider contract: where segmentation lives once a provider
+  consumes a continuous audio stream
+- model distribution: bundled with the installer versus first-run download
+- local STT sidecar implementation
+- switch the default provider to local once validated
+
+Engine research may start before earlier phases finish; the implementation
+must not destabilize the released outgoing path.
 
 ## Later
 
 Later capabilities should be promoted only after the outgoing path is stable.
 
 - incoming caption from system or VRChat audio
-- local STT sidecar
 - local translation sidecar
-- model download and component management
+- model and component management beyond the local STT path
 - persistent history and export
 - interpretation workflows
 - TTS
