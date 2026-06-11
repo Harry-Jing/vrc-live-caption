@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import ControlPanel from "../components/ControlPanel.vue";
+import SettingsForm from "../components/SettingsForm.vue";
 import { useRuntimeContext } from "../runtime/context";
 
 const {
@@ -28,7 +28,7 @@ const {
       </h2>
     </header>
 
-    <ControlPanel
+    <SettingsForm
       :audio-input-devices="audioInputDevices"
       :config="config"
       :is-secrets-busy="isSecretsBusy"
