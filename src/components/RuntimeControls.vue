@@ -3,7 +3,7 @@ import { computed } from "vue";
 import type { RuntimeCommand, RuntimeStatusEvent } from "../runtime/types";
 
 const props = defineProps<{
-  actionError: string;
+  errorMessage: string;
   isBusy: boolean;
   runtimeStatus: RuntimeStatusEvent;
 }>();
@@ -79,12 +79,12 @@ function run(command: RuntimeCommand) {
     </div>
 
     <UAlert
-      v-if="actionError"
+      v-if="errorMessage"
       class="mt-4"
       color="error"
       icon="i-lucide-circle-alert"
-      title="Action failed"
-      :description="actionError"
+      title="Runtime action failed"
+      :description="errorMessage"
       variant="subtle"
     />
   </UCard>

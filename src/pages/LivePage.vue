@@ -7,14 +7,14 @@ import { formatTime } from "../runtime/format";
 import { useRuntimeContext } from "../runtime/context";
 
 const {
-  actionError,
   activeCaptionText,
   captionMode,
   config,
   diagnostics,
   finalTranscripts,
-  isBusy,
+  isRuntimeBusy,
   runCommand,
+  runtimeError,
   runtimeStatus,
 } = useRuntimeContext();
 
@@ -55,8 +55,8 @@ const latestFinalTranscript = computed(
 
     <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
       <RuntimeControls
-        :action-error="actionError"
-        :is-busy="isBusy"
+        :error-message="runtimeError"
+        :is-busy="isRuntimeBusy"
         :runtime-status="runtimeStatus"
         @run="runCommand"
       />

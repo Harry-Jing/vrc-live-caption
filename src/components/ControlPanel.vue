@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, ref, toRaw, watch } from "vue";
 import type {
   AppConfig,
   AudioInputDevice,
@@ -8,11 +8,13 @@ import type {
 } from "../runtime/types";
 
 const props = defineProps<{
-  actionError: string;
   audioInputDevices: AudioInputDevice[];
   config: AppConfig | null;
-  isBusy: boolean;
-  openAiSecretStatus: ProviderSecretStatus | null;
+  isSecretsBusy: boolean;
+  isSettingsBusy: boolean;
+  secretStatuses: Partial<Record<SttProvider, ProviderSecretStatus>>;
+  secretsError: string;
+  settingsError: string;
 }>();
 
 const emit = defineEmits<{
@@ -22,32 +24,29 @@ const emit = defineEmits<{
   saveProviderSecret: [provider: SttProvider, secret: string];
 }>();
 
-const form = reactive<AppConfig>({
-  audio: {
-    inputDeviceId: null,
-  },
-  stt: {
-    provider: "openai",
-    language: "en",
-    model: "gpt-4o-mini-transcribe",
-  },
-  osc: {
-    host: "127.0.0.1",
-    port: 9000,
-    enabled: true,
-    minIntervalMs: 1200,
-  },
-  ui: {
-    showPartial: true,
-  },
-});
+// The form is a deep clone of the saved config: fields stay editable without
+// mutating shared state, and a save round-trip re-syncs it wholesale.
+const form = ref<AppConfig | null>(null);
 const apiKeyInput = ref("");
 
-const canSaveOpenAiApiKey = computed(
-  () => form.stt.provider === "openai" && apiKeyInput.value.trim().length > 0,
+watch(
+  () => props.config,
+  (config) => {
+    form.value = config ? structuredClone(toRaw(config)) : null;
+  },
+  { immediate: true },
 );
+
+const openAiSecretStatus = computed(() => props.secretStatuses.openai ?? null);
+
+const canSaveOpenAiApiKey = computed(
+  () =>
+    form.value?.stt.provider === "openai" &&
+    apiKeyInput.value.trim().length > 0,
+);
+
 const openAiSecretLabel = computed(() => {
-  const status = props.openAiSecretStatus;
+  const status = openAiSecretStatus.value;
 
   if (!status) {
     return "Checking";
@@ -65,68 +64,54 @@ const openAiSecretLabel = computed(() => {
 
   return `System ${suffix}`;
 });
+
+// Sentinel for "use the system default device": the config stores null, but
+// reka-ui's Select forbids empty-string item values.
+const DEFAULT_DEVICE_VALUE = "__default-input-device__";
+
+const inputDeviceItems = computed(() => [
+  { label: "Default input device", value: DEFAULT_DEVICE_VALUE },
+  ...props.audioInputDevices.map((device) => ({
+    label: device.isDefault ? `${device.name} (default)` : device.name,
+    value: device.id,
+  })),
+]);
+
+const providerItems: { label: string; value: SttProvider }[] = [
+  { label: "OpenAI", value: "openai" },
+  { label: "Mock", value: "mock" },
+];
+
 const selectedInputDevice = computed({
-  get() {
-    return form.audio.inputDeviceId ?? "";
-  },
-  set(value: string) {
-    form.audio.inputDeviceId = value || null;
+  get: () => form.value?.audio.inputDeviceId ?? DEFAULT_DEVICE_VALUE,
+  set: (value: string) => {
+    if (form.value) {
+      form.value.audio.inputDeviceId =
+        value === DEFAULT_DEVICE_VALUE ? null : value;
+    }
   },
 });
 
 watch(
-  () => props.config,
-  (config) => {
-    if (!config) {
-      return;
-    }
-
-    form.audio.inputDeviceId = config.audio.inputDeviceId;
-    form.stt.provider = config.stt.provider;
-    form.stt.language = config.stt.language;
-    form.stt.model = config.stt.model;
-    form.osc.host = config.osc.host;
-    form.osc.port = config.osc.port;
-    form.osc.enabled = config.osc.enabled;
-    form.osc.minIntervalMs = config.osc.minIntervalMs;
-    form.ui.showPartial = config.ui.showPartial;
-  },
-  { immediate: true },
-);
-
-watch(
-  () => props.openAiSecretStatus,
-  (status) => {
-    if (status?.configured) {
+  () => openAiSecretStatus.value?.configured,
+  (configured) => {
+    if (configured) {
       apiKeyInput.value = "";
     }
   },
 );
 
 function save() {
-  emit("saveConfig", {
-    audio: {
-      inputDeviceId: form.audio.inputDeviceId,
-    },
-    stt: {
-      provider: form.stt.provider,
-      language: form.stt.language.trim(),
-      model: form.stt.model.trim(),
-    },
-    osc: {
-      host: form.osc.host.trim(),
-      port: form.osc.port,
-      enabled: form.osc.enabled,
-      minIntervalMs: form.osc.minIntervalMs,
-    },
-    ui: {
-      showPartial: form.ui.showPartial,
-    },
-  });
-}
+  if (!form.value) {
+    return;
+  }
 
-function setProvider(event: Event) {
-  form.stt.provider = (event.target as HTMLSelectElement).value as SttProvider;
+  const next = structuredClone(toRaw(form.value));
+  next.stt.language = next.stt.language.trim();
+  next.stt.model = next.stt.model.trim();
+  next.osc.host = next.osc.host.trim();
+
+  emit("saveConfig", next);
 }
 
 function saveOpenAiApiKey() {
@@ -149,7 +134,7 @@ function deleteOpenAiApiKey() {
           </p>
         </div>
         <UButton
-          :disabled="isBusy"
+          :disabled="isSettingsBusy"
           icon="i-lucide-refresh-cw"
           label="Devices"
           size="sm"
@@ -160,38 +145,26 @@ function deleteOpenAiApiKey() {
     </template>
 
     <UAlert
-      v-if="actionError"
+      v-if="settingsError"
       class="mb-4"
       color="error"
       icon="i-lucide-circle-alert"
-      title="Action failed"
-      :description="actionError"
+      title="Settings action failed"
+      :description="settingsError"
       variant="subtle"
     />
 
-    <form class="grid gap-5" @submit.prevent="save">
+    <form v-if="form" class="grid gap-5" @submit.prevent="save">
       <section class="grid gap-4">
         <h3 class="text-sm font-semibold text-highlighted">Audio</h3>
 
-        <div class="grid gap-2">
-          <label class="text-sm font-medium text-highlighted" for="audio-input">
-            Microphone
-          </label>
-          <select
-            id="audio-input"
+        <UFormField label="Microphone">
+          <USelect
             v-model="selectedInputDevice"
-            class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-          >
-            <option value="">Default input device</option>
-            <option
-              v-for="device in audioInputDevices"
-              :key="device.id"
-              :value="device.id"
-            >
-              {{ device.name }}{{ device.isDefault ? " (default)" : "" }}
-            </option>
-          </select>
-        </div>
+            class="w-full"
+            :items="inputDeviceItems"
+          />
+        </UFormField>
       </section>
 
       <USeparator />
@@ -200,79 +173,47 @@ function deleteOpenAiApiKey() {
         <h3 class="text-sm font-semibold text-highlighted">Speech provider</h3>
 
         <div class="grid gap-3 sm:grid-cols-2">
-          <div class="grid gap-2">
-            <label
-              class="text-sm font-medium text-highlighted"
-              for="stt-provider"
-            >
-              Provider
-            </label>
-            <select
-              id="stt-provider"
-              :value="form.stt.provider"
-              class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-              @change="setProvider"
-            >
-              <option value="openai">OpenAI</option>
-              <option value="mock">Mock</option>
-            </select>
-          </div>
-
-          <div class="grid gap-2">
-            <label class="text-sm font-medium text-highlighted" for="language">
-              Language
-            </label>
-            <input
-              id="language"
-              v-model="form.stt.language"
-              class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-              type="text"
+          <UFormField label="Provider">
+            <USelect
+              v-model="form.stt.provider"
+              class="w-full"
+              :items="providerItems"
             />
-          </div>
+          </UFormField>
+
+          <UFormField label="Language">
+            <UInput v-model="form.stt.language" class="w-full" />
+          </UFormField>
         </div>
 
-        <div class="grid gap-2">
-          <label class="text-sm font-medium text-highlighted" for="stt-model">
-            STT model
-          </label>
-          <input
-            id="stt-model"
-            v-model="form.stt.model"
-            class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-            type="text"
-          />
-        </div>
+        <UFormField label="STT model">
+          <UInput v-model="form.stt.model" class="w-full" />
+        </UFormField>
 
         <div
           v-if="form.stt.provider === 'openai'"
           class="grid gap-3 rounded-md border border-default bg-muted/30 p-3"
         >
           <div class="flex items-center justify-between gap-3">
-            <label
-              class="text-sm font-medium text-highlighted"
-              for="openai-api-key"
-            >
+            <span class="text-sm font-medium text-highlighted">
               OpenAI API key
-            </label>
+            </span>
             <UBadge color="primary" variant="subtle">
               {{ openAiSecretLabel }}
             </UBadge>
           </div>
 
           <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-            <input
-              id="openai-api-key"
+            <UInput
               v-model="apiKeyInput"
-              autocomplete="off"
               autocapitalize="off"
-              class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-              inputmode="text"
+              autocomplete="off"
               placeholder="sk-..."
               spellcheck="false"
               type="password"
             />
             <UButton
-              :disabled="isBusy || !canSaveOpenAiApiKey"
+              :disabled="isSecretsBusy || !canSaveOpenAiApiKey"
               icon="i-lucide-key-round"
               label="Save Key"
               type="button"
@@ -281,7 +222,7 @@ function deleteOpenAiApiKey() {
             />
             <UButton
               v-if="openAiSecretStatus?.storage === 'systemCredentialStore'"
-              :disabled="isBusy"
+              :disabled="isSecretsBusy"
               color="neutral"
               icon="i-lucide-trash-2"
               label="Remove"
@@ -290,6 +231,15 @@ function deleteOpenAiApiKey() {
               @click="deleteOpenAiApiKey"
             />
           </div>
+
+          <UAlert
+            v-if="secretsError"
+            color="error"
+            icon="i-lucide-circle-alert"
+            title="API key action failed"
+            :description="secretsError"
+            variant="subtle"
+          />
 
           <p v-if="openAiSecretStatus?.error" class="text-xs text-error">
             {{ openAiSecretStatus.error }}
@@ -302,72 +252,38 @@ function deleteOpenAiApiKey() {
       <section class="grid gap-4">
         <h3 class="text-sm font-semibold text-highlighted">Chatbox output</h3>
 
-        <div class="grid gap-3 sm:grid-cols-[1fr_96px]">
-          <div class="grid gap-2">
-            <label class="text-sm font-medium text-highlighted" for="osc-host">
-              OSC host
-            </label>
-            <input
-              id="osc-host"
-              v-model="form.osc.host"
-              class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-              type="text"
+        <div class="grid gap-3 sm:grid-cols-[1fr_140px]">
+          <UFormField label="OSC host">
+            <UInput v-model="form.osc.host" class="w-full" />
+          </UFormField>
+
+          <UFormField label="Port">
+            <UInputNumber
+              v-model="form.osc.port"
+              class="w-full"
+              :max="65535"
+              :min="1"
             />
-          </div>
-          <div class="grid gap-2">
-            <label class="text-sm font-medium text-highlighted" for="osc-port">
-              Port
-            </label>
-            <input
-              id="osc-port"
-              v-model.number="form.osc.port"
-              class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-              min="1"
-              max="65535"
-              type="number"
-            />
-          </div>
+          </UFormField>
         </div>
 
-        <div class="grid gap-2">
-          <label
-            class="text-sm font-medium text-highlighted"
-            for="osc-interval"
-          >
-            OSC interval (ms)
-          </label>
-          <input
-            id="osc-interval"
-            v-model.number="form.osc.minIntervalMs"
-            class="h-10 rounded-md border border-default bg-default px-3 text-sm text-highlighted outline-none focus:border-primary"
-            min="500"
-            step="100"
-            type="number"
+        <UFormField label="OSC interval (ms)">
+          <UInputNumber
+            v-model="form.osc.minIntervalMs"
+            class="w-full"
+            :min="500"
+            :step="100"
           />
-        </div>
+        </UFormField>
 
         <div class="grid gap-3 sm:grid-cols-2">
-          <label class="flex items-center gap-2 text-sm text-highlighted">
-            <input
-              v-model="form.osc.enabled"
-              class="size-4 accent-primary"
-              type="checkbox"
-            />
-            Chatbox output
-          </label>
-          <label class="flex items-center gap-2 text-sm text-highlighted">
-            <input
-              v-model="form.ui.showPartial"
-              class="size-4 accent-primary"
-              type="checkbox"
-            />
-            App partial preview
-          </label>
+          <USwitch v-model="form.osc.enabled" label="Chatbox output" />
+          <USwitch v-model="form.ui.showPartial" label="App partial preview" />
         </div>
       </section>
 
       <UButton
-        :disabled="isBusy || !config"
+        :disabled="isSettingsBusy"
         icon="i-lucide-save"
         label="Save Settings"
         type="submit"
@@ -375,5 +291,7 @@ function deleteOpenAiApiKey() {
         block
       />
     </form>
+
+    <p v-else class="text-sm text-muted">Loading settings...</p>
   </UCard>
 </template>

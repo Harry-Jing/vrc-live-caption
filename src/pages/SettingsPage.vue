@@ -3,15 +3,17 @@ import ControlPanel from "../components/ControlPanel.vue";
 import { useRuntimeContext } from "../runtime/context";
 
 const {
-  actionError,
   audioInputDevices,
   config,
   deleteProviderSecret,
-  isBusy,
+  isSecretsBusy,
+  isSettingsBusy,
   loadAudioInputDevices,
-  openAiSecretStatus,
   saveConfig,
   saveProviderSecret,
+  secretStatuses,
+  secretsError,
+  settingsError,
 } = useRuntimeContext();
 </script>
 
@@ -27,11 +29,13 @@ const {
     </header>
 
     <ControlPanel
-      :action-error="actionError"
       :audio-input-devices="audioInputDevices"
       :config="config"
-      :is-busy="isBusy"
-      :open-ai-secret-status="openAiSecretStatus"
+      :is-secrets-busy="isSecretsBusy"
+      :is-settings-busy="isSettingsBusy"
+      :secret-statuses="secretStatuses"
+      :secrets-error="secretsError"
+      :settings-error="settingsError"
       @delete-provider-secret="deleteProviderSecret"
       @refresh-devices="loadAudioInputDevices"
       @save-config="saveConfig"

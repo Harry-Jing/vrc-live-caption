@@ -16,9 +16,7 @@ export type CaptionMode = "listening" | "partial" | "final";
 export type RuntimeCommand =
   | "start_runtime"
   | "stop_runtime"
-  | "start_mock_runtime"
   | "emit_mock_transcript"
-  | "emit_mock_diagnostic"
   | "send_osc_test_message";
 
 export const RUNTIME_EVENTS = {

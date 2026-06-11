@@ -9,9 +9,8 @@ use crate::audio::{AudioInputDevice, list_input_devices};
 use crate::config::{AppConfig, SttProvider};
 use crate::error::AppResult;
 use crate::events::{
-    DiagnosticCategory, DiagnosticSeverity, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate,
-    emit_diagnostic, emit_status, emit_transcript_final, emit_transcript_partial,
-    emit_utterance_started, next_utterance_id,
+    DiagnosticCategory, DiagnosticSeverity, DiagnosticUpdate, TranscriptUpdate, emit_diagnostic,
+    emit_transcript_final, emit_transcript_partial, emit_utterance_started, next_utterance_id,
 };
 use crate::osc::{OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE, send_chatbox_osc};
 use crate::secrets::{
@@ -84,32 +83,6 @@ pub(crate) fn stop_runtime(app: AppHandle, state: State<'_, AppState>) -> AppRes
 }
 
 #[tauri::command(async)]
-pub(crate) fn start_mock_runtime(app: AppHandle) -> AppResult<()> {
-    tracing::info!("starting mock runtime");
-
-    emit_status(
-        &app,
-        RuntimeStatus::Starting,
-        Some("Starting mock runtime".to_string()),
-    )?;
-    emit_diagnostic(
-        &app,
-        DiagnosticUpdate {
-            category: DiagnosticCategory::Runtime,
-            severity: DiagnosticSeverity::Info,
-            code: "runtime.mock_started",
-            message: "Mock runtime started".to_string(),
-            detail: Some("Runtime foundation path is active.".to_string()),
-        },
-    )?;
-    emit_status(
-        &app,
-        RuntimeStatus::Running,
-        Some("Mock runtime is running".to_string()),
-    )
-}
-
-#[tauri::command(async)]
 pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let config = state.config()?;
     let utterance_id = next_utterance_id("mock");
@@ -150,22 +123,6 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
             detail: Some(
                 "The UI received normalized partial and final transcript events.".to_string(),
             ),
-        },
-    )
-}
-
-#[tauri::command(async)]
-pub(crate) fn emit_mock_diagnostic(app: AppHandle) -> AppResult<()> {
-    tracing::info!("emitting mock diagnostic");
-
-    emit_diagnostic(
-        &app,
-        DiagnosticUpdate {
-            category: DiagnosticCategory::Config,
-            severity: DiagnosticSeverity::Info,
-            code: "config.shape_loaded",
-            message: "Config shape loaded".to_string(),
-            detail: Some("No API keys or provider secrets are stored in app config.".to_string()),
         },
     )
 }

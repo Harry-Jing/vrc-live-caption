@@ -1,7 +1,3 @@
-<script setup lang="ts">
-import { RouterLink } from "vue-router";
-</script>
-
 <template>
   <div class="grid min-h-[60dvh] place-items-center">
     <UCard :ui="{ body: 'p-6' }" class="w-full max-w-md">
@@ -15,12 +11,7 @@ import { RouterLink } from "vue-router";
           </h2>
         </div>
 
-        <RouterLink
-          class="mx-auto inline-flex min-h-11 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-inverted outline-none hover:bg-primary-600 focus-visible:ring-2 focus-visible:ring-primary"
-          to="/"
-        >
-          Back to Live
-        </RouterLink>
+        <UButton class="mx-auto" label="Back to Live" to="/" />
       </div>
     </UCard>
   </div>

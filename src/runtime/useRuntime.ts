@@ -1,40 +1,23 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
-  RUNTIME_EVENTS,
-  type AudioInputDevice,
-  type AppConfig,
-  type CaptionMode,
-  type DiagnosticEvent,
-  type ProviderSecretStatus,
-  type RuntimeCommand,
-  type RuntimeStatusEvent,
-  type SttProvider,
-  type TranscriptEvent,
-  type UtteranceEndedEvent,
-  type UtteranceStartedEvent,
+  createRuntimeBackend,
+  type RuntimeEventHandlers,
+  type Unsubscribe,
+} from "./backend";
+import type {
+  AppConfig,
+  AudioInputDevice,
+  CaptionMode,
+  DiagnosticEvent,
+  ProviderSecretStatus,
+  RuntimeCommand,
+  RuntimeStatusEvent,
+  SttProvider,
+  TranscriptEvent,
 } from "./types";
 
-const defaultConfig: AppConfig = {
-  audio: {
-    inputDeviceId: null,
-  },
-  stt: {
-    provider: "openai",
-    language: "en",
-    model: "gpt-4o-mini-transcribe",
-  },
-  osc: {
-    host: "127.0.0.1",
-    port: 9000,
-    enabled: true,
-    minIntervalMs: 1200,
-  },
-  ui: {
-    showPartial: true,
-  },
-};
+const FINAL_TRANSCRIPT_LIMIT = 5;
+const DIAGNOSTIC_LIMIT = 8;
 
 function normalizeError(error: unknown) {
   if (typeof error === "string") {
@@ -53,16 +36,36 @@ function normalizeError(error: unknown) {
   return "Action failed.";
 }
 
-function desktopAppRequiredError() {
-  return new Error("This feature requires the Tauri desktop app.");
+// One busy/error scope per action domain, so a slow settings save cannot
+// disable runtime controls or surface its error on an unrelated page.
+function createActionState() {
+  const pendingCount = ref(0);
+  const error = ref("");
+  const isBusy = computed(() => pendingCount.value > 0);
+
+  async function run(action: () => Promise<void>) {
+    error.value = "";
+    pendingCount.value += 1;
+
+    try {
+      await action();
+    } catch (cause) {
+      error.value = normalizeError(cause);
+    } finally {
+      pendingCount.value -= 1;
+    }
+  }
+
+  return { isBusy, error, run };
 }
 
 export function useRuntime() {
-  const isTauriApp = isTauri();
-  const browserPreviewEnabled = import.meta.env.DEV && !isTauriApp;
+  const backend = createRuntimeBackend();
   const audioInputDevices = ref<AudioInputDevice[]>([]);
   const config = ref<AppConfig | null>(null);
-  const openAiSecretStatus = ref<ProviderSecretStatus | null>(null);
+  const secretStatuses = ref<
+    Partial<Record<SttProvider, ProviderSecretStatus>>
+  >({});
   const runtimeStatus = ref<RuntimeStatusEvent>({
     status: "idle",
     message: "Runtime is idle",
@@ -72,9 +75,10 @@ export function useRuntime() {
   const partialTranscript = ref<TranscriptEvent | null>(null);
   const finalTranscripts = ref<TranscriptEvent[]>([]);
   const diagnostics = ref<DiagnosticEvent[]>([]);
-  const actionError = ref("");
-  const isBusy = ref(false);
-  const unlisteners: UnlistenFn[] = [];
+  const runtimeAction = createActionState();
+  const settingsAction = createActionState();
+  const secretsAction = createActionState();
+  let unsubscribeListeners: Unsubscribe | null = null;
   let isUnmounted = false;
 
   const latestFinalTranscript = computed<TranscriptEvent | null>(
@@ -112,174 +116,56 @@ export function useRuntime() {
   });
 
   async function runCommand(command: RuntimeCommand) {
-    actionError.value = "";
-    isBusy.value = true;
-
-    try {
-      if (!isTauriApp) {
-        if (browserPreviewEnabled) {
-          runBrowserPreviewCommand(command);
-          return;
-        }
-
-        throw desktopAppRequiredError();
-      }
-
-      await invoke(command);
-    } catch (error) {
-      actionError.value = normalizeError(error);
-    } finally {
-      isBusy.value = false;
-    }
-  }
-
-  async function saveConfig(nextConfig: AppConfig) {
-    actionError.value = "";
-    isBusy.value = true;
-
-    try {
-      if (!isTauriApp) {
-        if (browserPreviewEnabled) {
-          config.value = nextConfig;
-          return;
-        }
-
-        throw desktopAppRequiredError();
-      }
-
-      config.value = await invoke<AppConfig>("save_app_config", {
-        config: nextConfig,
-      });
-    } catch (error) {
-      actionError.value = normalizeError(error);
-    } finally {
-      isBusy.value = false;
-    }
-  }
-
-  async function loadProviderSecretStatus(provider: SttProvider) {
-    actionError.value = "";
-
-    try {
-      if (!isTauriApp) {
-        if (browserPreviewEnabled) {
-          setBrowserPreviewSecretStatus(provider);
-          return;
-        }
-
-        throw desktopAppRequiredError();
-      }
-
-      const status = await invoke<ProviderSecretStatus>(
-        "get_provider_secret_status",
-        { provider },
-      );
-
-      if (provider === "openai") {
-        openAiSecretStatus.value = status;
-      }
-    } catch (error) {
-      actionError.value = normalizeError(error);
-    }
-  }
-
-  async function saveProviderSecret(provider: SttProvider, secret: string) {
-    actionError.value = "";
-    isBusy.value = true;
-
-    try {
-      if (!isTauriApp) {
-        throw desktopAppRequiredError();
-      }
-
-      const status = await invoke<ProviderSecretStatus>(
-        "save_provider_secret",
-        { provider, secret },
-      );
-
-      if (provider === "openai") {
-        openAiSecretStatus.value = status;
-      }
-    } catch (error) {
-      actionError.value = normalizeError(error);
-    } finally {
-      isBusy.value = false;
-    }
-  }
-
-  async function deleteProviderSecret(provider: SttProvider) {
-    actionError.value = "";
-    isBusy.value = true;
-
-    try {
-      if (!isTauriApp) {
-        if (browserPreviewEnabled) {
-          setBrowserPreviewSecretStatus(provider);
-          return;
-        }
-
-        throw desktopAppRequiredError();
-      }
-
-      const status = await invoke<ProviderSecretStatus>(
-        "delete_provider_secret",
-        { provider },
-      );
-
-      if (provider === "openai") {
-        openAiSecretStatus.value = status;
-      }
-    } catch (error) {
-      actionError.value = normalizeError(error);
-    } finally {
-      isBusy.value = false;
-    }
+    await runtimeAction.run(() => backend.runCommand(command));
   }
 
   async function loadConfig() {
-    actionError.value = "";
+    await settingsAction.run(async () => {
+      config.value = await backend.getConfig();
+    });
+  }
 
-    try {
-      if (!isTauriApp) {
-        if (browserPreviewEnabled) {
-          config.value = { ...defaultConfig };
-          return;
-        }
-
-        throw desktopAppRequiredError();
-      }
-
-      config.value = await invoke<AppConfig>("get_app_config");
-    } catch (error) {
-      actionError.value = normalizeError(error);
-    }
+  async function saveConfig(nextConfig: AppConfig) {
+    await settingsAction.run(async () => {
+      config.value = await backend.saveConfig(nextConfig);
+    });
   }
 
   async function loadAudioInputDevices() {
-    actionError.value = "";
+    await settingsAction.run(async () => {
+      audioInputDevices.value = await backend.listAudioInputDevices();
+    });
+  }
 
-    try {
-      if (!isTauriApp) {
-        if (browserPreviewEnabled) {
-          audioInputDevices.value = [
-            {
-              id: "browser-preview-default",
-              name: "Browser preview device",
-              isDefault: true,
-            },
-          ];
-          return;
-        }
+  function setSecretStatus(
+    provider: SttProvider,
+    status: ProviderSecretStatus,
+  ) {
+    secretStatuses.value = { ...secretStatuses.value, [provider]: status };
+  }
 
-        throw desktopAppRequiredError();
-      }
-
-      audioInputDevices.value = await invoke<AudioInputDevice[]>(
-        "list_audio_input_devices",
+  async function loadProviderSecretStatus(provider: SttProvider) {
+    await secretsAction.run(async () => {
+      setSecretStatus(
+        provider,
+        await backend.getProviderSecretStatus(provider),
       );
-    } catch (error) {
-      actionError.value = normalizeError(error);
-    }
+    });
+  }
+
+  async function saveProviderSecret(provider: SttProvider, secret: string) {
+    await secretsAction.run(async () => {
+      setSecretStatus(
+        provider,
+        await backend.saveProviderSecret(provider, secret),
+      );
+    });
+  }
+
+  async function deleteProviderSecret(provider: SttProvider) {
+    await secretsAction.run(async () => {
+      setSecretStatus(provider, await backend.deleteProviderSecret(provider));
+    });
   }
 
   // Only the utterance that owns the live caption state may clear it; a final
@@ -294,199 +180,85 @@ export function useRuntime() {
     }
   }
 
-  function addUnlistener(unlisten: UnlistenFn) {
+  const eventHandlers: RuntimeEventHandlers = {
+    onStatus(event) {
+      runtimeStatus.value = event;
+
+      if (event.status === "stopped" || event.status === "error") {
+        activeUtteranceId.value = null;
+        partialTranscript.value = null;
+      }
+    },
+    onUtteranceStarted(event) {
+      activeUtteranceId.value = event.utteranceId;
+    },
+    onTranscriptPartial(event) {
+      partialTranscript.value = event;
+    },
+    onTranscriptFinal(event) {
+      clearUtteranceState(event.utteranceId);
+      finalTranscripts.value = [event, ...finalTranscripts.value].slice(
+        0,
+        FINAL_TRANSCRIPT_LIMIT,
+      );
+    },
+    onUtteranceEnded(event) {
+      clearUtteranceState(event.utteranceId);
+    },
+    onDiagnostic(event) {
+      diagnostics.value = [event, ...diagnostics.value].slice(
+        0,
+        DIAGNOSTIC_LIMIT,
+      );
+    },
+  };
+
+  async function registerRuntimeListeners() {
+    const unsubscribe = await backend.listen(eventHandlers);
+
     if (isUnmounted) {
-      unlisten();
+      unsubscribe();
       return;
     }
 
-    unlisteners.push(unlisten);
-  }
-
-  function cleanupListeners() {
-    for (const unlisten of unlisteners.splice(0)) {
-      unlisten();
-    }
-  }
-
-  async function registerRuntimeListeners() {
-    if (!isTauriApp) {
-      if (browserPreviewEnabled) {
-        return;
-      }
-
-      throw desktopAppRequiredError();
-    }
-
-    try {
-      addUnlistener(
-        await listen<RuntimeStatusEvent>(RUNTIME_EVENTS.status, (event) => {
-          runtimeStatus.value = event.payload;
-
-          if (
-            event.payload.status === "stopped" ||
-            event.payload.status === "error"
-          ) {
-            activeUtteranceId.value = null;
-            partialTranscript.value = null;
-          }
-        }),
-      );
-
-      addUnlistener(
-        await listen<UtteranceStartedEvent>(
-          RUNTIME_EVENTS.utteranceStarted,
-          (event) => {
-            activeUtteranceId.value = event.payload.utteranceId;
-          },
-        ),
-      );
-
-      addUnlistener(
-        await listen<TranscriptEvent>(
-          RUNTIME_EVENTS.transcriptPartial,
-          (event) => {
-            partialTranscript.value = event.payload;
-          },
-        ),
-      );
-
-      addUnlistener(
-        await listen<TranscriptEvent>(
-          RUNTIME_EVENTS.transcriptFinal,
-          (event) => {
-            clearUtteranceState(event.payload.utteranceId);
-            finalTranscripts.value = [
-              event.payload,
-              ...finalTranscripts.value,
-            ].slice(0, 5);
-          },
-        ),
-      );
-
-      addUnlistener(
-        await listen<UtteranceEndedEvent>(
-          RUNTIME_EVENTS.utteranceEnded,
-          (event) => {
-            clearUtteranceState(event.payload.utteranceId);
-          },
-        ),
-      );
-
-      addUnlistener(
-        await listen<DiagnosticEvent>(RUNTIME_EVENTS.diagnostic, (event) => {
-          diagnostics.value = [event.payload, ...diagnostics.value].slice(0, 8);
-        }),
-      );
-    } catch (error) {
-      cleanupListeners();
-      throw error;
-    }
+    unsubscribeListeners = unsubscribe;
   }
 
   onMounted(async () => {
-    try {
-      await registerRuntimeListeners();
-      await loadConfig();
-      await loadProviderSecretStatus("openai");
-      await loadAudioInputDevices();
-    } catch (error) {
-      actionError.value = normalizeError(error);
-    }
+    await runtimeAction.run(registerRuntimeListeners);
+    await Promise.all([
+      loadConfig(),
+      loadAudioInputDevices(),
+      loadProviderSecretStatus("openai"),
+    ]);
   });
-
-  function runBrowserPreviewCommand(command: RuntimeCommand) {
-    const timestampMs = Date.now();
-    const timestampId = String(timestampMs);
-
-    if (command === "start_runtime" || command === "start_mock_runtime") {
-      runtimeStatus.value = {
-        status: "running",
-        message: "Browser preview runtime is running",
-        timestampMs,
-      };
-      return;
-    }
-
-    if (command === "stop_runtime") {
-      runtimeStatus.value = {
-        status: "stopped",
-        message: "Browser preview runtime stopped",
-        timestampMs,
-      };
-      return;
-    }
-
-    if (command === "emit_mock_transcript") {
-      const transcript: TranscriptEvent = {
-        id: `browser-transcript-${timestampId}`,
-        utteranceId: `browser-${timestampId}`,
-        kind: "final",
-        text: "Testing live caption preview from the browser UI.",
-        language: config.value?.stt.language ?? "en",
-        provider: config.value?.stt.provider ?? "mock",
-        revision: 1,
-        timestampMs,
-      };
-
-      activeUtteranceId.value = null;
-      partialTranscript.value = null;
-      finalTranscripts.value = [transcript, ...finalTranscripts.value].slice(
-        0,
-        5,
-      );
-      return;
-    }
-
-    const diagnostic: DiagnosticEvent = {
-      id: `browser-diagnostic-${timestampId}`,
-      category: "osc",
-      severity: "info",
-      code: "browser.preview_action",
-      message: "Browser preview action",
-      detail: "Desktop-only command was simulated for UI preview.",
-      timestampMs,
-    };
-
-    diagnostics.value = [diagnostic, ...diagnostics.value].slice(0, 8);
-  }
-
-  function setBrowserPreviewSecretStatus(provider: SttProvider) {
-    if (provider !== "openai") {
-      return;
-    }
-
-    openAiSecretStatus.value = {
-      provider,
-      configured: false,
-      storage: null,
-      displaySuffix: null,
-      error: null,
-    };
-  }
 
   onBeforeUnmount(() => {
     isUnmounted = true;
-    cleanupListeners();
+    unsubscribeListeners?.();
+    unsubscribeListeners = null;
   });
 
   return {
-    actionError,
     activeCaptionText,
     audioInputDevices,
     captionMode,
     config,
+    deleteProviderSecret,
     diagnostics,
     finalTranscripts,
-    isBusy,
+    isRuntimeBusy: runtimeAction.isBusy,
+    isSecretsBusy: secretsAction.isBusy,
+    isSettingsBusy: settingsAction.isBusy,
     loadAudioInputDevices,
-    loadProviderSecretStatus,
-    openAiSecretStatus,
     partialTranscript,
-    deleteProviderSecret,
     runCommand,
+    runtimeError: runtimeAction.error,
+    runtimeStatus,
     saveConfig,
     saveProviderSecret,
-    runtimeStatus,
+    secretStatuses,
+    secretsError: secretsAction.error,
+    settingsError: settingsAction.error,
   };
 }
