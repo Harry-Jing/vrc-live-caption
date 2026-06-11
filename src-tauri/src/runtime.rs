@@ -20,14 +20,15 @@ use crate::audio::{open_input_capture, receive_audio};
 use crate::config::{AppConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
-    DiagnosticCategory, DiagnosticSeverity, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate,
-    UtteranceEndReason, emit_diagnostic, emit_status, emit_transcript_final, emit_utterance_ended,
+    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate, UtteranceEndReason,
+    emit_diagnostic, emit_status, emit_transcript_final, emit_utterance_ended,
     emit_utterance_started, next_utterance_id,
 };
-use crate::osc::send_paced_chatbox_osc;
+use crate::osc::ChatboxOscSender;
 use crate::secrets::openai_api_key as load_openai_api_key;
 use crate::segmenter::SpeechSegmenter;
-use crate::stt::transcribe_openai_wav;
+use crate::stt::{build_stt_client, transcribe_openai_wav};
+use reqwest::blocking::Client;
 use secrecy::SecretString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
@@ -89,13 +90,12 @@ impl RuntimeManager {
                 Err(error) => {
                     let _ = emit_diagnostic(
                         &app,
-                        DiagnosticUpdate {
-                            category: DiagnosticCategory::Config,
-                            severity: DiagnosticSeverity::Error,
-                            code: "config.openai_api_key_missing",
-                            message: "Cloud STT is not configured".to_string(),
-                            detail: Some(error.to_string()),
-                        },
+                        DiagnosticUpdate::error(
+                            DiagnosticCategory::Config,
+                            "config.openai_api_key_missing",
+                            "Cloud STT is not configured",
+                            error.to_string(),
+                        ),
                     );
 
                     return Err(error);
@@ -159,13 +159,12 @@ impl RuntimeManager {
         )?;
         emit_diagnostic(
             app,
-            DiagnosticUpdate {
-                category: DiagnosticCategory::Runtime,
-                severity: DiagnosticSeverity::Info,
-                code: "runtime.stopped",
-                message: "Runtime stopped".to_string(),
-                detail: Some("Microphone capture has been released.".to_string()),
-            },
+            DiagnosticUpdate::info(
+                DiagnosticCategory::Runtime,
+                "runtime.stopped",
+                "Runtime stopped",
+                "Microphone capture has been released.",
+            ),
         )
     }
 }
@@ -206,13 +205,7 @@ fn run_runtime_thread(
         let _ = emit_status(&app, RuntimeStatus::Error, Some(error.to_string()));
         let _ = emit_diagnostic(
             &app,
-            DiagnosticUpdate {
-                category: DiagnosticCategory::for_error(&error),
-                severity: DiagnosticSeverity::Error,
-                code: error.code(),
-                message: "Runtime stopped with an error".to_string(),
-                detail: Some(error.to_string()),
-            },
+            DiagnosticUpdate::from_error(&error, "Runtime stopped with an error"),
         );
     }
 }
@@ -249,13 +242,12 @@ fn run_mock_runtime(app: AppHandle, stop_requested: Arc<AtomicBool>) -> AppResul
     )?;
     emit_diagnostic(
         &app,
-        DiagnosticUpdate {
-            category: DiagnosticCategory::Runtime,
-            severity: DiagnosticSeverity::Info,
-            code: "runtime.mock_started",
-            message: "Mock runtime started".to_string(),
-            detail: Some("Use Mock Transcript to test normalized runtime events.".to_string()),
-        },
+        DiagnosticUpdate::info(
+            DiagnosticCategory::Runtime,
+            "runtime.mock_started",
+            "Mock runtime started",
+            "Use Mock Transcript to test normalized runtime events.",
+        ),
     )?;
 
     while !stop_requested.load(Ordering::Relaxed) {
@@ -274,10 +266,16 @@ fn run_openai_runtime(
     let capture = open_input_capture(&config.audio)?;
     let sample_rate = capture.sample_rate;
     let (segment_sender, segment_receiver) = sync_channel(STT_QUEUE_CAPACITY);
+    // Created once per runtime and reused by the worker across segments: the
+    // HTTP client keeps its connection pool and the OSC sender its socket.
+    let http_client = build_stt_client()?;
+    let osc_sender = ChatboxOscSender::new(&config.osc)?;
     let stt_worker = spawn_stt_worker(
         app.clone(),
         config.clone(),
         openai_api_key,
+        http_client,
+        osc_sender,
         segment_receiver,
         Arc::clone(&stop_requested),
     )?;
@@ -299,13 +297,12 @@ fn run_openai_runtime(
     )?;
     emit_diagnostic(
         &app,
-        DiagnosticUpdate {
-            category: DiagnosticCategory::Audio,
-            severity: DiagnosticSeverity::Info,
-            code: "audio.capture_started",
-            message: "Microphone capture started".to_string(),
-            detail: Some(format!("Capturing mono audio at {sample_rate} Hz.")),
-        },
+        DiagnosticUpdate::info(
+            DiagnosticCategory::Audio,
+            "audio.capture_started",
+            "Microphone capture started",
+            format!("Capturing mono audio at {sample_rate} Hz."),
+        ),
     )?;
 
     while !stop_requested.load(Ordering::Relaxed) {
@@ -358,16 +355,12 @@ fn run_openai_runtime(
 
         emit_diagnostic(
             &app,
-            DiagnosticUpdate {
-                category: DiagnosticCategory::Stt,
-                severity: DiagnosticSeverity::Info,
-                code: "stt.tail_speech_discarded",
-                message: "Unsent speech discarded".to_string(),
-                detail: Some(
-                    "Speech captured just before stop was discarded without transcription."
-                        .to_string(),
-                ),
-            },
+            DiagnosticUpdate::info(
+                DiagnosticCategory::Stt,
+                "stt.tail_speech_discarded",
+                "Unsent speech discarded",
+                "Speech captured just before stop was discarded without transcription.",
+            ),
         )?;
     }
 
@@ -399,16 +392,15 @@ fn queue_speech_segment(
         Err(TrySendError::Full(segment)) => {
             emit_diagnostic(
                 app,
-                DiagnosticUpdate {
-                    category: DiagnosticCategory::Stt,
-                    severity: DiagnosticSeverity::Warning,
-                    code: "stt.segment_dropped",
-                    message: "Speech segment dropped".to_string(),
-                    detail: Some(format!(
+                DiagnosticUpdate::warning(
+                    DiagnosticCategory::Stt,
+                    "stt.segment_dropped",
+                    "Speech segment dropped",
+                    format!(
                         "STT is still processing earlier audio, so {:.1} seconds of captured speech was skipped.",
                         segment.samples.len() as f32 / segment.sample_rate as f32
-                    )),
-                },
+                    ),
+                ),
             )?;
 
             emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::Discarded)
@@ -423,6 +415,8 @@ fn spawn_stt_worker(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: SecretString,
+    http_client: Client,
+    osc_sender: ChatboxOscSender,
     segment_receiver: Receiver<SpeechSegment>,
     stop_requested: Arc<AtomicBool>,
 ) -> AppResult<JoinHandle<()>> {
@@ -433,6 +427,8 @@ fn spawn_stt_worker(
                 app,
                 config,
                 openai_api_key,
+                http_client,
+                osc_sender,
                 segment_receiver,
                 stop_requested,
             )
@@ -444,10 +440,11 @@ fn run_stt_worker(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: SecretString,
+    http_client: Client,
+    mut osc_sender: ChatboxOscSender,
     segment_receiver: Receiver<SpeechSegment>,
     stop_requested: Arc<AtomicBool>,
 ) {
-    let mut last_osc_send: Option<Instant> = None;
     let mut discarded_segments: usize = 0;
 
     while let Ok(segment) = segment_receiver.recv() {
@@ -461,8 +458,9 @@ fn run_stt_worker(
             &app,
             &config,
             &openai_api_key,
+            &http_client,
             segment,
-            &mut last_osc_send,
+            &mut osc_sender,
             &stop_requested,
         ) {
             tracing::warn!(
@@ -473,13 +471,7 @@ fn run_stt_worker(
 
             let _ = emit_diagnostic(
                 &app,
-                DiagnosticUpdate {
-                    category: DiagnosticCategory::for_error(&error),
-                    severity: DiagnosticSeverity::Error,
-                    code: error.code(),
-                    message: "Speech segment failed".to_string(),
-                    detail: Some(error.to_string()),
-                },
+                DiagnosticUpdate::from_error(&error, "Speech segment failed"),
             );
         }
     }
@@ -489,15 +481,14 @@ fn run_stt_worker(
 
         let _ = emit_diagnostic(
             &app,
-            DiagnosticUpdate {
-                category: DiagnosticCategory::Stt,
-                severity: DiagnosticSeverity::Info,
-                code: "stt.queued_speech_discarded",
-                message: "Queued speech discarded".to_string(),
-                detail: Some(format!(
+            DiagnosticUpdate::info(
+                DiagnosticCategory::Stt,
+                "stt.queued_speech_discarded",
+                "Queued speech discarded",
+                format!(
                     "Discarded {discarded_segments} speech segment(s) that were still waiting for STT when the runtime stopped."
-                )),
-            },
+                ),
+            ),
         );
     }
 }
@@ -506,25 +497,26 @@ fn transcribe_and_emit_final(
     app: &AppHandle,
     config: &AppConfig,
     openai_api_key: &SecretString,
+    http_client: &Client,
     segment: SpeechSegment,
-    last_osc_send: &mut Option<Instant>,
+    osc_sender: &mut ChatboxOscSender,
     stop_requested: &AtomicBool,
 ) -> AppResult<()> {
     emit_diagnostic(
         app,
-        DiagnosticUpdate {
-            category: DiagnosticCategory::Stt,
-            severity: DiagnosticSeverity::Info,
-            code: "stt.segment_started",
-            message: "Sending speech segment to STT".to_string(),
-            detail: Some(format!(
+        DiagnosticUpdate::info(
+            DiagnosticCategory::Stt,
+            "stt.segment_started",
+            "Sending speech segment to STT",
+            format!(
                 "Captured {:.1} seconds for final transcription.",
                 segment.samples.len() as f32 / segment.sample_rate as f32
-            )),
-        },
+            ),
+        ),
     )?;
 
     let text = match transcribe_openai_wav(
+        http_client,
         &config.stt,
         openai_api_key,
         segment.sample_rate,
@@ -544,13 +536,12 @@ fn transcribe_and_emit_final(
 
         return emit_diagnostic(
             app,
-            DiagnosticUpdate {
-                category: DiagnosticCategory::Stt,
-                severity: DiagnosticSeverity::Info,
-                code: "stt.no_speech",
-                message: "STT returned no speech".to_string(),
-                detail: Some("The captured segment did not contain recognized words.".to_string()),
-            },
+            DiagnosticUpdate::info(
+                DiagnosticCategory::Stt,
+                "stt.no_speech",
+                "STT returned no speech",
+                "The captured segment did not contain recognized words.",
+            ),
         );
     }
 
@@ -570,32 +561,28 @@ fn transcribe_and_emit_final(
     if stop_requested.load(Ordering::Relaxed) {
         return emit_diagnostic(
             app,
-            DiagnosticUpdate {
-                category: DiagnosticCategory::Osc,
-                severity: DiagnosticSeverity::Info,
-                code: "osc.send_skipped_on_stop",
-                message: "Chatbox send skipped".to_string(),
-                detail: Some(
-                    "Runtime stop was requested before this transcript could be sent.".to_string(),
-                ),
-            },
+            DiagnosticUpdate::info(
+                DiagnosticCategory::Osc,
+                "osc.send_skipped_on_stop",
+                "Chatbox send skipped",
+                "Runtime stop was requested before this transcript could be sent.",
+            ),
         );
     }
 
     if !config.osc.enabled {
         return emit_diagnostic(
             app,
-            DiagnosticUpdate {
-                category: DiagnosticCategory::Osc,
-                severity: DiagnosticSeverity::Info,
-                code: "osc.output_disabled",
-                message: "Chatbox output skipped".to_string(),
-                detail: Some("OSC output is disabled in settings.".to_string()),
-            },
+            DiagnosticUpdate::info(
+                DiagnosticCategory::Osc,
+                "osc.output_disabled",
+                "Chatbox output skipped",
+                "OSC output is disabled in settings.",
+            ),
         );
     }
 
-    match send_paced_chatbox_osc(&config.osc, &text, last_osc_send) {
+    match osc_sender.send_paced(&text) {
         Ok(result) => {
             let clipped_note = if result.clipped {
                 " Text was clipped to fit the VRChat Chatbox layout."
@@ -605,28 +592,21 @@ fn transcribe_and_emit_final(
 
             emit_diagnostic(
                 app,
-                DiagnosticUpdate {
-                    category: DiagnosticCategory::Osc,
-                    severity: DiagnosticSeverity::Info,
-                    code: "osc.final_sent",
-                    message: "Final transcript sent to Chatbox".to_string(),
-                    detail: Some(format!(
+                DiagnosticUpdate::info(
+                    DiagnosticCategory::Osc,
+                    "osc.final_sent",
+                    "Final transcript sent to Chatbox",
+                    format!(
                         "Sent {} bytes to {}.{}",
                         result.byte_count, result.target, clipped_note
-                    )),
-                },
+                    ),
+                ),
             )
         }
         Err(error) => {
             emit_diagnostic(
                 app,
-                DiagnosticUpdate {
-                    category: DiagnosticCategory::Osc,
-                    severity: DiagnosticSeverity::Error,
-                    code: error.code(),
-                    message: "Chatbox output failed".to_string(),
-                    detail: Some(error.to_string()),
-                },
+                DiagnosticUpdate::from_error(&error, "Chatbox output failed"),
             )?;
 
             Err(error)

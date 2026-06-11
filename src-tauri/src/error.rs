@@ -1,3 +1,11 @@
+//! Application error type shared by Tauri commands and the runtime.
+//!
+//! `AppError` serializes to `{ code, message }` for the frontend: `code` is a
+//! stable machine-readable identifier following the diagnostic naming
+//! convention documented in `events`, and `message` is human-readable text.
+//! Variants flatten their causes into the message because the error crosses
+//! the IPC boundary as JSON; only `EventEmit` keeps a typed source.
+
 use serde::Serialize;
 use serde::ser::{SerializeStruct, Serializer};
 use std::error::Error;

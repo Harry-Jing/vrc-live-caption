@@ -1,3 +1,16 @@
+//! VRChat Chatbox output over OSC (UDP).
+//!
+//! Text is shaped to VRChat's fixed Chatbox layout before sending: lines wrap
+//! against a pixel width budget and clip at the hard visible line cap. The
+//! layout constants and per-character width estimates approximate the
+//! measured TMP contract in `docs/research/vrchat-chatbox-reference.md`: a
+//! 300px `ChatText` rectangle with 10px margins (280px of usable width) and
+//! a 9-line cap.
+//!
+//! `ChatboxOscSender` owns one UDP socket for its lifetime and paces repeated
+//! sends with a minimum interval so VRChat's Chatbox rate limit does not drop
+//! updates.
+
 use crate::config::OscConfig;
 use crate::error::{AppError, AppResult};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
@@ -8,6 +21,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) const OSC_CHATBOX_INPUT_ADDRESS: &str = "/chatbox/input";
 pub(crate) const OSC_TEST_MESSAGE: &str = "VRC Live Caption OSC test.";
+// ChatText rectangle minus margins; see the module docs for the source.
 const CHATBOX_WIDTH_PX: f32 = 280.0;
 const CHATBOX_MAX_LINES: usize = 9;
 
@@ -18,61 +32,78 @@ pub(crate) struct OscSendResult {
     pub(crate) clipped: bool,
 }
 
-pub(crate) fn send_chatbox_osc(config: &OscConfig, text: &str) -> AppResult<OscSendResult> {
-    let shaped = shape_chatbox_text(text);
+pub(crate) struct ChatboxOscSender {
+    socket: UdpSocket,
+    target: String,
+    min_interval: Duration,
+    last_send: Option<Instant>,
+}
 
-    send_rendered_chatbox_osc(config, &shaped.text).map(|mut result| {
+impl ChatboxOscSender {
+    pub(crate) fn new(config: &OscConfig) -> AppResult<Self> {
+        let socket =
+            UdpSocket::bind("0.0.0.0:0").map_err(|error| AppError::osc_bind(error.to_string()))?;
+
+        Ok(Self {
+            socket,
+            target: format!("{}:{}", config.host, config.port),
+            min_interval: Duration::from_millis(config.min_interval_ms),
+            last_send: None,
+        })
+    }
+
+    /// Shapes `text` for the Chatbox layout and sends it immediately.
+    pub(crate) fn send(&self, text: &str) -> AppResult<OscSendResult> {
+        let shaped = shape_chatbox_text(text);
+        let mut result = self.send_rendered(&shaped.text)?;
+
         result.clipped = shaped.clipped;
         result.rendered_text = shaped.text;
-        result
-    })
-}
 
-pub(crate) fn send_paced_chatbox_osc(
-    config: &OscConfig,
-    text: &str,
-    last_send: &mut Option<Instant>,
-) -> AppResult<OscSendResult> {
-    if let Some(last_send) = last_send {
-        let elapsed = last_send.elapsed();
-        let minimum_interval = Duration::from_millis(config.min_interval_ms);
+        Ok(result)
+    }
 
-        if elapsed < minimum_interval {
-            thread::sleep(minimum_interval - elapsed);
+    /// Like [`Self::send`], but first waits out the configured minimum
+    /// interval since the previous paced send.
+    pub(crate) fn send_paced(&mut self, text: &str) -> AppResult<OscSendResult> {
+        if let Some(last_send) = self.last_send {
+            let elapsed = last_send.elapsed();
+
+            if elapsed < self.min_interval {
+                thread::sleep(self.min_interval - elapsed);
+            }
         }
+
+        let result = self.send(text)?;
+        self.last_send = Some(Instant::now());
+
+        Ok(result)
     }
 
-    let result = send_chatbox_osc(config, text)?;
-    *last_send = Some(Instant::now());
+    fn send_rendered(&self, text: &str) -> AppResult<OscSendResult> {
+        let packet = chatbox_input_packet(text);
+        let packet_bytes =
+            encoder::encode(&packet).map_err(|error| AppError::osc_encode(error.to_string()))?;
+        let sent = self
+            .socket
+            .send_to(&packet_bytes, &self.target)
+            .map_err(|error| AppError::osc_send(&self.target, error.to_string()))?;
 
-    Ok(result)
-}
+        if sent != packet_bytes.len() {
+            return Err(AppError::osc_send_incomplete(
+                &self.target,
+                packet_bytes.len(),
+                sent,
+            ));
+        }
 
-fn send_rendered_chatbox_osc(config: &OscConfig, text: &str) -> AppResult<OscSendResult> {
-    let target = format!("{}:{}", config.host, config.port);
-    let packet = chatbox_input_packet(text);
-    let packet_bytes =
-        encoder::encode(&packet).map_err(|error| AppError::osc_encode(error.to_string()))?;
-    let socket =
-        UdpSocket::bind("0.0.0.0:0").map_err(|error| AppError::osc_bind(error.to_string()))?;
-    let sent = socket
-        .send_to(&packet_bytes, &target)
-        .map_err(|error| AppError::osc_send(&target, error.to_string()))?;
-
-    if sent != packet_bytes.len() {
-        return Err(AppError::osc_send_incomplete(
-            &target,
-            packet_bytes.len(),
-            sent,
-        ));
+        Ok(OscSendResult {
+            target: self.target.clone(),
+            byte_count: sent,
+            rendered_text: text.to_string(),
+            clipped: false,
+        })
     }
-
-    Ok(OscSendResult {
-        target,
-        byte_count: sent,
-        rendered_text: text.to_string(),
-        clipped: false,
-    })
 }
 
 fn chatbox_input_packet(text: &str) -> OscPacket {

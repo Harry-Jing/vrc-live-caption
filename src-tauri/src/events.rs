@@ -132,11 +132,68 @@ struct DiagnosticEvent {
 }
 
 pub(crate) struct DiagnosticUpdate {
-    pub(crate) category: DiagnosticCategory,
-    pub(crate) severity: DiagnosticSeverity,
-    pub(crate) code: &'static str,
-    pub(crate) message: String,
-    pub(crate) detail: Option<String>,
+    category: DiagnosticCategory,
+    severity: DiagnosticSeverity,
+    code: &'static str,
+    message: String,
+    detail: Option<String>,
+}
+
+impl DiagnosticUpdate {
+    pub(crate) fn info(
+        category: DiagnosticCategory,
+        code: &'static str,
+        message: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self::with_severity(category, DiagnosticSeverity::Info, code, message, detail)
+    }
+
+    pub(crate) fn warning(
+        category: DiagnosticCategory,
+        code: &'static str,
+        message: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self::with_severity(category, DiagnosticSeverity::Warning, code, message, detail)
+    }
+
+    pub(crate) fn error(
+        category: DiagnosticCategory,
+        code: &'static str,
+        message: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self::with_severity(category, DiagnosticSeverity::Error, code, message, detail)
+    }
+
+    /// Error diagnostic with the category, code, and detail derived from the
+    /// failure itself; `message` describes the operation that failed.
+    pub(crate) fn from_error(error: &AppError, message: impl Into<String>) -> Self {
+        Self {
+            category: DiagnosticCategory::for_error(error),
+            severity: DiagnosticSeverity::Error,
+            code: error.code(),
+            message: message.into(),
+            detail: Some(error.to_string()),
+        }
+    }
+
+    fn with_severity(
+        category: DiagnosticCategory,
+        severity: DiagnosticSeverity,
+        code: &'static str,
+        message: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            category,
+            severity,
+            code,
+            message: message.into(),
+            detail: Some(detail.into()),
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]

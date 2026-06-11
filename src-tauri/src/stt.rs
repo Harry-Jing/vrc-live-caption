@@ -1,5 +1,15 @@
+//! Cloud STT transcription for completed speech segments.
+//!
+//! Captured mono samples are encoded in memory as 16-bit PCM WAV and uploaded
+//! to the OpenAI transcriptions endpoint as one blocking request per segment.
+//! Blocking is intentional: the dedicated STT worker thread owns the upload,
+//! so the capture loop never waits on the network. Callers build one HTTP
+//! client per runtime with `build_stt_client` and reuse it across segments to
+//! keep connection pooling.
+
 use crate::config::SttConfig;
 use crate::error::{AppError, AppResult};
+use reqwest::blocking::Client;
 use reqwest::blocking::multipart::{Form, Part};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
@@ -7,13 +17,22 @@ use std::io::Cursor;
 use std::time::Duration;
 
 const OPENAI_TRANSCRIPTIONS_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
+const STT_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Deserialize)]
 struct OpenAiTranscriptionResponse {
     text: String,
 }
 
+pub(crate) fn build_stt_client() -> AppResult<Client> {
+    Client::builder()
+        .timeout(STT_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|error| AppError::stt(format!("Failed to create STT client: {error}")))
+}
+
 pub(crate) fn transcribe_openai_wav(
+    client: &Client,
     config: &SttConfig,
     api_key: &SecretString,
     sample_rate: u32,
@@ -29,10 +48,6 @@ pub(crate) fn transcribe_openai_wav(
         .text("language", normalize_language(&config.language))
         .text("response_format", "json")
         .part("file", part);
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(45))
-        .build()
-        .map_err(|error| AppError::stt(format!("Failed to create STT client: {error}")))?;
     let response = client
         .post(OPENAI_TRANSCRIPTIONS_URL)
         .bearer_auth(api_key.expose_secret())

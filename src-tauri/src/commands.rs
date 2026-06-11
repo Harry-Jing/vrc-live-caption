@@ -9,10 +9,10 @@ use crate::audio::{AudioInputDevice, list_input_devices};
 use crate::config::{AppConfig, SttProvider};
 use crate::error::AppResult;
 use crate::events::{
-    DiagnosticCategory, DiagnosticSeverity, DiagnosticUpdate, TranscriptUpdate, emit_diagnostic,
-    emit_transcript_final, emit_transcript_partial, emit_utterance_started, next_utterance_id,
+    DiagnosticCategory, DiagnosticUpdate, TranscriptUpdate, emit_diagnostic, emit_transcript_final,
+    emit_transcript_partial, emit_utterance_started, next_utterance_id,
 };
-use crate::osc::{OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE, send_chatbox_osc};
+use crate::osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
 use crate::secrets::{
     ProviderSecretStatus, delete_provider_secret as delete_secret, provider_secret_status,
     save_provider_secret as save_secret,
@@ -35,13 +35,12 @@ pub(crate) fn save_app_config(
 
     emit_diagnostic(
         &app,
-        DiagnosticUpdate {
-            category: DiagnosticCategory::Config,
-            severity: DiagnosticSeverity::Info,
-            code: "config.saved",
-            message: "Settings saved".to_string(),
-            detail: Some("Only non-sensitive settings are stored in app config.".to_string()),
-        },
+        DiagnosticUpdate::info(
+            DiagnosticCategory::Config,
+            "config.saved",
+            "Settings saved",
+            "Only non-sensitive settings are stored in app config.",
+        ),
     )?;
 
     Ok(saved_config)
@@ -53,16 +52,12 @@ pub(crate) fn list_audio_input_devices(app: AppHandle) -> AppResult<Vec<AudioInp
 
     emit_diagnostic(
         &app,
-        DiagnosticUpdate {
-            category: DiagnosticCategory::Audio,
-            severity: DiagnosticSeverity::Info,
-            code: "audio.devices_refreshed",
-            message: "Audio input devices refreshed".to_string(),
-            detail: Some(format!(
-                "Found {} microphone input device(s).",
-                devices.len()
-            )),
-        },
+        DiagnosticUpdate::info(
+            DiagnosticCategory::Audio,
+            "audio.devices_refreshed",
+            "Audio input devices refreshed",
+            format!("Found {} microphone input device(s).", devices.len()),
+        ),
     )?;
 
     Ok(devices)
@@ -115,15 +110,12 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
 
     emit_diagnostic(
         &app,
-        DiagnosticUpdate {
-            category: DiagnosticCategory::Stt,
-            severity: DiagnosticSeverity::Info,
-            code: "stt.mock_transcript_emitted",
-            message: "Mock transcript emitted".to_string(),
-            detail: Some(
-                "The UI received normalized partial and final transcript events.".to_string(),
-            ),
-        },
+        DiagnosticUpdate::info(
+            DiagnosticCategory::Stt,
+            "stt.mock_transcript_emitted",
+            "Mock transcript emitted",
+            "The UI received normalized partial and final transcript events.",
+        ),
     )
 }
 
@@ -131,7 +123,7 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
 pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let config = state.config()?;
 
-    match send_chatbox_osc(&config.osc, OSC_TEST_MESSAGE) {
+    match ChatboxOscSender::new(&config.osc).and_then(|sender| sender.send(OSC_TEST_MESSAGE)) {
         Ok(result) => {
             tracing::info!(
                 target = result.target,
@@ -141,16 +133,15 @@ pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) 
 
             emit_diagnostic(
                 &app,
-                DiagnosticUpdate {
-                    category: DiagnosticCategory::Osc,
-                    severity: DiagnosticSeverity::Info,
-                    code: "osc.test_sent",
-                    message: "OSC Chatbox test sent".to_string(),
-                    detail: Some(format!(
+                DiagnosticUpdate::info(
+                    DiagnosticCategory::Osc,
+                    "osc.test_sent",
+                    "OSC Chatbox test sent",
+                    format!(
                         "Sent final-only test text to {} with {}.",
                         result.target, OSC_CHATBOX_INPUT_ADDRESS
-                    )),
-                },
+                    ),
+                ),
             )
         }
         Err(error) => {
@@ -162,13 +153,7 @@ pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) 
 
             emit_diagnostic(
                 &app,
-                DiagnosticUpdate {
-                    category: DiagnosticCategory::Osc,
-                    severity: DiagnosticSeverity::Error,
-                    code: error.code(),
-                    message: "OSC Chatbox test failed".to_string(),
-                    detail: Some(error.to_string()),
-                },
+                DiagnosticUpdate::from_error(&error, "OSC Chatbox test failed"),
             )?;
 
             Err(error)
@@ -191,15 +176,12 @@ pub(crate) fn save_provider_secret(
 
     emit_diagnostic(
         &app,
-        DiagnosticUpdate {
-            category: DiagnosticCategory::Config,
-            severity: DiagnosticSeverity::Info,
-            code: "config.provider_secret_saved",
-            message: "Provider API key saved".to_string(),
-            detail: Some(
-                "The API key was saved in the system credential store, not app config.".to_string(),
-            ),
-        },
+        DiagnosticUpdate::info(
+            DiagnosticCategory::Config,
+            "config.provider_secret_saved",
+            "Provider API key saved",
+            "The API key was saved in the system credential store, not app config.",
+        ),
     )?;
 
     Ok(provider_secret_status(provider))
@@ -214,13 +196,12 @@ pub(crate) fn delete_provider_secret(
 
     emit_diagnostic(
         &app,
-        DiagnosticUpdate {
-            category: DiagnosticCategory::Config,
-            severity: DiagnosticSeverity::Info,
-            code: "config.provider_secret_deleted",
-            message: "Provider API key removed".to_string(),
-            detail: Some("The saved provider API key was removed from secure storage.".to_string()),
-        },
+        DiagnosticUpdate::info(
+            DiagnosticCategory::Config,
+            "config.provider_secret_deleted",
+            "Provider API key removed",
+            "The saved provider API key was removed from secure storage.",
+        ),
     )?;
 
     Ok(provider_secret_status(provider))

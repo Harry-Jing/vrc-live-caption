@@ -1,3 +1,10 @@
+//! Tauri-managed application state.
+//!
+//! Holds the in-memory copy of the non-secret app config plus the runtime
+//! manager. Config reads and writes go through this module so the persisted
+//! `config.json` and the in-memory copy cannot drift apart; secrets never
+//! pass through here.
+
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::runtime::RuntimeManager;
