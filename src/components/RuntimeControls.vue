@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { runtimeStatusColor } from "../runtime/presentation";
 import type { RuntimeCommand, RuntimeStatusEvent } from "../runtime/types";
 
 const props = defineProps<{
@@ -36,7 +37,11 @@ function run(command: RuntimeCommand) {
             {{ runtimeStatus.message ?? "No runtime status message." }}
           </p>
         </div>
-        <UBadge color="primary" variant="subtle" class="capitalize">
+        <UBadge
+          :color="runtimeStatusColor[runtimeStatus.status]"
+          variant="subtle"
+          class="capitalize"
+        >
           {{ runtimeStatus.status }}
         </UBadge>
       </div>

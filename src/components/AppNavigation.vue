@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { runtimeStatusColor } from "../runtime/presentation";
 import type { RuntimeStatusEvent } from "../runtime/types";
 
 defineProps<{
@@ -36,7 +37,11 @@ const navItems = [
 
       <div class="mt-4 flex items-center justify-between gap-3">
         <span class="text-sm text-muted">Runtime</span>
-        <UBadge color="primary" variant="subtle" class="capitalize">
+        <UBadge
+          :color="runtimeStatusColor[runtimeStatus.status]"
+          variant="subtle"
+          class="capitalize"
+        >
           {{ runtimeStatus.status }}
         </UBadge>
       </div>

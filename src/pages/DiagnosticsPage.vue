@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import EventFeed from "../components/EventFeed.vue";
 import { formatTime } from "../runtime/format";
+import { runtimeStatusColor } from "../runtime/presentation";
 import { useRuntimeContext } from "../runtime/context";
 
 const { diagnostics, finalTranscripts, runtimeStatus } = useRuntimeContext();
@@ -21,7 +22,11 @@ const { diagnostics, finalTranscripts, runtimeStatus } = useRuntimeContext();
       </div>
 
       <div class="flex flex-wrap gap-2">
-        <UBadge color="primary" variant="subtle" class="capitalize">
+        <UBadge
+          :color="runtimeStatusColor[runtimeStatus.status]"
+          variant="subtle"
+          class="capitalize"
+        >
           {{ runtimeStatus.status }}
         </UBadge>
         <UBadge color="neutral" variant="subtle">

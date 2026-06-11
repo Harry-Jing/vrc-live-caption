@@ -1,23 +1,12 @@
 <script setup lang="ts">
 import { formatTime } from "../runtime/format";
+import { diagnosticSeverityColor } from "../runtime/presentation";
 import type { DiagnosticEvent, TranscriptEvent } from "../runtime/types";
 
 defineProps<{
   diagnostics: DiagnosticEvent[];
   finalTranscripts: TranscriptEvent[];
 }>();
-
-function diagnosticColor(severity: DiagnosticEvent["severity"]) {
-  if (severity === "error") {
-    return "error";
-  }
-
-  if (severity === "warning") {
-    return "warning";
-  }
-
-  return "primary";
-}
 </script>
 
 <template>
@@ -48,7 +37,7 @@ function diagnosticColor(severity: DiagnosticEvent["severity"]) {
               </p>
             </div>
             <UBadge
-              :color="diagnosticColor(diagnostic.severity)"
+              :color="diagnosticSeverityColor[diagnostic.severity]"
               variant="subtle"
             >
               {{ diagnostic.category }}

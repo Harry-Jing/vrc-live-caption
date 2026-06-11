@@ -1,16 +1,11 @@
 <script setup lang="ts">
+import { captionModeColor } from "../runtime/presentation";
 import type { CaptionMode } from "../runtime/types";
 
 defineProps<{
   mode: CaptionMode;
   text: string;
 }>();
-
-const modeColors = {
-  listening: "info",
-  partial: "warning",
-  final: "success",
-} as const;
 </script>
 
 <template>
@@ -22,7 +17,7 @@ const modeColors = {
         </p>
         <h2 class="text-base font-semibold text-highlighted">Current output</h2>
       </div>
-      <UBadge :color="modeColors[mode]" variant="subtle">
+      <UBadge :color="captionModeColor[mode]" variant="subtle">
         {{ mode }}
       </UBadge>
     </div>
