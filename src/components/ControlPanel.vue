@@ -69,13 +69,27 @@ const openAiSecretLabel = computed(() => {
 // reka-ui's Select forbids empty-string item values.
 const DEFAULT_DEVICE_VALUE = "__default-input-device__";
 
-const inputDeviceItems = computed(() => [
-  { label: "Default input device", value: DEFAULT_DEVICE_VALUE },
-  ...props.audioInputDevices.map((device) => ({
-    label: device.isDefault ? `${device.name} (default)` : device.name,
-    value: device.id,
-  })),
-]);
+const inputDeviceItems = computed(() => {
+  const items = [
+    { label: "Default input device", value: DEFAULT_DEVICE_VALUE },
+    ...props.audioInputDevices.map((device) => ({
+      label: device.isDefault ? `${device.name} (default)` : device.name,
+      value: device.id,
+    })),
+  ];
+  const selectedId = form.value?.audio.inputDeviceId;
+
+  // Keep a saved-but-disconnected device selectable instead of showing a
+  // blank select; the user can keep waiting for it or pick another device.
+  if (
+    selectedId &&
+    !props.audioInputDevices.some((device) => device.id === selectedId)
+  ) {
+    items.push({ label: "Saved device (not connected)", value: selectedId });
+  }
+
+  return items;
+});
 
 const providerItems: { label: string; value: SttProvider }[] = [
   { label: "OpenAI", value: "openai" },
@@ -92,17 +106,27 @@ const selectedInputDevice = computed({
   },
 });
 
+// Watch the status object, not `.configured`: overwriting an existing key is
+// a configured->configured transition, but every save returns a new object.
 watch(
-  () => openAiSecretStatus.value?.configured,
-  (configured) => {
-    if (configured) {
+  () => openAiSecretStatus.value,
+  (status) => {
+    if (status?.configured) {
       apiKeyInput.value = "";
     }
   },
 );
 
+// UInputNumber yields undefined when cleared; keep the last saved value
+// instead of letting backend serde defaults silently replace it.
+function finiteOr(value: number, fallback: number) {
+  return Number.isFinite(value) ? value : fallback;
+}
+
 function save() {
-  if (!form.value) {
+  const saved = props.config;
+
+  if (!form.value || !saved) {
     return;
   }
 
@@ -110,6 +134,11 @@ function save() {
   next.stt.language = next.stt.language.trim();
   next.stt.model = next.stt.model.trim();
   next.osc.host = next.osc.host.trim();
+  next.osc.port = finiteOr(next.osc.port, saved.osc.port);
+  next.osc.minIntervalMs = finiteOr(
+    next.osc.minIntervalMs,
+    saved.osc.minIntervalMs,
+  );
 
   emit("saveConfig", next);
 }
@@ -261,6 +290,7 @@ function deleteOpenAiApiKey() {
             <UInputNumber
               v-model="form.osc.port"
               class="w-full"
+              :format-options="{ useGrouping: false }"
               :max="65535"
               :min="1"
             />
@@ -271,6 +301,7 @@ function deleteOpenAiApiKey() {
           <UInputNumber
             v-model="form.osc.minIntervalMs"
             class="w-full"
+            :format-options="{ useGrouping: false }"
             :min="500"
             :step="100"
           />
@@ -292,6 +323,10 @@ function deleteOpenAiApiKey() {
       />
     </form>
 
-    <p v-else class="text-sm text-muted">Loading settings...</p>
+    <p v-else class="text-sm text-muted">
+      {{
+        settingsError ? "Settings could not be loaded." : "Loading settings..."
+      }}
+    </p>
   </UCard>
 </template>

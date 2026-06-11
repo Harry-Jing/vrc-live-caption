@@ -169,6 +169,13 @@ export function createPreviewBackend(): RuntimeBackend {
         return Promise.reject(new Error("API key cannot be empty."));
       }
 
+      // Mirrors the desktop backend's normalize_secret control-character rule.
+      if (/\p{Cc}/u.test(trimmed)) {
+        return Promise.reject(
+          new Error("API key cannot contain control characters."),
+        );
+      }
+
       openAiSecretSuffix = trimmed.slice(-4);
       return Promise.resolve(openAiSecretStatus());
     },
