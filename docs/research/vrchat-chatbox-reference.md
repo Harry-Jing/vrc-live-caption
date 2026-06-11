@@ -8,6 +8,28 @@ This document is the canonical implementation reference for the fixed VRChat cha
 - Long-text behavior is defined by a fixed text rectangle, fixed margins, fixed font size, the VRChat font/fallback stack, real glyph widths, TMP line-break tables, and a hard `9`-line cap.
 - For this project, the important target is text layout and clipping inside the `ChatText` rectangle, not full world-space chat bubble rendering.
 
+## OSC input contract
+
+These are the OSC endpoints VRChat exposes for the chatbox, separate from the
+layout model below.
+
+- `/chatbox/input s b n`: sets the chatbox text. `s` is the message, `b` true
+  sends immediately (false opens the in-game keyboard instead), `n` true plays
+  the notification sound for nearby players. This app sends
+  `(text, true, false)`: immediate send, no notification sound, so captions do
+  not ping other players on every update.
+- The input text is hard-capped at `144` characters by VRChat. This cap applies
+  before the layout model below: for Latin text it is reached well before the
+  `9`-line cap (about `29` characters per line over `9` lines is far more than
+  `144`), so `144` is the binding constraint for Latin output. For CJK,
+  `15 × 9 = 135` visible characters stays under the cap.
+- `/chatbox/typing b`: toggles the typing indicator on the chat bubble. Useful
+  for showing activity while speech is still being recognized.
+- VRChat applies spam protection to chatbox updates. The precise window is not
+  officially documented; this app paces sends with a configurable minimum
+  interval (default `1200` ms, validated minimum `500` ms) chosen
+  conservatively.
+
 ## Verified layout contract
 
 ### Text object paths
