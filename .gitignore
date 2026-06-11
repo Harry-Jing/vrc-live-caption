@@ -37,3 +37,6 @@ lerna-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+# Local source material, intentionally untracked
+PROJECT_REWRITE_BRIEF.zh-CN.md
