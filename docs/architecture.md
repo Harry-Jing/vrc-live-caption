@@ -122,11 +122,13 @@ translation as a processing stage between transcript events and output sinks.
 
 ## Local Inference Boundary
 
-Local inference is a future optional capability.
+Local STT is the planned long-term default path; the MVP ships cloud-first
+(see [decisions.md](./decisions.md)). Whether local translation follows the
+local-first direction is an open question in [product.md](./product.md).
 
 The main app should not require users to install Python, PyTorch, CUDA Toolkit,
 or model-specific development dependencies. Local STT and local translation
-should run behind sidecars or workers so model crashes, GPU failures, and large
+run behind sidecars or workers so model crashes, GPU failures, and large
 runtime dependencies do not destabilize the main app.
 
 The main app should be able to fall back to a cloud path or show a clear

@@ -19,8 +19,8 @@ Goal: establish the smallest Tauri/Vue/Rust base that can support the runtime.
 
 ## Phase 1: Outgoing MVP-A
 
-Status: implemented; success criteria are still being validated in real VRChat
-sessions.
+Status: core path implemented; remaining work is listed below, and success
+criteria are still being validated in real VRChat sessions.
 
 Goal: make the core user path work reliably.
 
@@ -47,7 +47,10 @@ Remaining work:
 - full Chatbox wrap model from
   [research/vrchat-chatbox-reference.md](./research/vrchat-chatbox-reference.md);
   the current width model is a simplified approximation
-- Windows CI build running the existing quality gates
+- clear in-App disclosure before microphone audio is uploaded to a cloud
+  provider (a MUST in [product.md](./product.md))
+- run the Rust and frontend quality gates on Windows in CI; the Tauri bundle
+  build already runs on windows-latest
 - validation in real Windows VRChat sessions
 
 ## Phase 2: Frontend Test Infrastructure

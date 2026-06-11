@@ -23,6 +23,7 @@
   `docs/architecture.md`, `docs/decisions.md`, and `docs/roadmap.md`.
 - For Chatbox layout, wrapping, clipping, or OSC behavior, read
   `docs/research/vrchat-chatbox-reference.md`.
+- For local inference work, read `docs/research/local-inference-notes.md`.
 - For Tauri 2 behavior or configuration questions, verify against the Tauri 2
   docs rather than relying on memory.
 
@@ -96,9 +97,10 @@
 - In CI, use locked installs and locked Cargo resolution:
   - `pnpm install --frozen-lockfile`
   - `pnpm check:ci`
-- Do not require `npm run typecheck` or `npm run lint` until matching package
-  scripts exist. `pnpm build` is the current frontend typecheck path because it
-  runs `vue-tsc --noEmit`.
+- Use pnpm for all package scripts; never npm or yarn. There is no standalone
+  typecheck script: `pnpm build` is the frontend typecheck path because it runs
+  `vue-tsc --noEmit`. Lint and format have their own scripts (`pnpm lint`,
+  `pnpm format:check`).
 - For docs-only changes, run no build checks unless the change affects commands,
   configuration, or documented behavior; state that checks were skipped because
   the change was docs-only.

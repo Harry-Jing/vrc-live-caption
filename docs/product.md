@@ -104,8 +104,8 @@ SHOULD:
 MAY:
 
 - Later versions may support Incoming Caption.
-- Later versions will add local STT (the planned long-term default) and may
-  support local translation.
+- Later versions may support local translation. Local STT is planned long-term
+  default work rather than a MAY item (see [decisions.md](./decisions.md)).
 - Later versions may support history, export, interpretation, TTS, or virtual
   microphone output.
 
@@ -153,3 +153,9 @@ Resolved questions move to [decisions.md](./decisions.md).
   start, stop, and monitor captioning? Candidates include OVR overlays, global
   hotkeys, auto-start with VRChat, and status feedback through the Chatbox
   itself.
+
+- How does the cloud path stay reachable for users behind restricted networks?
+  Many target users cannot reach OpenAI without a proxy, and a Windows GUI app
+  does not automatically inherit system proxy settings. Candidates: an in-app
+  proxy setting, honoring system proxy configuration, and a clear
+  network-unreachable diagnostic.

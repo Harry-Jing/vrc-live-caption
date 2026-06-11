@@ -61,7 +61,9 @@ Partial output would be slow, noisy, and visible to other players before it is
 stable.
 
 Consequence: partial and stable transcript events are for App preview,
-diagnostics, and future workflows, not MVP Chatbox output.
+diagnostics, and future workflows, not MVP Chatbox output. Final-only applies
+to transcript text: the typing indicator is a presence signal, not text, and
+may run during an active utterance.
 
 Revisit if: a later experiment proves stable or semi-final output improves UX
 without causing flicker, spam, or incorrect public text.
@@ -143,7 +145,10 @@ Date: 2026-06
 
 Decision: stop releases the microphone within one receive timeout, discards
 buffered and queued speech, and sends no Chatbox output after the stop
-request; only an STT request already in flight is awaited.
+request; only an STT request already in flight is awaited. State-clearing
+signals are the one exception: stop may still send a typing-indicator off
+message so other players are not left with a stuck indicator, but never
+transcript text.
 
 Reason: stop is a trust action. "Stop listening" must mean nothing further is
 uploaded or published.
