@@ -107,6 +107,12 @@ Windows (see [decisions.md](./decisions.md)).
 
 - code signing and updater key handling
 - versioning and release notes flow
+- resolve the cloud reachability open question in [product.md](./product.md);
+  a cloud-only release that many target users cannot connect to is not
+  shippable
+- review and narrow Tauri capabilities and permissions to the APIs the app
+  actually uses; `core:default` was only acceptable during the foundation
+  phase
 - validation on real Windows VRChat setups
 
 ## Phase 6: Local STT Path

@@ -255,6 +255,9 @@ Additional confirmed validation:
 
 ## Known unknowns
 
+- The chatbox display duration model is unverified: how long a message stays
+  visible, whether a new `/chatbox/input` resets the timer, and when the bubble
+  fades. These need in-game measurement before tuning replacement pacing.
 - The full custom MonoBehaviour typetree was not recovered, so some non-critical fields remain inferred rather than directly dumped.
 - The short-text chat bubble background resize logic is still not the authoritative model. The inspected object chain did not expose clearly named `ContentSizeFitter`, `LayoutElement`, `HorizontalLayoutGroup`, or `VerticalLayoutGroup` components, which suggests the width change is likely driven by custom script logic. This does not affect long-text wrapping and clipping inside `ChatText`.
 - Small non-critical field differences between normal and mirrored objects, including possible `overflowMode` differences, should not be used as primary implementation inputs unless re-verified.

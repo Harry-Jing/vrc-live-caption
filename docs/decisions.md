@@ -279,3 +279,23 @@ non-goals.
 
 Revisit if: no local engine reaches acceptable accuracy and resource usage on
 machines that are also running VRChat.
+
+## Signal Speech Activity With The Typing Indicator
+
+Date: 2026-06
+
+Decision: while an utterance is active, the app sends the VRChat typing
+indicator on; the indicator turns off when final text is sent, when the
+utterance ends without a final, and on runtime stop.
+
+Reason: the default cloud provider emits final-only transcripts, so other
+players would otherwise see nothing between the start of speech and the final
+text. The typing indicator is VRChat's native affordance for exactly this gap
+and masks recognition latency at almost no cost.
+
+Consequence: stop must send one clearing typing-off message (the exception
+recorded in the stop decision). Final-only continues to apply to transcript
+text; the indicator is a presence signal.
+
+Revisit if: in-game validation shows the indicator confuses or annoys other
+players, or VRChat changes its semantics.

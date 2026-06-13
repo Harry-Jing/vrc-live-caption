@@ -105,6 +105,8 @@ Chatbox output must handle:
 - length limits
 - line and wrap constraints
 - final text replacement or history behavior
+- typing indicator lifecycle: on while an utterance is active; off after the
+  final send, after an utterance ends without a final, and on stop
 - OSC send failures
 
 Detailed VRChat layout facts live in

@@ -12,4 +12,4 @@ the automated format checks unless that policy is changed explicitly.
 - [architecture.md](./architecture.md): runtime boundaries and data flow
 - [roadmap.md](./roadmap.md): near-term implementation phases
 - [decisions.md](./decisions.md): accepted project decisions
-- [research/](./research/): factual notes and experiments
+- [research/](./research/): factual notes, research material, and experiments
