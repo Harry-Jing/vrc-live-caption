@@ -59,6 +59,20 @@ export default defineConfigWithVueTs(
   },
 
   {
+    name: "app/vue-component-shape",
+    files: ["src/**/*.vue"],
+    rules: {
+      "vue/block-lang": ["error", { script: { lang: "ts" } }],
+      "vue/component-api-style": ["error", ["script-setup"]],
+      "vue/component-name-in-template-casing": [
+        "error",
+        "PascalCase",
+        { registeredComponentsOnly: false },
+      ],
+    },
+  },
+
+  {
     name: "app/layer-boundaries",
     files: ["src/**/*.{vue,ts}"],
     ignores: ["src/runtime/**"],
