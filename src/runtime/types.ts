@@ -1,10 +1,5 @@
 export type RuntimeStatus =
-  | "idle"
-  | "starting"
-  | "running"
-  | "stopping"
-  | "stopped"
-  | "error";
+  "idle" | "starting" | "running" | "stopping" | "stopped" | "error";
 export type SttProvider = "mock" | "openai";
 export type ProviderSecretStorage = "systemCredentialStore" | "environment";
 export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";

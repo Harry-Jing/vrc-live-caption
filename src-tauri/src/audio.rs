@@ -1,6 +1,6 @@
 //! Microphone discovery and capture for the outgoing caption path.
 //!
-//! Device ids are CPAL 0.17 `DeviceId` strings, not display names. Persisting
+//! Device ids are CPAL `DeviceId` strings, not display names. Persisting
 //! names is fragile because duplicate names and reconnects are common on Windows.
 //! Captured samples are converted to mono `f32` frames before reaching runtime
 //! code; the frontend never sees raw audio.
@@ -8,7 +8,7 @@
 use crate::config::AudioConfig;
 use crate::error::{AppError, AppResult};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{DeviceId, FromSample, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
+use cpal::{DeviceId, FromSample, I24, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
 use serde::Serialize;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -87,9 +87,13 @@ pub(crate) fn open_input_capture(config: &AudioConfig) -> AppResult<AudioCapture
     let stream_config: StreamConfig = supported_config.into();
     let (sender, receiver) = sync_channel(16);
     let stream = match sample_format {
-        SampleFormat::F32 => build_input_stream::<f32>(&device, &stream_config, channels, sender),
-        SampleFormat::I16 => build_input_stream::<i16>(&device, &stream_config, channels, sender),
-        SampleFormat::U16 => build_input_stream::<u16>(&device, &stream_config, channels, sender),
+        SampleFormat::F32 => build_input_stream::<f32>(&device, stream_config, channels, sender),
+        SampleFormat::F64 => build_input_stream::<f64>(&device, stream_config, channels, sender),
+        SampleFormat::I16 => build_input_stream::<i16>(&device, stream_config, channels, sender),
+        SampleFormat::I24 => build_input_stream::<I24>(&device, stream_config, channels, sender),
+        SampleFormat::I32 => build_input_stream::<i32>(&device, stream_config, channels, sender),
+        SampleFormat::U16 => build_input_stream::<u16>(&device, stream_config, channels, sender),
+        SampleFormat::U32 => build_input_stream::<u32>(&device, stream_config, channels, sender),
         _ => Err(AppError::audio(format!(
             "Unsupported microphone sample format: {sample_format:?}"
         ))),
@@ -145,7 +149,7 @@ fn select_input_device(
 
 fn build_input_stream<T>(
     device: &cpal::Device,
-    config: &StreamConfig,
+    config: StreamConfig,
     channels: usize,
     sender: SyncSender<Vec<f32>>,
 ) -> AppResult<Stream>
