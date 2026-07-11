@@ -5,7 +5,7 @@ description = "Desktop live caption tool for VRChat"
 authors = ["VRC Live Caption contributors"]
 license = "MIT"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.97"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -45,9 +45,12 @@ windows-native-keyring-store = "1.0.0"
 unsafe_code = "deny"
 
 [lints.clippy]
+allow_attributes_without_reason = "deny"
 dbg_macro = "deny"
 expect_used = "deny"
 panic = "deny"
+print_stderr = "deny"
+print_stdout = "deny"
 todo = "deny"
 unimplemented = "deny"
 unwrap_used = "deny"

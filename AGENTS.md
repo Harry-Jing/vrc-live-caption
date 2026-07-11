@@ -11,6 +11,9 @@
 - If a request is unclear or changes project direction, discuss the approach first.
 - Keep edits scoped; do not rewrite unrelated code, docs, or formatting.
 - Preserve existing user changes in the worktree.
+- Never hand-edit lockfiles or generated files (`pnpm-lock.yaml`,
+  `src-tauri/Cargo.lock`, `src-tauri/gen/`). Change them only through pnpm,
+  Cargo, or Tauri tooling.
 - After making substantive changes to project docs, summarize what changed in
   Chinese in the conversation so the maintainer can review it quickly.
 - When adding or upgrading a production dependency, explain why it is needed and
@@ -94,6 +97,9 @@
   CI should run the full quality gate.
 - Rust lint policy lives in `src-tauri/Cargo.toml` under `[lints]`. Do not
   weaken those lints unless the project rule itself changes.
+- The Rust toolchain is pinned in `rust-toolchain.toml`. Upgrading Rust is an
+  explicit change: update `rust-toolchain.toml`, the toolchain version in both
+  GitHub workflows, and `rust-version` in `src-tauri/Cargo.toml` together.
 - In CI, use locked installs and locked Cargo resolution:
   - `pnpm install --frozen-lockfile`
   - `pnpm check:ci`

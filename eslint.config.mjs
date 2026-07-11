@@ -58,5 +58,42 @@ export default defineConfigWithVueTs(
     },
   },
 
+  {
+    name: "app/layer-boundaries",
+    files: ["src/**/*.{vue,ts}"],
+    ignores: ["src/runtime/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@tauri-apps/*", "@tauri-apps/**"],
+              message:
+                "Tauri APIs must stay behind src/runtime/. Use the runtime context instead.",
+            },
+            {
+              group: [
+                "**/runtime/backend",
+                "**/tauriBackend",
+                "**/previewBackend",
+              ],
+              message:
+                "Backend implementations are internal to src/runtime/. Use useRuntime or the runtime context instead.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  {
+    name: "app/no-debug-output",
+    files: ["src/**/*.{vue,ts}"],
+    rules: {
+      "no-console": ["error", { allow: ["warn", "error"] }],
+    },
+  },
+
   skipFormatting,
 );
