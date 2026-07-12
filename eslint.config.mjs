@@ -74,7 +74,7 @@ export default defineConfigWithVueTs(
 
   {
     name: "app/layer-boundaries",
-    files: ["src/**/*.{vue,ts}"],
+    files: ["src/**/*.{vue,ts}", "tests/eslint/**/*.mjs"],
     ignores: ["src/runtime/**"],
     rules: {
       "no-restricted-imports": [
@@ -87,15 +87,38 @@ export default defineConfigWithVueTs(
                 "Tauri APIs must stay behind src/runtime/. Use the runtime context instead.",
             },
             {
-              group: [
-                "**/runtime/backend",
-                "**/tauriBackend",
-                "**/previewBackend",
-              ],
+              regex:
+                "(^|/)runtime/(backend|tauriBackend|previewBackend)(\\.[cm]?[jt]sx?)?$",
               message:
                 "Backend implementations are internal to src/runtime/. Use useRuntime or the runtime context instead.",
             },
           ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "ImportExpression[source.value=/^@tauri-apps(?:\\/|$)/]",
+          message:
+            "Tauri APIs must stay behind src/runtime/. Use the runtime context instead.",
+        },
+        {
+          selector:
+            "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/^@tauri-apps(?:\\/|$)/]",
+          message:
+            "Tauri APIs must stay behind src/runtime/. Use the runtime context instead.",
+        },
+        {
+          selector:
+            "ImportExpression[source.value=/(?:^|\\/)runtime\\/(?:backend|tauriBackend|previewBackend)(?:\\.[cm]?[jt]sx?)?$/]",
+          message:
+            "Backend implementations are internal to src/runtime/. Use useRuntime or the runtime context instead.",
+        },
+        {
+          selector:
+            "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)runtime\\/(?:backend|tauriBackend|previewBackend)(?:\\.[cm]?[jt]sx?)?$/]",
+          message:
+            "Backend implementations are internal to src/runtime/. Use useRuntime or the runtime context instead.",
         },
       ],
     },
