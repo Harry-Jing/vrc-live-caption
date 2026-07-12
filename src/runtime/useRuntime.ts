@@ -75,6 +75,7 @@ export function useRuntime() {
   const partialTranscript = ref<TranscriptEvent | null>(null);
   const finalTranscripts = ref<TranscriptEvent[]>([]);
   const diagnostics = ref<DiagnosticEvent[]>([]);
+  const settingsNotice = ref("");
   const runtimeAction = createActionState();
   const settingsAction = createActionState();
   const secretsAction = createActionState();
@@ -116,7 +117,13 @@ export function useRuntime() {
   });
 
   async function runCommand(command: RuntimeCommand) {
-    await runtimeAction.run(() => backend.runCommand(command));
+    await runtimeAction.run(async () => {
+      await backend.runCommand(command);
+
+      if (command === "start_runtime") {
+        settingsNotice.value = "";
+      }
+    });
   }
 
   async function loadConfig() {
@@ -126,8 +133,18 @@ export function useRuntime() {
   }
 
   async function saveConfig(nextConfig: AppConfig) {
+    settingsNotice.value = "";
+    const requiresRestart = ["starting", "running", "stopping"].includes(
+      runtimeStatus.value.status,
+    );
+
     await settingsAction.run(async () => {
       config.value = await backend.saveConfig(nextConfig);
+
+      if (requiresRestart) {
+        settingsNotice.value =
+          "These changes will take effect the next time the runtime starts.";
+      }
     });
   }
 
@@ -182,6 +199,10 @@ export function useRuntime() {
 
   function applyRuntimeStatus(event: RuntimeStatusEvent) {
     runtimeStatus.value = event;
+
+    if (event.status === "starting") {
+      settingsNotice.value = "";
+    }
 
     if (event.status === "stopped" || event.status === "error") {
       activeUtteranceId.value = null;
@@ -283,5 +304,6 @@ export function useRuntime() {
     secretStatuses,
     secretsError: secretsAction.error,
     settingsError: settingsAction.error,
+    settingsNotice,
   };
 }

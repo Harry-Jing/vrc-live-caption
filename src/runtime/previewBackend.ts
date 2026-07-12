@@ -122,6 +122,7 @@ export function createPreviewBackend(): RuntimeBackend {
 
     runCommand(command: RuntimeCommand) {
       if (command === "start_runtime") {
+        emitStatus("starting", "Starting browser preview runtime");
         emitStatus("running", "Browser preview runtime is running");
       } else if (command === "stop_runtime") {
         emitStatus("stopped", "Browser preview runtime stopped");

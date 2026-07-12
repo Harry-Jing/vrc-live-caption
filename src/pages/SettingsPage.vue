@@ -14,6 +14,7 @@ const {
   secretStatuses,
   secretsError,
   settingsError,
+  settingsNotice,
 } = useRuntimeContext();
 </script>
 
@@ -36,6 +37,7 @@ const {
       :secret-statuses="secretStatuses"
       :secrets-error="secretsError"
       :settings-error="settingsError"
+      :settings-notice="settingsNotice"
       @delete-provider-secret="deleteProviderSecret"
       @refresh-devices="loadAudioInputDevices"
       @save-config="saveConfig"

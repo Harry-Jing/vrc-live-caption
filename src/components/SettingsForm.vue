@@ -15,6 +15,7 @@ const props = defineProps<{
   secretStatuses: Partial<Record<SttProvider, ProviderSecretStatus>>;
   secretsError: string;
   settingsError: string;
+  settingsNotice: string;
 }>();
 
 const emit = defineEmits<{
@@ -180,6 +181,16 @@ function deleteOpenAiApiKey() {
       icon="i-lucide-circle-alert"
       title="Settings action failed"
       :description="settingsError"
+      variant="subtle"
+    />
+
+    <UAlert
+      v-if="settingsNotice"
+      class="mb-4"
+      color="success"
+      icon="i-lucide-circle-check"
+      title="Settings saved"
+      :description="settingsNotice"
       variant="subtle"
     />
 
