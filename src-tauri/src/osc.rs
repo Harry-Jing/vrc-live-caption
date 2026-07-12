@@ -1,11 +1,11 @@
 //! VRChat Chatbox output over OSC (UDP).
 //!
-//! Text is shaped to VRChat's fixed Chatbox layout before sending: lines wrap
-//! against a pixel width budget and clip at the hard visible line cap. The
-//! layout constants and per-character width estimates approximate the
-//! measured TMP contract in `docs/research/vrchat-chatbox-reference.md`: a
-//! 300px `ChatText` rectangle with 10px margins (280px of usable width) and
-//! a 9-line cap.
+//! Text is shaped to VRChat's fixed Chatbox constraints before sending. Input
+//! is hard-clipped to 144 UTF-16 code units at a grapheme-cluster boundary,
+//! then a layout simulation finds the source-text prefix visible within nine
+//! wrapped lines. VRChat receives that prefix without artificial line breaks
+//! and performs the actual wrapping. The width estimates approximate the
+//! measured TMP contract in `docs/research/vrchat-chatbox-reference.md`.
 //!
 //! `ChatboxOscSender` owns one UDP socket for its lifetime and paces repeated
 //! sends with a minimum interval so VRChat's Chatbox rate limit does not drop
@@ -25,6 +25,7 @@ pub(crate) const OSC_TEST_MESSAGE: &str = "VRC Live Caption OSC test.";
 // ChatText rectangle minus margins; see the module docs for the source.
 const CHATBOX_WIDTH_PX: f32 = 280.0;
 const CHATBOX_MAX_LINES: usize = 9;
+const CHATBOX_MAX_UTF16_UNITS: usize = 144;
 // Upper bound on one pacing sleep slice so a cancel request interrupts the
 // wait quickly instead of after the full minimum interval.
 const PACING_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -149,43 +150,68 @@ struct ShapedChatboxText {
 
 fn shape_chatbox_text(text: &str) -> ShapedChatboxText {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut lines = Vec::new();
-    let mut current_line = String::new();
-    let mut current_width = 0.0;
-    let mut clipped = false;
+    let (input_limited, input_clipped) = clip_to_utf16_budget(&normalized);
+    let (visible, layout_clipped) = clip_to_visible_lines(input_limited);
 
-    for grapheme in normalized.graphemes(true) {
+    ShapedChatboxText {
+        text: visible.to_string(),
+        clipped: input_clipped || layout_clipped,
+    }
+}
+
+fn clip_to_utf16_budget(text: &str) -> (&str, bool) {
+    let mut used_units = 0;
+
+    for (index, grapheme) in text.grapheme_indices(true) {
+        let grapheme_units = grapheme.encode_utf16().count();
+
+        if used_units + grapheme_units > CHATBOX_MAX_UTF16_UNITS {
+            let Some(prefix) = text.get(..index) else {
+                return ("", true);
+            };
+
+            return (prefix, true);
+        }
+
+        used_units += grapheme_units;
+    }
+
+    (text, false)
+}
+
+fn clip_to_visible_lines(text: &str) -> (&str, bool) {
+    let mut line_count = 1;
+    let mut current_width = 0.0;
+    let mut line_has_content = false;
+
+    for (index, grapheme) in text.grapheme_indices(true) {
         let width = estimate_chatbox_width_px(grapheme);
 
-        if !current_line.is_empty() && current_width + width > CHATBOX_WIDTH_PX {
-            lines.push(current_line.trim_end().to_string());
-            current_line.clear();
-            current_width = 0.0;
+        if line_has_content && current_width + width > CHATBOX_WIDTH_PX {
+            if line_count >= CHATBOX_MAX_LINES {
+                let Some(prefix) = text.get(..index) else {
+                    return ("", true);
+                };
 
-            if lines.len() >= CHATBOX_MAX_LINES {
-                clipped = true;
-                break;
+                return (prefix.trim_end(), true);
             }
 
+            line_count += 1;
+            current_width = 0.0;
+            line_has_content = false;
+
+            // VRChat keeps the source space in its input budget but does not
+            // render it as the first character on the wrapped line.
             if grapheme.trim().is_empty() {
                 continue;
             }
         }
 
-        current_line.push_str(grapheme);
         current_width += width;
+        line_has_content = true;
     }
 
-    if !current_line.trim().is_empty() && lines.len() < CHATBOX_MAX_LINES {
-        lines.push(current_line.trim_end().to_string());
-    } else if !current_line.trim().is_empty() {
-        clipped = true;
-    }
-
-    ShapedChatboxText {
-        text: lines.join("\n"),
-        clipped,
-    }
+    (text.trim_end(), false)
 }
 
 fn estimate_chatbox_width_px(grapheme: &str) -> f32 {
@@ -253,23 +279,104 @@ mod tests {
     }
 
     #[test]
-    fn chatbox_text_is_clipped_to_nine_visible_lines() {
+    fn chatbox_send_clips_to_nine_visible_lines_without_inserting_breaks() -> AppResult<()> {
         let text = "中".repeat(144);
-        let shaped = shape_chatbox_text(&text);
+        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let result = sender.send(&text)?;
 
-        assert!(shaped.clipped);
-        assert_eq!(shaped.text.lines().count(), CHATBOX_MAX_LINES);
-        assert!(shaped.text.lines().all(|line| line.chars().count() == 15));
+        assert_eq!(result.rendered_text, "中".repeat(135));
+        assert!(!result.rendered_text.contains('\n'));
+        assert!(result.clipped);
+
+        Ok(())
     }
 
     #[test]
-    fn chatbox_text_keeps_latin_lines_within_width_budget() {
+    fn chatbox_send_leaves_wrapping_to_vrchat() -> AppResult<()> {
         let text = "x".repeat(40);
-        let shaped = shape_chatbox_text(&text);
-        let lines: Vec<_> = shaped.text.lines().collect();
+        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let result = sender.send(&text)?;
 
-        assert_eq!(lines[0].chars().count(), 29);
-        assert_eq!(lines[1].chars().count(), 11);
+        assert_eq!(result.rendered_text, text);
+        assert!(!result.rendered_text.contains('\n'));
+        assert!(!result.clipped);
+
+        Ok(())
+    }
+
+    #[test]
+    fn chatbox_send_hard_clips_input_to_144_utf16_code_units() -> AppResult<()> {
+        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let result = sender.send(&"x".repeat(145))?;
+
+        assert_eq!(result.rendered_text, "x".repeat(144));
+        assert_eq!(result.rendered_text.encode_utf16().count(), 144);
+        assert!(result.clipped);
+
+        Ok(())
+    }
+
+    #[test]
+    fn chatbox_send_keeps_exactly_144_utf16_code_units() -> AppResult<()> {
+        let text = "x".repeat(144);
+        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let result = sender.send(&text)?;
+
+        assert_eq!(result.rendered_text, text);
+        assert_eq!(result.rendered_text.encode_utf16().count(), 144);
+        assert!(!result.clipped);
+
+        Ok(())
+    }
+
+    #[test]
+    fn chatbox_send_counts_non_bmp_emoji_as_two_utf16_units() -> AppResult<()> {
+        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let result = sender.send(&"😀".repeat(73))?;
+
+        assert_eq!(result.rendered_text, "😀".repeat(72));
+        assert_eq!(result.rendered_text.encode_utf16().count(), 144);
+        assert!(result.clipped);
+
+        Ok(())
+    }
+
+    #[test]
+    fn chatbox_send_does_not_split_a_combining_grapheme() -> AppResult<()> {
+        let grapheme = "e\u{301}";
+        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let result = sender.send(&grapheme.repeat(73))?;
+
+        assert_eq!(result.rendered_text, grapheme.repeat(72));
+        assert_eq!(result.rendered_text.encode_utf16().count(), 144);
+        assert!(result.clipped);
+
+        Ok(())
+    }
+
+    #[test]
+    fn chatbox_send_does_not_split_a_zwj_emoji_sequence() -> AppResult<()> {
+        let family = "👨‍👩‍👧‍👦";
+        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let result = sender.send(&family.repeat(14))?;
+
+        assert_eq!(family.encode_utf16().count(), 11);
+        assert_eq!(result.rendered_text, family.repeat(13));
+        assert_eq!(result.rendered_text.encode_utf16().count(), 143);
+        assert!(result.clipped);
+
+        Ok(())
+    }
+
+    #[test]
+    fn chatbox_send_normalizes_whitespace_without_reporting_clipping() -> AppResult<()> {
+        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let result = sender.send("  hello\t \n world  ")?;
+
+        assert_eq!(result.rendered_text, "hello world");
+        assert!(!result.clipped);
+
+        Ok(())
     }
 
     fn local_test_config(port: u16, min_interval_ms: u64) -> OscConfig {
