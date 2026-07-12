@@ -64,6 +64,11 @@ struct SpeechSegment {
     samples: Vec<f32>,
 }
 
+struct NoFinalUtteranceResolution {
+    utterance_id: String,
+    reason: UtteranceEndReason,
+}
+
 enum RuntimeChatboxInit {
     Disabled,
     Ready(ChatboxOscSender),
@@ -799,8 +804,31 @@ fn end_utterance_without_final(
     utterance_id: String,
     reason: UtteranceEndReason,
 ) {
-    emit_utterance_ended(app, utterance_id.clone(), reason);
-    resolve_chatbox_activity(app, activity, &utterance_id);
+    let resolution = NoFinalUtteranceResolution {
+        utterance_id,
+        reason,
+    };
+
+    if let Err(error) = complete_no_final_utterance(activity, resolution, |utterance_id, reason| {
+        emit_utterance_ended(app, utterance_id, reason);
+    }) {
+        emit_chatbox_activity_failure(app, &error, "Typing indicator cleanup failed");
+    }
+}
+
+fn complete_no_final_utterance(
+    activity: Option<&ChatboxActivityHandle>,
+    resolution: NoFinalUtteranceResolution,
+    emit_ended: impl FnOnce(String, UtteranceEndReason),
+) -> AppResult<()> {
+    let utterance_id = resolution.utterance_id.clone();
+    emit_ended(resolution.utterance_id, resolution.reason);
+
+    let Some(activity) = activity else {
+        return Ok(());
+    };
+
+    activity.utterance_resolved(&utterance_id)
 }
 
 fn resolve_chatbox_activity(
@@ -887,6 +915,82 @@ mod tests {
 
     #[test]
     fn typing_off_is_sent_before_the_stt_worker_join_begins() -> AppResult<()> {
+        let (sender, receiver) = runtime_test_sender_and_receiver()?;
+        let activity = sender.activity_handle();
+        let cancel = AtomicBool::new(false);
+        activity.request_stop(&cancel)?;
+
+        let (typing_result, worker_result) = finish_chatbox_before_join(Some(&activity), || {
+            let packet = receive_runtime_test_packet(&receiver)?;
+            let expected = typing_packet(false);
+
+            if packet == expected {
+                Ok(())
+            } else {
+                Err(AppError::runtime(
+                    "STT worker join began before typing-off was observable.",
+                ))
+            }
+        });
+
+        typing_result?;
+        worker_result?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn every_no_final_resolution_turns_typing_off() -> AppResult<()> {
+        let reasons = [
+            UtteranceEndReason::NoSpeech,
+            UtteranceEndReason::SttFailed,
+            UtteranceEndReason::Discarded,
+        ];
+
+        for (index, reason) in reasons.into_iter().enumerate() {
+            let (sender, receiver) = runtime_test_sender_and_receiver()?;
+            let activity = sender.activity_handle();
+            let utterance_id = format!("no-final-{index}");
+            let resolution = NoFinalUtteranceResolution {
+                utterance_id: utterance_id.clone(),
+                reason,
+            };
+            let mut emitted = None;
+
+            activity.utterance_started(&utterance_id)?;
+            assert_eq!(receive_runtime_test_packet(&receiver)?, typing_packet(true));
+
+            complete_no_final_utterance(
+                Some(&activity),
+                resolution,
+                |emitted_utterance_id, emitted_reason| {
+                    emitted = Some((emitted_utterance_id, emitted_reason));
+                },
+            )?;
+
+            let (emitted_utterance_id, emitted_reason) = emitted
+                .ok_or_else(|| AppError::runtime("No-final completion event was not emitted."))?;
+            assert_eq!(emitted_utterance_id, utterance_id);
+            assert!(same_utterance_end_reason(emitted_reason, reason));
+            assert_eq!(
+                receive_runtime_test_packet(&receiver)?,
+                typing_packet(false)
+            );
+        }
+
+        Ok(())
+    }
+
+    fn same_utterance_end_reason(left: UtteranceEndReason, right: UtteranceEndReason) -> bool {
+        matches!(
+            (left, right),
+            (UtteranceEndReason::NoSpeech, UtteranceEndReason::NoSpeech)
+                | (UtteranceEndReason::SttFailed, UtteranceEndReason::SttFailed)
+                | (UtteranceEndReason::Discarded, UtteranceEndReason::Discarded)
+        )
+    }
+
+    fn runtime_test_sender_and_receiver() -> AppResult<(ChatboxOscSender, UdpSocket)> {
         let receiver = UdpSocket::bind("127.0.0.1:0")
             .map_err(|error| AppError::osc_bind(error.to_string()))?;
         receiver
@@ -903,34 +1007,25 @@ mod tests {
             min_interval_ms: 500,
         };
         let sender = ChatboxOscSender::new(&config)?;
-        let activity = sender.activity_handle();
-        let cancel = AtomicBool::new(false);
-        activity.request_stop(&cancel)?;
 
-        let (typing_result, worker_result) = finish_chatbox_before_join(Some(&activity), || {
-            let mut buffer = [0_u8; 1024];
-            let (size, _) = receiver
-                .recv_from(&mut buffer)
-                .map_err(|error| AppError::osc_send("test receiver", error.to_string()))?;
-            let (_, packet) = decoder::decode_udp(&buffer[..size])
-                .map_err(|error| AppError::osc_encode(error.to_string()))?;
-            let expected = OscPacket::Message(OscMessage {
-                addr: "/chatbox/typing".to_string(),
-                args: vec![OscType::Bool(false)],
-            });
+        Ok((sender, receiver))
+    }
 
-            if packet == expected {
-                Ok(())
-            } else {
-                Err(AppError::runtime(
-                    "STT worker join began before typing-off was observable.",
-                ))
-            }
-        });
+    fn receive_runtime_test_packet(receiver: &UdpSocket) -> AppResult<OscPacket> {
+        let mut buffer = [0_u8; 1024];
+        let (size, _) = receiver
+            .recv_from(&mut buffer)
+            .map_err(|error| AppError::osc_send("test receiver", error.to_string()))?;
+        let (_, packet) = decoder::decode_udp(&buffer[..size])
+            .map_err(|error| AppError::osc_encode(error.to_string()))?;
 
-        typing_result?;
-        worker_result?;
+        Ok(packet)
+    }
 
-        Ok(())
+    fn typing_packet(is_typing: bool) -> OscPacket {
+        OscPacket::Message(OscMessage {
+            addr: "/chatbox/typing".to_string(),
+            args: vec![OscType::Bool(is_typing)],
+        })
     }
 }

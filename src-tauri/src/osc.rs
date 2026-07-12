@@ -297,6 +297,11 @@ impl ChatboxActivityHandle {
             .lock()
             .map_err(|_| AppError::state("Chatbox activity state lock was poisoned."))?;
         cancel.store(true, Ordering::Relaxed);
+
+        if state.lifecycle != ChatboxActivityLifecycle::StopRequested {
+            state.stop_off_attempted = false;
+        }
+
         state.lifecycle = ChatboxActivityLifecycle::StopRequested;
         state.active_utterances.clear();
 
@@ -795,6 +800,29 @@ mod tests {
 
         activity.utterance_started("speech-1")?;
         assert!(activity.finish_after_error().is_err());
+
+        activity.request_stop(&cancel)?;
+        activity.finish_stop()?;
+        assert_eq!(
+            transport.packets()?,
+            vec![
+                typing_indicator_packet(true),
+                typing_indicator_packet(false),
+                typing_indicator_packet(false),
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn formal_stop_reasserts_off_after_successful_runtime_error_cleanup() -> AppResult<()> {
+        let (sender, transport) = scripted_test_sender([false, false, false]);
+        let activity = sender.activity_handle();
+        let cancel = AtomicBool::new(false);
+
+        activity.utterance_started("speech-1")?;
+        activity.finish_after_error()?;
 
         activity.request_stop(&cancel)?;
         activity.finish_stop()?;
