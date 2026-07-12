@@ -46,8 +46,11 @@ Remaining work:
   the current width model is a simplified approximation
 - clear in-App disclosure before microphone audio is uploaded to a cloud
   provider (a MUST in [product.md](./product.md))
-- run the Rust and frontend quality gates on Windows in CI; the Tauri bundle
-  build already runs on windows-latest
+- get the Windows quality gate green; the quality workflow now runs on
+  ubuntu-latest and windows-latest for every branch push
+- execute the Tauri bundle build workflow at least once; it triggers only on
+  pushes to main, pull requests, and manual dispatch from the default branch,
+  none of which have happened yet
 - validation in real Windows VRChat sessions
 
 ## Phase 2: Frontend Test Infrastructure
