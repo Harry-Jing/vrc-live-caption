@@ -41,6 +41,9 @@ apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = "1.0.0"
 
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 [lints.rust]
 unsafe_code = "deny"
 

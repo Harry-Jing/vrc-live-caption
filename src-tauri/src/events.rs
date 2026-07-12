@@ -19,7 +19,7 @@ use crate::error::AppError;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 
 const EVENT_RUNTIME_STATUS: &str = "runtime-status";
 const EVENT_TRANSCRIPT_PARTIAL: &str = "transcript-partial";
@@ -239,7 +239,11 @@ pub(crate) enum DiagnosticSeverity {
     Warning,
 }
 
-pub(crate) fn emit_status(app: &AppHandle, status: RuntimeStatus, message: Option<String>) {
+pub(crate) fn emit_status<R: Runtime>(
+    app: &AppHandle<R>,
+    status: RuntimeStatus,
+    message: Option<String>,
+) {
     emit_event(
         app,
         EVENT_RUNTIME_STATUS,
@@ -251,7 +255,7 @@ pub(crate) fn emit_status(app: &AppHandle, status: RuntimeStatus, message: Optio
     );
 }
 
-pub(crate) fn emit_transcript_partial(app: &AppHandle, update: TranscriptUpdate) {
+pub(crate) fn emit_transcript_partial<R: Runtime>(app: &AppHandle<R>, update: TranscriptUpdate) {
     emit_transcript(
         app,
         EVENT_TRANSCRIPT_PARTIAL,
@@ -260,11 +264,11 @@ pub(crate) fn emit_transcript_partial(app: &AppHandle, update: TranscriptUpdate)
     );
 }
 
-pub(crate) fn emit_transcript_final(app: &AppHandle, update: TranscriptUpdate) {
+pub(crate) fn emit_transcript_final<R: Runtime>(app: &AppHandle<R>, update: TranscriptUpdate) {
     emit_transcript(app, EVENT_TRANSCRIPT_FINAL, TranscriptKind::Final, update);
 }
 
-pub(crate) fn emit_utterance_started(app: &AppHandle, utterance_id: String) {
+pub(crate) fn emit_utterance_started<R: Runtime>(app: &AppHandle<R>, utterance_id: String) {
     emit_event(
         app,
         EVENT_UTTERANCE_STARTED,
@@ -276,8 +280,8 @@ pub(crate) fn emit_utterance_started(app: &AppHandle, utterance_id: String) {
     );
 }
 
-pub(crate) fn emit_utterance_ended(
-    app: &AppHandle,
+pub(crate) fn emit_utterance_ended<R: Runtime>(
+    app: &AppHandle<R>,
     utterance_id: String,
     reason: UtteranceEndReason,
 ) {
@@ -293,7 +297,7 @@ pub(crate) fn emit_utterance_ended(
     );
 }
 
-pub(crate) fn emit_diagnostic(app: &AppHandle, update: DiagnosticUpdate) {
+pub(crate) fn emit_diagnostic<R: Runtime>(app: &AppHandle<R>, update: DiagnosticUpdate) {
     emit_event(
         app,
         EVENT_DIAGNOSTIC,
@@ -313,8 +317,8 @@ pub(crate) fn next_utterance_id(prefix: &str) -> String {
     next_event_id(prefix)
 }
 
-fn emit_transcript(
-    app: &AppHandle,
+fn emit_transcript<R: Runtime>(
+    app: &AppHandle<R>,
     event_name: &str,
     kind: TranscriptKind,
     update: TranscriptUpdate,
@@ -339,7 +343,7 @@ fn emit_transcript(
 /// acknowledgement, and in practice an emit only fails while the webview is
 /// being torn down. No caller can act on such a failure, so it is logged here
 /// instead of being propagated.
-fn emit_event<P: Serialize + Clone>(app: &AppHandle, event_name: &str, payload: P) {
+fn emit_event<R: Runtime, P: Serialize + Clone>(app: &AppHandle<R>, event_name: &str, payload: P) {
     if let Err(error) = app.emit(event_name, payload) {
         tracing::warn!(
             event_name,

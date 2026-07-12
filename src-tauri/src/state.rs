@@ -13,7 +13,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 const CONFIG_FILE_NAME: &str = "config.json";
 
@@ -39,7 +39,7 @@ impl AppState {
             .map_err(|_| AppError::state("Config state lock was poisoned."))
     }
 
-    pub(crate) fn load_config(&self, app: &AppHandle) -> AppResult<AppConfig> {
+    pub(crate) fn load_config<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<AppConfig> {
         let path = config_path(app)?;
         let config = match fs::read_to_string(&path) {
             // A corrupt or invalid config file must not lock the user out of
@@ -138,7 +138,7 @@ impl AppState {
     }
 }
 
-fn config_path(app: &AppHandle) -> AppResult<PathBuf> {
+fn config_path<R: Runtime>(app: &AppHandle<R>) -> AppResult<PathBuf> {
     app.path()
         .app_config_dir()
         .map(|directory| directory.join(CONFIG_FILE_NAME))
@@ -171,6 +171,21 @@ mod tests {
 
         assert_eq!(config.stt.language, "ja");
         assert!(!config.stt.model.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_valid_config_preserves_runtime_settings() -> AppResult<()> {
+        let config = parse_valid_config(
+            r#"{"audio":{"inputDeviceId":"saved-device"},"osc":{"enabled":false}}"#,
+        )?;
+
+        assert_eq!(
+            config.audio.input_device_id.as_deref(),
+            Some("saved-device")
+        );
+        assert!(!config.osc.enabled);
 
         Ok(())
     }
