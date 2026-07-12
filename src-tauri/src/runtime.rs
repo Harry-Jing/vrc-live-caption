@@ -21,8 +21,8 @@ use crate::audio::{open_input_capture, receive_audio};
 use crate::config::{AppConfig, OscConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate, UtteranceEndReason,
-    emit_diagnostic, emit_status, emit_transcript_final, emit_utterance_ended,
+    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, RuntimeStatusEvent, TranscriptUpdate,
+    UtteranceEndReason, emit_diagnostic, emit_status, emit_transcript_final, emit_utterance_ended,
     emit_utterance_started, next_utterance_id,
 };
 use crate::osc::{ChatboxActivityHandle, ChatboxOscSender};
@@ -50,6 +50,7 @@ const PREROLL_SECONDS: f32 = 0.25;
 
 pub(crate) struct RuntimeManager {
     handle: Mutex<Option<RuntimeHandle>>,
+    status: Mutex<RuntimeStatusEvent>,
 }
 
 struct RuntimeHandle {
@@ -79,11 +80,29 @@ impl Default for RuntimeManager {
     fn default() -> Self {
         Self {
             handle: Mutex::new(None),
+            status: Mutex::new(RuntimeStatusEvent::idle()),
         }
     }
 }
 
 impl RuntimeManager {
+    pub(crate) fn status_snapshot(&self) -> AppResult<RuntimeStatusEvent> {
+        self.status
+            .lock()
+            .map(|status| status.clone())
+            .map_err(|_| AppError::state("Runtime status lock was poisoned."))
+    }
+
+    pub(crate) fn replace_status(&self, status: RuntimeStatusEvent) -> AppResult<()> {
+        let mut guard = self
+            .status
+            .lock()
+            .map_err(|_| AppError::state("Runtime status lock was poisoned."))?;
+        *guard = status;
+
+        Ok(())
+    }
+
     pub(crate) fn start(&self, app: AppHandle, config: AppConfig) -> AppResult<()> {
         config.validate()?;
 

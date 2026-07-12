@@ -55,7 +55,8 @@ Remaining work:
 
 ## Phase 2: Frontend Test Infrastructure
 
-Status: not started.
+Status: not started; the runtime status snapshot shipped early during Phase 1
+reliability work.
 
 Goal: protect MVP-A behavior before building on it. The Rust runtime already
 has unit tests; the frontend has none.
@@ -65,8 +66,8 @@ has unit tests; the frontend has none.
 - one behavior suite run against both the preview backend and the Tauri
   backend gateway so the two cannot drift
 - runtime status snapshot command so a reloaded webview can resync state, as
-  the pull-side companion to best-effort event delivery (see
-  [decisions.md](./decisions.md))
+  the pull-side companion to best-effort event delivery (implemented early
+  during Phase 1 reliability work; see [decisions.md](./decisions.md))
 
 ## Phase 3: Outgoing MVP-B
 

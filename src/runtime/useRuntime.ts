@@ -80,6 +80,7 @@ export function useRuntime() {
   const secretsAction = createActionState();
   let unsubscribeListeners: Unsubscribe | null = null;
   let isUnmounted = false;
+  let receivedStatusEventVersion = 0;
 
   const latestFinalTranscript = computed<TranscriptEvent | null>(
     () => finalTranscripts.value.at(0) ?? null,
@@ -179,14 +180,19 @@ export function useRuntime() {
     }
   }
 
+  function applyRuntimeStatus(event: RuntimeStatusEvent) {
+    runtimeStatus.value = event;
+
+    if (event.status === "stopped" || event.status === "error") {
+      activeUtteranceId.value = null;
+      partialTranscript.value = null;
+    }
+  }
+
   const eventHandlers: RuntimeEventHandlers = {
     onStatus(event) {
-      runtimeStatus.value = event;
-
-      if (event.status === "stopped" || event.status === "error") {
-        activeUtteranceId.value = null;
-        partialTranscript.value = null;
-      }
+      receivedStatusEventVersion += 1;
+      applyRuntimeStatus(event);
     },
     onUtteranceStarted(event) {
       activeUtteranceId.value = event.utteranceId;
@@ -223,8 +229,26 @@ export function useRuntime() {
     unsubscribeListeners = unsubscribe;
   }
 
+  async function synchronizeRuntimeStatus() {
+    const eventVersionBeforeRequest = receivedStatusEventVersion;
+    const snapshot = await backend.getRuntimeStatus();
+
+    // A status event may arrive while the command is in flight. Keep that
+    // event unless the snapshot is strictly newer; equal timestamps can occur
+    // within one millisecond and must not roll the UI backwards.
+    if (
+      receivedStatusEventVersion === eventVersionBeforeRequest ||
+      snapshot.timestampMs > runtimeStatus.value.timestampMs
+    ) {
+      applyRuntimeStatus(snapshot);
+    }
+  }
+
   onMounted(async () => {
-    await runtimeAction.run(registerRuntimeListeners);
+    await runtimeAction.run(async () => {
+      await registerRuntimeListeners();
+      await synchronizeRuntimeStatus();
+    });
     await Promise.all([
       loadConfig(),
       loadAudioInputDevices(),

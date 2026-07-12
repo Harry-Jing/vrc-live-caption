@@ -16,10 +16,11 @@
 //! an event reached the webview.
 
 use crate::error::AppError;
+use crate::state::AppState;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 const EVENT_RUNTIME_STATUS: &str = "runtime-status";
 const EVENT_TRANSCRIPT_PARTIAL: &str = "transcript-partial";
@@ -32,20 +33,29 @@ static NEXT_EVENT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RuntimeStatusEvent {
-    status: RuntimeStatus,
+pub(crate) struct RuntimeStatusEvent {
+    pub(crate) status: RuntimeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-    timestamp_ms: u64,
+    pub(crate) message: Option<String>,
+    pub(crate) timestamp_ms: u64,
+}
+
+impl RuntimeStatusEvent {
+    pub(crate) fn idle() -> Self {
+        Self::new(RuntimeStatus::Idle, Some("Runtime is idle".to_string()))
+    }
+
+    fn new(status: RuntimeStatus, message: Option<String>) -> Self {
+        Self {
+            status,
+            message,
+            timestamp_ms: now_ms(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-// Keep all statuses in the UI contract even before every lifecycle branch is emitted.
-#[expect(
-    dead_code,
-    reason = "runtime status contract includes future lifecycle states"
-)]
 pub(crate) enum RuntimeStatus {
     Idle,
     Starting,
@@ -244,15 +254,27 @@ pub(crate) fn emit_status<R: Runtime>(
     status: RuntimeStatus,
     message: Option<String>,
 ) {
-    emit_event(
-        app,
-        EVENT_RUNTIME_STATUS,
-        RuntimeStatusEvent {
-            status,
-            message,
-            timestamp_ms: now_ms(),
-        },
-    );
+    let event = RuntimeStatusEvent::new(status, message);
+
+    // Update the pull-side snapshot before best-effort delivery. If the
+    // webview is reloading and misses this emit, its next status query still
+    // observes the lifecycle transition.
+    match app.try_state::<AppState>() {
+        Some(state) => {
+            if let Err(error) = state.runtime.replace_status(event.clone()) {
+                tracing::warn!(
+                    code = error.code(),
+                    error_message = %error,
+                    "failed to update runtime status snapshot"
+                );
+            }
+        }
+        None => {
+            tracing::warn!("runtime status emitted before app state was managed");
+        }
+    }
+
+    emit_event(app, EVENT_RUNTIME_STATUS, event);
 }
 
 pub(crate) fn emit_transcript_partial<R: Runtime>(app: &AppHandle<R>, update: TranscriptUpdate) {
@@ -369,6 +391,45 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::AppResult;
+    use tauri::Listener;
+
+    #[test]
+    fn status_snapshot_is_updated_before_event_delivery() -> AppResult<()> {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
+        let listener_handle = app.handle().clone();
+        let (snapshot_sender, snapshot_receiver) = std::sync::mpsc::channel();
+
+        app.listen(EVENT_RUNTIME_STATUS, move |_| {
+            let snapshot = listener_handle
+                .state::<AppState>()
+                .runtime
+                .status_snapshot()
+                .and_then(|status| {
+                    serde_json::to_value(status).map_err(|error| {
+                        AppError::runtime(format!("Failed to serialize status snapshot: {error}"))
+                    })
+                });
+            let _ = snapshot_sender.send(snapshot);
+        });
+
+        emit_status(
+            app.handle(),
+            RuntimeStatus::Running,
+            Some("Listening for microphone speech".to_string()),
+        );
+
+        let snapshot = snapshot_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Runtime status event was not delivered."))??;
+        assert_eq!(snapshot["status"], "running");
+        assert_eq!(snapshot["message"], "Listening for microphone speech");
+
+        Ok(())
+    }
 
     #[test]
     fn transcript_payload_includes_stable_runtime_contract_fields() {

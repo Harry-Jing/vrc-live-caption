@@ -33,6 +33,7 @@ export type RuntimeEventHandlers = {
 export interface RuntimeBackend {
   listen(handlers: RuntimeEventHandlers): Promise<Unsubscribe>;
   runCommand(command: RuntimeCommand): Promise<void>;
+  getRuntimeStatus(): Promise<RuntimeStatusEvent>;
   getConfig(): Promise<AppConfig>;
   saveConfig(config: AppConfig): Promise<AppConfig>;
   listAudioInputDevices(): Promise<AudioInputDevice[]>;
@@ -51,6 +52,7 @@ function createUnsupportedBackend(): RuntimeBackend {
   return {
     listen: reject,
     runCommand: reject,
+    getRuntimeStatus: reject,
     getConfig: reject,
     saveConfig: reject,
     listAudioInputDevices: reject,

@@ -9,6 +9,7 @@ import type {
   ProviderSecretStatus,
   RuntimeCommand,
   RuntimeStatus,
+  RuntimeStatusEvent,
   SttProvider,
 } from "./types";
 
@@ -37,6 +38,11 @@ export function createPreviewBackend(): RuntimeBackend {
   let config = structuredClone(PREVIEW_DEFAULT_CONFIG);
   let openAiSecretSuffix: string | null = null;
   let nextEventNumber = 1;
+  let latestStatus: RuntimeStatusEvent = {
+    status: "idle",
+    message: "Runtime is idle",
+    timestampMs: Date.now(),
+  };
 
   function eventId(prefix: string) {
     nextEventNumber += 1;
@@ -44,7 +50,8 @@ export function createPreviewBackend(): RuntimeBackend {
   }
 
   function emitStatus(status: RuntimeStatus, message: string) {
-    handlers?.onStatus({ status, message, timestampMs: Date.now() });
+    latestStatus = { status, message, timestampMs: Date.now() };
+    handlers?.onStatus(latestStatus);
   }
 
   function emitMockTranscript() {
@@ -133,6 +140,10 @@ export function createPreviewBackend(): RuntimeBackend {
       }
 
       return Promise.resolve();
+    },
+
+    getRuntimeStatus() {
+      return Promise.resolve({ ...latestStatus });
     },
 
     getConfig() {

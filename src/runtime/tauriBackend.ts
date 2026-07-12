@@ -84,6 +84,10 @@ export function createTauriBackend(): RuntimeBackend {
       await invoke(command);
     },
 
+    getRuntimeStatus() {
+      return invoke<RuntimeStatusEvent>("get_runtime_status");
+    },
+
     getConfig() {
       return invoke<AppConfig>("get_app_config");
     },

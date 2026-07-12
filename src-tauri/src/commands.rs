@@ -9,8 +9,8 @@ use crate::audio::{AudioInputDevice, list_input_devices};
 use crate::config::{AppConfig, SttProvider};
 use crate::error::AppResult;
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, TranscriptUpdate, emit_diagnostic, emit_transcript_final,
-    emit_transcript_partial, emit_utterance_started, next_utterance_id,
+    DiagnosticCategory, DiagnosticUpdate, RuntimeStatusEvent, TranscriptUpdate, emit_diagnostic,
+    emit_transcript_final, emit_transcript_partial, emit_utterance_started, next_utterance_id,
 };
 use crate::osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
 use crate::secrets::{
@@ -75,6 +75,11 @@ pub(crate) fn start_runtime(app: AppHandle, state: State<'_, AppState>) -> AppRe
 pub(crate) fn stop_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     tracing::info!("stopping outgoing caption runtime");
     state.runtime.stop(&app)
+}
+
+#[tauri::command(async)]
+pub(crate) fn get_runtime_status(state: State<'_, AppState>) -> AppResult<RuntimeStatusEvent> {
+    state.runtime.status_snapshot()
 }
 
 #[tauri::command(async)]

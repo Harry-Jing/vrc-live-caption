@@ -33,6 +33,7 @@ pub fn run() {
             commands::list_audio_input_devices,
             commands::start_runtime,
             commands::stop_runtime,
+            commands::get_runtime_status,
             commands::emit_mock_transcript,
             commands::send_osc_test_message,
             commands::get_provider_secret_status,
