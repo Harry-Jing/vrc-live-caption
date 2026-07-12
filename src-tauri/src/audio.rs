@@ -8,7 +8,9 @@
 use crate::config::AudioConfig;
 use crate::error::{AppError, AppResult};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{DeviceId, FromSample, I24, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
+use cpal::{
+    DeviceId, FromSample, I24, Sample, SampleFormat, SizedSample, Stream, StreamConfig, U24,
+};
 use serde::Serialize;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -27,6 +29,9 @@ pub(crate) struct AudioCapture {
     pub(crate) sample_rate: u32,
     pub(crate) stream: Stream,
 }
+
+type InputStreamBuilder =
+    fn(&cpal::Device, StreamConfig, usize, SyncSender<Vec<f32>>) -> AppResult<Stream>;
 
 pub(crate) fn list_input_devices() -> AppResult<Vec<AudioInputDevice>> {
     let host = cpal::default_host();
@@ -86,18 +91,8 @@ pub(crate) fn open_input_capture(config: &AudioConfig) -> AppResult<AudioCapture
     let sample_format = supported_config.sample_format();
     let stream_config: StreamConfig = supported_config.into();
     let (sender, receiver) = sync_channel(16);
-    let stream = match sample_format {
-        SampleFormat::F32 => build_input_stream::<f32>(&device, stream_config, channels, sender),
-        SampleFormat::F64 => build_input_stream::<f64>(&device, stream_config, channels, sender),
-        SampleFormat::I16 => build_input_stream::<i16>(&device, stream_config, channels, sender),
-        SampleFormat::I24 => build_input_stream::<I24>(&device, stream_config, channels, sender),
-        SampleFormat::I32 => build_input_stream::<i32>(&device, stream_config, channels, sender),
-        SampleFormat::U16 => build_input_stream::<u16>(&device, stream_config, channels, sender),
-        SampleFormat::U32 => build_input_stream::<u32>(&device, stream_config, channels, sender),
-        _ => Err(AppError::audio(format!(
-            "Unsupported microphone sample format: {sample_format:?}"
-        ))),
-    }?;
+    let stream_builder = input_stream_builder(sample_format)?;
+    let stream = stream_builder(&device, stream_config, channels, sender)?;
 
     stream.play().map_err(|error| {
         AppError::audio(format!(
@@ -110,6 +105,31 @@ pub(crate) fn open_input_capture(config: &AudioConfig) -> AppResult<AudioCapture
         sample_rate,
         stream,
     })
+}
+
+fn input_stream_builder(sample_format: SampleFormat) -> AppResult<InputStreamBuilder> {
+    match sample_format {
+        SampleFormat::F32 => Ok(build_input_stream::<f32>),
+        SampleFormat::F64 => Ok(build_input_stream::<f64>),
+        SampleFormat::I8 => Ok(build_input_stream::<i8>),
+        SampleFormat::I16 => Ok(build_input_stream::<i16>),
+        SampleFormat::I24 => Ok(build_input_stream::<I24>),
+        SampleFormat::I32 => Ok(build_input_stream::<i32>),
+        SampleFormat::I64 => Ok(build_input_stream::<i64>),
+        SampleFormat::U8 => Ok(build_input_stream::<u8>),
+        SampleFormat::U16 => Ok(build_input_stream::<u16>),
+        SampleFormat::U24 => Ok(build_input_stream::<U24>),
+        SampleFormat::U32 => Ok(build_input_stream::<u32>),
+        SampleFormat::U64 => Ok(build_input_stream::<u64>),
+        SampleFormat::DsdU8 | SampleFormat::DsdU16 | SampleFormat::DsdU32 => {
+            Err(AppError::audio(format!(
+                "DSD microphone sample format is not PCM and cannot be captured: {sample_format:?}"
+            )))
+        }
+        _ => Err(AppError::audio(format!(
+            "Unsupported microphone sample format: {sample_format:?}"
+        ))),
+    }
 }
 
 pub(crate) fn receive_audio(
@@ -194,5 +214,56 @@ where
 
     if !samples.is_empty() {
         let _ = sender.try_send(samples);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_pcm_sample_format_has_an_input_stream_builder() {
+        let pcm_formats = [
+            SampleFormat::I8,
+            SampleFormat::I16,
+            SampleFormat::I24,
+            SampleFormat::I32,
+            SampleFormat::I64,
+            SampleFormat::U8,
+            SampleFormat::U16,
+            SampleFormat::U24,
+            SampleFormat::U32,
+            SampleFormat::U64,
+            SampleFormat::F32,
+            SampleFormat::F64,
+        ];
+
+        for sample_format in pcm_formats {
+            assert!(
+                input_stream_builder(sample_format).is_ok(),
+                "missing input stream builder for {sample_format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dsd_sample_formats_are_rejected_as_non_pcm() {
+        let dsd_formats = [
+            SampleFormat::DsdU8,
+            SampleFormat::DsdU16,
+            SampleFormat::DsdU32,
+        ];
+
+        for sample_format in dsd_formats {
+            let error_message = input_stream_builder(sample_format)
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
+
+            assert!(
+                error_message.contains("DSD microphone sample format is not PCM"),
+                "DSD format was not rejected explicitly: {sample_format:?}"
+            );
+        }
     }
 }
