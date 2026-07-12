@@ -51,6 +51,9 @@ pub(crate) enum AppError {
     Stt {
         message: String,
     },
+    SttNetwork {
+        message: String,
+    },
     Wav {
         message: String,
     },
@@ -122,6 +125,12 @@ impl AppError {
         }
     }
 
+    pub(crate) fn stt_network(message: impl Into<String>) -> Self {
+        Self::SttNetwork {
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn wav(message: impl Into<String>) -> Self {
         Self::Wav {
             message: format!("Failed to encode captured audio as WAV: {}", message.into()),
@@ -145,6 +154,7 @@ impl AppError {
             Self::Secret { .. } => "config.secret_failed",
             Self::State { .. } => "runtime.state_failed",
             Self::Stt { .. } => "stt.failed",
+            Self::SttNetwork { .. } => "stt.network_unreachable",
             Self::Wav { .. } => "stt.wav_encode_failed",
         }
     }
@@ -172,6 +182,7 @@ impl AppError {
             Self::Secret { message } => message.clone(),
             Self::State { message } => message.clone(),
             Self::Stt { message } => message.clone(),
+            Self::SttNetwork { message } => message.clone(),
             Self::Wav { message } => message.clone(),
         }
     }
@@ -212,6 +223,24 @@ mod tests {
         assert_eq!(
             value["message"],
             "Failed to send OSC Chatbox message to 127.0.0.1:9000: network unreachable"
+        );
+    }
+
+    #[test]
+    fn network_error_serializes_with_actionable_stt_code() {
+        let error = AppError::stt_network(
+            "Could not reach OpenAI. Check your network connection or system proxy settings.",
+        );
+        let value = serde_json::to_value(&error).unwrap_or_else(|serialization_error| {
+            serde_json::json!({ "serializationError": serialization_error.to_string() })
+        });
+
+        assert_eq!(value["code"], "stt.network_unreachable");
+        assert!(
+            value["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("system proxy")
         );
     }
 }

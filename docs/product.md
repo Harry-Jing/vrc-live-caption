@@ -158,14 +158,6 @@ Resolved questions move to [decisions.md](./decisions.md).
   VRChat, which work in both desktop and VR modes; treat overlay integration
   as a later enhancement.
 
-- How does the cloud path stay reachable for users behind restricted networks?
-  Many target users cannot reach OpenAI without a proxy, and a Windows GUI app
-  does not automatically inherit system proxy settings. Candidates: an in-app
-  proxy setting, honoring system proxy configuration, and a clear
-  network-unreachable diagnostic. Recommendation: honor system proxy settings
-  and ship a clear network-unreachable diagnostic first; add an in-app proxy
-  field only if that proves insufficient.
-
 - How should Chatbox replacement pacing respect reading speed? Consecutive
   final transcripts replace each other at the pacing interval, which can be
   faster than other players can read. Candidates: a minimum display time

@@ -299,3 +299,23 @@ text; the indicator is a presence signal.
 
 Revisit if: in-game validation shows the indicator confuses or annoys other
 players, or VRChat changes its semantics.
+
+## Follow System Proxy Configuration For Cloud Requests
+
+Date: 2026-07
+
+Decision: cloud requests follow the operating system's manual proxy
+configuration and report connection and timeout failures with a dedicated
+network-unreachable diagnostic. Do not add an in-app proxy setting yet.
+
+Reason: many target users need a Clash-style system proxy to reach OpenAI. The
+system route supports that common setup without creating a second proxy
+configuration surface inside the App.
+
+Consequence: proxy settings are read when a runtime creates its HTTP client, so
+users must stop and restart the runtime after changing them. The Windows path
+covers current-user WinINet-style manual proxy settings; PAC/WPAD, WinHTTP,
+machine policy, and uncommon per-protocol proxy formats are not assumed to work.
+
+Revisit if: Windows validation or user reports show that system proxy support is
+insufficient, especially for PAC, enterprise policy, or per-protocol setups.

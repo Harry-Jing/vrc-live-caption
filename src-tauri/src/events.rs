@@ -236,7 +236,7 @@ impl DiagnosticCategory {
             | AppError::OscSend { .. }
             | AppError::OscSendIncomplete { .. } => Self::Osc,
             AppError::Runtime { .. } | AppError::State { .. } => Self::Runtime,
-            AppError::Stt { .. } | AppError::Wav { .. } => Self::Stt,
+            AppError::Stt { .. } | AppError::SttNetwork { .. } | AppError::Wav { .. } => Self::Stt,
         }
     }
 }
@@ -536,6 +536,7 @@ mod tests {
             AppError::secret("x"),
             AppError::state("x"),
             AppError::stt("x"),
+            AppError::stt_network("x"),
             AppError::wav("x"),
         ];
 

@@ -53,11 +53,11 @@ pub(crate) fn transcribe_openai_wav(
         .bearer_auth(api_key.expose_secret())
         .multipart(form)
         .send()
-        .map_err(|error| AppError::stt(format!("STT request failed: {error}")))?;
+        .map_err(|error| map_stt_request_error("STT request failed", error))?;
     let status = response.status();
     let body = response
         .text()
-        .map_err(|error| AppError::stt(format!("Failed to read STT response: {error}")))?;
+        .map_err(|error| map_stt_request_error("Failed to read STT response", error))?;
 
     if !status.is_success() {
         return Err(AppError::stt(format!(
@@ -70,6 +70,16 @@ pub(crate) fn transcribe_openai_wav(
         .map_err(|error| AppError::stt(format!("Failed to parse STT response: {error}")))?;
 
     Ok(parsed.text.trim().to_string())
+}
+
+fn map_stt_request_error(context: &str, error: reqwest::Error) -> AppError {
+    if error.is_connect() || error.is_timeout() {
+        return AppError::stt_network(format!(
+            "Could not reach OpenAI. Check your network connection or system proxy settings. {context}: {error}"
+        ));
+    }
+
+    AppError::stt(format!("{context}: {error}"))
 }
 
 fn encode_wav(sample_rate: u32, samples: &[f32]) -> AppResult<Vec<u8>> {
@@ -129,6 +139,8 @@ fn truncate_for_diagnostic(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn language_is_normalized_for_openai_transcriptions() {
@@ -143,6 +155,42 @@ mod tests {
 
         assert!(wav.starts_with(b"RIFF"));
         assert!(wav.len() > 44);
+
+        Ok(())
+    }
+
+    #[test]
+    fn timeout_errors_are_reported_as_network_unreachable() -> AppResult<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .map_err(|error| AppError::stt(format!("Failed to bind test server: {error}")))?;
+        let address = listener
+            .local_addr()
+            .map_err(|error| AppError::stt(format!("Failed to read test address: {error}")))?;
+        let server = thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                thread::sleep(Duration::from_millis(150));
+                drop(stream);
+            }
+        });
+        let client = Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_millis(30))
+            .build()
+            .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
+        let request_error = client
+            .get(format!("http://{address}"))
+            .send()
+            .err()
+            .ok_or_else(|| AppError::stt("Test request unexpectedly succeeded."))?;
+        let error = map_stt_request_error("STT request failed", request_error);
+
+        server
+            .join()
+            .map_err(|_| AppError::runtime("Network timeout test server panicked."))?;
+
+        assert_eq!(error.code(), "stt.network_unreachable");
+        assert!(error.to_string().contains("network connection"));
+        assert!(error.to_string().contains("system proxy"));
 
         Ok(())
     }

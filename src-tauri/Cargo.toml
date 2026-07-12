@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 cpal = "0.18.1"
 hound = "3.5.1"
 keyring-core = "1.0.0"
-reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "multipart", "rustls"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "multipart", "rustls", "system-proxy"] }
 rosc = "0.11.4"
 secrecy = "0.10.3"
 tauri = { version = "2", features = [] }
