@@ -36,7 +36,7 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 const RECEIVE_TIMEOUT: Duration = Duration::from_millis(100);
 const STT_QUEUE_CAPACITY: usize = 2;
@@ -399,9 +399,35 @@ fn run_openai_runtime(
         ),
     );
 
-    while !stop_requested.load(Ordering::Relaxed) {
-        let Some(samples) = receive_audio(&capture.receiver, RECEIVE_TIMEOUT)? else {
-            if let Some(samples) = segmenter.tick(Instant::now()) {
+    // Once the worker exists, no capture error may return before shutdown has
+    // set the shared stop flag and joined that worker. Keeping the fallible loop
+    // inside this result makes every exit converge on the cleanup below.
+    let capture_result = (|| -> AppResult<()> {
+        while !stop_requested.load(Ordering::Relaxed) {
+            let Some(samples) = receive_audio(&capture.receiver, RECEIVE_TIMEOUT)? else {
+                if let Some(samples) = segmenter.tick(Instant::now()) {
+                    queue_speech_segment(
+                        &app,
+                        segmenter.sample_rate(),
+                        samples,
+                        &mut utterance_id,
+                        &segment_sender,
+                        chatbox_activity.as_ref(),
+                    )?;
+                }
+                continue;
+            };
+
+            let update = segmenter.push_samples(samples, Instant::now());
+
+            if update.speech_started {
+                let next_utterance = next_utterance_id("speech");
+                emit_utterance_started(&app, next_utterance.clone());
+                start_chatbox_activity(&app, chatbox_activity.as_ref(), &next_utterance);
+                utterance_id = Some(next_utterance);
+            }
+
+            if let Some(samples) = update.ready_segment {
                 queue_speech_segment(
                     &app,
                     segmenter.sample_rate(),
@@ -411,46 +437,39 @@ fn run_openai_runtime(
                     chatbox_activity.as_ref(),
                 )?;
             }
-            continue;
-        };
-
-        let update = segmenter.push_samples(samples, Instant::now());
-
-        if update.speech_started {
-            let next_utterance = next_utterance_id("speech");
-            emit_utterance_started(&app, next_utterance.clone());
-            start_chatbox_activity(&app, chatbox_activity.as_ref(), &next_utterance);
-            utterance_id = Some(next_utterance);
         }
 
-        if let Some(samples) = update.ready_segment {
-            queue_speech_segment(
-                &app,
-                segmenter.sample_rate(),
-                samples,
-                &mut utterance_id,
-                &segment_sender,
-                chatbox_activity.as_ref(),
-            )?;
-        }
-    }
+        Ok(())
+    })();
 
+    let capture_failed = capture_result.is_err();
+    // Close Chatbox output before releasing anything that can take time. An
+    // in-flight transcription may finish concurrently with stream teardown.
+    stop_requested.store(true, Ordering::Relaxed);
     // Stop path: release the microphone before waiting on the worker, and
     // discard buffered tail speech instead of sending it to STT after stop.
     drop(stream);
-    drop(segment_sender);
-    let (typing_result, worker_result) =
-        finish_chatbox_before_join(chatbox_activity.as_ref(), || {
-            stt_worker
-                .join()
-                .map_err(|_| AppError::runtime("STT worker thread panicked while stopping."))
-        });
+    let worker_result = if capture_failed {
+        // The outer runtime error path retains responsibility for typing
+        // cleanup through `finish_after_error`.
+        finish_stt_worker_after_capture(capture_result, &stop_requested, segment_sender, stt_worker)
+    } else {
+        let (typing_result, worker_result) =
+            finish_chatbox_before_join(chatbox_activity.as_ref(), || {
+                finish_stt_worker_after_capture(
+                    capture_result,
+                    &stop_requested,
+                    segment_sender,
+                    stt_worker,
+                )
+            });
 
-    if let Err(error) = typing_result {
-        emit_chatbox_activity_failure(&app, &error, "Typing indicator cleanup failed");
-    }
+        if let Err(error) = typing_result {
+            emit_chatbox_activity_failure(&app, &error, "Typing indicator cleanup failed");
+        }
 
-    worker_result?;
+        worker_result
+    };
     let tail_speech_discarded = segmenter.finish().is_some();
 
     if tail_speech_discarded {
@@ -474,7 +493,35 @@ fn run_openai_runtime(
         );
     }
 
-    Ok(())
+    worker_result
+}
+
+fn finish_stt_worker_after_capture(
+    capture_result: AppResult<()>,
+    stop_requested: &AtomicBool,
+    segment_sender: SyncSender<SpeechSegment>,
+    stt_worker: JoinHandle<()>,
+) -> AppResult<()> {
+    stop_requested.store(true, Ordering::Relaxed);
+    drop(segment_sender);
+
+    let join_result = stt_worker
+        .join()
+        .map_err(|_| AppError::runtime("STT worker thread panicked while stopping."));
+
+    match (capture_result, join_result) {
+        (Err(capture_error), Err(join_error)) => {
+            tracing::warn!(
+                code = join_error.code(),
+                error_message = %join_error,
+                "STT worker also failed while closing after a capture error"
+            );
+            Err(capture_error)
+        }
+        (Err(capture_error), Ok(())) => Err(capture_error),
+        (Ok(()), Err(join_error)) => Err(join_error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
 }
 
 fn queue_speech_segment(
@@ -522,9 +569,18 @@ fn queue_speech_segment(
 
             Ok(())
         }
-        Err(TrySendError::Disconnected(_)) => Err(AppError::runtime(
-            "STT worker stopped unexpectedly while the runtime was still capturing audio.",
-        )),
+        Err(TrySendError::Disconnected(segment)) => {
+            end_utterance_without_final(
+                app,
+                chatbox_activity,
+                segment.utterance_id,
+                UtteranceEndReason::Discarded,
+            );
+
+            Err(AppError::runtime(
+                "STT worker stopped unexpectedly while the runtime was still capturing audio.",
+            ))
+        }
     }
 }
 
@@ -548,19 +604,27 @@ fn spawn_stt_worker(
                 osc_sender,
                 segment_receiver,
                 stop_requested,
+                |client, config, api_key, sample_rate, samples| {
+                    transcribe_openai_wav(client, &config.stt, api_key, sample_rate, samples)
+                },
             )
         })
         .map_err(|error| AppError::runtime(format!("Failed to start STT worker thread: {error}")))
 }
 
-fn run_stt_worker(
-    app: AppHandle,
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Worker lifecycle dependencies stay explicit; the final argument is the test seam for cloud transcription."
+)]
+fn run_stt_worker<R: Runtime>(
+    app: AppHandle<R>,
     config: AppConfig,
     openai_api_key: SecretString,
     http_client: Client,
     mut osc_sender: Option<ChatboxOscSender>,
     segment_receiver: Receiver<SpeechSegment>,
     stop_requested: Arc<AtomicBool>,
+    transcribe: impl Fn(&Client, &AppConfig, &SecretString, u32, &[f32]) -> AppResult<String>,
 ) {
     let mut discarded_segments: usize = 0;
     let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
@@ -585,6 +649,7 @@ fn run_stt_worker(
             segment,
             osc_sender.as_mut(),
             &stop_requested,
+            &transcribe,
         ) {
             tracing::warn!(
                 code = error.code(),
@@ -616,14 +681,19 @@ fn run_stt_worker(
     }
 }
 
-fn transcribe_and_emit_final(
-    app: &AppHandle,
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The transcript operation keeps its runtime sinks explicit; the final argument is the test seam for cloud transcription."
+)]
+fn transcribe_and_emit_final<R: Runtime>(
+    app: &AppHandle<R>,
     config: &AppConfig,
     openai_api_key: &SecretString,
     http_client: &Client,
     segment: SpeechSegment,
     osc_sender: Option<&mut ChatboxOscSender>,
     stop_requested: &AtomicBool,
+    transcribe: &impl Fn(&Client, &AppConfig, &SecretString, u32, &[f32]) -> AppResult<String>,
 ) -> AppResult<()> {
     let chatbox_activity = osc_sender.as_ref().map(|sender| sender.activity_handle());
 
@@ -640,9 +710,9 @@ fn transcribe_and_emit_final(
         ),
     );
 
-    let text = match transcribe_openai_wav(
+    let text = match transcribe(
         http_client,
-        &config.stt,
+        config,
         openai_api_key,
         segment.sample_rate,
         &segment.samples,
@@ -772,7 +842,7 @@ fn transcribe_and_emit_final(
     }
 }
 
-fn emit_chatbox_send_skipped_on_stop(app: &AppHandle) {
+fn emit_chatbox_send_skipped_on_stop<R: Runtime>(app: &AppHandle<R>) {
     emit_diagnostic(
         app,
         DiagnosticUpdate::info(
@@ -798,8 +868,8 @@ fn start_chatbox_activity(
     }
 }
 
-fn end_utterance_without_final(
-    app: &AppHandle,
+fn end_utterance_without_final<R: Runtime>(
+    app: &AppHandle<R>,
     activity: Option<&ChatboxActivityHandle>,
     utterance_id: String,
     reason: UtteranceEndReason,
@@ -831,8 +901,8 @@ fn complete_no_final_utterance(
     activity.utterance_resolved(&utterance_id)
 }
 
-fn resolve_chatbox_activity(
-    app: &AppHandle,
+fn resolve_chatbox_activity<R: Runtime>(
+    app: &AppHandle<R>,
     activity: Option<&ChatboxActivityHandle>,
     utterance_id: &str,
 ) {
@@ -845,7 +915,11 @@ fn resolve_chatbox_activity(
     }
 }
 
-fn emit_chatbox_activity_failure(app: &AppHandle, error: &AppError, message: &'static str) {
+fn emit_chatbox_activity_failure<R: Runtime>(
+    app: &AppHandle<R>,
+    error: &AppError,
+    message: &'static str,
+) {
     tracing::warn!(
         code = error.code(),
         error_message = %error,
@@ -882,6 +956,7 @@ mod tests {
     use super::*;
     use rosc::{OscMessage, OscPacket, OscType, decoder};
     use std::net::UdpSocket;
+    use tauri::Listener;
 
     #[test]
     fn disabled_osc_does_not_create_runtime_chatbox_output() {
@@ -911,6 +986,107 @@ mod tests {
             initialize_runtime_chatbox(&config),
             RuntimeChatboxInit::Unavailable(_)
         ));
+    }
+
+    #[test]
+    fn capture_error_waits_for_in_flight_final_and_discards_queued_speech() -> AppResult<()> {
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+        let (final_sender, final_receiver) = std::sync::mpsc::channel();
+        let (ended_sender, ended_receiver) = std::sync::mpsc::channel();
+        app.listen("transcript-final", move |event| {
+            let _ = final_sender.send(event.payload().to_string());
+        });
+        app.listen("utterance-ended", move |event| {
+            let _ = ended_sender.send(event.payload().to_string());
+        });
+
+        let (osc_sender, osc_receiver) = runtime_test_sender_and_receiver()?;
+        let activity = osc_sender.activity_handle();
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        let (segment_sender, segment_receiver) = sync_channel(STT_QUEUE_CAPACITY);
+        let (in_flight_sender, in_flight_receiver) = std::sync::mpsc::channel();
+        let config = AppConfig::default();
+        let http_client = Client::builder()
+            .build()
+            .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
+
+        activity.utterance_started("in-flight")?;
+        activity.utterance_started("queued")?;
+        assert_eq!(
+            receive_runtime_test_packet(&osc_receiver)?,
+            typing_packet(true)
+        );
+
+        segment_sender
+            .send(test_speech_segment("in-flight"))
+            .map_err(|_| AppError::runtime("Failed to queue the in-flight test segment."))?;
+        segment_sender
+            .send(test_speech_segment("queued"))
+            .map_err(|_| AppError::runtime("Failed to queue the pending test segment."))?;
+
+        let worker_stop = Arc::clone(&stop_requested);
+        let worker = thread::spawn(move || {
+            run_stt_worker(
+                app_handle,
+                config,
+                SecretString::from("test-key".to_string()),
+                http_client,
+                Some(osc_sender),
+                segment_receiver,
+                Arc::clone(&worker_stop),
+                move |_client, _config, _api_key, _sample_rate, _samples| {
+                    in_flight_sender.send(()).map_err(|_| {
+                        AppError::runtime("Could not announce the in-flight test segment.")
+                    })?;
+                    while !worker_stop.load(Ordering::Relaxed) {
+                        thread::yield_now();
+                    }
+
+                    Ok("in-flight final".to_string())
+                },
+            );
+        });
+
+        in_flight_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("STT test worker did not start its first segment."))?;
+
+        let shutdown = finish_stt_worker_after_capture(
+            Err(AppError::audio("Microphone capture disconnected.")),
+            &stop_requested,
+            segment_sender,
+            worker,
+        );
+
+        let error = shutdown
+            .err()
+            .ok_or_else(|| AppError::runtime("Capture failure was not returned after cleanup."))?;
+        assert_eq!(error.code(), "audio.failed");
+
+        let final_event = receive_json_event(&final_receiver, "final transcript")?;
+        assert_eq!(final_event["utteranceId"], "in-flight");
+        assert_eq!(final_event["text"], "in-flight final");
+
+        let ended_event = receive_json_event(&ended_receiver, "discarded utterance")?;
+        assert_eq!(ended_event["utteranceId"], "queued");
+        assert_eq!(ended_event["reason"], "discarded");
+        assert_eq!(
+            receive_runtime_test_packet(&osc_receiver)?,
+            typing_packet(false)
+        );
+
+        activity.finish_after_error()?;
+
+        osc_receiver
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .map_err(|error| AppError::osc_bind(error.to_string()))?;
+        assert!(matches!(
+            receive_runtime_test_packet(&osc_receiver),
+            Err(AppError::OscSend { .. })
+        ));
+
+        Ok(())
     }
 
     #[test]
@@ -1009,6 +1185,27 @@ mod tests {
         let sender = ChatboxOscSender::new(&config)?;
 
         Ok((sender, receiver))
+    }
+
+    fn test_speech_segment(utterance_id: &str) -> SpeechSegment {
+        SpeechSegment {
+            utterance_id: utterance_id.to_string(),
+            sample_rate: 16_000,
+            samples: vec![0.0; 160],
+        }
+    }
+
+    fn receive_json_event(
+        receiver: &std::sync::mpsc::Receiver<String>,
+        event_name: &str,
+    ) -> AppResult<serde_json::Value> {
+        let payload = receiver.recv_timeout(Duration::from_secs(1)).map_err(|_| {
+            AppError::runtime(format!("Did not receive the expected {event_name} event."))
+        })?;
+
+        serde_json::from_str(&payload).map_err(|error| {
+            AppError::runtime(format!("Failed to parse the {event_name} event: {error}"))
+        })
     }
 
     fn receive_runtime_test_packet(receiver: &UdpSocket) -> AppResult<OscPacket> {
