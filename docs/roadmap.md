@@ -41,8 +41,6 @@ Success criteria:
 
 Remaining work:
 
-- typing indicator on `/chatbox/typing` while an utterance is active, so other
-  players see activity before the final text arrives
 - full Chatbox wrap model from
   [research/vrchat-chatbox-reference.md](./research/vrchat-chatbox-reference.md);
   the current width model is a simplified approximation

@@ -12,19 +12,20 @@
 //!
 //! Stop is a hard cutoff: the microphone is released within one receive timeout,
 //! buffered and queued speech is discarded instead of drained, and no Chatbox
-//! output is sent after the stop request. Stop still waits for an STT request
-//! that is already in flight, so runtime commands must run off the main thread
-//! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
+//! text is sent after the stop request. A state-clearing typing-off packet is
+//! sent before waiting for an STT request that is already in flight, so runtime
+//! commands must run off the main thread (`#[tauri::command(async)]`) to keep the
+//! window responsive during that wait.
 
 use crate::audio::{open_input_capture, receive_audio};
-use crate::config::{AppConfig, SttProvider};
+use crate::config::{AppConfig, OscConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate, UtteranceEndReason,
     emit_diagnostic, emit_status, emit_transcript_final, emit_utterance_ended,
     emit_utterance_started, next_utterance_id,
 };
-use crate::osc::ChatboxOscSender;
+use crate::osc::{ChatboxActivityHandle, ChatboxOscSender};
 use crate::secrets::openai_api_key as load_openai_api_key;
 use crate::segmenter::SpeechSegmenter;
 use crate::stt::{build_stt_client, transcribe_openai_wav};
@@ -53,6 +54,7 @@ pub(crate) struct RuntimeManager {
 
 struct RuntimeHandle {
     stop_requested: Arc<AtomicBool>,
+    chatbox_activity: Option<ChatboxActivityHandle>,
     join_handle: JoinHandle<()>,
 }
 
@@ -60,6 +62,12 @@ struct SpeechSegment {
     utterance_id: String,
     sample_rate: u32,
     samples: Vec<f32>,
+}
+
+enum RuntimeChatboxInit {
+    Disabled,
+    Ready(ChatboxOscSender),
+    Unavailable(AppError),
 }
 
 impl Default for RuntimeManager {
@@ -78,7 +86,7 @@ impl RuntimeManager {
             .handle
             .lock()
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
-        clear_finished_runtime(&mut guard)?;
+        clear_finished_runtime(&app, &mut guard)?;
 
         if guard.is_some() {
             return Err(AppError::runtime("Runtime is already running."));
@@ -104,18 +112,28 @@ impl RuntimeManager {
         } else {
             None
         };
+        let osc_sender = match initialize_runtime_chatbox(&config.osc) {
+            RuntimeChatboxInit::Disabled => None,
+            RuntimeChatboxInit::Ready(sender) => Some(sender),
+            RuntimeChatboxInit::Unavailable(error) => {
+                emit_chatbox_activity_failure(&app, &error, "Chatbox OSC output could not start");
+                None
+            }
+        };
+        let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
 
         let stop_requested = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop_requested);
         let join_handle = thread::Builder::new()
             .name("vrc-live-caption-runtime".to_string())
-            .spawn(move || run_runtime_thread(app, config, openai_api_key, thread_stop))
+            .spawn(move || run_runtime_thread(app, config, openai_api_key, osc_sender, thread_stop))
             .map_err(|error| {
                 AppError::runtime(format!("Failed to start runtime thread: {error}"))
             })?;
 
         *guard = Some(RuntimeHandle {
             stop_requested,
+            chatbox_activity,
             join_handle,
         });
 
@@ -139,14 +157,33 @@ impl RuntimeManager {
             return Ok(());
         };
 
-        handle.stop_requested.store(true, Ordering::Relaxed);
+        if let Some(activity) = &handle.chatbox_activity {
+            if let Err(error) = activity.request_stop(&handle.stop_requested) {
+                handle.stop_requested.store(true, Ordering::Relaxed);
+                emit_chatbox_activity_failure(app, &error, "Typing indicator cleanup failed");
+            }
+        } else {
+            handle.stop_requested.store(true, Ordering::Relaxed);
+        }
         emit_status(
             app,
             RuntimeStatus::Stopping,
             Some("Stopping runtime and discarding pending speech".to_string()),
         );
 
-        if handle.join_handle.join().is_err() {
+        let runtime_panicked = handle.join_handle.join().is_err();
+
+        if let Some(activity) = &handle.chatbox_activity
+            && let Err(cleanup_error) = activity.finish_stop()
+        {
+            emit_chatbox_activity_failure(
+                app,
+                &cleanup_error,
+                "Typing indicator cleanup after runtime stop failed",
+            );
+        }
+
+        if runtime_panicked {
             let error = AppError::runtime("Runtime thread panicked while stopping.");
             emit_status(app, RuntimeStatus::Error, Some(error.to_string()));
             return Err(error);
@@ -171,7 +208,7 @@ impl RuntimeManager {
     }
 }
 
-fn clear_finished_runtime(handle: &mut Option<RuntimeHandle>) -> AppResult<()> {
+fn clear_finished_runtime(app: &AppHandle, handle: &mut Option<RuntimeHandle>) -> AppResult<()> {
     let is_finished = handle
         .as_ref()
         .map(|handle| handle.join_handle.is_finished())
@@ -185,19 +222,59 @@ fn clear_finished_runtime(handle: &mut Option<RuntimeHandle>) -> AppResult<()> {
         return Ok(());
     };
 
+    if let Some(activity) = &handle.chatbox_activity
+        && let Err(cleanup_error) = activity.finish_stop()
+    {
+        emit_chatbox_activity_failure(
+            app,
+            &cleanup_error,
+            "Typing indicator cleanup before runtime restart failed",
+        );
+    }
+
     handle
         .join_handle
         .join()
         .map_err(|_| AppError::runtime("Runtime thread panicked after stopping."))
 }
 
+fn initialize_runtime_chatbox(config: &OscConfig) -> RuntimeChatboxInit {
+    if !config.enabled {
+        return RuntimeChatboxInit::Disabled;
+    }
+
+    match ChatboxOscSender::new(config) {
+        Ok(sender) => RuntimeChatboxInit::Ready(sender),
+        Err(error) => RuntimeChatboxInit::Unavailable(error),
+    }
+}
+
 fn run_runtime_thread(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: Option<SecretString>,
+    osc_sender: Option<ChatboxOscSender>,
     stop_requested: Arc<AtomicBool>,
 ) {
-    if let Err(error) = run_runtime(app.clone(), config, openai_api_key, stop_requested) {
+    let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
+
+    if let Err(error) = run_runtime(
+        app.clone(),
+        config,
+        openai_api_key,
+        osc_sender,
+        stop_requested,
+    ) {
+        if let Some(activity) = &chatbox_activity
+            && let Err(cleanup_error) = activity.finish_after_error()
+        {
+            emit_chatbox_activity_failure(
+                &app,
+                &cleanup_error,
+                "Typing indicator cleanup after runtime failure failed",
+            );
+        }
+
         tracing::warn!(
             code = error.code(),
             error_message = %error,
@@ -216,6 +293,7 @@ fn run_runtime(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: Option<SecretString>,
+    osc_sender: Option<ChatboxOscSender>,
     stop_requested: Arc<AtomicBool>,
 ) -> AppResult<()> {
     emit_status(
@@ -224,19 +302,25 @@ fn run_runtime(
         Some("Starting outgoing caption runtime".to_string()),
     );
 
+    let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
+
     match config.stt.provider {
-        SttProvider::Mock => run_mock_runtime(app, stop_requested),
+        SttProvider::Mock => run_mock_runtime(app, stop_requested, chatbox_activity.as_ref()),
         SttProvider::OpenAi => {
             let api_key = openai_api_key.ok_or_else(|| {
                 AppError::secret("OpenAI API key was not loaded before runtime startup.")
             })?;
 
-            run_openai_runtime(app, config, api_key, stop_requested)
+            run_openai_runtime(app, config, api_key, osc_sender, stop_requested)
         }
     }
 }
 
-fn run_mock_runtime(app: AppHandle, stop_requested: Arc<AtomicBool>) -> AppResult<()> {
+fn run_mock_runtime(
+    app: AppHandle,
+    stop_requested: Arc<AtomicBool>,
+    chatbox_activity: Option<&ChatboxActivityHandle>,
+) -> AppResult<()> {
     emit_status(
         &app,
         RuntimeStatus::Running,
@@ -256,6 +340,8 @@ fn run_mock_runtime(app: AppHandle, stop_requested: Arc<AtomicBool>) -> AppResul
         thread::sleep(RECEIVE_TIMEOUT);
     }
 
+    finish_chatbox_stop(&app, chatbox_activity);
+
     Ok(())
 }
 
@@ -263,15 +349,16 @@ fn run_openai_runtime(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: SecretString,
+    osc_sender: Option<ChatboxOscSender>,
     stop_requested: Arc<AtomicBool>,
 ) -> AppResult<()> {
     let capture = open_input_capture(&config.audio)?;
     let sample_rate = capture.sample_rate;
     let (segment_sender, segment_receiver) = sync_channel(STT_QUEUE_CAPACITY);
-    // Created once per runtime and reused by the worker across segments: the
-    // HTTP client keeps its connection pool and the OSC sender its socket.
+    // Created once per runtime and reused by the worker across segments so the
+    // HTTP client keeps its connection pool.
     let http_client = build_stt_client()?;
-    let osc_sender = ChatboxOscSender::new(&config.osc)?;
+    let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
     let stt_worker = spawn_stt_worker(
         app.clone(),
         config.clone(),
@@ -316,6 +403,7 @@ fn run_openai_runtime(
                     samples,
                     &mut utterance_id,
                     &segment_sender,
+                    chatbox_activity.as_ref(),
                 )?;
             }
             continue;
@@ -325,8 +413,9 @@ fn run_openai_runtime(
 
         if update.speech_started {
             let next_utterance = next_utterance_id("speech");
-            utterance_id = Some(next_utterance.clone());
-            emit_utterance_started(&app, next_utterance);
+            emit_utterance_started(&app, next_utterance.clone());
+            start_chatbox_activity(&app, chatbox_activity.as_ref(), &next_utterance);
+            utterance_id = Some(next_utterance);
         }
 
         if let Some(samples) = update.ready_segment {
@@ -336,6 +425,7 @@ fn run_openai_runtime(
                 samples,
                 &mut utterance_id,
                 &segment_sender,
+                chatbox_activity.as_ref(),
             )?;
         }
     }
@@ -343,16 +433,29 @@ fn run_openai_runtime(
     // Stop path: release the microphone before waiting on the worker, and
     // discard buffered tail speech instead of sending it to STT after stop.
     drop(stream);
-    let tail_speech_discarded = segmenter.finish().is_some();
-
     drop(segment_sender);
-    stt_worker
-        .join()
-        .map_err(|_| AppError::runtime("STT worker thread panicked while stopping."))?;
+    let (typing_result, worker_result) =
+        finish_chatbox_before_join(chatbox_activity.as_ref(), || {
+            stt_worker
+                .join()
+                .map_err(|_| AppError::runtime("STT worker thread panicked while stopping."))
+        });
+
+    if let Err(error) = typing_result {
+        emit_chatbox_activity_failure(&app, &error, "Typing indicator cleanup failed");
+    }
+
+    worker_result?;
+    let tail_speech_discarded = segmenter.finish().is_some();
 
     if tail_speech_discarded {
         if let Some(utterance_id) = utterance_id {
-            emit_utterance_ended(&app, utterance_id, UtteranceEndReason::Discarded);
+            end_utterance_without_final(
+                &app,
+                chatbox_activity.as_ref(),
+                utterance_id,
+                UtteranceEndReason::Discarded,
+            );
         }
 
         emit_diagnostic(
@@ -375,6 +478,7 @@ fn queue_speech_segment(
     samples: Vec<f32>,
     utterance_id: &mut Option<String>,
     segment_sender: &SyncSender<SpeechSegment>,
+    chatbox_activity: Option<&ChatboxActivityHandle>,
 ) -> AppResult<()> {
     // The segmenter only yields segments that reached the voiced minimum, and
     // crossing the voiced minimum announces the utterance first, so an id is
@@ -404,7 +508,12 @@ fn queue_speech_segment(
                     ),
                 ),
             );
-            emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::Discarded);
+            end_utterance_without_final(
+                app,
+                chatbox_activity,
+                segment.utterance_id,
+                UtteranceEndReason::Discarded,
+            );
 
             Ok(())
         }
@@ -419,7 +528,7 @@ fn spawn_stt_worker(
     config: AppConfig,
     openai_api_key: SecretString,
     http_client: Client,
-    osc_sender: ChatboxOscSender,
+    osc_sender: Option<ChatboxOscSender>,
     segment_receiver: Receiver<SpeechSegment>,
     stop_requested: Arc<AtomicBool>,
 ) -> AppResult<JoinHandle<()>> {
@@ -444,16 +553,22 @@ fn run_stt_worker(
     config: AppConfig,
     openai_api_key: SecretString,
     http_client: Client,
-    mut osc_sender: ChatboxOscSender,
+    mut osc_sender: Option<ChatboxOscSender>,
     segment_receiver: Receiver<SpeechSegment>,
     stop_requested: Arc<AtomicBool>,
 ) {
     let mut discarded_segments: usize = 0;
+    let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
 
     while let Ok(segment) = segment_receiver.recv() {
         if stop_requested.load(Ordering::Relaxed) {
             discarded_segments += 1;
-            emit_utterance_ended(&app, segment.utterance_id, UtteranceEndReason::Discarded);
+            end_utterance_without_final(
+                &app,
+                chatbox_activity.as_ref(),
+                segment.utterance_id,
+                UtteranceEndReason::Discarded,
+            );
             continue;
         }
 
@@ -463,7 +578,7 @@ fn run_stt_worker(
             &openai_api_key,
             &http_client,
             segment,
-            &mut osc_sender,
+            osc_sender.as_mut(),
             &stop_requested,
         ) {
             tracing::warn!(
@@ -502,9 +617,11 @@ fn transcribe_and_emit_final(
     openai_api_key: &SecretString,
     http_client: &Client,
     segment: SpeechSegment,
-    osc_sender: &mut ChatboxOscSender,
+    osc_sender: Option<&mut ChatboxOscSender>,
     stop_requested: &AtomicBool,
 ) -> AppResult<()> {
+    let chatbox_activity = osc_sender.as_ref().map(|sender| sender.activity_handle());
+
     emit_diagnostic(
         app,
         DiagnosticUpdate::info(
@@ -528,14 +645,24 @@ fn transcribe_and_emit_final(
         Ok(text) => text,
         Err(error) => {
             // Resolve the utterance for the UI; the caller reports error details.
-            emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::SttFailed);
+            end_utterance_without_final(
+                app,
+                chatbox_activity.as_ref(),
+                segment.utterance_id,
+                UtteranceEndReason::SttFailed,
+            );
 
             return Err(error);
         }
     };
 
     if text.is_empty() {
-        emit_utterance_ended(app, segment.utterance_id, UtteranceEndReason::NoSpeech);
+        end_utterance_without_final(
+            app,
+            chatbox_activity.as_ref(),
+            segment.utterance_id,
+            UtteranceEndReason::NoSpeech,
+        );
         emit_diagnostic(
             app,
             DiagnosticUpdate::info(
@@ -549,6 +676,7 @@ fn transcribe_and_emit_final(
         return Ok(());
     }
 
+    let utterance_id = segment.utterance_id.clone();
     emit_transcript_final(
         app,
         TranscriptUpdate {
@@ -564,28 +692,43 @@ fn transcribe_and_emit_final(
     // preview, but never send Chatbox output after the user asked to stop.
     if stop_requested.load(Ordering::Relaxed) {
         emit_chatbox_send_skipped_on_stop(app);
+        resolve_chatbox_activity(app, chatbox_activity.as_ref(), &utterance_id);
 
         return Ok(());
     }
 
-    if !config.osc.enabled {
-        emit_diagnostic(
-            app,
-            DiagnosticUpdate::info(
-                DiagnosticCategory::Osc,
+    let Some(osc_sender) = osc_sender else {
+        let (code, message, detail) = if config.osc.enabled {
+            (
+                "osc.output_unavailable",
+                "Chatbox output unavailable",
+                "OSC output could not be initialized when the runtime started.",
+            )
+        } else {
+            (
                 "osc.output_disabled",
                 "Chatbox output skipped",
                 "OSC output is disabled in settings.",
-            ),
+            )
+        };
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate::info(DiagnosticCategory::Osc, code, message, detail),
         );
 
         return Ok(());
-    }
+    };
 
     // The paced send also watches the stop flag itself: a stop requested
     // while the send is waiting out the pacing interval cancels the send
     // instead of flushing one more Chatbox message.
-    match osc_sender.send_paced(&text, stop_requested) {
+    let attempt = osc_sender.send_final_paced(&utterance_id, &text, stop_requested);
+
+    if let Err(error) = attempt.typing {
+        emit_chatbox_activity_failure(app, &error, "Typing indicator cleanup failed");
+    }
+
+    match attempt.text {
         Ok(Some(result)) => {
             let clipped_note = if result.clipped {
                 " Text was clipped to fit the VRChat Chatbox layout."
@@ -634,4 +777,160 @@ fn emit_chatbox_send_skipped_on_stop(app: &AppHandle) {
             "Runtime stop was requested before this transcript could be sent.",
         ),
     );
+}
+
+fn start_chatbox_activity(
+    app: &AppHandle,
+    activity: Option<&ChatboxActivityHandle>,
+    utterance_id: &str,
+) {
+    let Some(activity) = activity else {
+        return;
+    };
+
+    if let Err(error) = activity.utterance_started(utterance_id) {
+        emit_chatbox_activity_failure(app, &error, "Typing indicator could not be enabled");
+    }
+}
+
+fn end_utterance_without_final(
+    app: &AppHandle,
+    activity: Option<&ChatboxActivityHandle>,
+    utterance_id: String,
+    reason: UtteranceEndReason,
+) {
+    emit_utterance_ended(app, utterance_id.clone(), reason);
+    resolve_chatbox_activity(app, activity, &utterance_id);
+}
+
+fn resolve_chatbox_activity(
+    app: &AppHandle,
+    activity: Option<&ChatboxActivityHandle>,
+    utterance_id: &str,
+) {
+    let Some(activity) = activity else {
+        return;
+    };
+
+    if let Err(error) = activity.utterance_resolved(utterance_id) {
+        emit_chatbox_activity_failure(app, &error, "Typing indicator cleanup failed");
+    }
+}
+
+fn emit_chatbox_activity_failure(app: &AppHandle, error: &AppError, message: &'static str) {
+    tracing::warn!(
+        code = error.code(),
+        error_message = %error,
+        "Chatbox typing indicator update failed"
+    );
+    emit_diagnostic(app, DiagnosticUpdate::from_error(error, message));
+}
+
+fn finish_chatbox_stop(app: &AppHandle, activity: Option<&ChatboxActivityHandle>) {
+    let Some(activity) = activity else {
+        return;
+    };
+
+    if let Err(error) = activity.finish_stop() {
+        emit_chatbox_activity_failure(app, &error, "Typing indicator cleanup failed");
+    }
+}
+
+fn finish_chatbox_before_join<T>(
+    activity: Option<&ChatboxActivityHandle>,
+    join_worker: impl FnOnce() -> AppResult<T>,
+) -> (AppResult<()>, AppResult<T>) {
+    let typing_result = match activity {
+        Some(activity) => activity.finish_stop(),
+        None => Ok(()),
+    };
+    let worker_result = join_worker();
+
+    (typing_result, worker_result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosc::{OscMessage, OscPacket, OscType, decoder};
+    use std::net::UdpSocket;
+
+    #[test]
+    fn disabled_osc_does_not_create_runtime_chatbox_output() {
+        let config = crate::config::OscConfig {
+            host: "does-not-resolve.invalid".to_string(),
+            port: 9000,
+            enabled: false,
+            min_interval_ms: 500,
+        };
+
+        assert!(matches!(
+            initialize_runtime_chatbox(&config),
+            RuntimeChatboxInit::Disabled
+        ));
+    }
+
+    #[test]
+    fn unavailable_osc_output_does_not_become_a_runtime_start_error() {
+        let config = crate::config::OscConfig {
+            host: "[::1]".to_string(),
+            port: 9000,
+            enabled: true,
+            min_interval_ms: 500,
+        };
+
+        assert!(matches!(
+            initialize_runtime_chatbox(&config),
+            RuntimeChatboxInit::Unavailable(_)
+        ));
+    }
+
+    #[test]
+    fn typing_off_is_sent_before_the_stt_worker_join_begins() -> AppResult<()> {
+        let receiver = UdpSocket::bind("127.0.0.1:0")
+            .map_err(|error| AppError::osc_bind(error.to_string()))?;
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .map_err(|error| AppError::osc_bind(error.to_string()))?;
+        let port = receiver
+            .local_addr()
+            .map_err(|error| AppError::osc_bind(error.to_string()))?
+            .port();
+        let config = OscConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            enabled: true,
+            min_interval_ms: 500,
+        };
+        let sender = ChatboxOscSender::new(&config)?;
+        let activity = sender.activity_handle();
+        let cancel = AtomicBool::new(false);
+        activity.request_stop(&cancel)?;
+
+        let (typing_result, worker_result) = finish_chatbox_before_join(Some(&activity), || {
+            let mut buffer = [0_u8; 1024];
+            let (size, _) = receiver
+                .recv_from(&mut buffer)
+                .map_err(|error| AppError::osc_send("test receiver", error.to_string()))?;
+            let (_, packet) = decoder::decode_udp(&buffer[..size])
+                .map_err(|error| AppError::osc_encode(error.to_string()))?;
+            let expected = OscPacket::Message(OscMessage {
+                addr: "/chatbox/typing".to_string(),
+                args: vec![OscType::Bool(false)],
+            });
+
+            if packet == expected {
+                Ok(())
+            } else {
+                Err(AppError::runtime(
+                    "STT worker join began before typing-off was observable.",
+                ))
+            }
+        });
+
+        typing_result?;
+        worker_result?;
+
+        Ok(())
+    }
 }
