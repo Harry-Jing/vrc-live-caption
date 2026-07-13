@@ -25,6 +25,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@iconify/vue": "5.0.1",
     "@nuxt/ui": "^4.9.0",
     "@tauri-apps/api": "^2.11.1",
     "tailwindcss": "^4.3.2",
@@ -35,6 +36,8 @@
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
     "@eslint/js": "^10.0.1",
+    "@iconify-json/lucide": "^1.2.116",
+    "@nuxt/icon": "2.3.1",
     "@tauri-apps/cli": "^2.11.4",
     "@tsconfig/node24": "^24.0.4",
     "@types/node": "^24.13.3",
