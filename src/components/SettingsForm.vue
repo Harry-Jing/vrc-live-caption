@@ -243,6 +243,11 @@ function deleteOpenAiApiKey() {
             </UBadge>
           </div>
 
+          <p class="text-sm text-muted">
+            When OpenAI cloud speech recognition is selected, microphone audio
+            is uploaded to OpenAI for transcription.
+          </p>
+
           <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
             <UInput
               v-model="apiKeyInput"

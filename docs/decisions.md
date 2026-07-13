@@ -319,3 +319,21 @@ machine policy, and uncommon per-protocol proxy formats are not assumed to work.
 
 Revisit if: Windows validation or user reports show that system proxy support is
 insufficient, especially for PAC, enterprise policy, or per-protocol setups.
+
+## Keep Cloud Audio Disclosure In Settings
+
+Date: 2026-07
+
+Decision: show a persistent disclosure line in the cloud STT section of
+Settings explaining that microphone audio is uploaded to OpenAI for
+transcription.
+
+Reason: this satisfies the product's cloud-upload disclosure requirement while
+the maintainer prioritizes keeping the primary interface clean.
+
+Consequence: a startup confirmation dialog and a disclosure on the main Live
+page were considered and intentionally rejected. The disclosure requires no
+confirmation action and remains visible whenever OpenAI cloud STT is selected.
+
+Revisit if: users report that they did not understand audio was uploaded, or a
+distribution channel imposes stricter compliance requirements.

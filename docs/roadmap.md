@@ -44,8 +44,6 @@ Remaining work:
 - full Chatbox wrap model from
   [research/vrchat-chatbox-reference.md](./research/vrchat-chatbox-reference.md);
   the current width model is a simplified approximation
-- clear in-App disclosure before microphone audio is uploaded to a cloud
-  provider (a MUST in [product.md](./product.md))
 - get the Windows quality gate green; the quality workflow now runs on
   ubuntu-latest and windows-latest for every branch push
 - execute the Tauri bundle build workflow at least once; it triggers only on
