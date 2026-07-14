@@ -2,8 +2,10 @@
 import { computed } from "vue";
 import CaptionPreview from "../components/CaptionPreview.vue";
 import RuntimeControls from "../components/RuntimeControls.vue";
+import { uiText } from "../i18n/uiText";
 import { formatTime } from "../runtime/format";
 import { useRuntimeContext } from "../runtime/context";
+import { sttProviderMessageKey } from "../runtime/presentation";
 
 const {
   activeCaptionText,
@@ -28,7 +30,7 @@ const currentMicrophoneLabel = computed(() => {
   const currentConfig = config.value;
 
   if (!currentConfig) {
-    return "loading";
+    return uiText("common.loading");
   }
 
   const selectedId = currentConfig.audio.inputDeviceId;
@@ -38,12 +40,14 @@ const currentMicrophoneLabel = computed(() => {
       (device) => device.isDefault,
     );
 
-    return defaultDevice ? `${defaultDevice.name} (default)` : "Default device";
+    return defaultDevice
+      ? uiText("audio.devices.defaultNamed", { name: defaultDevice.name })
+      : uiText("audio.devices.default");
   }
 
   return (
     audioInputDevices.value.find((device) => device.id === selectedId)?.name ??
-    "Saved device (not connected)"
+    uiText("audio.devices.savedDisconnected")
   );
 });
 </script>
@@ -55,22 +59,28 @@ const currentMicrophoneLabel = computed(() => {
     >
       <div>
         <p class="text-xs font-semibold tracking-wide text-muted uppercase">
-          Live caption
+          {{ uiText("live.eyebrow") }}
         </p>
         <h1 class="mt-1 text-2xl font-semibold tracking-tight text-highlighted">
-          Speak, preview, send final text
+          {{ uiText("live.title") }}
         </h1>
       </div>
 
       <div class="flex flex-wrap gap-2">
         <UBadge color="neutral" variant="subtle">
-          {{ config?.stt.provider ?? "loading" }}
+          {{
+            config
+              ? uiText(sttProviderMessageKey[config.stt.provider])
+              : uiText("common.loading")
+          }}
         </UBadge>
         <UBadge
           :color="config?.osc.enabled ? 'success' : 'neutral'"
           variant="subtle"
         >
-          {{ config?.osc.enabled ? "Chatbox on" : "Chatbox off" }}
+          {{
+            uiText(config?.osc.enabled ? "live.chatbox.on" : "live.chatbox.off")
+          }}
         </UBadge>
       </div>
     </header>
@@ -95,15 +105,22 @@ const currentMicrophoneLabel = computed(() => {
           <template #header>
             <div class="flex items-center justify-between gap-4">
               <h2 class="text-base font-semibold text-highlighted">
-                Current setup
+                {{ uiText("live.currentSetup.title") }}
               </h2>
-              <UButton label="Edit" size="sm" to="/settings" variant="link" />
+              <UButton
+                :label="uiText('live.currentSetup.edit')"
+                size="sm"
+                to="/settings"
+                variant="link"
+              />
             </div>
           </template>
 
           <dl class="grid gap-3 text-sm">
             <div class="flex items-center justify-between gap-4">
-              <dt class="text-muted">Microphone</dt>
+              <dt class="text-muted">
+                {{ uiText("live.currentSetup.microphone") }}
+              </dt>
               <dd
                 class="min-w-0 text-right font-medium break-words text-highlighted"
               >
@@ -111,16 +128,22 @@ const currentMicrophoneLabel = computed(() => {
               </dd>
             </div>
             <div class="flex items-center justify-between gap-4">
-              <dt class="text-muted">STT model</dt>
+              <dt class="text-muted">
+                {{ uiText("live.currentSetup.sttModel") }}
+              </dt>
               <dd class="text-right font-medium text-highlighted">
-                {{ config?.stt.model ?? "loading" }}
+                {{ config?.stt.model ?? uiText("common.loading") }}
               </dd>
             </div>
             <div class="flex items-center justify-between gap-4">
-              <dt class="text-muted">OSC target</dt>
+              <dt class="text-muted">
+                {{ uiText("live.currentSetup.oscTarget") }}
+              </dt>
               <dd class="font-medium text-highlighted">
                 {{
-                  config ? `${config.osc.host}:${config.osc.port}` : "loading"
+                  config
+                    ? `${config.osc.host}:${config.osc.port}`
+                    : uiText("common.loading")
                 }}
               </dd>
             </div>
@@ -131,10 +154,10 @@ const currentMicrophoneLabel = computed(() => {
           <template #header>
             <div class="flex items-center justify-between gap-4">
               <h2 class="text-base font-semibold text-highlighted">
-                Recent activity
+                {{ uiText("live.recentActivity.title") }}
               </h2>
               <UButton
-                label="Open"
+                :label="uiText('live.recentActivity.open')"
                 size="sm"
                 to="/diagnostics"
                 variant="link"
@@ -144,18 +167,25 @@ const currentMicrophoneLabel = computed(() => {
 
           <div class="grid gap-4 text-sm">
             <div>
-              <p class="text-muted">Latest final transcript</p>
+              <p class="text-muted">
+                {{ uiText("live.recentActivity.latestFinalTranscript") }}
+              </p>
               <p class="mt-1 leading-6 text-highlighted">
-                {{ latestFinalTranscript?.text ?? "No final transcript yet." }}
+                {{
+                  latestFinalTranscript?.text ??
+                  uiText("live.recentActivity.noFinalTranscript")
+                }}
               </p>
             </div>
 
             <USeparator />
 
             <div>
-              <p class="text-muted">Latest diagnostic</p>
+              <p class="text-muted">
+                {{ uiText("live.recentActivity.latestDiagnostic") }}
+              </p>
               <p class="mt-1 font-medium text-highlighted">
-                {{ latestDiagnostic?.message ?? "No diagnostics yet." }}
+                {{ latestDiagnostic?.message ?? uiText("diagnostics.empty") }}
               </p>
               <p v-if="latestDiagnostic" class="mt-1 text-xs text-muted">
                 {{ formatTime(latestDiagnostic.timestampMs) }}

@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { runtimeStatusColor } from "../runtime/presentation";
+import { uiText } from "../i18n/uiText";
+import {
+  runtimeStatusColor,
+  runtimeStatusMessageKey,
+} from "../runtime/presentation";
 import type { RuntimeCommand, RuntimeStatusEvent } from "../runtime/types";
 
 const props = defineProps<{
@@ -32,17 +36,18 @@ function run(command: RuntimeCommand) {
     <template #header>
       <div class="flex items-start justify-between gap-4">
         <div>
-          <h2 class="text-base font-semibold text-highlighted">Runtime</h2>
+          <h2 class="text-base font-semibold text-highlighted">
+            {{ uiText("runtime.title") }}
+          </h2>
           <p class="mt-1 text-sm text-muted">
-            {{ runtimeStatus.message ?? "No runtime status message." }}
+            {{ runtimeStatus.message ?? uiText("runtime.status.noMessage") }}
           </p>
         </div>
         <UBadge
           :color="runtimeStatusColor[runtimeStatus.status]"
           variant="subtle"
-          class="capitalize"
         >
-          {{ runtimeStatus.status }}
+          {{ uiText(runtimeStatusMessageKey[runtimeStatus.status]) }}
         </UBadge>
       </div>
     </template>
@@ -51,7 +56,7 @@ function run(command: RuntimeCommand) {
       <UButton
         :disabled="isBusy || !canStart"
         icon="i-lucide-play"
-        label="Start"
+        :label="uiText('runtime.actions.start')"
         :loading="
           pendingCommand === 'start_runtime' ||
           runtimeStatus.status === 'starting'
@@ -62,7 +67,7 @@ function run(command: RuntimeCommand) {
       <UButton
         :disabled="isBusy || !canStop"
         icon="i-lucide-square"
-        label="Stop"
+        :label="uiText('runtime.actions.stop')"
         :loading="
           pendingCommand === 'stop_runtime' ||
           runtimeStatus.status === 'stopping'
@@ -74,7 +79,7 @@ function run(command: RuntimeCommand) {
       <UButton
         :disabled="isBusy"
         icon="i-lucide-message-square-text"
-        label="Mock Transcript"
+        :label="uiText('runtime.actions.mockTranscript')"
         :loading="pendingCommand === 'emit_mock_transcript'"
         variant="subtle"
         block
@@ -83,7 +88,7 @@ function run(command: RuntimeCommand) {
       <UButton
         :disabled="isBusy"
         icon="i-lucide-radio"
-        label="OSC Test"
+        :label="uiText('runtime.actions.oscTest')"
         :loading="pendingCommand === 'send_osc_test_message'"
         variant="subtle"
         block
@@ -97,7 +102,7 @@ function run(command: RuntimeCommand) {
       color="error"
       icon="i-lucide-circle-alert"
       role="alert"
-      title="Runtime action failed"
+      :title="uiText('runtime.errors.actionFailed')"
       :description="errorMessage"
       variant="subtle"
     />

@@ -1,4 +1,5 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { uiText } from "../i18n/uiText";
 import {
   createRuntimeBackend,
   type RuntimeEventHandlers,
@@ -33,7 +34,7 @@ function normalizeError(error: unknown) {
     return error.message;
   }
 
-  return "Action failed.";
+  return uiText("runtime.errors.unknownAction");
 }
 
 // One busy/error scope per action domain, so a slow settings save cannot
@@ -68,14 +69,14 @@ export function useRuntime() {
   >({});
   const runtimeStatus = ref<RuntimeStatusEvent>({
     status: "idle",
-    message: "Runtime is idle",
+    message: uiText("runtime.status.initialIdleMessage"),
     timestampMs: Date.now(),
   });
   const activeUtteranceId = ref<string | null>(null);
   const partialTranscript = ref<TranscriptEvent | null>(null);
   const finalTranscripts = ref<TranscriptEvent[]>([]);
   const diagnostics = ref<DiagnosticEvent[]>([]);
-  const settingsNotice = ref("");
+  const requiresRuntimeRestart = ref(false);
   const pendingRuntimeCommand = ref<RuntimeCommand | null>(null);
   const runtimeAction = createActionState();
   const settingsAction = createActionState();
@@ -109,12 +110,10 @@ export function useRuntime() {
     }
 
     if (captionMode.value === "listening") {
-      return "Listening...";
+      return uiText("caption.state.listening");
     }
 
-    return (
-      latestFinalTranscript.value?.text ?? "Waiting for transcript events."
-    );
+    return latestFinalTranscript.value?.text ?? uiText("caption.state.waiting");
   });
 
   async function runCommand(command: RuntimeCommand) {
@@ -125,7 +124,7 @@ export function useRuntime() {
         await backend.runCommand(command);
 
         if (command === "start_runtime") {
-          settingsNotice.value = "";
+          requiresRuntimeRestart.value = false;
         }
       });
     } finally {
@@ -142,7 +141,7 @@ export function useRuntime() {
   }
 
   async function saveConfig(nextConfig: AppConfig) {
-    settingsNotice.value = "";
+    requiresRuntimeRestart.value = false;
     let didSave = false;
     const requiresRestart = ["starting", "running", "stopping"].includes(
       runtimeStatus.value.status,
@@ -153,8 +152,7 @@ export function useRuntime() {
       didSave = true;
 
       if (requiresRestart) {
-        settingsNotice.value =
-          "These changes will take effect the next time the runtime starts.";
+        requiresRuntimeRestart.value = true;
       }
     });
 
@@ -214,7 +212,7 @@ export function useRuntime() {
     runtimeStatus.value = event;
 
     if (event.status === "starting") {
-      settingsNotice.value = "";
+      requiresRuntimeRestart.value = false;
     }
 
     if (event.status === "stopped" || event.status === "error") {
@@ -318,6 +316,6 @@ export function useRuntime() {
     secretStatuses,
     secretsError: secretsAction.error,
     settingsError: settingsAction.error,
-    settingsNotice,
+    requiresRuntimeRestart,
   };
 }

@@ -1,6 +1,11 @@
 <script setup lang="ts">
+import { uiText } from "../i18n/uiText";
 import { formatTime } from "../runtime/format";
-import { diagnosticSeverityColor } from "../runtime/presentation";
+import {
+  diagnosticCategoryMessageKey,
+  diagnosticSeverityColor,
+  diagnosticSeverityMessageKey,
+} from "../runtime/presentation";
 import type { DiagnosticEvent, TranscriptEvent } from "../runtime/types";
 
 defineProps<{
@@ -14,7 +19,9 @@ defineProps<{
     <UCard :ui="{ body: 'p-5' }">
       <template #header>
         <div class="flex items-center justify-between gap-4">
-          <h2 class="text-base font-semibold text-highlighted">Diagnostics</h2>
+          <h2 class="text-base font-semibold text-highlighted">
+            {{ uiText("diagnostics.title") }}
+          </h2>
           <UBadge color="neutral" variant="subtle">{{
             diagnostics.length
           }}</UBadge>
@@ -41,10 +48,11 @@ defineProps<{
             </div>
             <UBadge
               :color="diagnosticSeverityColor[diagnostic.severity]"
-              class="shrink-0 capitalize"
+              class="shrink-0"
               variant="subtle"
             >
-              {{ diagnostic.severity }} · {{ diagnostic.category }}
+              {{ uiText(diagnosticSeverityMessageKey[diagnostic.severity]) }} ·
+              {{ uiText(diagnosticCategoryMessageKey[diagnostic.category]) }}
             </UBadge>
           </div>
           <p class="mt-2 text-xs text-muted">
@@ -53,14 +61,16 @@ defineProps<{
         </li>
       </ol>
 
-      <p v-else class="text-sm text-muted">No diagnostics yet.</p>
+      <p v-else class="text-sm text-muted">
+        {{ uiText("diagnostics.empty") }}
+      </p>
     </UCard>
 
     <UCard :ui="{ body: 'p-5' }">
       <template #header>
         <div class="flex items-center justify-between gap-4">
           <h2 class="text-base font-semibold text-highlighted">
-            Final Transcripts
+            {{ uiText("diagnostics.finalTranscripts.title") }}
           </h2>
           <UBadge color="neutral" variant="subtle">{{
             finalTranscripts.length
@@ -83,7 +93,9 @@ defineProps<{
         </li>
       </ol>
 
-      <p v-else class="text-sm text-muted">No final transcript events yet.</p>
+      <p v-else class="text-sm text-muted">
+        {{ uiText("diagnostics.finalTranscripts.empty") }}
+      </p>
     </UCard>
   </div>
 </template>

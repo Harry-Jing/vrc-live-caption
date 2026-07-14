@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, toRaw, watch } from "vue";
-import type {
-  AppConfig,
-  AudioInputDevice,
-  ProviderSecretStatus,
-  SttProvider,
+import { uiText } from "../i18n/uiText";
+import { sttProviderMessageKey } from "../runtime/presentation";
+import {
+  STT_PROVIDERS,
+  type AppConfig,
+  type AudioInputDevice,
+  type ProviderSecretStatus,
+  type SttProvider,
 } from "../runtime/types";
 
 const props = defineProps<{
@@ -12,10 +15,10 @@ const props = defineProps<{
   config: AppConfig | null;
   isSecretsBusy: boolean;
   isSettingsBusy: boolean;
+  requiresRuntimeRestart: boolean;
   secretStatuses: Partial<Record<SttProvider, ProviderSecretStatus>>;
   secretsError: string;
   settingsError: string;
-  settingsNotice: string;
 }>();
 
 const emit = defineEmits<{
@@ -51,20 +54,22 @@ const openAiSecretLabel = computed(() => {
   const status = openAiSecretStatus.value;
 
   if (!status) {
-    return "Checking";
+    return uiText("settings.credentials.openai.status.checking");
   }
 
   if (!status.configured) {
-    return "Not saved";
+    return uiText("settings.credentials.openai.status.notSaved");
   }
-
-  const suffix = status.displaySuffix ? `...${status.displaySuffix}` : "saved";
 
   if (status.storage === "environment") {
-    return `Env ${suffix}`;
+    return uiText("settings.credentials.openai.status.environment", {
+      displaySuffix: status.displaySuffix,
+    });
   }
 
-  return `System ${suffix}`;
+  return uiText("settings.credentials.openai.status.system", {
+    displaySuffix: status.displaySuffix,
+  });
 });
 
 const openAiSecretColor = computed<"error" | "neutral" | "success">(() => {
@@ -83,9 +88,14 @@ const DEFAULT_DEVICE_VALUE = "__default-input-device__";
 
 const inputDeviceItems = computed(() => {
   const items = [
-    { label: "Default input device", value: DEFAULT_DEVICE_VALUE },
+    {
+      label: uiText("audio.devices.defaultInput"),
+      value: DEFAULT_DEVICE_VALUE,
+    },
     ...props.audioInputDevices.map((device) => ({
-      label: device.isDefault ? `${device.name} (default)` : device.name,
+      label: device.isDefault
+        ? uiText("audio.devices.defaultNamed", { name: device.name })
+        : device.name,
       value: device.id,
     })),
   ];
@@ -97,16 +107,21 @@ const inputDeviceItems = computed(() => {
     selectedId &&
     !props.audioInputDevices.some((device) => device.id === selectedId)
   ) {
-    items.push({ label: "Saved device (not connected)", value: selectedId });
+    items.push({
+      label: uiText("audio.devices.savedDisconnected"),
+      value: selectedId,
+    });
   }
 
   return items;
 });
 
-const providerItems: { label: string; value: SttProvider }[] = [
-  { label: "OpenAI", value: "openai" },
-  { label: "Mock", value: "mock" },
-];
+const providerItems = computed(() =>
+  STT_PROVIDERS.map((value) => ({
+    label: uiText(sttProviderMessageKey[value]),
+    value,
+  })),
+);
 
 const selectedInputDevice = computed({
   get: () => form.value?.audio.inputDeviceId ?? DEFAULT_DEVICE_VALUE,
@@ -178,15 +193,17 @@ function confirmDeleteOpenAiApiKey() {
     <template #header>
       <div class="flex items-start justify-between gap-4">
         <div>
-          <h2 class="text-base font-semibold text-highlighted">Settings</h2>
+          <h2 class="text-base font-semibold text-highlighted">
+            {{ uiText("settings.title") }}
+          </h2>
           <p class="mt-1 text-sm text-muted">
-            Configure capture, provider credentials, and Chatbox output.
+            {{ uiText("settings.description") }}
           </p>
         </div>
         <UButton
           :disabled="isSettingsBusy"
           icon="i-lucide-refresh-cw"
-          label="Refresh devices"
+          :label="uiText('settings.actions.refreshDevices')"
           size="sm"
           variant="ghost"
           @click="emit('refreshDevices')"
@@ -200,26 +217,28 @@ function confirmDeleteOpenAiApiKey() {
       color="error"
       icon="i-lucide-circle-alert"
       role="alert"
-      title="Settings action failed"
+      :title="uiText('settings.errors.actionFailed')"
       :description="settingsError"
       variant="subtle"
     />
 
     <UAlert
-      v-if="settingsNotice"
+      v-if="requiresRuntimeRestart"
       class="mb-4"
       color="warning"
       icon="i-lucide-triangle-alert"
-      title="Restart required"
-      :description="settingsNotice"
+      :title="uiText('settings.feedback.restartRequired.title')"
+      :description="uiText('settings.feedback.restartRequired.description')"
       variant="subtle"
     />
 
     <form v-if="form" class="grid gap-5" @submit.prevent="save">
       <section class="grid gap-4">
-        <h3 class="text-sm font-semibold text-highlighted">Audio</h3>
+        <h3 class="text-sm font-semibold text-highlighted">
+          {{ uiText("settings.sections.audio") }}
+        </h3>
 
-        <UFormField label="Microphone">
+        <UFormField :label="uiText('settings.fields.microphone')">
           <USelect
             v-model="selectedInputDevice"
             class="w-full"
@@ -231,10 +250,12 @@ function confirmDeleteOpenAiApiKey() {
       <USeparator />
 
       <section class="grid gap-4">
-        <h3 class="text-sm font-semibold text-highlighted">Speech provider</h3>
+        <h3 class="text-sm font-semibold text-highlighted">
+          {{ uiText("settings.sections.speechProvider") }}
+        </h3>
 
         <div class="grid gap-3 sm:grid-cols-2">
-          <UFormField label="Provider">
+          <UFormField :label="uiText('settings.fields.provider')">
             <USelect
               v-model="form.stt.provider"
               class="w-full"
@@ -242,12 +263,12 @@ function confirmDeleteOpenAiApiKey() {
             />
           </UFormField>
 
-          <UFormField label="Language">
+          <UFormField :label="uiText('settings.fields.language')">
             <UInput v-model="form.stt.language" class="w-full" />
           </UFormField>
         </div>
 
-        <UFormField label="STT model">
+        <UFormField :label="uiText('settings.fields.sttModel')">
           <UInput v-model="form.stt.model" class="w-full" />
         </UFormField>
 
@@ -257,7 +278,7 @@ function confirmDeleteOpenAiApiKey() {
         >
           <div class="flex items-center justify-between gap-3">
             <span class="text-sm font-medium text-highlighted">
-              OpenAI credentials
+              {{ uiText("settings.credentials.openai.title") }}
             </span>
             <UBadge :color="openAiSecretColor" variant="subtle">
               {{ openAiSecretLabel }}
@@ -265,20 +286,21 @@ function confirmDeleteOpenAiApiKey() {
           </div>
 
           <p class="text-sm text-muted">
-            When OpenAI cloud speech recognition is selected, microphone audio
-            is uploaded to OpenAI for transcription.
+            {{ uiText("settings.credentials.openai.cloudDisclosure") }}
           </p>
 
           <div
             class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end"
           >
-            <UFormField label="API key">
+            <UFormField :label="uiText('settings.credentials.openai.apiKey')">
               <UInput
                 v-model="apiKeyInput"
                 autocapitalize="off"
                 autocomplete="off"
                 class="w-full"
-                placeholder="sk-..."
+                :placeholder="
+                  uiText('settings.credentials.openai.apiKeyPlaceholder')
+                "
                 spellcheck="false"
                 type="password"
               />
@@ -286,7 +308,7 @@ function confirmDeleteOpenAiApiKey() {
             <UButton
               :disabled="isSecretsBusy || !canSaveOpenAiApiKey"
               icon="i-lucide-key-round"
-              label="Save Key"
+              :label="uiText('settings.credentials.openai.actions.save')"
               type="button"
               variant="subtle"
               @click="saveOpenAiApiKey"
@@ -296,7 +318,7 @@ function confirmDeleteOpenAiApiKey() {
               :disabled="isSecretsBusy"
               color="error"
               icon="i-lucide-trash-2"
-              label="Remove key"
+              :label="uiText('settings.credentials.openai.actions.remove')"
               type="button"
               variant="ghost"
               @click="requestDeleteOpenAiApiKey"
@@ -308,7 +330,7 @@ function confirmDeleteOpenAiApiKey() {
             color="error"
             icon="i-lucide-circle-alert"
             role="alert"
-            title="API key action failed"
+            :title="uiText('settings.credentials.openai.errors.actionFailed')"
             :description="secretsError"
             variant="subtle"
           />
@@ -326,14 +348,16 @@ function confirmDeleteOpenAiApiKey() {
       <USeparator />
 
       <section class="grid gap-4">
-        <h3 class="text-sm font-semibold text-highlighted">Chatbox output</h3>
+        <h3 class="text-sm font-semibold text-highlighted">
+          {{ uiText("settings.sections.chatboxOutput") }}
+        </h3>
 
         <div class="grid gap-3 sm:grid-cols-[1fr_140px]">
-          <UFormField label="OSC host">
+          <UFormField :label="uiText('settings.fields.oscHost')">
             <UInput v-model="form.osc.host" class="w-full" />
           </UFormField>
 
-          <UFormField label="Port">
+          <UFormField :label="uiText('settings.fields.port')">
             <UInputNumber
               v-model="form.osc.port"
               class="w-full"
@@ -344,7 +368,7 @@ function confirmDeleteOpenAiApiKey() {
           </UFormField>
         </div>
 
-        <UFormField label="OSC interval (ms)">
+        <UFormField :label="uiText('settings.fields.oscInterval')">
           <UInputNumber
             v-model="form.osc.minIntervalMs"
             class="w-full"
@@ -355,15 +379,21 @@ function confirmDeleteOpenAiApiKey() {
         </UFormField>
 
         <div class="grid gap-3 sm:grid-cols-2">
-          <USwitch v-model="form.osc.enabled" label="Chatbox output" />
-          <USwitch v-model="form.ui.showPartial" label="App partial preview" />
+          <USwitch
+            v-model="form.osc.enabled"
+            :label="uiText('settings.fields.chatboxOutput')"
+          />
+          <USwitch
+            v-model="form.ui.showPartial"
+            :label="uiText('settings.fields.partialPreview')"
+          />
         </div>
       </section>
 
       <UButton
         :disabled="isSettingsBusy"
         icon="i-lucide-save"
-        label="Save Settings"
+        :label="uiText('settings.actions.save')"
         type="submit"
         block
       />
@@ -371,21 +401,25 @@ function confirmDeleteOpenAiApiKey() {
 
     <p v-else class="text-sm text-muted">
       {{
-        settingsError ? "Settings could not be loaded." : "Loading settings..."
+        settingsError
+          ? uiText("settings.loadFailed")
+          : uiText("settings.loading")
       }}
     </p>
   </UCard>
 
   <UModal
     v-model:open="isRemoveKeyModalOpen"
-    title="Remove OpenAI API key?"
-    description="The saved key will be removed from the system credential store. You can add it again later."
+    :title="uiText('settings.credentials.openai.removeDialog.title')"
+    :description="
+      uiText('settings.credentials.openai.removeDialog.description')
+    "
   >
     <template #footer>
       <div class="flex w-full justify-end gap-2">
         <UButton
           color="neutral"
-          label="Cancel"
+          :label="uiText('settings.credentials.openai.removeDialog.cancel')"
           variant="outline"
           @click="closeRemoveKeyModal"
         />
@@ -393,7 +427,7 @@ function confirmDeleteOpenAiApiKey() {
           :disabled="isSecretsBusy"
           color="error"
           icon="i-lucide-trash-2"
-          label="Remove API key"
+          :label="uiText('settings.credentials.openai.removeDialog.confirm')"
           @click="confirmDeleteOpenAiApiKey"
         />
       </div>

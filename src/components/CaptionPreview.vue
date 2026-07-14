@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import { captionModeColor } from "../runtime/presentation";
+import { uiText } from "../i18n/uiText";
+import {
+  captionModeColor,
+  captionModeMessageKey,
+} from "../runtime/presentation";
 import type { CaptionMode } from "../runtime/types";
 
 defineProps<{
@@ -14,12 +18,14 @@ defineProps<{
     <div class="mb-4 flex items-center justify-between gap-4">
       <div>
         <p class="text-xs font-semibold tracking-wide text-muted uppercase">
-          Caption Preview
+          {{ uiText("caption.preview.eyebrow") }}
         </p>
-        <h2 class="text-base font-semibold text-highlighted">Current output</h2>
+        <h2 class="text-base font-semibold text-highlighted">
+          {{ uiText("caption.preview.title") }}
+        </h2>
       </div>
       <UBadge :color="captionModeColor[mode]" variant="subtle">
-        {{ mode }}
+        {{ uiText(captionModeMessageKey[mode]) }}
       </UBadge>
     </div>
 
@@ -30,7 +36,9 @@ defineProps<{
     </p>
     <p class="sr-only" aria-atomic="true" aria-live="polite">
       {{
-        mode === "final" && hasFinalTranscript ? `Final caption: ${text}` : ""
+        mode === "final" && hasFinalTranscript
+          ? uiText("caption.finalAnnouncement", { text })
+          : ""
       }}
     </p>
   </UCard>

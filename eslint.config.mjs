@@ -69,6 +69,24 @@ export default defineConfigWithVueTs(
         "PascalCase",
         { registeredComponentsOnly: false },
       ],
+      "vue/no-bare-strings-in-template": [
+        "error",
+        {
+          attributes: {
+            "/.+/": [
+              "title",
+              "label",
+              "description",
+              "placeholder",
+              "alt",
+              "aria-label",
+              "aria-placeholder",
+              "aria-roledescription",
+              "aria-valuetext",
+            ],
+          },
+        },
+      ],
     },
   },
 
@@ -119,6 +137,12 @@ export default defineConfigWithVueTs(
             "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)runtime\\/(?:backend|tauriBackend|previewBackend)(?:\\.[cm]?[jt]sx?)?$/]",
           message:
             "Backend implementations are internal to src/runtime/. Use useRuntime or the runtime context instead.",
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='toast'][callee.property.name='add'] > ObjectExpression > Property[key.name=/^(title|description)$/] > Literal",
+          message:
+            "Toast copy must be resolved through uiText so it has a stable message key.",
         },
       ],
     },

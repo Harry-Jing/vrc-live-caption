@@ -1,6 +1,7 @@
 export type RuntimeStatus =
   "idle" | "starting" | "running" | "stopping" | "stopped" | "error";
-export type SttProvider = "mock" | "openai";
+export const STT_PROVIDERS = ["openai", "mock"] as const;
+export type SttProvider = (typeof STT_PROVIDERS)[number];
 export type ProviderSecretStorage = "systemCredentialStore" | "environment";
 export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";
 export type DiagnosticSeverity = "info" | "warning" | "error";

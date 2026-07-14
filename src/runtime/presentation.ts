@@ -1,9 +1,16 @@
-// Shared semantic color mappings for runtime state shown in the UI. Each map
-// is a Record over the full union type, so adding a status, mode, or severity
-// without choosing a color fails the typecheck instead of silently rendering
-// a default.
+// Shared semantic presentation mappings for runtime state shown in the UI.
+// Each map covers its full union type, so adding a status, mode, category, or
+// provider without choosing its presentation fails the typecheck instead of
+// silently rendering a default.
 
-import type { CaptionMode, DiagnosticSeverity, RuntimeStatus } from "./types";
+import type { UiStaticMessageKey } from "../i18n/uiText";
+import type {
+  CaptionMode,
+  DiagnosticCategory,
+  DiagnosticSeverity,
+  RuntimeStatus,
+  SttProvider,
+} from "./types";
 
 type StatusBadgeColor = "error" | "info" | "neutral" | "success" | "warning";
 
@@ -32,3 +39,37 @@ export const diagnosticSeverityColor: Record<
   warning: "warning",
   error: "error",
 };
+
+export const runtimeStatusMessageKey = {
+  idle: "runtime.status.idle",
+  starting: "runtime.status.starting",
+  running: "runtime.status.running",
+  stopping: "runtime.status.stopping",
+  stopped: "runtime.status.stopped",
+  error: "runtime.status.error",
+} satisfies Record<RuntimeStatus, UiStaticMessageKey>;
+
+export const captionModeMessageKey = {
+  listening: "caption.mode.listening",
+  partial: "caption.mode.partial",
+  final: "caption.mode.final",
+} satisfies Record<CaptionMode, UiStaticMessageKey>;
+
+export const diagnosticSeverityMessageKey = {
+  info: "diagnostics.severity.info",
+  warning: "diagnostics.severity.warning",
+  error: "diagnostics.severity.error",
+} satisfies Record<DiagnosticSeverity, UiStaticMessageKey>;
+
+export const diagnosticCategoryMessageKey = {
+  config: "diagnostics.category.config",
+  runtime: "diagnostics.category.runtime",
+  audio: "diagnostics.category.audio",
+  stt: "diagnostics.category.stt",
+  osc: "diagnostics.category.osc",
+} satisfies Record<DiagnosticCategory, UiStaticMessageKey>;
+
+export const sttProviderMessageKey = {
+  openai: "stt.providers.openai",
+  mock: "stt.providers.mock",
+} satisfies Record<SttProvider, UiStaticMessageKey>;

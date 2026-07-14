@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useToast } from "@nuxt/ui/composables";
 import SettingsForm from "../components/SettingsForm.vue";
+import { uiText } from "../i18n/uiText";
 import { useRuntimeContext } from "../runtime/context";
 import type { AppConfig } from "../runtime/types";
 
@@ -11,12 +12,12 @@ const {
   isSecretsBusy,
   isSettingsBusy,
   loadAudioInputDevices,
+  requiresRuntimeRestart,
   saveConfig,
   saveProviderSecret,
   secretStatuses,
   secretsError,
   settingsError,
-  settingsNotice,
 } = useRuntimeContext();
 
 const toast = useToast();
@@ -28,7 +29,7 @@ async function handleSaveConfig(nextConfig: AppConfig) {
     toast.add({
       color: "success",
       icon: "i-lucide-circle-check",
-      title: "Settings saved",
+      title: uiText("settings.feedback.saved"),
     });
   }
 }
@@ -38,10 +39,10 @@ async function handleSaveConfig(nextConfig: AppConfig) {
   <div class="grid gap-5">
     <header>
       <p class="text-xs font-semibold tracking-wide text-muted uppercase">
-        Settings
+        {{ uiText("settings.title") }}
       </p>
       <h1 class="mt-1 text-2xl font-semibold tracking-tight text-highlighted">
-        Capture, provider, and output
+        {{ uiText("settings.page.title") }}
       </h1>
     </header>
 
@@ -50,10 +51,10 @@ async function handleSaveConfig(nextConfig: AppConfig) {
       :config="config"
       :is-secrets-busy="isSecretsBusy"
       :is-settings-busy="isSettingsBusy"
+      :requires-runtime-restart="requiresRuntimeRestart"
       :secret-statuses="secretStatuses"
       :secrets-error="secretsError"
       :settings-error="settingsError"
-      :settings-notice="settingsNotice"
       @delete-provider-secret="deleteProviderSecret"
       @refresh-devices="loadAudioInputDevices"
       @save-config="handleSaveConfig"

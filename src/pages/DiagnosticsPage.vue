@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import EventFeed from "../components/EventFeed.vue";
+import { uiText } from "../i18n/uiText";
 import { formatTime } from "../runtime/format";
-import { runtimeStatusColor } from "../runtime/presentation";
 import { useRuntimeContext } from "../runtime/context";
+import {
+  runtimeStatusColor,
+  runtimeStatusMessageKey,
+} from "../runtime/presentation";
 
 const { diagnostics, finalTranscripts, runtimeStatus } = useRuntimeContext();
 </script>
@@ -14,10 +18,10 @@ const { diagnostics, finalTranscripts, runtimeStatus } = useRuntimeContext();
     >
       <div>
         <p class="text-xs font-semibold tracking-wide text-muted uppercase">
-          Diagnostics
+          {{ uiText("diagnostics.title") }}
         </p>
         <h1 class="mt-1 text-2xl font-semibold tracking-tight text-highlighted">
-          Runtime events and transcripts
+          {{ uiText("diagnostics.page.title") }}
         </h1>
       </div>
 
@@ -25,9 +29,8 @@ const { diagnostics, finalTranscripts, runtimeStatus } = useRuntimeContext();
         <UBadge
           :color="runtimeStatusColor[runtimeStatus.status]"
           variant="subtle"
-          class="capitalize"
         >
-          {{ runtimeStatus.status }}
+          {{ uiText(runtimeStatusMessageKey[runtimeStatus.status]) }}
         </UBadge>
         <UBadge color="neutral" variant="subtle">
           {{ formatTime(runtimeStatus.timestampMs) }}

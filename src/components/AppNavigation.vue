@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import { runtimeStatusColor } from "../runtime/presentation";
+import { uiText } from "../i18n/uiText";
+import {
+  runtimeStatusColor,
+  runtimeStatusMessageKey,
+} from "../runtime/presentation";
 import type { RuntimeStatusEvent } from "../runtime/types";
 
 defineProps<{
@@ -8,17 +12,17 @@ defineProps<{
 
 const navItems = [
   {
-    label: "Live",
+    labelKey: "navigation.live",
     to: "/",
     icon: "i-lucide-radio-tower",
   },
   {
-    label: "Settings",
+    labelKey: "navigation.settings",
     to: "/settings",
     icon: "i-lucide-sliders-horizontal",
   },
   {
-    label: "Diagnostics",
+    labelKey: "navigation.diagnostics",
     to: "/diagnostics",
     icon: "i-lucide-activity",
   },
@@ -29,26 +33,25 @@ const navItems = [
   <aside class="grid gap-4 self-start lg:sticky lg:top-5">
     <div class="rounded-md border border-default bg-default p-4">
       <p class="text-xs font-semibold tracking-wide text-muted uppercase">
-        VRC Live Caption
+        {{ uiText("app.name") }}
       </p>
       <p class="mt-1 text-lg font-semibold text-highlighted">
-        Outgoing Caption
+        {{ uiText("app.mode.outgoingCaption") }}
       </p>
 
       <div class="mt-4 flex items-center justify-between gap-3">
-        <span class="text-sm text-muted">Runtime</span>
+        <span class="text-sm text-muted">{{ uiText("runtime.title") }}</span>
         <UBadge
           :color="runtimeStatusColor[runtimeStatus.status]"
           variant="subtle"
-          class="capitalize"
         >
-          {{ runtimeStatus.status }}
+          {{ uiText(runtimeStatusMessageKey[runtimeStatus.status]) }}
         </UBadge>
       </div>
     </div>
 
     <nav
-      aria-label="Primary"
+      :aria-label="uiText('navigation.primary')"
       class="grid grid-cols-3 gap-2 rounded-md border border-default bg-default p-2 lg:grid-cols-1"
     >
       <RouterLink
@@ -70,7 +73,7 @@ const navItems = [
           @click="navigate"
         >
           <UIcon :name="item.icon" class="size-4 shrink-0" aria-hidden="true" />
-          <span>{{ item.label }}</span>
+          <span>{{ uiText(item.labelKey) }}</span>
         </a>
       </RouterLink>
     </nav>
