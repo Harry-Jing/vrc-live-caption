@@ -52,7 +52,7 @@ jobs:
             artifact-name: windows-latest
             artifact-path: src-tauri/target/release/bundle/**
             platform: windows-latest
-            args: ""
+            args: "-- --locked"
             apple_signing_identity: ""
             rust-targets: ""
 
@@ -60,7 +60,7 @@ jobs:
             artifact-name: macos-aarch64
             artifact-path: src-tauri/target/aarch64-apple-darwin/release/bundle/**
             platform: macos-latest
-            args: "--target aarch64-apple-darwin"
+            args: "--target aarch64-apple-darwin -- --locked"
             apple_signing_identity: "-"
             rust-targets: "aarch64-apple-darwin"
 
@@ -69,7 +69,7 @@ jobs:
             artifact-name: linux-x86_64-appimage
             artifact-path: src-tauri/target/release/bundle/appimage/*.AppImage
             platform: ubuntu-22.04
-            args: "--bundles appimage"
+            args: "--bundles appimage -- --locked"
             apple_signing_identity: ""
             rust-targets: ""
 
