@@ -19,6 +19,10 @@ export default defineConfig({
     vue(),
     NuxtIconBundle({
       icons: NUXT_UI_RUNTIME_ICONS,
+      scan: {
+        globInclude: ["src/**/*.{vue,ts}"],
+      },
+      sizeLimitKb: 32,
     }),
     ui(),
   ],

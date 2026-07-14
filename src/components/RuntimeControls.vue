@@ -6,6 +6,7 @@ import type { RuntimeCommand, RuntimeStatusEvent } from "../runtime/types";
 const props = defineProps<{
   errorMessage: string;
   isBusy: boolean;
+  pendingCommand: RuntimeCommand | null;
   runtimeStatus: RuntimeStatusEvent;
 }>();
 
@@ -13,7 +14,6 @@ const emit = defineEmits<{
   run: [command: RuntimeCommand];
 }>();
 
-const isStopping = computed(() => props.runtimeStatus.status === "stopping");
 const canStart = computed(
   () =>
     !["starting", "running", "stopping"].includes(props.runtimeStatus.status),
@@ -52,7 +52,10 @@ function run(command: RuntimeCommand) {
         :disabled="isBusy || !canStart"
         icon="i-lucide-play"
         label="Start"
-        :loading="isBusy && canStart"
+        :loading="
+          pendingCommand === 'start_runtime' ||
+          runtimeStatus.status === 'starting'
+        "
         block
         @click="run('start_runtime')"
       />
@@ -60,7 +63,10 @@ function run(command: RuntimeCommand) {
         :disabled="isBusy || !canStop"
         icon="i-lucide-square"
         label="Stop"
-        :loading="isStopping"
+        :loading="
+          pendingCommand === 'stop_runtime' ||
+          runtimeStatus.status === 'stopping'
+        "
         variant="subtle"
         block
         @click="run('stop_runtime')"
@@ -69,6 +75,7 @@ function run(command: RuntimeCommand) {
         :disabled="isBusy"
         icon="i-lucide-message-square-text"
         label="Mock Transcript"
+        :loading="pendingCommand === 'emit_mock_transcript'"
         variant="subtle"
         block
         @click="run('emit_mock_transcript')"
@@ -77,6 +84,7 @@ function run(command: RuntimeCommand) {
         :disabled="isBusy"
         icon="i-lucide-radio"
         label="OSC Test"
+        :loading="pendingCommand === 'send_osc_test_message'"
         variant="subtle"
         block
         @click="run('send_osc_test_message')"
@@ -88,6 +96,7 @@ function run(command: RuntimeCommand) {
       class="mt-4"
       color="error"
       icon="i-lucide-circle-alert"
+      role="alert"
       title="Runtime action failed"
       :description="errorMessage"
       variant="subtle"

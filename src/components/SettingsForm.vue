@@ -29,6 +29,7 @@ const emit = defineEmits<{
 // mutating shared state, and a save round-trip re-syncs it wholesale.
 const form = ref<AppConfig | null>(null);
 const apiKeyInput = ref("");
+const isRemoveKeyModalOpen = ref(false);
 
 watch(
   () => props.config,
@@ -64,6 +65,16 @@ const openAiSecretLabel = computed(() => {
   }
 
   return `System ${suffix}`;
+});
+
+const openAiSecretColor = computed<"error" | "neutral" | "success">(() => {
+  const status = openAiSecretStatus.value;
+
+  if (status?.error) {
+    return "error";
+  }
+
+  return status?.configured ? "success" : "neutral";
 });
 
 // Sentinel for "use the system default device": the config stores null, but
@@ -148,7 +159,16 @@ function saveOpenAiApiKey() {
   emit("saveProviderSecret", "openai", apiKeyInput.value);
 }
 
-function deleteOpenAiApiKey() {
+function requestDeleteOpenAiApiKey() {
+  isRemoveKeyModalOpen.value = true;
+}
+
+function closeRemoveKeyModal() {
+  isRemoveKeyModalOpen.value = false;
+}
+
+function confirmDeleteOpenAiApiKey() {
+  isRemoveKeyModalOpen.value = false;
   emit("deleteProviderSecret", "openai");
 }
 </script>
@@ -166,7 +186,7 @@ function deleteOpenAiApiKey() {
         <UButton
           :disabled="isSettingsBusy"
           icon="i-lucide-refresh-cw"
-          label="Devices"
+          label="Refresh devices"
           size="sm"
           variant="ghost"
           @click="emit('refreshDevices')"
@@ -179,6 +199,7 @@ function deleteOpenAiApiKey() {
       class="mb-4"
       color="error"
       icon="i-lucide-circle-alert"
+      role="alert"
       title="Settings action failed"
       :description="settingsError"
       variant="subtle"
@@ -187,9 +208,9 @@ function deleteOpenAiApiKey() {
     <UAlert
       v-if="settingsNotice"
       class="mb-4"
-      color="success"
-      icon="i-lucide-circle-check"
-      title="Settings saved"
+      color="warning"
+      icon="i-lucide-triangle-alert"
+      title="Restart required"
       :description="settingsNotice"
       variant="subtle"
     />
@@ -236,9 +257,9 @@ function deleteOpenAiApiKey() {
         >
           <div class="flex items-center justify-between gap-3">
             <span class="text-sm font-medium text-highlighted">
-              OpenAI API key
+              OpenAI credentials
             </span>
-            <UBadge color="primary" variant="subtle">
+            <UBadge :color="openAiSecretColor" variant="subtle">
               {{ openAiSecretLabel }}
             </UBadge>
           </div>
@@ -248,15 +269,20 @@ function deleteOpenAiApiKey() {
             is uploaded to OpenAI for transcription.
           </p>
 
-          <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-            <UInput
-              v-model="apiKeyInput"
-              autocapitalize="off"
-              autocomplete="off"
-              placeholder="sk-..."
-              spellcheck="false"
-              type="password"
-            />
+          <div
+            class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end"
+          >
+            <UFormField label="API key">
+              <UInput
+                v-model="apiKeyInput"
+                autocapitalize="off"
+                autocomplete="off"
+                class="w-full"
+                placeholder="sk-..."
+                spellcheck="false"
+                type="password"
+              />
+            </UFormField>
             <UButton
               :disabled="isSecretsBusy || !canSaveOpenAiApiKey"
               icon="i-lucide-key-round"
@@ -268,12 +294,12 @@ function deleteOpenAiApiKey() {
             <UButton
               v-if="openAiSecretStatus?.storage === 'systemCredentialStore'"
               :disabled="isSecretsBusy"
-              color="neutral"
+              color="error"
               icon="i-lucide-trash-2"
-              label="Remove"
+              label="Remove key"
               type="button"
               variant="ghost"
-              @click="deleteOpenAiApiKey"
+              @click="requestDeleteOpenAiApiKey"
             />
           </div>
 
@@ -281,12 +307,17 @@ function deleteOpenAiApiKey() {
             v-if="secretsError"
             color="error"
             icon="i-lucide-circle-alert"
+            role="alert"
             title="API key action failed"
             :description="secretsError"
             variant="subtle"
           />
 
-          <p v-if="openAiSecretStatus?.error" class="text-xs text-error">
+          <p
+            v-if="openAiSecretStatus?.error"
+            class="text-xs text-error"
+            role="alert"
+          >
             {{ openAiSecretStatus.error }}
           </p>
         </div>
@@ -334,7 +365,6 @@ function deleteOpenAiApiKey() {
         icon="i-lucide-save"
         label="Save Settings"
         type="submit"
-        variant="subtle"
         block
       />
     </form>
@@ -345,4 +375,28 @@ function deleteOpenAiApiKey() {
       }}
     </p>
   </UCard>
+
+  <UModal
+    v-model:open="isRemoveKeyModalOpen"
+    title="Remove OpenAI API key?"
+    description="The saved key will be removed from the system credential store. You can add it again later."
+  >
+    <template #footer>
+      <div class="flex w-full justify-end gap-2">
+        <UButton
+          color="neutral"
+          label="Cancel"
+          variant="outline"
+          @click="closeRemoveKeyModal"
+        />
+        <UButton
+          :disabled="isSecretsBusy"
+          color="error"
+          icon="i-lucide-trash-2"
+          label="Remove API key"
+          @click="confirmDeleteOpenAiApiKey"
+        />
+      </div>
+    </template>
+  </UModal>
 </template>

@@ -69,7 +69,7 @@ const navItems = [
           :href="href"
           @click="navigate"
         >
-          <span :class="[item.icon, 'size-4']" aria-hidden="true" />
+          <UIcon :name="item.icon" class="size-4 shrink-0" aria-hidden="true" />
           <span>{{ item.label }}</span>
         </a>
       </RouterLink>

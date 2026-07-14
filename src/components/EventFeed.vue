@@ -28,19 +28,23 @@ defineProps<{
           class="rounded-md border border-default bg-muted/40 p-3"
         >
           <div class="flex items-start justify-between gap-3">
-            <div>
-              <p class="font-medium text-highlighted">
+            <div class="min-w-0">
+              <p class="font-medium break-words text-highlighted">
                 {{ diagnostic.message }}
               </p>
-              <p v-if="diagnostic.detail" class="mt-1 text-sm text-muted">
+              <p
+                v-if="diagnostic.detail"
+                class="mt-1 text-sm break-words text-muted"
+              >
                 {{ diagnostic.detail }}
               </p>
             </div>
             <UBadge
               :color="diagnosticSeverityColor[diagnostic.severity]"
+              class="shrink-0 capitalize"
               variant="subtle"
             >
-              {{ diagnostic.category }}
+              {{ diagnostic.severity }} · {{ diagnostic.category }}
             </UBadge>
           </div>
           <p class="mt-2 text-xs text-muted">
@@ -73,7 +77,7 @@ defineProps<{
           <span class="text-xs text-muted">{{
             formatTime(transcript.timestampMs)
           }}</span>
-          <p class="text-sm leading-6 text-highlighted">
+          <p class="text-sm leading-6 break-words text-highlighted">
             {{ transcript.text }}
           </p>
         </li>

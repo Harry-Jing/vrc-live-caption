@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { RouterLink } from "vue-router";
 import CaptionPreview from "../components/CaptionPreview.vue";
 import RuntimeControls from "../components/RuntimeControls.vue";
 import { formatTime } from "../runtime/format";
@@ -8,11 +7,13 @@ import { useRuntimeContext } from "../runtime/context";
 
 const {
   activeCaptionText,
+  audioInputDevices,
   captionMode,
   config,
   diagnostics,
   finalTranscripts,
   isRuntimeBusy,
+  pendingRuntimeCommand,
   runCommand,
   runtimeError,
   runtimeStatus,
@@ -22,6 +23,29 @@ const latestDiagnostic = computed(() => diagnostics.value.at(0) ?? null);
 const latestFinalTranscript = computed(
   () => finalTranscripts.value.at(0) ?? null,
 );
+
+const currentMicrophoneLabel = computed(() => {
+  const currentConfig = config.value;
+
+  if (!currentConfig) {
+    return "loading";
+  }
+
+  const selectedId = currentConfig.audio.inputDeviceId;
+
+  if (!selectedId) {
+    const defaultDevice = audioInputDevices.value.find(
+      (device) => device.isDefault,
+    );
+
+    return defaultDevice ? `${defaultDevice.name} (default)` : "Default device";
+  }
+
+  return (
+    audioInputDevices.value.find((device) => device.id === selectedId)?.name ??
+    "Saved device (not connected)"
+  );
+});
 </script>
 
 <template>
@@ -51,12 +75,17 @@ const latestFinalTranscript = computed(
       </div>
     </header>
 
-    <CaptionPreview :mode="captionMode" :text="activeCaptionText" />
+    <CaptionPreview
+      :has-final-transcript="latestFinalTranscript !== null"
+      :mode="captionMode"
+      :text="activeCaptionText"
+    />
 
     <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
       <RuntimeControls
         :error-message="runtimeError"
         :is-busy="isRuntimeBusy"
+        :pending-command="pendingRuntimeCommand"
         :runtime-status="runtimeStatus"
         @run="runCommand"
       />
@@ -68,20 +97,17 @@ const latestFinalTranscript = computed(
               <h3 class="text-base font-semibold text-highlighted">
                 Current setup
               </h3>
-              <RouterLink
-                class="text-sm font-medium text-primary outline-none hover:text-primary-600 focus-visible:ring-2 focus-visible:ring-primary"
-                to="/settings"
-              >
-                Edit
-              </RouterLink>
+              <UButton label="Edit" size="sm" to="/settings" variant="link" />
             </div>
           </template>
 
           <dl class="grid gap-3 text-sm">
             <div class="flex items-center justify-between gap-4">
               <dt class="text-muted">Microphone</dt>
-              <dd class="text-right font-medium text-highlighted">
-                {{ config?.audio.inputDeviceId ?? "Default device" }}
+              <dd
+                class="min-w-0 text-right font-medium break-words text-highlighted"
+              >
+                {{ currentMicrophoneLabel }}
               </dd>
             </div>
             <div class="flex items-center justify-between gap-4">
@@ -107,12 +133,12 @@ const latestFinalTranscript = computed(
               <h3 class="text-base font-semibold text-highlighted">
                 Recent activity
               </h3>
-              <RouterLink
-                class="text-sm font-medium text-primary outline-none hover:text-primary-600 focus-visible:ring-2 focus-visible:ring-primary"
+              <UButton
+                label="Open"
+                size="sm"
                 to="/diagnostics"
-              >
-                Open
-              </RouterLink>
+                variant="link"
+              />
             </div>
           </template>
 

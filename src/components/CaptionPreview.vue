@@ -3,6 +3,7 @@ import { captionModeColor } from "../runtime/presentation";
 import type { CaptionMode } from "../runtime/types";
 
 defineProps<{
+  hasFinalTranscript: boolean;
   mode: CaptionMode;
   text: string;
 }>();
@@ -22,8 +23,15 @@ defineProps<{
       </UBadge>
     </div>
 
-    <p class="min-h-24 text-2xl leading-relaxed text-highlighted sm:text-3xl">
+    <p
+      class="min-h-24 text-2xl leading-relaxed break-words text-highlighted sm:text-3xl"
+    >
       {{ text }}
+    </p>
+    <p class="sr-only" aria-atomic="true" aria-live="polite">
+      {{
+        mode === "final" && hasFinalTranscript ? `Final caption: ${text}` : ""
+      }}
     </p>
   </UCard>
 </template>

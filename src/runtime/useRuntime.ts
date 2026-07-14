@@ -76,6 +76,7 @@ export function useRuntime() {
   const finalTranscripts = ref<TranscriptEvent[]>([]);
   const diagnostics = ref<DiagnosticEvent[]>([]);
   const settingsNotice = ref("");
+  const pendingRuntimeCommand = ref<RuntimeCommand | null>(null);
   const runtimeAction = createActionState();
   const settingsAction = createActionState();
   const secretsAction = createActionState();
@@ -117,13 +118,21 @@ export function useRuntime() {
   });
 
   async function runCommand(command: RuntimeCommand) {
-    await runtimeAction.run(async () => {
-      await backend.runCommand(command);
+    pendingRuntimeCommand.value = command;
 
-      if (command === "start_runtime") {
-        settingsNotice.value = "";
+    try {
+      await runtimeAction.run(async () => {
+        await backend.runCommand(command);
+
+        if (command === "start_runtime") {
+          settingsNotice.value = "";
+        }
+      });
+    } finally {
+      if (pendingRuntimeCommand.value === command) {
+        pendingRuntimeCommand.value = null;
       }
-    });
+    }
   }
 
   async function loadConfig() {
@@ -134,18 +143,22 @@ export function useRuntime() {
 
   async function saveConfig(nextConfig: AppConfig) {
     settingsNotice.value = "";
+    let didSave = false;
     const requiresRestart = ["starting", "running", "stopping"].includes(
       runtimeStatus.value.status,
     );
 
     await settingsAction.run(async () => {
       config.value = await backend.saveConfig(nextConfig);
+      didSave = true;
 
       if (requiresRestart) {
         settingsNotice.value =
           "These changes will take effect the next time the runtime starts.";
       }
     });
+
+    return didSave;
   }
 
   async function loadAudioInputDevices() {
@@ -295,6 +308,7 @@ export function useRuntime() {
     isSecretsBusy: secretsAction.isBusy,
     isSettingsBusy: settingsAction.isBusy,
     loadAudioInputDevices,
+    pendingRuntimeCommand,
     partialTranscript,
     runCommand,
     runtimeError: runtimeAction.error,
