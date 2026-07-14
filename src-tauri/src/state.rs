@@ -166,9 +166,19 @@ mod tests {
     }
 
     #[test]
+    fn default_config_serializes_schema_version() -> Result<(), serde_json::Error> {
+        let value = serde_json::to_value(AppConfig::default())?;
+
+        assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(1)));
+
+        Ok(())
+    }
+
+    #[test]
     fn parse_valid_config_fills_missing_fields_with_defaults() -> AppResult<()> {
         let config = parse_valid_config(r#"{"stt":{"language":"ja"}}"#)?;
 
+        assert_eq!(config.schema_version, 1);
         assert_eq!(config.stt.language, "ja");
         assert!(!config.stt.model.is_empty());
 
@@ -198,5 +208,10 @@ mod tests {
     #[test]
     fn parse_valid_config_rejects_invalid_settings() {
         assert!(parse_valid_config(r#"{"stt":{"language":"  "}}"#).is_err());
+    }
+
+    #[test]
+    fn parse_valid_config_rejects_unknown_schema_version() {
+        assert!(parse_valid_config(r#"{"schemaVersion":2}"#).is_err());
     }
 }

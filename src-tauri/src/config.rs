@@ -8,9 +8,13 @@
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+const APP_CONFIG_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AppConfig {
+    #[serde(default = "default_app_config_schema_version")]
+    pub(crate) schema_version: u32,
     #[serde(default)]
     pub(crate) audio: AudioConfig,
     #[serde(default)]
@@ -21,8 +25,27 @@ pub(crate) struct AppConfig {
     pub(crate) ui: UiConfig,
 }
 
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: APP_CONFIG_SCHEMA_VERSION,
+            audio: AudioConfig::default(),
+            stt: SttConfig::default(),
+            osc: OscConfig::default(),
+            ui: UiConfig::default(),
+        }
+    }
+}
+
 impl AppConfig {
     pub(crate) fn validate(&self) -> AppResult<()> {
+        if self.schema_version != APP_CONFIG_SCHEMA_VERSION {
+            return Err(AppError::config(format!(
+                "Unsupported config schema version {}. Expected {}.",
+                self.schema_version, APP_CONFIG_SCHEMA_VERSION
+            )));
+        }
+
         if self.stt.language.trim().is_empty() {
             return Err(AppError::config("STT language cannot be empty."));
         }
@@ -129,6 +152,10 @@ impl Default for UiConfig {
 
 fn default_language() -> String {
     "en".to_string()
+}
+
+fn default_app_config_schema_version() -> u32 {
+    APP_CONFIG_SCHEMA_VERSION
 }
 
 fn default_stt_model() -> String {

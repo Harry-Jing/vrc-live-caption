@@ -23,7 +23,10 @@ export const RUNTIME_EVENTS = {
   diagnostic: "diagnostic-event",
 } as const;
 
+export const APP_CONFIG_SCHEMA_VERSION = 1 as const;
+
 export type AppConfig = {
+  schemaVersion: typeof APP_CONFIG_SCHEMA_VERSION;
   audio: {
     inputDeviceId: string | null;
   };

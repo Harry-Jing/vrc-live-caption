@@ -4,16 +4,18 @@
 // backend, so preview mode exercises the actual caption state machine.
 
 import type { RuntimeBackend, RuntimeEventHandlers } from "./backend";
-import type {
-  AppConfig,
-  ProviderSecretStatus,
-  RuntimeCommand,
-  RuntimeStatus,
-  RuntimeStatusEvent,
-  SttProvider,
+import {
+  APP_CONFIG_SCHEMA_VERSION,
+  type AppConfig,
+  type ProviderSecretStatus,
+  type RuntimeCommand,
+  type RuntimeStatus,
+  type RuntimeStatusEvent,
+  type SttProvider,
 } from "./types";
 
 const PREVIEW_DEFAULT_CONFIG: AppConfig = {
+  schemaVersion: APP_CONFIG_SCHEMA_VERSION,
   audio: {
     inputDeviceId: null,
   },
