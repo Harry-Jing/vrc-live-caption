@@ -57,9 +57,9 @@ const currentMicrophoneLabel = computed(() => {
         <p class="text-xs font-semibold tracking-wide text-muted uppercase">
           Live caption
         </p>
-        <h2 class="mt-1 text-2xl font-semibold tracking-tight text-highlighted">
+        <h1 class="mt-1 text-2xl font-semibold tracking-tight text-highlighted">
           Speak, preview, send final text
-        </h2>
+        </h1>
       </div>
 
       <div class="flex flex-wrap gap-2">
@@ -94,9 +94,9 @@ const currentMicrophoneLabel = computed(() => {
         <UCard :ui="{ body: 'p-5' }">
           <template #header>
             <div class="flex items-center justify-between gap-4">
-              <h3 class="text-base font-semibold text-highlighted">
+              <h2 class="text-base font-semibold text-highlighted">
                 Current setup
-              </h3>
+              </h2>
               <UButton label="Edit" size="sm" to="/settings" variant="link" />
             </div>
           </template>
@@ -130,9 +130,9 @@ const currentMicrophoneLabel = computed(() => {
         <UCard :ui="{ body: 'p-5' }">
           <template #header>
             <div class="flex items-center justify-between gap-4">
-              <h3 class="text-base font-semibold text-highlighted">
+              <h2 class="text-base font-semibold text-highlighted">
                 Recent activity
-              </h3>
+              </h2>
               <UButton
                 label="Open"
                 size="sm"

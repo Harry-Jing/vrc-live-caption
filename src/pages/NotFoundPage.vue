@@ -6,9 +6,9 @@
           <p class="text-xs font-semibold tracking-wide text-muted uppercase">
             Page not found
           </p>
-          <h2 class="mt-1 text-xl font-semibold text-highlighted">
+          <h1 class="mt-1 text-xl font-semibold text-highlighted">
             This route does not exist
-          </h2>
+          </h1>
         </div>
 
         <UButton class="mx-auto" label="Back to Live" to="/" />

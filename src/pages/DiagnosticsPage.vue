@@ -16,9 +16,9 @@ const { diagnostics, finalTranscripts, runtimeStatus } = useRuntimeContext();
         <p class="text-xs font-semibold tracking-wide text-muted uppercase">
           Diagnostics
         </p>
-        <h2 class="mt-1 text-2xl font-semibold tracking-tight text-highlighted">
+        <h1 class="mt-1 text-2xl font-semibold tracking-tight text-highlighted">
           Runtime events and transcripts
-        </h2>
+        </h1>
       </div>
 
       <div class="flex flex-wrap gap-2">

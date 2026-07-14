@@ -31,9 +31,9 @@ const navItems = [
       <p class="text-xs font-semibold tracking-wide text-muted uppercase">
         VRC Live Caption
       </p>
-      <h1 class="mt-1 text-lg font-semibold text-highlighted">
+      <p class="mt-1 text-lg font-semibold text-highlighted">
         Outgoing Caption
-      </h1>
+      </p>
 
       <div class="mt-4 flex items-center justify-between gap-3">
         <span class="text-sm text-muted">Runtime</span>

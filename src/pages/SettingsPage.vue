@@ -40,9 +40,9 @@ async function handleSaveConfig(nextConfig: AppConfig) {
       <p class="text-xs font-semibold tracking-wide text-muted uppercase">
         Settings
       </p>
-      <h2 class="mt-1 text-2xl font-semibold tracking-tight text-highlighted">
+      <h1 class="mt-1 text-2xl font-semibold tracking-tight text-highlighted">
         Capture, provider, and output
-      </h2>
+      </h1>
     </header>
 
     <SettingsForm
