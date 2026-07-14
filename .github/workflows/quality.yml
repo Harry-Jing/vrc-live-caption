@@ -22,11 +22,11 @@ jobs:
     timeout-minutes: 45
 
     strategy:
-      # Report both platforms even when one fails; Windows is the release
-      # platform and its result matters independently of Linux.
+      # Report all desktop platforms even when one fails; Windows is the
+      # release platform and its result matters independently.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - name: Checkout
@@ -44,6 +44,7 @@ jobs:
             wget \
             libasound2-dev \
             libayatana-appindicator3-dev \
+            libdbus-1-dev \
             librsvg2-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \

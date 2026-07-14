@@ -64,9 +64,37 @@ jobs:
             apple_signing_identity: "-"
             rust-targets: "aarch64-apple-darwin"
 
+          # Ubuntu 22.04 provides the older glibc baseline for the AppImage.
+          - name: Linux x86_64 AppImage
+            artifact-name: linux-x86_64-appimage
+            artifact-path: src-tauri/target/release/bundle/appimage/*.AppImage
+            platform: ubuntu-22.04
+            args: "--bundles appimage"
+            apple_signing_identity: ""
+            rust-targets: ""
+
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            curl \
+            file \
+            wget \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libdbus-1-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf
 
       - name: Set up pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
