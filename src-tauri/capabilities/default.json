@@ -3,7 +3,7 @@
   "identifier": "default",
   "description": "Desktop capability for the main window",
   "windows": ["main"],
-  "platforms": ["windows", "macOS"],
+  "platforms": ["windows", "macOS", "linux"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
