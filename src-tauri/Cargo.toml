@@ -61,5 +61,7 @@ unimplemented = "deny"
 unwrap_used = "deny"
 
 [profile.release]
-lto = "thin"
+lto = true
 codegen-units = 1
+panic = "unwind"
+strip = true
