@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --build && vite build",
+    "build": "vite build && vue-tsc --build",
     "check": "pnpm check:frontend && pnpm check:rust",
     "check:ci": "pnpm check:frontend && pnpm check:rust:locked",
     "check:frontend": "pnpm format:check && pnpm lint && pnpm build",

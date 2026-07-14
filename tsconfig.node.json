@@ -3,6 +3,9 @@
   "include": ["vite.config.ts", "eslint.config.mjs"],
   "compilerOptions": {
     "types": ["node"],
+    "paths": {
+      "#build/ui": ["./node_modules/.nuxt-ui/ui"]
+    },
     "allowJs": true,
     "checkJs": true,
     "exactOptionalPropertyTypes": true,

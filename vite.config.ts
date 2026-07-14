@@ -20,9 +20,7 @@ export default defineConfig({
     NuxtIconBundle({
       icons: NUXT_UI_RUNTIME_ICONS,
     }),
-    ui({
-      dts: false,
-    }),
+    ui(),
   ],
 
   // Keep Rust/Tauri errors visible in the same terminal.

@@ -104,9 +104,9 @@
   - `pnpm install --frozen-lockfile`
   - `pnpm check:ci`
 - Use pnpm for all package scripts; never npm or yarn. There is no standalone
-  typecheck script: `pnpm build` is the frontend typecheck path because it runs
-  `vue-tsc --noEmit`. Lint and format have their own scripts (`pnpm lint`,
-  `pnpm format:check`).
+  typecheck script: `pnpm build` runs Vite first so generated Nuxt UI declarations
+  are current, then runs `vue-tsc --build`. Lint and format have their own scripts
+  (`pnpm lint`, `pnpm format:check`).
 - For docs-only changes, run no build checks unless the change affects commands,
   configuration, or documented behavior; state that checks were skipped because
   the change was docs-only.
