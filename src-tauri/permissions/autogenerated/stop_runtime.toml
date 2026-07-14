@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stop-runtime"
+description = "Enables the stop_runtime command without any pre-configured scope."
+commands.allow = ["stop_runtime"]
+
+[[permission]]
+identifier = "deny-stop-runtime"
+description = "Denies the stop_runtime command without any pre-configured scope."
+commands.deny = ["stop_runtime"]

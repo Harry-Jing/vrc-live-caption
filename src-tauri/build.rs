@@ -1,4 +1,19 @@
-fn main() {
+// Keep this ACL manifest in sync with the invoke handler in src/lib.rs.
+const APP_COMMANDS: &[&str] = &[
+    "get_app_config",
+    "save_app_config",
+    "list_audio_input_devices",
+    "start_runtime",
+    "stop_runtime",
+    "get_runtime_status",
+    "emit_mock_transcript",
+    "send_osc_test_message",
+    "get_provider_secret_status",
+    "save_provider_secret",
+    "delete_provider_secret",
+];
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
     {
@@ -10,5 +25,10 @@ fn main() {
         );
     }
 
-    tauri_build::build()
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(APP_COMMANDS)),
+    )?;
+
+    Ok(())
 }

@@ -4,5 +4,19 @@
   "description": "Desktop capability for the main window",
   "windows": ["main"],
   "platforms": ["windows", "macOS"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-app-config",
+    "allow-save-app-config",
+    "allow-list-audio-input-devices",
+    "allow-start-runtime",
+    "allow-stop-runtime",
+    "allow-get-runtime-status",
+    "allow-emit-mock-transcript",
+    "allow-send-osc-test-message",
+    "allow-get-provider-secret-status",
+    "allow-save-provider-secret",
+    "allow-delete-provider-secret"
+  ]
 }
