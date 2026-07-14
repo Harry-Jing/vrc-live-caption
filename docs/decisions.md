@@ -241,21 +241,31 @@ locale switch itself is scheduled separately from this groundwork rule.
 
 Revisit if: a consumer outside the UI needs localized backend text.
 
-## Target Windows As The First Release Platform
+## Define Desktop Platform Support Tiers
 
-Date: 2026-06
+Date: 2026-07
 
-Decision: the first public release targets Windows.
+Decision: Windows x86_64 is the Tier 1 and first public-release platform.
+Windows 11 is the primary validation environment; Windows 10 22H2 remains in
+Tier 1 while VRChat supports it. macOS arm64 and Linux x86_64 are runnable Tier
+2 compatibility targets. Windows is the only platform that receives complete
+real-machine end-to-end validation. Tier 2 coverage consists of CI compilation,
+automated tests, and native package builds. Linux CI builds an x86_64 AppImage
+on Ubuntu 22.04; this build baseline does not imply real-machine validation.
 
-Reason: VRChat has no macOS client, so audio devices, OSC, and real VRChat
-sessions can only be validated on Windows. Current macOS development is a
-temporary convenience, not a release target.
+Reason: Windows is the project's only complete VRChat test environment. Keeping
+macOS and Linux green catches portability and packaging regressions without
+claiming validation the project cannot perform.
 
-Consequence: Windows CI builds and real-machine VRChat validation move ahead of
-release work instead of waiting for the release phase.
+Consequence: Windows release readiness requires validating the microphone to
+cloud STT to App preview to final-only VRChat Chatbox path on real hardware. A
+Tier 2 compilation, test, or package failure blocks merging. Platform-specific
+Tier 2 runtime issues may be deferred unless they affect shared core behavior,
+security, secrets, or data integrity. Tier 2 compatibility remains best-effort,
+and its CI bundles are test artifacts rather than a public-release commitment.
 
-Revisit if: VRChat ships on another desktop platform that the user base
-actually plays on.
+Revisit if: repeatable real-machine validation becomes available for a Tier 2
+platform, or distribution requirements change.
 
 ## Make Local STT The Long-Term Default
 

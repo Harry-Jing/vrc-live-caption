@@ -44,12 +44,13 @@ Remaining work:
 - full Chatbox wrap model from
   [research/vrchat-chatbox-reference.md](./research/vrchat-chatbox-reference.md);
   the current width model is a simplified approximation
-- get the Windows quality gate green; the quality workflow now runs on
-  ubuntu-latest and windows-latest for every branch push
-- execute the Tauri bundle build workflow at least once; it triggers only on
-  pushes to main, pull requests, and manual dispatch from the default branch,
-  none of which have happened yet
-- validation in real Windows VRChat sessions
+- get the desktop quality gates green; the quality workflow runs on
+  ubuntu-latest, windows-latest, and macos-latest for every branch push
+- execute the native bundle workflow at least once for Windows, macOS arm64,
+  and the Linux x86_64 AppImage; it triggers only on pushes to main, pull
+  requests, and manual dispatch from the default branch
+- validate the microphone to cloud STT to App preview to final-only Chatbox path
+  in real Windows VRChat sessions
 
 ## Phase 2: Frontend Test Infrastructure
 
