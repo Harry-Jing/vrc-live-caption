@@ -53,6 +53,7 @@ jobs:
             artifact-path: src-tauri/target/release/bundle/**
             platform: windows-latest
             args: ""
+            apple_signing_identity: ""
             rust-targets: ""
 
           - name: macOS Apple Silicon
@@ -60,6 +61,7 @@ jobs:
             artifact-path: src-tauri/target/aarch64-apple-darwin/release/bundle/**
             platform: macos-latest
             args: "--target aarch64-apple-darwin"
+            apple_signing_identity: "-"
             rust-targets: "aarch64-apple-darwin"
 
     steps:
@@ -93,6 +95,8 @@ jobs:
       - name: Build Tauri app
         id: tauri-build
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ matrix.apple_signing_identity }}
         with:
           args: ${{ matrix.args }}
 
