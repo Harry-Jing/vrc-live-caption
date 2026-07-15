@@ -38,35 +38,106 @@ formal compatibility contract.
 
 Date: 2026-05
 
-Decision: the MVP is microphone input to App preview to final-only VRChat
-Chatbox output.
+Decision: the MVP is microphone input to normalized App preview and paced
+VRChat Chatbox output. The first implemented provider path uses completed-only
+publication, while later paths may publish rolling text when their capabilities
+and the user's mode allow it.
 
 Reason: this is the smallest product path that validates the rewrite and gives
 users a useful experience.
 
 Consequence: incoming caption, local inference, TTS, virtual microphone output,
-and persistent history are future capabilities.
+and persistent history are future capabilities. The MVP validates one simple
+path without making that path's completion behavior a global runtime rule.
 
 Revisit if: user validation shows incoming caption is more important than
 outgoing caption for the first release.
 
-## Keep Chatbox Final-Only In The MVP
+## Expose Completed And Live Publication Modes
 
-Date: 2026-05
+Date: 2026-07
 
-Decision: VRChat Chatbox receives final text only in the MVP.
+Decision: Chatbox exposes two timing choices: Completed and Live. Completed
+publishes real completed caption units only. Live may also publish ongoing
+revisions. There is no public Automatic mode and no general soft-checkpoint
+state. Provider path, publication mode, and source/translation/bilingual content
+selection remain independent.
 
-Reason: Chatbox cannot behave like a high-frequency real-time subtitle surface.
-Partial output would be slow, noisy, and visible to other players before it is
-stable.
+Reason: users understand the choice between waiting for a completed unit and
+seeing revisable text. Automatic hides behavior changes when a model or endpoint
+changes, while a soft checkpoint cannot make a provider's incomplete stream
+complete. VRChat can replace visible text, so revisable providers remain useful
+without inventing another completion category.
 
-Consequence: partial and stable transcript events are for App preview,
-diagnostics, and future workflows, not MVP Chatbox output. Final-only applies
-to transcript text: the typing indicator is a presence signal, not text, and
-may run during an active utterance.
+Consequence: the current segmented OpenAI path supports Completed. A streaming
+path with ongoing and completed snapshots supports both. A continuous path with
+no real per-unit completion supports Live only. An incompatible explicit choice
+is explained with two directions: keep the model/provider and choose a
+supported mode, or keep the requested experience and choose a compatible
+model/provider. The App never silently changes model or mode. Bilingual Live
+may let one lane progress ahead of the other.
 
-Revisit if: a later experiment proves stable or semi-final output improves UX
-without causing flicker, spam, or incorrect public text.
+The translation-only mapping is provisional until real translators are
+benchmarked. A complete-result-only translator cannot update during speech;
+whether token streaming that starts only after a completed source should be
+presented as Live remains an explicit product test rather than a settled model
+capability rule.
+
+Revisit if: in-game testing shows that controlled Live replacement is unreadable
+or if VRChat changes Chatbox replacement semantics.
+
+## Pace Chatbox At One Second And Separate Live From Completed Backlog
+
+Date: 2026-07
+
+Decision: text-send attempts are separated by at least `1000 ms` from the last
+actual attempt, including a failed attempt. The publisher does not consume the
+initial leaky-bucket burst. Live keeps one latest-wins rolling viewport;
+Completed uses an ordered bounded page queue.
+
+Reason: real-client continuous-send tests showed skipped messages at 200, 250,
+500, 800, and sustained 900 ms cadences, while 1000 ms delivered 120 numbered
+messages without a skip. The result is consistent with a bucket that starts
+with about five messages and replenishes about one message per second. A single
+queue policy is wrong: queued Live revisions replay obsolete guesses, while
+dropping completed pages normally loses real speech.
+
+Consequence: on a path with real caption units, Live observes the unit's first
+second; a short unit sends only its completion, while a longer unit begins
+rolling at the newest snapshot. On an ongoing-only unitless path, the publisher
+waits one second after the stream's first non-empty snapshot, then stays Live
+without treating silence or a timer as completion. Completed pages and units
+stay ordered. Only sustained exceptional overload may discard the oldest whole
+units that have not begun publication; the App retains complete text and emits
+a diagnostic. Exact queue limits remain measured parameters.
+
+Revisit if: a future VRChat client changes observed delivery behavior. Re-run
+the numbered-message test before reducing the interval.
+
+## Render Bilingual Live As One Asynchronous View
+
+Date: 2026-07
+
+Decision: bilingual Chatbox output renders source above translation in one
+message. The 144-character and nine-line budget is shared dynamically, both
+lanes are visible once both have text, and remaining capacity modestly favors
+translation. In Live, each send recomputes the newest useful view of both lanes;
+source may lead translation and strict sentence alignment never blocks fresher
+text.
+
+Reason: a rigid half split wastes capacity, while replaying a late translation
+as a separate old screen pulls a real-time conversation backward. Viewers can
+tolerate translation lag more readily than stale source, but they assume a
+displayed target is still valid.
+
+Consequence: unit and source-revision identities preserve exact linkage inside
+the App. Normal delay may leave the target one unit behind. If translation
+explicitly fails, the bilingual selection remains configured, the App reports
+degraded translation, and newer Chatbox snapshots omit stale target text until
+translation is healthy again.
+
+Revisit if: observer testing demonstrates that loose Live alignment is more
+confusing than the added latency of an alignment-priority mode.
 
 ## Default To OpenAI For Cloud STT
 
@@ -81,28 +152,37 @@ and no streaming protocol work.
 
 Consequence: the default provider emits final transcripts only; the App
 preview shows listening state and final text. Provider neutrality lives in the
-normalized event contract, not in avoiding a default. Cloud stays the MVP
-default; the long-term default direction is local STT (see "Make Local STT The
-Long-Term Default").
+normalized event contract, not in avoiding a default. This adapter's
+completed-only behavior is not a constraint on other provider paths. Cloud
+stays the MVP default; the long-term default direction is local STT (see "Make
+Local STT The Long-Term Default").
 
 Revisit if: per-segment latency or cost fails real usage, or a streaming
 provider is added.
 
-## Support partial / stable / final Event Semantics
+## Normalize Full Ongoing And Completed Snapshots
 
-Date: 2026-05
+Date: 2026-07
 
-Decision: the architecture supports `partial`, `stable`, and `final`
-transcript semantics.
+Decision: concrete adapters reconcile provider deltas into full caption
+snapshots with a monotonic revision and one application state: ongoing or
+completed. Snapshots identify their source or translation lane and their
+session/stream correlation. They also identify a caption unit when the concrete
+path has real units; an ongoing-only continuous path does not fabricate one.
+Provider-specific stable-prefix behavior stays inside the adapter.
 
-Reason: MVP providers may only emit partial and final, but the product needs a
-clean path for two-pass recognition, incoming caption, and future
-interpretation.
+Reason: downstream consumers need the current text, its identity, and whether a
+real unit closed. A general `stable` state is ambiguous, and forcing every
+consumer to replay provider deltas duplicates fragile protocol logic.
 
-Consequence: UI and output sinks should consume normalized transcript events
-instead of provider raw messages.
+Consequence: the currently reserved but unused `transcript.stable` name must not
+gain new meaning. Before a streaming or translation adapter ships, version the
+wire contract with explicit lane, stream correlation, optional unit, revision,
+and ongoing/completed fields. Future two-pass work may add authority as a
+separate dimension; it must not overload completion.
 
-Revisit if: provider behavior makes `stable` impossible to define consistently.
+Revisit if: an implemented provider exposes information that cannot remain
+inside its adapter and materially improves publication behavior.
 
 ## Name Diagnostic Codes `<category>.<detail>`
 
@@ -144,17 +224,17 @@ Revisit if: an event appears whose loss corrupts UI state irrecoverably.
 Date: 2026-06
 
 Decision: stop releases the microphone within one receive timeout, discards
-buffered and queued speech, and sends no Chatbox output after the stop
-request; only an STT request already in flight is awaited. State-clearing
-signals are the one exception: stop may still send a typing-indicator off
-message so other players are not left with a stuck indicator, but never
-transcript text.
+buffered and queued speech, cancels work where possible, and rejects every late
+caption or translation result from the stopped generation for both App and
+Chatbox. State-clearing signals are the one exception: stop may still send a
+typing-indicator off message, but never caption text.
 
-Reason: stop is a trust action. "Stop listening" must mean nothing further is
-uploaded or published.
+Reason: stop is a trust action and a state boundary. "Stop listening" must mean
+nothing further is uploaded, displayed as new session text, or published.
 
-Consequence: speech captured just before stop is lost by design and reported
-as a diagnostic.
+Consequence: speech captured just before stop is lost by design and reported as
+a diagnostic. An uncancellable in-flight request may finish during cleanup, but
+its result is ignored rather than emitted to the App.
 
 Revisit if: users ask for a stop mode that finishes the current utterance.
 
@@ -176,8 +256,8 @@ Revisit if: CPAL ids prove unstable across driver or OS updates.
 
 Date: 2026-06
 
-Decision: the MVP keeps bounded in-memory history only: recent final
-transcripts and diagnostics for UI state. Nothing is persisted.
+Decision: the MVP keeps bounded in-memory history only: recent completed caption
+units and diagnostics for UI state. Nothing is persisted.
 
 Reason: this covers preview and diagnosis without storage, retention, or
 privacy design.
@@ -198,11 +278,41 @@ Reason: users should not need Python, PyTorch, CUDA Toolkit, or model-specific
 development dependencies. Model crashes and GPU runtime failures should not
 destabilize the main app.
 
-Consequence: the main app stays small and keeps a working cloud path even when
-local inference is missing or broken.
+Consequence: the main app stays small and keeps cloud paths independently
+available. Local failure never uploads audio to cloud without explicit user
+action. A running worker crash stops that recognition session and offers the
+user explicit same-backend retry or backend change; it does not silently restart
+on CPU or cloud.
 
 Revisit if: a native local runtime becomes small and stable enough to include in
 the main app without increasing install or support burden.
+
+## Build Local STT One Pass At A Time And Let Users Choose The Backend
+
+Date: 2026-07
+
+Decision: the first local STT implementation is single-pass and loads one STT
+model. CPU is implemented first as the compatibility path, followed by NVIDIA
+CUDA in the same local-STT program after the worker boundary works. Local
+compute uses one global preference:
+CPU or prefer NVIDIA GPU (CUDA). No automatic performance selector is planned
+now, and two-pass is deferred until the primary speech product is mature.
+
+Reason: CPU is easiest to package for every Windows x64 machine, but neither CPU
+nor GPU is universally best while VRChat is running. Utilization percentages do
+not reveal main-thread, frame-time, memory-bandwidth, or VRAM contention. A
+second recognizer also imposes resource cost that most users do not need.
+
+Consequence: missing preference defaults to CPU. The App stores backend
+preference separately from the effective backend and always displays both when
+they differ. An unsupported CUDA/model combination uses CPU with a visible
+reason; CUDA startup failure may use CPU only with a clear warning. A crash
+during an active session never switches backend automatically. Model/backend
+recommendations wait for real VRChat benchmarks rather than becoming universal
+defaults from model marketing.
+
+Revisit if: validated measurements justify an optional automatic selector or a
+two-pass quality mode for a clearly identified user group.
 
 ## Keep Secrets Out Of Normal Config And Logs
 
@@ -257,9 +367,11 @@ Reason: Windows is the project's only complete VRChat test environment. Keeping
 macOS and Linux green catches portability and packaging regressions without
 claiming validation the project cannot perform.
 
-Consequence: Windows release readiness requires validating the microphone to
-cloud STT to App preview to final-only VRChat Chatbox path on real hardware. A
-Tier 2 compilation, test, or package failure blocks merging. Platform-specific
+Consequence: Windows release readiness requires validating the current
+microphone to segmented cloud STT to App preview to completed-only VRChat
+Chatbox path on real hardware. Each later Live or translation path needs its own
+real-machine validation. A Tier 2 compilation, test, or package failure blocks
+merging. Platform-specific
 Tier 2 runtime issues may be deferred unless they affect shared core behavior,
 security, secrets, or data integrity. Tier 2 compatibility remains best-effort,
 and its CI bundles are test artifacts rather than a public-release commitment.
@@ -294,18 +406,18 @@ machines that are also running VRChat.
 
 Date: 2026-06
 
-Decision: while an utterance is active, the app sends the VRChat typing
-indicator on; the indicator turns off when final text is sent, when the
-utterance ends without a final, and on runtime stop.
+Decision: while normalized speech or publication activity is active, the app
+sends the VRChat typing indicator on. It turns off when that activity is
+resolved, on failure, and on runtime stop; it is not semantically tied to a
+provider final.
 
-Reason: the default cloud provider emits final-only transcripts, so other
-players would otherwise see nothing between the start of speech and the final
-text. The typing indicator is VRChat's native affordance for exactly this gap
-and masks recognition latency at almost no cost.
+Reason: the default bounded cloud provider leaves a gap before completed text,
+while streaming paths may leave gaps between rolling publications. The typing
+indicator is VRChat's native presence signal for both cases.
 
 Consequence: stop must send one clearing typing-off message (the exception
-recorded in the stop decision). Final-only continues to apply to transcript
-text; the indicator is a presence signal.
+recorded in the stop decision). Provider completion, Chatbox publication, and
+typing cleanup remain independently testable.
 
 Revisit if: in-game validation shows the indicator confuses or annoys other
 players, or VRChat changes its semantics.

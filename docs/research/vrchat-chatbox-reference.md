@@ -2,6 +2,10 @@
 
 This document is the canonical implementation reference for the fixed VRChat chatbox wrap model used by `VRC Live Caption`. It keeps the project-facing layout, font, validation, and line-break facts needed to simulate VRChat wrapping and clipping without the reverse-engineering narrative.
 
+The OSC and rate-limit sections were re-verified against first-party VRChat
+documentation on 2026-07-15. Layout extraction facts retain their original
+verification basis.
+
 ## Overview
 
 - The chatbox model is a fixed TMP text layout, not a configurable heuristic width model.
@@ -23,12 +27,83 @@ layout model below.
   `9`-line cap (about `29` characters per line over `9` lines is far more than
   `144`), so `144` is the binding constraint for Latin output. For CJK,
   `15 × 9 = 135` visible characters stays under the cap.
+- The project enforces the input cap conservatively as a UTF-16 budget and only
+  cuts at grapheme boundaries. The official wording is `144` characters; this
+  implementation rule avoids splitting surrogate pairs or visible clusters.
 - `/chatbox/typing b`: toggles the typing indicator on the chat bubble. Useful
   for showing activity while speech is still being recognized.
-- VRChat applies spam protection to chatbox updates. The precise window is not
-  officially documented; this app paces sends with a configurable minimum
-  interval (default `1200` ms, validated minimum `500` ms) chosen
-  conservatively.
+
+The endpoint shape, `144`-character limit, and `9`-line limit are documented in
+[VRChat's current OSC input reference](https://docs.vrchat.com/docs/osc-as-input-controller#chatbox).
+
+### Current rate-limit evidence
+
+VRChat 2026.2.1 removed the old flat Chatbox timeout and introduced a leaky
+bucket. The release note says users may send five messages within five seconds
+before the next message must wait. It also says auto-sent messages do not count
+toward that limit and only manually sent messages are limited. See
+[VRChat 2026.2.1](https://docs.vrchat.com/docs/vrchat-202621).
+The later live [2026.2.2](https://docs.vrchat.com/docs/vrchat-202622) and
+[2026.2.3](https://docs.vrchat.com/docs/vrchat-202623) notes do not document a
+subsequent Chatbox rate-limit change as of this verification date.
+
+This is not a documented fixed minimum interval per message. In particular,
+`1.5` seconds is not a current hard protocol limit. That number came from a
+[2022 official development update](https://ask.vrchat.com/t/developer-update-11-august-2022/12286),
+which recommended updating every 1.5 seconds under the older cooldown behavior
+and two-second minimum display setting. It remains useful historical UX
+context, not the current rate-limit contract.
+
+VRChat's current OSC reference only guarantees that `n = false` suppresses the
+notification sound. Earlier official material called this field
+`MessageComplete`, and Chatbox 2.0 later added live auto-send while typing, so
+`n = false` may map to the exempt auto-sent category. No current official OSC
+document makes that mapping a contract. The project must therefore not claim
+that `(text, true, false)` has unlimited update rate. The continuous-send
+experiment below also shows that sustained sub-second updates are not reliable
+on the tested client.
+
+### Project continuous-send experiment
+
+A real-client numbered-message test was completed in July 2026 with
+`/chatbox/input (text, true, false)`:
+
+| Cadence | Observed result |
+|---:|---|
+| 200, 250, 500 ms | skipped sequence numbers quickly |
+| 800 ms | initially worked, then skipped periodically under sustained sending |
+| 900 ms | 40 messages appeared successful; a 100-message run began skipping near message 41-42 |
+| 1000 ms | 120 consecutive messages without an observed skip |
+
+The pattern is strongly consistent with an initial bucket of about five
+messages and recovery of about one message per second. It is experimental
+evidence, not a documented OSC protocol guarantee. In particular, a short 900
+ms test can look successful because it consumes the initial allowance slowly.
+
+### Project pacing policy
+
+The reliable current-client boundary is therefore:
+
+- keep at least `1000 ms` between actual text-send attempts;
+- measure from the previous attempt, not from a drifting periodic timer;
+- count a failed attempt too, so failure cannot create a rapid retry loop;
+- do not exploit the initial burst allowance;
+- coalesce Live revisions latest-wins instead of queueing missed intermediate
+  screens;
+- keep distinct Completed pages ordered in a bounded queue.
+
+The current code still uses a configurable `1200` ms default and `500` ms
+validation floor. Replacing those implementation values with this policy is
+roadmap work.
+
+Cloud, model, or translation latency only makes the actual interval longer and
+does not invalidate the one-second lower bound. Publication eligibility and
+transport pacing remain independent: a timer can say that VRChat may be
+updated, but cannot prove text is complete.
+
+Future current-client validation should still use numbered messages and a
+remote observer when available. A successful UDP send proves only that the
+local socket accepted the packet, not that VRChat displayed or relayed it.
 
 ## Verified layout contract
 
@@ -258,6 +333,13 @@ Additional confirmed validation:
 - The chatbox display duration model is unverified: how long a message stays
   visible, whether a new `/chatbox/input` resets the timer, and when the bubble
   fades. These need in-game measurement before tuning replacement pacing.
+- Whether OSC `(text, true, false)` is classified as exempt auto-sent text is
+  not documented. The project does not depend on an exemption.
+- The exact internal bucket implementation and what every excess update does
+  are not documented. The project uses the measured 1000 ms boundary instead of
+  relying on those internals.
+- Local-sender and remote-observer behavior may differ and must be measured
+  independently.
 - The full custom MonoBehaviour typetree was not recovered, so some non-critical fields remain inferred rather than directly dumped.
 - The short-text chat bubble background resize logic is still not the authoritative model. The inspected object chain did not expose clearly named `ContentSizeFitter`, `LayoutElement`, `HorizontalLayoutGroup`, or `VerticalLayoutGroup` components, which suggests the width change is likely driven by custom script logic. This does not affect long-text wrapping and clipping inside `ChatText`.
 - Small non-critical field differences between normal and mirrored objects, including possible `overflowMode` differences, should not be used as primary implementation inputs unless re-verified.
