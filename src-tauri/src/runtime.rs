@@ -19,6 +19,10 @@
 
 use crate::audio::{open_input_capture, receive_audio};
 use crate::chatbox_pacer::ChatboxPacer;
+use crate::chatbox_publisher::{
+    CompletedChatboxPublisher, CompletedPublisherEvent, PublisherCloseReason, PublisherDiagnostic,
+    PublisherReporter, PublisherSubmitOutcome,
+};
 use crate::config::{AppConfig, OscConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
@@ -26,7 +30,7 @@ use crate::events::{
     UtteranceEndReason, emit_diagnostic, emit_status, emit_transcript_final, emit_utterance_ended,
     emit_utterance_started, next_utterance_id,
 };
-use crate::osc::{ChatboxActivityHandle, ChatboxOscSender};
+use crate::osc::ChatboxOscSender;
 use crate::secrets::openai_api_key as load_openai_api_key;
 use crate::segmenter::SpeechSegmenter;
 use crate::stt::{build_stt_client, transcribe_openai_wav};
@@ -56,12 +60,12 @@ pub(crate) struct RuntimeManager {
 
 struct RuntimeHandle {
     generation: RuntimeGeneration,
-    chatbox_activity: Option<ChatboxActivityHandle>,
+    publisher: Option<CompletedChatboxPublisher>,
     join_handle: JoinHandle<()>,
 }
 
 #[derive(Clone)]
-struct RuntimeGeneration {
+pub(crate) struct RuntimeGeneration {
     output_gate: Arc<Mutex<()>>,
     hard_stop_requested: Arc<AtomicBool>,
     work_cancelled: Arc<AtomicBool>,
@@ -78,14 +82,14 @@ struct NoFinalUtteranceResolution {
     reason: UtteranceEndReason,
 }
 
-enum RuntimeChatboxInit {
+enum RuntimePublisherInit {
     Disabled,
-    Ready(ChatboxOscSender),
+    Ready(CompletedChatboxPublisher),
     Unavailable(AppError),
 }
 
 impl RuntimeGeneration {
-    fn active() -> Self {
+    pub(crate) fn active() -> Self {
         Self {
             output_gate: Arc::new(Mutex::new(())),
             hard_stop_requested: Arc::new(AtomicBool::new(false)),
@@ -93,7 +97,10 @@ impl RuntimeGeneration {
         }
     }
 
-    fn request_stop(&self, activity: Option<&ChatboxActivityHandle>) -> AppResult<()> {
+    pub(crate) fn request_stop(
+        &self,
+        publisher: Option<&CompletedChatboxPublisher>,
+    ) -> AppResult<()> {
         // Cancel capture and provider work before waiting for either sink.
         // The explicit marker also prevents a new commit from overtaking Stop
         // while an earlier App emit still owns the output gate.
@@ -104,18 +111,45 @@ impl RuntimeGeneration {
         // Stop has one linearizable cutoff across both sinks. A commit that
         // validated before the explicit marker belongs before Stop; every
         // later commit is rejected by this generation forever.
-        let _output_gate = self
-            .output_gate
-            .lock()
-            .map_err(|_| AppError::state("Runtime generation lock was poisoned."))?;
+        self.close_publisher_at_boundary(publisher, PublisherCloseReason::Stop)
+    }
 
-        match activity {
-            Some(activity) => activity.request_stop(&self.work_cancelled),
+    fn close_publisher_at_boundary(
+        &self,
+        publisher: Option<&CompletedChatboxPublisher>,
+        reason: PublisherCloseReason,
+    ) -> AppResult<()> {
+        // Close admission before waiting on an older App/Chatbox commit. This
+        // keeps late STT results non-blocking while making them observe a
+        // closed Publisher immediately. An already-linearized transport call
+        // may finish; the gate below waits for it before returning.
+        let close_result = match publisher {
+            Some(publisher) => publisher.request_close(reason),
             None => Ok(()),
+        };
+
+        // Recover the guard even after a panic poisoned the gate. Normal
+        // commits already fail closed on poison, but Publisher admission must
+        // still close so Stop cannot hang while joining an idle worker.
+        let (_output_gate, gate_was_poisoned) = match self.output_gate.lock() {
+            Ok(gate) => (gate, false),
+            Err(poisoned) => (poisoned.into_inner(), true),
+        };
+
+        if gate_was_poisoned {
+            let close_note = match close_result {
+                Ok(()) => " Publisher shutdown was still requested.".to_string(),
+                Err(error) => format!(" Publisher shutdown also failed: {error}"),
+            };
+            Err(AppError::state(format!(
+                "Runtime generation lock was poisoned.{close_note}"
+            )))
+        } else {
+            close_result
         }
     }
 
-    fn commit_if_active(&self, commit: impl FnOnce()) -> AppResult<bool> {
+    pub(crate) fn commit_if_active(&self, commit: impl FnOnce()) -> AppResult<bool> {
         let _output_gate = self
             .output_gate
             .lock()
@@ -137,7 +171,7 @@ impl RuntimeGeneration {
         self.work_cancelled.load(Ordering::SeqCst)
     }
 
-    fn is_hard_stopped(&self) -> bool {
+    pub(crate) fn is_hard_stopped(&self) -> bool {
         self.hard_stop_requested.load(Ordering::SeqCst)
     }
 
@@ -218,30 +252,52 @@ impl RuntimeManager {
         } else {
             None
         };
-        let osc_sender = match initialize_runtime_chatbox(&config.osc, chatbox_pacer) {
-            RuntimeChatboxInit::Disabled => None,
-            RuntimeChatboxInit::Ready(sender) => Some(sender),
-            RuntimeChatboxInit::Unavailable(error) => {
-                emit_chatbox_activity_failure(&app, &error, "Chatbox OSC output could not start");
+        let generation = RuntimeGeneration::active();
+        let publisher = match initialize_runtime_publisher(
+            &app,
+            &config.osc,
+            chatbox_pacer,
+            generation.clone(),
+        ) {
+            RuntimePublisherInit::Disabled => None,
+            RuntimePublisherInit::Ready(publisher) => Some(publisher),
+            RuntimePublisherInit::Unavailable(error) => {
+                emit_diagnostic(
+                    &app,
+                    DiagnosticUpdate::from_error(&error, "Chatbox OSC output could not start"),
+                );
                 None
             }
         };
-        let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
 
-        let generation = RuntimeGeneration::active();
         let thread_generation = generation.clone();
+        let thread_publisher = publisher.clone();
         let join_handle = thread::Builder::new()
             .name("vrc-live-caption-runtime".to_string())
             .spawn(move || {
-                run_runtime_thread(app, config, openai_api_key, osc_sender, thread_generation)
+                run_runtime_thread(
+                    app,
+                    config,
+                    openai_api_key,
+                    thread_publisher,
+                    thread_generation,
+                )
             })
-            .map_err(|error| {
-                AppError::runtime(format!("Failed to start runtime thread: {error}"))
-            })?;
+            .map_err(|error| AppError::runtime(format!("Failed to start runtime thread: {error}")));
+        let join_handle = match join_handle {
+            Ok(join_handle) => join_handle,
+            Err(error) => {
+                let _ = generation.request_stop(publisher.as_ref());
+                if let Some(publisher) = &publisher {
+                    let _ = publisher.join();
+                }
+                return Err(error);
+            }
+        };
 
         *guard = Some(RuntimeHandle {
             generation,
-            chatbox_activity,
+            publisher,
             join_handle,
         });
 
@@ -265,12 +321,12 @@ impl RuntimeManager {
             return Ok(());
         };
 
-        if let Err(error) = handle
-            .generation
-            .request_stop(handle.chatbox_activity.as_ref())
-        {
+        if let Err(error) = handle.generation.request_stop(handle.publisher.as_ref()) {
             handle.generation.cancel_work();
-            emit_chatbox_activity_failure(app, &error, "Typing indicator cleanup failed");
+            emit_diagnostic(
+                app,
+                DiagnosticUpdate::from_error(&error, "Completed publisher could not close"),
+            );
         }
         emit_status(
             app,
@@ -278,15 +334,16 @@ impl RuntimeManager {
             Some("Stopping runtime and discarding pending speech".to_string()),
         );
 
+        let publisher_result = match &handle.publisher {
+            Some(publisher) => publisher.join(),
+            None => Ok(()),
+        };
         let runtime_panicked = handle.join_handle.join().is_err();
 
-        if let Some(activity) = &handle.chatbox_activity
-            && let Err(cleanup_error) = activity.finish_stop()
-        {
-            emit_chatbox_activity_failure(
+        if let Err(error) = publisher_result {
+            emit_diagnostic(
                 app,
-                &cleanup_error,
-                "Typing indicator cleanup after runtime stop failed",
+                DiagnosticUpdate::from_error(&error, "Completed publisher failed while stopping"),
             );
         }
 
@@ -329,14 +386,22 @@ fn clear_finished_runtime(app: &AppHandle, handle: &mut Option<RuntimeHandle>) -
         return Ok(());
     };
 
-    if let Some(activity) = &handle.chatbox_activity
-        && let Err(cleanup_error) = activity.finish_stop()
-    {
-        emit_chatbox_activity_failure(
-            app,
-            &cleanup_error,
-            "Typing indicator cleanup before runtime restart failed",
-        );
+    if let Some(publisher) = &handle.publisher {
+        if let Err(error) = handle
+            .generation
+            .close_publisher_at_boundary(Some(publisher), PublisherCloseReason::RuntimeError)
+        {
+            emit_diagnostic(
+                app,
+                DiagnosticUpdate::from_error(&error, "Completed publisher could not close"),
+            );
+        }
+        if let Err(error) = publisher.join() {
+            emit_diagnostic(
+                app,
+                DiagnosticUpdate::from_error(&error, "Completed publisher failed while closing"),
+            );
+        }
     }
 
     handle
@@ -345,17 +410,28 @@ fn clear_finished_runtime(app: &AppHandle, handle: &mut Option<RuntimeHandle>) -
         .map_err(|_| AppError::runtime("Runtime thread panicked after stopping."))
 }
 
-fn initialize_runtime_chatbox(
+fn initialize_runtime_publisher(
+    app: &AppHandle,
     config: &OscConfig,
     chatbox_pacer: ChatboxPacer,
-) -> RuntimeChatboxInit {
+    generation: RuntimeGeneration,
+) -> RuntimePublisherInit {
     if !config.enabled {
-        return RuntimeChatboxInit::Disabled;
+        return RuntimePublisherInit::Disabled;
     }
 
-    match ChatboxOscSender::new(config, chatbox_pacer) {
-        Ok(sender) => RuntimeChatboxInit::Ready(sender),
-        Err(error) => RuntimeChatboxInit::Unavailable(error),
+    let sender = match ChatboxOscSender::new(config) {
+        Ok(sender) => sender,
+        Err(error) => return RuntimePublisherInit::Unavailable(error),
+    };
+    let reporter_app = app.clone();
+    let reporter: PublisherReporter = Arc::new(move |diagnostic| {
+        emit_publisher_diagnostic(&reporter_app, diagnostic);
+    });
+
+    match CompletedChatboxPublisher::start(Arc::new(sender), chatbox_pacer, generation, reporter) {
+        Ok(publisher) => RuntimePublisherInit::Ready(publisher),
+        Err(error) => RuntimePublisherInit::Unavailable(error),
     }
 }
 
@@ -363,37 +439,104 @@ fn run_runtime_thread(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: Option<SecretString>,
-    osc_sender: Option<ChatboxOscSender>,
+    publisher: Option<CompletedChatboxPublisher>,
     generation: RuntimeGeneration,
 ) {
-    let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
     let error_generation = generation.clone();
+    let cleanup_publisher = publisher.clone();
+    let runtime_app = app.clone();
 
-    if let Err(error) = run_runtime(app.clone(), config, openai_api_key, osc_sender, generation) {
-        if let Some(activity) = &chatbox_activity
-            && let Err(cleanup_error) = activity.finish_after_error()
-        {
-            emit_chatbox_activity_failure(
-                &app,
-                &cleanup_error,
-                "Typing indicator cleanup after runtime failure failed",
+    supervise_runtime_thread(
+        &app,
+        &error_generation,
+        cleanup_publisher.as_ref(),
+        move || run_runtime(runtime_app, config, openai_api_key, publisher, generation),
+    );
+}
+
+fn supervise_runtime_thread<R: Runtime>(
+    app: &AppHandle<R>,
+    generation: &RuntimeGeneration,
+    publisher: Option<&CompletedChatboxPublisher>,
+    run: impl FnOnce() -> AppResult<()>,
+) {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    let runtime_result = match outcome {
+        Ok(runtime_result) => runtime_result,
+        Err(panic) => {
+            finish_runtime_output(app, generation, publisher, PublisherCloseReason::Stop);
+            tracing::error!("runtime thread panicked; its generation and Publisher were stopped");
+            emit_status(
+                app,
+                RuntimeStatus::Error,
+                Some("Runtime thread panicked and was stopped".to_string()),
             );
+            emit_diagnostic(
+                app,
+                DiagnosticUpdate::error(
+                    DiagnosticCategory::Runtime,
+                    "runtime.thread_panicked",
+                    "Runtime thread panicked",
+                    "The runtime generation was invalidated and pending Chatbox output was discarded.",
+                ),
+            );
+            std::panic::resume_unwind(panic);
         }
+    };
 
+    let reason = if generation.is_hard_stopped() {
+        PublisherCloseReason::Stop
+    } else {
+        PublisherCloseReason::RuntimeError
+    };
+    finish_runtime_output(app, generation, publisher, reason);
+
+    if let Err(error) = runtime_result {
         tracing::warn!(
             code = error.code(),
             error_message = %error,
             "runtime stopped with error"
         );
 
-        if error_generation.is_hard_stopped() {
+        if generation.is_hard_stopped() {
             return;
         }
 
-        emit_status(&app, RuntimeStatus::Error, Some(error.to_string()));
+        emit_status(app, RuntimeStatus::Error, Some(error.to_string()));
         emit_diagnostic(
-            &app,
+            app,
             DiagnosticUpdate::from_error(&error, "Runtime stopped with an error"),
+        );
+    }
+}
+
+fn finish_runtime_output<R: Runtime>(
+    app: &AppHandle<R>,
+    generation: &RuntimeGeneration,
+    publisher: Option<&CompletedChatboxPublisher>,
+    reason: PublisherCloseReason,
+) {
+    let close_result = match reason {
+        PublisherCloseReason::Stop => generation.request_stop(publisher),
+        PublisherCloseReason::RuntimeError => match publisher {
+            Some(publisher) => generation
+                .close_publisher_at_boundary(Some(publisher), PublisherCloseReason::RuntimeError),
+            None => Ok(()),
+        },
+    };
+    if let Err(error) = close_result {
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate::from_error(&error, "Completed publisher could not close"),
+        );
+    }
+
+    if let Some(publisher) = publisher
+        && let Err(error) = publisher.join()
+    {
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate::from_error(&error, "Completed publisher failed while closing"),
         );
     }
 }
@@ -402,7 +545,7 @@ fn run_runtime(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: Option<SecretString>,
-    osc_sender: Option<ChatboxOscSender>,
+    publisher: Option<CompletedChatboxPublisher>,
     generation: RuntimeGeneration,
 ) -> AppResult<()> {
     let started = generation.commit_if_active(|| {
@@ -416,25 +559,19 @@ fn run_runtime(
         return Ok(());
     }
 
-    let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
-
     match config.stt.provider {
-        SttProvider::Mock => run_mock_runtime(app, generation, chatbox_activity.as_ref()),
+        SttProvider::Mock => run_mock_runtime(app, generation),
         SttProvider::OpenAi => {
             let api_key = openai_api_key.ok_or_else(|| {
                 AppError::secret("OpenAI API key was not loaded before runtime startup.")
             })?;
 
-            run_openai_runtime(app, config, api_key, osc_sender, generation)
+            run_openai_runtime(app, config, api_key, publisher, generation)
         }
     }
 }
 
-fn run_mock_runtime<R: Runtime>(
-    app: AppHandle<R>,
-    generation: RuntimeGeneration,
-    chatbox_activity: Option<&ChatboxActivityHandle>,
-) -> AppResult<()> {
+fn run_mock_runtime<R: Runtime>(app: AppHandle<R>, generation: RuntimeGeneration) -> AppResult<()> {
     let running = generation.commit_if_active(|| {
         emit_status(
             &app,
@@ -459,8 +596,6 @@ fn run_mock_runtime<R: Runtime>(
         thread::sleep(RECEIVE_TIMEOUT);
     }
 
-    finish_chatbox_stop(&app, chatbox_activity);
-
     Ok(())
 }
 
@@ -468,7 +603,7 @@ fn run_openai_runtime(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: SecretString,
-    osc_sender: Option<ChatboxOscSender>,
+    publisher: Option<CompletedChatboxPublisher>,
     generation: RuntimeGeneration,
 ) -> AppResult<()> {
     if !generation.try_begin_work() {
@@ -505,13 +640,12 @@ fn run_openai_runtime(
     // Created once per runtime and reused by the worker across segments so the
     // HTTP client keeps its connection pool.
     let http_client = build_stt_client()?;
-    let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
     let stt_worker = spawn_stt_worker(
         app.clone(),
         config.clone(),
         openai_api_key,
         http_client,
-        osc_sender,
+        publisher.clone(),
         segment_receiver,
         generation.clone(),
     )?;
@@ -539,7 +673,7 @@ fn run_openai_runtime(
                         samples,
                         &mut utterance_id,
                         &segment_sender,
-                        chatbox_activity.as_ref(),
+                        publisher.as_ref(),
                     )?;
                 }
                 continue;
@@ -550,7 +684,7 @@ fn run_openai_runtime(
             if update.speech_started {
                 let next_utterance = next_utterance_id("speech");
                 emit_utterance_started(&app, next_utterance.clone());
-                start_chatbox_activity(&app, chatbox_activity.as_ref(), &next_utterance);
+                start_chatbox_activity(&app, publisher.as_ref(), &next_utterance);
                 utterance_id = Some(next_utterance);
             }
 
@@ -561,7 +695,7 @@ fn run_openai_runtime(
                     samples,
                     &mut utterance_id,
                     &segment_sender,
-                    chatbox_activity.as_ref(),
+                    publisher.as_ref(),
                 )?;
             }
         }
@@ -569,46 +703,46 @@ fn run_openai_runtime(
         Ok(())
     })();
 
-    let capture_failed = capture_result.is_err();
     // Close Chatbox output before releasing anything that can take time. An
     // in-flight transcription may finish concurrently with stream teardown.
     generation.cancel_work();
-    // Stop path: release the microphone before waiting on the worker, and
+    if let Some(publisher) = &publisher {
+        let reason = if generation.is_hard_stopped() {
+            PublisherCloseReason::Stop
+        } else {
+            PublisherCloseReason::RuntimeError
+        };
+        if let Err(error) = generation.close_publisher_at_boundary(Some(publisher), reason) {
+            emit_diagnostic(
+                &app,
+                DiagnosticUpdate::from_error(&error, "Completed publisher could not close"),
+            );
+        }
+    }
+    // Stop path: release the microphone before joining either worker, and
     // discard buffered tail speech instead of sending it to STT after stop.
     drop(stream);
-    let worker_result = if capture_failed {
-        // The outer runtime error path retains responsibility for typing
-        // cleanup through `finish_after_error`.
-        finish_stt_worker_after_capture(
-            capture_result,
-            generation.work_cancelled(),
-            segment_sender,
-            stt_worker,
-        )
-    } else {
-        let (typing_result, worker_result) =
-            finish_chatbox_before_join(chatbox_activity.as_ref(), || {
-                finish_stt_worker_after_capture(
-                    capture_result,
-                    generation.work_cancelled(),
-                    segment_sender,
-                    stt_worker,
-                )
-            });
-
-        if let Err(error) = typing_result {
-            emit_chatbox_activity_failure(&app, &error, "Typing indicator cleanup failed");
-        }
-
-        worker_result
-    };
+    if let Some(publisher) = &publisher
+        && let Err(error) = publisher.join()
+    {
+        emit_diagnostic(
+            &app,
+            DiagnosticUpdate::from_error(&error, "Completed publisher failed while closing"),
+        );
+    }
+    let worker_result = finish_stt_worker_after_capture(
+        capture_result,
+        generation.work_cancelled(),
+        segment_sender,
+        stt_worker,
+    );
     let tail_speech_discarded = segmenter.finish().is_some();
 
     if tail_speech_discarded {
         if let Some(utterance_id) = utterance_id {
             end_utterance_without_final(
                 &app,
-                chatbox_activity.as_ref(),
+                publisher.as_ref(),
                 utterance_id,
                 UtteranceEndReason::Discarded,
             );
@@ -662,7 +796,7 @@ fn queue_speech_segment(
     samples: Vec<f32>,
     utterance_id: &mut Option<String>,
     segment_sender: &SyncSender<SpeechSegment>,
-    chatbox_activity: Option<&ChatboxActivityHandle>,
+    publisher: Option<&CompletedChatboxPublisher>,
 ) -> AppResult<()> {
     // The segmenter only yields segments that reached the voiced minimum, and
     // crossing the voiced minimum announces the utterance first, so an id is
@@ -694,7 +828,7 @@ fn queue_speech_segment(
             );
             end_utterance_without_final(
                 app,
-                chatbox_activity,
+                publisher,
                 segment.utterance_id,
                 UtteranceEndReason::Discarded,
             );
@@ -704,7 +838,7 @@ fn queue_speech_segment(
         Err(TrySendError::Disconnected(segment)) => {
             end_utterance_without_final(
                 app,
-                chatbox_activity,
+                publisher,
                 segment.utterance_id,
                 UtteranceEndReason::Discarded,
             );
@@ -721,7 +855,7 @@ fn spawn_stt_worker(
     config: AppConfig,
     openai_api_key: SecretString,
     http_client: Client,
-    osc_sender: Option<ChatboxOscSender>,
+    publisher: Option<CompletedChatboxPublisher>,
     segment_receiver: Receiver<SpeechSegment>,
     generation: RuntimeGeneration,
 ) -> AppResult<JoinHandle<()>> {
@@ -733,7 +867,7 @@ fn spawn_stt_worker(
                 config,
                 openai_api_key,
                 http_client,
-                osc_sender,
+                publisher,
                 segment_receiver,
                 generation,
                 |client, config, api_key, sample_rate, samples| {
@@ -753,20 +887,18 @@ fn run_stt_worker<R: Runtime>(
     config: AppConfig,
     openai_api_key: SecretString,
     http_client: Client,
-    mut osc_sender: Option<ChatboxOscSender>,
+    publisher: Option<CompletedChatboxPublisher>,
     segment_receiver: Receiver<SpeechSegment>,
     generation: RuntimeGeneration,
     transcribe: impl Fn(&Client, &AppConfig, &SecretString, u32, &[f32]) -> AppResult<String>,
 ) {
     let mut discarded_segments: usize = 0;
-    let chatbox_activity = osc_sender.as_ref().map(ChatboxOscSender::activity_handle);
-
     while let Ok(segment) = segment_receiver.recv() {
         if generation.is_work_cancelled() {
             discarded_segments += 1;
             end_utterance_without_final(
                 &app,
-                chatbox_activity.as_ref(),
+                publisher.as_ref(),
                 segment.utterance_id,
                 UtteranceEndReason::Discarded,
             );
@@ -779,7 +911,7 @@ fn run_stt_worker<R: Runtime>(
             &openai_api_key,
             &http_client,
             segment,
-            osc_sender.as_mut(),
+            publisher.as_ref(),
             &generation,
             &transcribe,
         ) {
@@ -823,16 +955,14 @@ fn transcribe_and_emit_final<R: Runtime>(
     openai_api_key: &SecretString,
     http_client: &Client,
     segment: SpeechSegment,
-    osc_sender: Option<&mut ChatboxOscSender>,
+    publisher: Option<&CompletedChatboxPublisher>,
     generation: &RuntimeGeneration,
     transcribe: &impl Fn(&Client, &AppConfig, &SecretString, u32, &[f32]) -> AppResult<String>,
 ) -> AppResult<()> {
-    let chatbox_activity = osc_sender.as_ref().map(|sender| sender.activity_handle());
-
     if !generation.try_begin_work() {
         end_utterance_without_final(
             app,
-            chatbox_activity.as_ref(),
+            publisher,
             segment.utterance_id,
             UtteranceEndReason::Discarded,
         );
@@ -876,13 +1006,13 @@ fn transcribe_and_emit_final<R: Runtime>(
                 // Resolve the utterance for the UI; the caller reports error details.
                 end_utterance_without_final(
                     app,
-                    chatbox_activity.as_ref(),
+                    publisher,
                     utterance_id.clone(),
                     UtteranceEndReason::SttFailed,
                 );
             })?;
             if !committed {
-                discard_late_transcription_result(app, chatbox_activity.as_ref(), utterance_id);
+                discard_late_transcription_result(app, publisher, utterance_id);
                 return Ok(());
             }
 
@@ -894,7 +1024,7 @@ fn transcribe_and_emit_final<R: Runtime>(
         let committed = generation.commit_if_active(|| {
             end_utterance_without_final(
                 app,
-                chatbox_activity.as_ref(),
+                publisher,
                 utterance_id.clone(),
                 UtteranceEndReason::NoSpeech,
             );
@@ -909,7 +1039,7 @@ fn transcribe_and_emit_final<R: Runtime>(
             );
         })?;
         if !committed {
-            discard_late_transcription_result(app, chatbox_activity.as_ref(), utterance_id);
+            discard_late_transcription_result(app, publisher, utterance_id);
         }
 
         return Ok(());
@@ -929,21 +1059,21 @@ fn transcribe_and_emit_final<R: Runtime>(
     })?;
 
     if !committed {
-        discard_late_transcription_result(app, chatbox_activity.as_ref(), utterance_id);
+        discard_late_transcription_result(app, publisher, utterance_id);
         return Ok(());
     }
 
-    // A capture failure may cancel remaining worker activity without closing
-    // the generation's App-output gate. Preserve its already in-flight App
-    // result, but never send Chatbox text after any cancellation.
-    if generation.is_work_cancelled() {
+    // Hard Stop rejects the Chatbox candidate immediately. A non-Stop runtime
+    // failure closes the publisher separately; the outcome below makes that
+    // race visible without turning the STT worker into a Chatbox waiter.
+    if generation.is_hard_stopped() {
         emit_chatbox_send_skipped_on_stop(app);
-        resolve_chatbox_activity(app, chatbox_activity.as_ref(), &utterance_id);
+        abort_chatbox_activity(app, publisher, &utterance_id);
 
         return Ok(());
     }
 
-    let Some(osc_sender) = osc_sender else {
+    let Some(publisher) = publisher else {
         let (code, message, detail) = if config.osc.enabled {
             (
                 "osc.output_unavailable",
@@ -965,60 +1095,41 @@ fn transcribe_and_emit_final<R: Runtime>(
         return Ok(());
     };
 
-    // The paced send also watches the stop flag itself: a stop requested
-    // while the send is waiting out the pacing interval cancels the send
-    // instead of flushing one more Chatbox message.
-    let attempt = osc_sender.send_final_paced(&utterance_id, &text, generation.work_cancelled());
-
-    if let Err(error) = attempt.typing {
-        emit_chatbox_activity_failure(app, &error, "Typing indicator cleanup failed");
-    }
-
-    match attempt.text {
-        Ok(Some(result)) => {
-            let clipped_note = if result.clipped {
-                " Text was clipped to fit the VRChat Chatbox layout."
+    match publisher.try_submit(CompletedPublisherEvent::Completed {
+        unit_id: utterance_id,
+        text,
+    }) {
+        Ok(PublisherSubmitOutcome::Handled) => {}
+        Ok(PublisherSubmitOutcome::Closed) => {
+            if generation.is_hard_stopped() {
+                emit_chatbox_send_skipped_on_stop(app);
             } else {
-                ""
-            };
-
-            emit_diagnostic(
-                app,
-                DiagnosticUpdate::info(
-                    DiagnosticCategory::Osc,
-                    "osc.final_sent",
-                    "Final transcript sent to Chatbox",
-                    format!(
-                        "Sent {} bytes to {}.{}",
-                        result.byte_count, result.target, clipped_note
+                emit_diagnostic(
+                    app,
+                    DiagnosticUpdate::info(
+                        DiagnosticCategory::Osc,
+                        "osc.completed_unit_discarded_after_close",
+                        "Completed Chatbox publication discarded",
+                        "The runtime output worker closed before this completed caption could enter its queue. The App transcript remains available.",
                     ),
-                ),
-            );
-
-            Ok(())
+                );
+            }
         }
-        Ok(None) => {
-            emit_chatbox_send_skipped_on_stop(app);
-
-            Ok(())
-        }
-        Err(error) => {
-            emit_diagnostic(
-                app,
-                DiagnosticUpdate::from_error(&error, "Chatbox output failed"),
-            );
-
-            Err(error)
-        }
+        Err(error) => emit_diagnostic(
+            app,
+            DiagnosticUpdate::from_error(&error, "Completed Chatbox publication was rejected"),
+        ),
     }
+
+    Ok(())
 }
 
 fn discard_late_transcription_result<R: Runtime>(
     app: &AppHandle<R>,
-    activity: Option<&ChatboxActivityHandle>,
+    publisher: Option<&CompletedChatboxPublisher>,
     utterance_id: String,
 ) {
-    end_utterance_without_final(app, activity, utterance_id, UtteranceEndReason::Discarded);
+    end_utterance_without_final(app, publisher, utterance_id, UtteranceEndReason::Discarded);
     emit_diagnostic(
         app,
         DiagnosticUpdate::info(
@@ -1042,23 +1153,137 @@ fn emit_chatbox_send_skipped_on_stop<R: Runtime>(app: &AppHandle<R>) {
     );
 }
 
+fn emit_publisher_diagnostic<R: Runtime>(app: &AppHandle<R>, diagnostic: PublisherDiagnostic) {
+    let update = match diagnostic {
+        PublisherDiagnostic::UnitPublished {
+            unit_id,
+            page_count,
+            byte_count,
+            target,
+        } => DiagnosticUpdate::info(
+            DiagnosticCategory::Osc,
+            "osc.completed_unit_sent",
+            "Completed caption published",
+            format!(
+                "Published {page_count} ordered page(s) for {unit_id} to {target} using {byte_count} encoded byte(s)."
+            ),
+        ),
+        PublisherDiagnostic::UnitDroppedOverload {
+            unit_id,
+            page_count,
+        } => DiagnosticUpdate::warning(
+            DiagnosticCategory::Osc,
+            "osc.completed_unit_dropped_overload",
+            "Completed caption dropped from Chatbox backlog",
+            format!(
+                "Dropped the oldest unstarted caption unit {unit_id} as one complete {page_count}-page publication because the Chatbox backlog was full. The App transcript remains available."
+            ),
+        ),
+        PublisherDiagnostic::UnitRejectedOverload {
+            unit_id,
+            page_count,
+        } => DiagnosticUpdate::warning(
+            DiagnosticCategory::Osc,
+            "osc.completed_unit_rejected_overload",
+            "Completed caption could not enter the Chatbox backlog",
+            format!(
+                "Rejected caption unit {unit_id} as one complete {page_count}-page publication because it could not fit safely within the bounded Chatbox backlog. No partial pages were queued; the App transcript remains available."
+            ),
+        ),
+        PublisherDiagnostic::UnitExpired {
+            unit_id,
+            page_count,
+        } => DiagnosticUpdate::warning(
+            DiagnosticCategory::Osc,
+            "osc.completed_unit_expired",
+            "Completed caption expired from Chatbox backlog",
+            format!(
+                "Discarded unstarted caption unit {unit_id} as one complete {page_count}-page publication after it exceeded the provisional backlog age. The App transcript remains available."
+            ),
+        ),
+        PublisherDiagnostic::LayoutFailed { unit_id, reason } => DiagnosticUpdate::warning(
+            DiagnosticCategory::Osc,
+            "osc.completed_layout_failed",
+            "Completed caption could not be laid out for Chatbox",
+            format!("Caption unit {unit_id} was not published: {reason}"),
+        ),
+        PublisherDiagnostic::UnitSendFailed {
+            unit_id,
+            page_index,
+            page_count,
+            pages_sent,
+            error,
+        } => DiagnosticUpdate::from_error(
+            &error,
+            format!(
+                "Completed Chatbox publication failed for {unit_id} on page {page_index} of {page_count} after {pages_sent} successful page(s); the failed page was not retried and the unit's remaining pages were discarded"
+            ),
+        ),
+        PublisherDiagnostic::PagesDiscardedOnClose {
+            reason,
+            unit_count,
+            page_count,
+            started_unit_count,
+        } => {
+            let (code, message) = match reason {
+                PublisherCloseReason::Stop => (
+                    "osc.completed_pages_discarded_on_stop",
+                    "Pending Chatbox captions discarded on Stop",
+                ),
+                PublisherCloseReason::RuntimeError => (
+                    "osc.completed_pages_discarded_on_error",
+                    "Pending Chatbox captions discarded after Runtime failure",
+                ),
+            };
+            DiagnosticUpdate::info(
+                DiagnosticCategory::Osc,
+                code,
+                message,
+                format!(
+                    "Discarded {page_count} unsent page(s) across {unit_count} caption unit(s), including {started_unit_count} unit(s) whose publication had begun."
+                ),
+            )
+        }
+        PublisherDiagnostic::TypingFailed { is_typing, error } => {
+            let transition = if is_typing { "on" } else { "off" };
+            DiagnosticUpdate::from_error(
+                &error,
+                format!("Chatbox typing indicator could not turn {transition}"),
+            )
+        }
+        PublisherDiagnostic::WorkerFailed { reason } => DiagnosticUpdate::error(
+            DiagnosticCategory::Osc,
+            "osc.completed_publisher_failed",
+            "Completed Chatbox publisher stopped unexpectedly",
+            reason,
+        ),
+    };
+
+    emit_diagnostic(app, update);
+}
+
 fn start_chatbox_activity(
     app: &AppHandle,
-    activity: Option<&ChatboxActivityHandle>,
+    publisher: Option<&CompletedChatboxPublisher>,
     utterance_id: &str,
 ) {
-    let Some(activity) = activity else {
+    let Some(publisher) = publisher else {
         return;
     };
 
-    if let Err(error) = activity.utterance_started(utterance_id) {
-        emit_chatbox_activity_failure(app, &error, "Typing indicator could not be enabled");
+    if let Err(error) = publisher.try_submit(CompletedPublisherEvent::Started {
+        unit_id: utterance_id.to_string(),
+    }) {
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate::from_error(&error, "Chatbox activity could not start"),
+        );
     }
 }
 
 fn end_utterance_without_final<R: Runtime>(
     app: &AppHandle<R>,
-    activity: Option<&ChatboxActivityHandle>,
+    publisher: Option<&CompletedChatboxPublisher>,
     utterance_id: String,
     reason: UtteranceEndReason,
 ) {
@@ -1067,112 +1292,61 @@ fn end_utterance_without_final<R: Runtime>(
         reason,
     };
 
-    if let Err(error) = complete_no_final_utterance(activity, resolution, |utterance_id, reason| {
-        emit_utterance_ended(app, utterance_id, reason);
-    }) {
-        emit_chatbox_activity_failure(app, &error, "Typing indicator cleanup failed");
+    if let Err(error) =
+        complete_no_final_utterance(publisher, resolution, |utterance_id, reason| {
+            emit_utterance_ended(app, utterance_id, reason);
+        })
+    {
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate::from_error(&error, "Chatbox activity could not resolve"),
+        );
     }
 }
 
 fn complete_no_final_utterance(
-    activity: Option<&ChatboxActivityHandle>,
+    publisher: Option<&CompletedChatboxPublisher>,
     resolution: NoFinalUtteranceResolution,
     emit_ended: impl FnOnce(String, UtteranceEndReason),
 ) -> AppResult<()> {
     let utterance_id = resolution.utterance_id.clone();
     emit_ended(resolution.utterance_id, resolution.reason);
 
-    let Some(activity) = activity else {
+    let Some(publisher) = publisher else {
         return Ok(());
     };
 
-    activity.utterance_resolved(&utterance_id)
+    publisher
+        .try_submit(CompletedPublisherEvent::Aborted {
+            unit_id: utterance_id,
+        })
+        .map(|_| ())
 }
 
-fn resolve_chatbox_activity<R: Runtime>(
+fn abort_chatbox_activity<R: Runtime>(
     app: &AppHandle<R>,
-    activity: Option<&ChatboxActivityHandle>,
+    publisher: Option<&CompletedChatboxPublisher>,
     utterance_id: &str,
 ) {
-    let Some(activity) = activity else {
+    let Some(publisher) = publisher else {
         return;
     };
 
-    if let Err(error) = activity.utterance_resolved(utterance_id) {
-        emit_chatbox_activity_failure(app, &error, "Typing indicator cleanup failed");
+    if let Err(error) = publisher.try_submit(CompletedPublisherEvent::Aborted {
+        unit_id: utterance_id.to_string(),
+    }) {
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate::from_error(&error, "Chatbox activity could not resolve"),
+        );
     }
-}
-
-fn emit_chatbox_activity_failure<R: Runtime>(
-    app: &AppHandle<R>,
-    error: &AppError,
-    message: &'static str,
-) {
-    tracing::warn!(
-        code = error.code(),
-        error_message = %error,
-        "Chatbox typing indicator update failed"
-    );
-    emit_diagnostic(app, DiagnosticUpdate::from_error(error, message));
-}
-
-fn finish_chatbox_stop<R: Runtime>(app: &AppHandle<R>, activity: Option<&ChatboxActivityHandle>) {
-    let Some(activity) = activity else {
-        return;
-    };
-
-    if let Err(error) = activity.finish_stop() {
-        emit_chatbox_activity_failure(app, &error, "Typing indicator cleanup failed");
-    }
-}
-
-fn finish_chatbox_before_join<T>(
-    activity: Option<&ChatboxActivityHandle>,
-    join_worker: impl FnOnce() -> AppResult<T>,
-) -> (AppResult<()>, AppResult<T>) {
-    let typing_result = match activity {
-        Some(activity) => activity.finish_stop(),
-        None => Ok(()),
-    };
-    let worker_result = join_worker();
-
-    (typing_result, worker_result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rosc::{OscMessage, OscPacket, OscType, decoder};
-    use std::net::UdpSocket;
+    use crate::chatbox_publisher::{ChatboxSendReceipt, ChatboxTransport};
     use tauri::Listener;
-
-    #[test]
-    fn disabled_osc_does_not_create_runtime_chatbox_output() {
-        let config = crate::config::OscConfig {
-            host: "does-not-resolve.invalid".to_string(),
-            port: 9000,
-            enabled: false,
-        };
-
-        assert!(matches!(
-            initialize_runtime_chatbox(&config, ChatboxPacer::default()),
-            RuntimeChatboxInit::Disabled
-        ));
-    }
-
-    #[test]
-    fn unavailable_osc_output_does_not_become_a_runtime_start_error() {
-        let config = crate::config::OscConfig {
-            host: "[::1]".to_string(),
-            port: 9000,
-            enabled: true,
-        };
-
-        assert!(matches!(
-            initialize_runtime_chatbox(&config, ChatboxPacer::default()),
-            RuntimeChatboxInit::Unavailable(_)
-        ));
-    }
 
     #[test]
     fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResult<()> {
@@ -1193,7 +1367,7 @@ mod tests {
                 .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
             *handle = Some(RuntimeHandle {
                 generation: generation.clone(),
-                chatbox_activity: None,
+                publisher: None,
                 join_handle,
             });
         }
@@ -1275,6 +1449,82 @@ mod tests {
             .map_err(|_| AppError::runtime("Runtime stop test thread panicked."))??;
         assert!(cancelled_before_commit_finished);
         assert!(!generation.commit_if_active(|| {})?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn poisoned_generation_gate_still_closes_and_joins_the_publisher() -> AppResult<()> {
+        let generation = RuntimeGeneration::active();
+        let output_gate = Arc::clone(&generation.output_gate);
+        let poisoner = thread::spawn(move || {
+            if let Ok(_gate) = output_gate.lock() {
+                std::panic::resume_unwind(Box::new("poison generation gate for shutdown coverage"));
+            }
+        });
+        assert!(poisoner.join().is_err());
+        let (publisher, text_receiver) = runtime_test_publisher(generation.clone())?;
+
+        assert!(generation.request_stop(Some(&publisher)).is_err());
+        publisher.join()?;
+        assert_eq!(
+            publisher.try_submit(CompletedPublisherEvent::Completed {
+                unit_id: "late".to_string(),
+                text: "late".to_string(),
+            })?,
+            PublisherSubmitOutcome::Closed
+        );
+        assert!(matches!(
+            text_receiver.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_thread_panic_invalidates_generation_and_closes_publisher() -> AppResult<()> {
+        let app = tauri::test::mock_app();
+        let (diagnostic_sender, diagnostic_receiver) = std::sync::mpsc::channel();
+        app.listen("diagnostic-event", move |event| {
+            let _ = diagnostic_sender.send(event.payload().to_string());
+        });
+        let generation = RuntimeGeneration::active();
+        let (publisher, text_receiver) = runtime_test_publisher(generation.clone())?;
+        let panic_app = app.handle().clone();
+        let panic_generation = generation.clone();
+        let panic_publisher = publisher.clone();
+
+        let panicking_runtime = thread::spawn(move || {
+            supervise_runtime_thread(
+                &panic_app,
+                &panic_generation,
+                Some(&panic_publisher),
+                || -> AppResult<()> {
+                    std::panic::resume_unwind(Box::new(
+                        "panic runtime thread for supervisor coverage",
+                    ));
+                },
+            );
+        });
+        assert!(panicking_runtime.join().is_err());
+
+        assert!(generation.is_hard_stopped());
+        assert!(!generation.commit_if_active(|| {})?);
+        publisher.join()?;
+        assert_eq!(
+            publisher.try_submit(CompletedPublisherEvent::Completed {
+                unit_id: "late-after-panic".to_string(),
+                text: "late".to_string(),
+            })?,
+            PublisherSubmitOutcome::Closed
+        );
+        assert!(matches!(
+            text_receiver.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        let diagnostic = receive_json_event(&diagnostic_receiver, "Runtime panic diagnostic")?;
+        assert_eq!(diagnostic["code"], "runtime.thread_panicked");
 
         Ok(())
     }
@@ -1400,7 +1650,7 @@ mod tests {
             );
         })?);
         generation.request_stop(None)?;
-        run_mock_runtime(app.handle().clone(), generation, None)?;
+        run_mock_runtime(app.handle().clone(), generation)?;
 
         let starting_event = receive_json_event(&status_receiver, "starting runtime status")?;
         assert_eq!(starting_event["status"], "starting");
@@ -1429,22 +1679,23 @@ mod tests {
             let _ = ended_sender.send(event.payload().to_string());
         });
 
-        let (mut osc_sender, osc_receiver) = runtime_test_sender_and_receiver()?;
-        let activity = osc_sender.activity_handle();
         let generation = RuntimeGeneration::active();
+        let (stopped_publisher, stopped_text_receiver) =
+            runtime_test_publisher(generation.clone())?;
+        assert_eq!(
+            stopped_publisher.try_submit(CompletedPublisherEvent::Started {
+                unit_id: "stopped-in-flight".to_string(),
+            })?,
+            PublisherSubmitOutcome::Handled
+        );
         let worker_generation = generation.clone();
+        let worker_publisher = stopped_publisher.clone();
         let (in_flight_sender, in_flight_receiver) = std::sync::mpsc::channel();
         let (release_sender, release_receiver) = std::sync::mpsc::channel();
         let config = AppConfig::default();
         let http_client = Client::builder()
             .build()
             .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
-
-        activity.utterance_started("stopped-in-flight")?;
-        assert_eq!(
-            receive_runtime_test_packet(&osc_receiver)?,
-            typing_packet(true)
-        );
 
         let worker = thread::spawn(move || {
             transcribe_and_emit_final(
@@ -1453,7 +1704,7 @@ mod tests {
                 &SecretString::from("test-key".to_string()),
                 &http_client,
                 test_speech_segment("stopped-in-flight"),
-                Some(&mut osc_sender),
+                Some(&worker_publisher),
                 &worker_generation,
                 &move |_client, _config, _api_key, _sample_rate, _samples| {
                     in_flight_sender.send(()).map_err(|_| {
@@ -1471,22 +1722,23 @@ mod tests {
         in_flight_receiver
             .recv_timeout(Duration::from_secs(1))
             .map_err(|_| AppError::runtime("STT test worker did not start its segment."))?;
-        generation.request_stop(Some(&activity))?;
-        activity.finish_stop()?;
+        generation.request_stop(Some(&stopped_publisher))?;
+        stopped_publisher.join()?;
 
         let current_app_handle = app.handle().clone();
-        let (mut current_osc_sender, current_osc_receiver) = runtime_test_sender_and_receiver()?;
-        let current_activity = current_osc_sender.activity_handle();
         let current_generation = RuntimeGeneration::active();
+        let (current_publisher, current_text_receiver) =
+            runtime_test_publisher(current_generation.clone())?;
         let current_config = AppConfig::default();
         let current_http_client = Client::builder()
             .build()
             .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
 
-        current_activity.utterance_started("current")?;
         assert_eq!(
-            receive_runtime_test_packet(&current_osc_receiver)?,
-            typing_packet(true)
+            current_publisher.try_submit(CompletedPublisherEvent::Started {
+                unit_id: "current".to_string(),
+            })?,
+            PublisherSubmitOutcome::Handled
         );
         transcribe_and_emit_final(
             &current_app_handle,
@@ -1494,10 +1746,16 @@ mod tests {
             &SecretString::from("test-key".to_string()),
             &current_http_client,
             test_speech_segment("current"),
-            Some(&mut current_osc_sender),
+            Some(&current_publisher),
             &current_generation,
             &|_client, _config, _api_key, _sample_rate, _samples| Ok("current final".to_string()),
         )?;
+        let current_text = current_text_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Current publisher did not send its caption."))?;
+        assert_eq!(current_text, "current final");
+        current_publisher.request_close(PublisherCloseReason::RuntimeError)?;
+        current_publisher.join()?;
 
         release_sender
             .send(())
@@ -1516,26 +1774,10 @@ mod tests {
         let ended_event = receive_json_event(&ended_receiver, "discarded old utterance")?;
         assert_eq!(ended_event["utteranceId"], "stopped-in-flight");
         assert_eq!(ended_event["reason"], "discarded");
-        assert_eq!(
-            receive_runtime_test_packet(&osc_receiver)?,
-            typing_packet(false)
-        );
-
-        osc_receiver
-            .set_read_timeout(Some(Duration::from_millis(50)))
-            .map_err(|error| AppError::osc_bind(error.to_string()))?;
         assert!(matches!(
-            receive_runtime_test_packet(&osc_receiver),
-            Err(AppError::OscSend { .. })
+            stopped_text_receiver.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
         ));
-        assert_eq!(
-            receive_runtime_test_packet(&current_osc_receiver)?,
-            chatbox_text_packet("current final")
-        );
-        assert_eq!(
-            receive_runtime_test_packet(&current_osc_receiver)?,
-            typing_packet(false)
-        );
 
         let mut late_result_discarded = false;
         for payload in diagnostic_receiver.try_iter() {
@@ -1550,7 +1792,93 @@ mod tests {
     }
 
     #[test]
-    fn capture_error_waits_for_in_flight_final_and_discards_queued_speech() -> AppResult<()> {
+    fn runtime_error_close_preserves_an_in_flight_app_final_but_rejects_chatbox() -> AppResult<()> {
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+        let (final_sender, final_receiver) = std::sync::mpsc::channel();
+        let (diagnostic_sender, diagnostic_receiver) = std::sync::mpsc::channel();
+        app.listen("transcript-final", move |event| {
+            let _ = final_sender.send(event.payload().to_string());
+        });
+        app.listen("diagnostic-event", move |event| {
+            let _ = diagnostic_sender.send(event.payload().to_string());
+        });
+
+        let generation = RuntimeGeneration::active();
+        let (publisher, text_receiver) = runtime_test_publisher(generation.clone())?;
+        assert_eq!(
+            publisher.try_submit(CompletedPublisherEvent::Started {
+                unit_id: "in-flight-error".to_string(),
+            })?,
+            PublisherSubmitOutcome::Handled
+        );
+        let worker_generation = generation.clone();
+        let worker_publisher = publisher.clone();
+        let (entered_sender, entered_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let config = AppConfig::default();
+        let http_client = Client::builder()
+            .build()
+            .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
+        let worker = thread::spawn(move || {
+            transcribe_and_emit_final(
+                &app_handle,
+                &config,
+                &SecretString::from("test-key".to_string()),
+                &http_client,
+                test_speech_segment("in-flight-error"),
+                Some(&worker_publisher),
+                &worker_generation,
+                &move |_client, _config, _api_key, _sample_rate, _samples| {
+                    entered_sender.send(()).map_err(|_| {
+                        AppError::runtime("Could not announce the in-flight test request.")
+                    })?;
+                    release_receiver.recv().map_err(|_| {
+                        AppError::runtime("Could not release the in-flight test request.")
+                    })?;
+                    Ok("preserved in App".to_string())
+                },
+            )
+        });
+
+        entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("In-flight test request did not start."))?;
+        generation.cancel_work();
+        generation
+            .close_publisher_at_boundary(Some(&publisher), PublisherCloseReason::RuntimeError)?;
+        publisher.join()?;
+        release_sender
+            .send(())
+            .map_err(|_| AppError::runtime("Could not release the in-flight test request."))?;
+        worker
+            .join()
+            .map_err(|_| AppError::runtime("In-flight test worker panicked."))??;
+
+        let final_event = receive_json_event(&final_receiver, "in-flight final transcript")?;
+        assert_eq!(final_event["utteranceId"], "in-flight-error");
+        assert_eq!(final_event["text"], "preserved in App");
+        assert!(matches!(
+            text_receiver.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        let diagnostic_codes = (0..2)
+            .map(|_| {
+                receive_json_event(&diagnostic_receiver, "in-flight Runtime error diagnostic")
+                    .map(|event| event["code"].as_str().unwrap_or_default().to_string())
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        assert!(
+            diagnostic_codes
+                .iter()
+                .any(|code| code == "osc.completed_unit_discarded_after_close")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn capture_error_preserves_in_flight_app_final_and_discards_queued_speech() -> AppResult<()> {
         let app = tauri::test::mock_app();
         let app_handle = app.handle().clone();
         let (final_sender, final_receiver) = std::sync::mpsc::channel();
@@ -1562,8 +1890,6 @@ mod tests {
             let _ = ended_sender.send(event.payload().to_string());
         });
 
-        let (osc_sender, osc_receiver) = runtime_test_sender_and_receiver()?;
-        let activity = osc_sender.activity_handle();
         let generation = RuntimeGeneration::active();
         let (segment_sender, segment_receiver) = sync_channel(STT_QUEUE_CAPACITY);
         let (in_flight_sender, in_flight_receiver) = std::sync::mpsc::channel();
@@ -1571,13 +1897,6 @@ mod tests {
         let http_client = Client::builder()
             .build()
             .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
-
-        activity.utterance_started("in-flight")?;
-        activity.utterance_started("queued")?;
-        assert_eq!(
-            receive_runtime_test_packet(&osc_receiver)?,
-            typing_packet(true)
-        );
 
         segment_sender
             .send(test_speech_segment("in-flight"))
@@ -1594,7 +1913,7 @@ mod tests {
                 config,
                 SecretString::from("test-key".to_string()),
                 http_client,
-                Some(osc_sender),
+                None,
                 segment_receiver,
                 worker_generation,
                 move |_client, _config, _api_key, _sample_rate, _samples| {
@@ -1633,52 +1952,137 @@ mod tests {
         let ended_event = receive_json_event(&ended_receiver, "discarded utterance")?;
         assert_eq!(ended_event["utteranceId"], "queued");
         assert_eq!(ended_event["reason"], "discarded");
-        assert_eq!(
-            receive_runtime_test_packet(&osc_receiver)?,
-            typing_packet(false)
-        );
-
-        activity.finish_after_error()?;
-
-        osc_receiver
-            .set_read_timeout(Some(Duration::from_millis(50)))
-            .map_err(|error| AppError::osc_bind(error.to_string()))?;
-        assert!(matches!(
-            receive_runtime_test_packet(&osc_receiver),
-            Err(AppError::OscSend { .. })
-        ));
 
         Ok(())
     }
 
     #[test]
-    fn typing_off_is_sent_before_the_stt_worker_join_begins() -> AppResult<()> {
-        let (sender, receiver) = runtime_test_sender_and_receiver()?;
-        let activity = sender.activity_handle();
-        let cancel = AtomicBool::new(false);
-        activity.request_stop(&cancel)?;
-
-        let (typing_result, worker_result) = finish_chatbox_before_join(Some(&activity), || {
-            let packet = receive_runtime_test_packet(&receiver)?;
-            let expected = typing_packet(false);
-
-            if packet == expected {
-                Ok(())
-            } else {
-                Err(AppError::runtime(
-                    "STT worker join began before typing-off was observable.",
-                ))
-            }
+    fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
+        let app = tauri::test::mock_app();
+        let (diagnostic_sender, diagnostic_receiver) = std::sync::mpsc::channel();
+        app.listen("diagnostic-event", move |event| {
+            let _ = diagnostic_sender.send(event.payload().to_string());
         });
+        let diagnostics = vec![
+            (
+                PublisherDiagnostic::UnitPublished {
+                    unit_id: "published".to_string(),
+                    page_count: 2,
+                    byte_count: 42,
+                    target: "127.0.0.1:9000".to_string(),
+                },
+                "osc.completed_unit_sent",
+                "info",
+            ),
+            (
+                PublisherDiagnostic::UnitDroppedOverload {
+                    unit_id: "dropped".to_string(),
+                    page_count: 2,
+                },
+                "osc.completed_unit_dropped_overload",
+                "warning",
+            ),
+            (
+                PublisherDiagnostic::UnitRejectedOverload {
+                    unit_id: "rejected".to_string(),
+                    page_count: 33,
+                },
+                "osc.completed_unit_rejected_overload",
+                "warning",
+            ),
+            (
+                PublisherDiagnostic::UnitExpired {
+                    unit_id: "expired".to_string(),
+                    page_count: 2,
+                },
+                "osc.completed_unit_expired",
+                "warning",
+            ),
+            (
+                PublisherDiagnostic::LayoutFailed {
+                    unit_id: "layout".to_string(),
+                    reason: "test layout failure".to_string(),
+                },
+                "osc.completed_layout_failed",
+                "warning",
+            ),
+            (
+                PublisherDiagnostic::UnitSendFailed {
+                    unit_id: "send".to_string(),
+                    page_index: 2,
+                    page_count: 3,
+                    pages_sent: 1,
+                    error: AppError::osc_send("test", "send failure".to_string()),
+                },
+                "osc.send_failed",
+                "error",
+            ),
+            (
+                PublisherDiagnostic::PagesDiscardedOnClose {
+                    reason: PublisherCloseReason::Stop,
+                    unit_count: 2,
+                    page_count: 3,
+                    started_unit_count: 1,
+                },
+                "osc.completed_pages_discarded_on_stop",
+                "info",
+            ),
+            (
+                PublisherDiagnostic::PagesDiscardedOnClose {
+                    reason: PublisherCloseReason::RuntimeError,
+                    unit_count: 2,
+                    page_count: 3,
+                    started_unit_count: 1,
+                },
+                "osc.completed_pages_discarded_on_error",
+                "info",
+            ),
+            (
+                PublisherDiagnostic::TypingFailed {
+                    is_typing: false,
+                    error: AppError::osc_send("test", "typing failure".to_string()),
+                },
+                "osc.send_failed",
+                "error",
+            ),
+            (
+                PublisherDiagnostic::WorkerFailed {
+                    reason: "worker failure".to_string(),
+                },
+                "osc.completed_publisher_failed",
+                "error",
+            ),
+        ];
 
-        typing_result?;
-        worker_result?;
+        for (diagnostic, expected_code, expected_severity) in diagnostics {
+            emit_publisher_diagnostic(app.handle(), diagnostic);
+            let event = receive_json_event(&diagnostic_receiver, "Publisher diagnostic")?;
+            assert_eq!(event["category"], "osc");
+            assert_eq!(event["code"], expected_code);
+            assert_eq!(event["severity"], expected_severity);
+            if expected_code == "osc.completed_unit_rejected_overload" {
+                assert!(
+                    event["detail"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("No partial pages were queued")
+                );
+            }
+            if expected_code == "osc.completed_pages_discarded_on_stop" {
+                assert!(
+                    event["detail"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("Discarded 3 unsent page(s)")
+                );
+            }
+        }
 
         Ok(())
     }
 
     #[test]
-    fn every_no_final_resolution_turns_typing_off() -> AppResult<()> {
+    fn every_no_final_resolution_emits_app_lifecycle_and_turns_typing_off() -> AppResult<()> {
         let reasons = [
             UtteranceEndReason::NoSpeech,
             UtteranceEndReason::SttFailed,
@@ -1686,20 +2090,37 @@ mod tests {
         ];
 
         for (index, reason) in reasons.into_iter().enumerate() {
-            let (sender, receiver) = runtime_test_sender_and_receiver()?;
-            let activity = sender.activity_handle();
             let utterance_id = format!("no-final-{index}");
+            let (text_sender, text_receiver) = std::sync::mpsc::channel();
+            let (typing_sender, typing_receiver) = std::sync::mpsc::channel();
+            let publisher = CompletedChatboxPublisher::start(
+                Arc::new(RecordingChatboxTransport {
+                    text_sender,
+                    typing_sender: Some(typing_sender),
+                }),
+                ChatboxPacer::default(),
+                RuntimeGeneration::active(),
+                Arc::new(|_| {}),
+            )?;
+            assert_eq!(
+                publisher.try_submit(CompletedPublisherEvent::Started {
+                    unit_id: utterance_id.clone(),
+                })?,
+                PublisherSubmitOutcome::Handled
+            );
+            assert!(
+                typing_receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .map_err(|_| AppError::runtime("No-final typing indicator did not turn on."))?
+            );
             let resolution = NoFinalUtteranceResolution {
                 utterance_id: utterance_id.clone(),
                 reason,
             };
             let mut emitted = None;
 
-            activity.utterance_started(&utterance_id)?;
-            assert_eq!(receive_runtime_test_packet(&receiver)?, typing_packet(true));
-
             complete_no_final_utterance(
-                Some(&activity),
+                Some(&publisher),
                 resolution,
                 |emitted_utterance_id, emitted_reason| {
                     emitted = Some((emitted_utterance_id, emitted_reason));
@@ -1710,10 +2131,19 @@ mod tests {
                 .ok_or_else(|| AppError::runtime("No-final completion event was not emitted."))?;
             assert_eq!(emitted_utterance_id, utterance_id);
             assert!(same_utterance_end_reason(emitted_reason, reason));
-            assert_eq!(
-                receive_runtime_test_packet(&receiver)?,
-                typing_packet(false)
+            assert!(
+                !typing_receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .map_err(|_| AppError::runtime(
+                        "No-final typing indicator did not turn off."
+                    ))?
             );
+            assert!(matches!(
+                text_receiver.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ));
+            publisher.request_close(PublisherCloseReason::RuntimeError)?;
+            publisher.join()?;
         }
 
         Ok(())
@@ -1728,24 +2158,55 @@ mod tests {
         )
     }
 
-    fn runtime_test_sender_and_receiver() -> AppResult<(ChatboxOscSender, UdpSocket)> {
-        let receiver = UdpSocket::bind("127.0.0.1:0")
-            .map_err(|error| AppError::osc_bind(error.to_string()))?;
-        receiver
-            .set_read_timeout(Some(Duration::from_secs(1)))
-            .map_err(|error| AppError::osc_bind(error.to_string()))?;
-        let port = receiver
-            .local_addr()
-            .map_err(|error| AppError::osc_bind(error.to_string()))?
-            .port();
-        let config = OscConfig {
-            host: "127.0.0.1".to_string(),
-            port,
-            enabled: true,
-        };
-        let sender = ChatboxOscSender::new(&config, ChatboxPacer::default())?;
+    struct RecordingChatboxTransport {
+        text_sender: std::sync::mpsc::Sender<String>,
+        typing_sender: Option<std::sync::mpsc::Sender<bool>>,
+    }
 
-        Ok((sender, receiver))
+    impl ChatboxTransport for RecordingChatboxTransport {
+        fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+            self.text_sender.send(text.to_string()).map_err(|_| {
+                AppError::osc_send(
+                    "runtime test transport",
+                    "Text receiver disconnected.".to_string(),
+                )
+            })?;
+
+            Ok(ChatboxSendReceipt {
+                target: "runtime-test".to_string(),
+                byte_count: text.len(),
+            })
+        }
+
+        fn send_typing(&self, is_typing: bool) -> AppResult<()> {
+            if let Some(sender) = &self.typing_sender {
+                sender.send(is_typing).map_err(|_| {
+                    AppError::osc_send(
+                        "runtime test transport",
+                        "Typing receiver disconnected.".to_string(),
+                    )
+                })?;
+            }
+            Ok(())
+        }
+    }
+
+    fn runtime_test_publisher(
+        generation: RuntimeGeneration,
+    ) -> AppResult<(CompletedChatboxPublisher, std::sync::mpsc::Receiver<String>)> {
+        let (text_sender, text_receiver) = std::sync::mpsc::channel();
+        let reporter: PublisherReporter = Arc::new(|_| {});
+        let publisher = CompletedChatboxPublisher::start(
+            Arc::new(RecordingChatboxTransport {
+                text_sender,
+                typing_sender: None,
+            }),
+            ChatboxPacer::default(),
+            generation,
+            reporter,
+        )?;
+
+        Ok((publisher, text_receiver))
     }
 
     fn test_speech_segment(utterance_id: &str) -> SpeechSegment {
@@ -1766,35 +2227,6 @@ mod tests {
 
         serde_json::from_str(&payload).map_err(|error| {
             AppError::runtime(format!("Failed to parse the {event_name} event: {error}"))
-        })
-    }
-
-    fn receive_runtime_test_packet(receiver: &UdpSocket) -> AppResult<OscPacket> {
-        let mut buffer = [0_u8; 1024];
-        let (size, _) = receiver
-            .recv_from(&mut buffer)
-            .map_err(|error| AppError::osc_send("test receiver", error.to_string()))?;
-        let (_, packet) = decoder::decode_udp(&buffer[..size])
-            .map_err(|error| AppError::osc_encode(error.to_string()))?;
-
-        Ok(packet)
-    }
-
-    fn typing_packet(is_typing: bool) -> OscPacket {
-        OscPacket::Message(OscMessage {
-            addr: "/chatbox/typing".to_string(),
-            args: vec![OscType::Bool(is_typing)],
-        })
-    }
-
-    fn chatbox_text_packet(text: &str) -> OscPacket {
-        OscPacket::Message(OscMessage {
-            addr: "/chatbox/input".to_string(),
-            args: vec![
-                OscType::String(text.to_string()),
-                OscType::Bool(true),
-                OscType::Bool(false),
-            ],
         })
     }
 }

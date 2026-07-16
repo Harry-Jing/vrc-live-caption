@@ -75,6 +75,10 @@ impl ChatboxPacer {
         Self::new(clock)
     }
 
+    pub(crate) fn now(&self) -> Instant {
+        self.shared.clock.now()
+    }
+
     /// Waits until one caller can decide whether to make the next text-send
     /// attempt. The returned permit keeps that decision exclusive; dropping
     /// it records nothing, while [`ChatboxAttemptPermit::attempt`] records the

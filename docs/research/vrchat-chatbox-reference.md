@@ -107,6 +107,28 @@ Future current-client validation should still use numbered messages and a
 remote observer when available. A successful UDP send proves only that the
 local socket accepted the packet, not that VRChat displayed or relayed it.
 
+### Current Completed publisher policy
+
+The current Phase 1 implementation publishes whole Completed caption units
+through a dedicated non-blocking worker. Its queue behavior is:
+
+- keep at most `32` resident pages that have not yet been sent successfully;
+- expire a whole unit after `30` seconds only while it remains unstarted;
+- define started publication at the unit's first actual text-send attempt, after
+  it receives a pacing opportunity;
+- on capacity pressure, remove the oldest whole unstarted units until the new
+  unit fits, or reject the new whole unit if it cannot fit without splitting a
+  unit or displacing one that has started;
+- do not retry a failed page. The attempt still consumes the pacing opportunity,
+  and the publisher discards that unit's failed and remaining pages, reports the
+  failure, and may continue with later units;
+- on Stop or a runtime-fatal close, close admission and discard every resident
+  page without draining caption text, then attempt one typing-off cleanup.
+
+The `32`-page and `30`-second values are internal provisional safety limits, not
+user settings or settled product limits. Phase 1 real-machine VRChat validation
+must measure backlog and readability and adjust them as needed.
+
 ## Verified layout contract
 
 ### Text object paths
@@ -356,8 +378,8 @@ Additional confirmed validation:
   rather than splitting, dropping, or sending an over-limit grapheme.
 - Limit each page to at most `9` visible lines after wrapping. The pure
   Completed layout returns all remaining text as later ordered pages instead of
-  clipping it; connecting those pages to a Publisher and Runtime remains a
-  later implementation stage.
+  clipping it. The implemented Completed publisher consumes those pages in
+  order; Live viewport and translation-aware rendering remain later stages.
 
 ## Known unknowns
 

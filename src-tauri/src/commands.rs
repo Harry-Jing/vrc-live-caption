@@ -132,9 +132,12 @@ pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) 
     let config = state.config()?;
     let chatbox_pacer = state.chatbox_pacer();
 
-    match ChatboxOscSender::new(&config.osc, chatbox_pacer)
-        .and_then(|sender| sender.send(OSC_TEST_MESSAGE))
-    {
+    match ChatboxOscSender::new(&config.osc).and_then(|sender| {
+        chatbox_pacer
+            .wait_for_turn(None)?
+            .ok_or_else(|| crate::error::AppError::state("OSC Test pacing was cancelled."))?
+            .attempt(|| sender.send_text(OSC_TEST_MESSAGE))
+    }) {
         Ok(result) => {
             tracing::info!(
                 target = result.target,

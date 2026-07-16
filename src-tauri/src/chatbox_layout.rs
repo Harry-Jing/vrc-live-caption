@@ -61,13 +61,6 @@ pub(crate) enum ChatboxLayoutError {
 /// An empty caption has no pages. A single grapheme that is itself larger than
 /// VRChat's complete input budget cannot be represented without violating one
 /// of the layout invariants, so that pathological input returns an error.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "The staged pure layout entry point is consumed by the later Completed Publisher phase."
-    )
-)]
 pub(crate) fn paginate_completed(text: &str) -> Result<Vec<String>, ChatboxLayoutError> {
     if text.is_empty() {
         return Ok(Vec::new());

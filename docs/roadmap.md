@@ -27,8 +27,9 @@ rewrite while implementing later phases.
 
 ## Phase 1: Completed Cloud Baseline Hardening
 
-Status: core microphone-to-OpenAI-to-App-to-Chatbox path implemented;
-reliability corrections and real-client validation remain.
+Status: the core microphone-to-OpenAI-to-App-to-Chatbox path, hard Stop,
+process-wide pacing, fixed Chatbox layout, and independent Completed publisher
+are implemented; real-client validation and the remaining exit evidence remain.
 
 Goal: make the existing segmented `gpt-4o-mini-transcribe` Completed path a
 trustworthy baseline before changing the provider and wire contracts.
@@ -46,14 +47,25 @@ trustworthy baseline before changing the provider and wire contracts.
 - paginate current Completed text in order through a bounded, non-blocking
   publisher; under sustained overload, drop only oldest whole units that have
   not started publication and report the loss;
+- use provisional internal publisher limits of `32` resident pages and `30`
+  seconds for an unstarted unit; count a unit as started only at its first actual
+  text-send attempt, evict only whole unstarted units, and reject a new unit as a
+  whole when it cannot fit safely;
+- do not retry a failed page: the failed attempt consumes the pacing opportunity,
+  the remaining pages of that unit are discarded with a diagnostic, and later
+  units may continue;
 - add fake-time and fake-OSC Rust tests for Completed pacing, ordered pages,
   overload, Unicode boundaries, typing, send failures, and Stop races;
 - preserve the typing-indicator lifecycle across success, no-speech, per-unit
   failure, and Stop;
 - make Stop release capture, discard buffered/queued audio and unsent publisher
   pages, prevent new provider submissions, cancel or close in-flight work where
-  possible, and reject every late caption for both App and Chatbox; allow only
-  one typing-off cleanup message;
+  possible, and reject every late caption for both App and Chatbox; Stop and a
+  runtime-fatal close do not drain publisher pages and allow only one typing-off
+  cleanup message;
+- treat the `32`-page and `30`-second publisher limits as Phase 1 safety values,
+  not settled product settings, and adjust them from real-machine VRChat backlog
+  and readability results;
 - measure real Chatbox display duration and remote-observer readability before
   choosing any additional page hold-time or adjacent-unit merge rule;
 - validate the full path on real Windows 10/11 VRChat setups;

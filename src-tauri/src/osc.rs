@@ -1,52 +1,24 @@
-//! VRChat Chatbox output over OSC (UDP).
+//! Raw VRChat Chatbox OSC transport over UDP.
 //!
-//! Text is shaped to VRChat's fixed Chatbox constraints before sending. Input
-//! is hard-clipped to 144 UTF-16 code units at a grapheme-cluster boundary,
-//! then a layout simulation finds the source-text prefix visible within nine
-//! wrapped lines. VRChat receives that prefix without artificial line breaks
-//! and performs the actual wrapping. The width estimates approximate the
-//! measured TMP contract in `docs/research/vrchat-chatbox-reference.md`.
-//!
-//! `ChatboxOscSender` owns one UDP socket for its lifetime. Every sender uses a
-//! process-wide `ChatboxPacer`, so Runtime restarts and OSC Test share the same
-//! text-attempt history. A cloneable activity handle shares the socket,
-//! aggregates active utterance ids, and sends typing transitions immediately
-//! without reading or changing the text pacing state.
+//! This module only encodes and attempts OSC packets. Completed layout,
+//! pagination, queueing, pacing, typing lifecycle, diagnostics, and generation
+//! cancellation belong to the independent Chatbox publisher. The OSC Test
+//! command acquires the same process-wide pacer before calling this transport.
 
-use crate::chatbox_pacer::ChatboxPacer;
+use crate::chatbox_publisher::{ChatboxSendReceipt, ChatboxTransport};
 use crate::config::OscConfig;
 use crate::error::{AppError, AppResult};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
-use std::collections::HashSet;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use unicode_segmentation::UnicodeSegmentation;
+use std::sync::Arc;
 
 pub(crate) const OSC_CHATBOX_INPUT_ADDRESS: &str = "/chatbox/input";
 pub(crate) const OSC_CHATBOX_TYPING_ADDRESS: &str = "/chatbox/typing";
 pub(crate) const OSC_TEST_MESSAGE: &str = "VRC Live Caption OSC test.";
-// ChatText rectangle minus margins; see the module docs for the source.
-const CHATBOX_WIDTH_PX: f32 = 280.0;
-const CHATBOX_MAX_LINES: usize = 9;
-const CHATBOX_MAX_UTF16_UNITS: usize = 144;
 
-pub(crate) struct OscSendResult {
-    pub(crate) target: String,
-    pub(crate) byte_count: usize,
-    pub(crate) rendered_text: String,
-    pub(crate) clipped: bool,
-}
-
-pub(crate) struct ChatboxFinalSendAttempt {
-    pub(crate) text: AppResult<Option<OscSendResult>>,
-    pub(crate) typing: AppResult<()>,
-}
-
+#[derive(Clone)]
 pub(crate) struct ChatboxOscSender {
     transport: Arc<dyn OscTransport>,
-    activity: ChatboxActivityHandle,
-    pacer: ChatboxPacer,
 }
 
 trait OscTransport: Send + Sync {
@@ -60,28 +32,8 @@ struct UdpOscTransport {
     target_address: SocketAddr,
 }
 
-#[derive(Clone)]
-pub(crate) struct ChatboxActivityHandle {
-    transport: Arc<dyn OscTransport>,
-    state: Arc<Mutex<ChatboxActivityState>>,
-}
-
-struct ChatboxActivityState {
-    active_utterances: HashSet<String>,
-    lifecycle: ChatboxActivityLifecycle,
-    stop_off_attempted: bool,
-    typing_on_sent: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ChatboxActivityLifecycle {
-    Running,
-    StopRequested,
-    ErrorFinished,
-}
-
 impl ChatboxOscSender {
-    pub(crate) fn new(config: &OscConfig, pacer: ChatboxPacer) -> AppResult<Self> {
+    pub(crate) fn new(config: &OscConfig) -> AppResult<Self> {
         let socket =
             UdpSocket::bind("0.0.0.0:0").map_err(|error| AppError::osc_bind(error.to_string()))?;
         socket
@@ -95,107 +47,44 @@ impl ChatboxOscSender {
             .ok_or_else(|| {
                 AppError::osc_send(&target, "No IPv4 target address resolved.".to_string())
             })?;
-        let transport: Arc<dyn OscTransport> = Arc::new(UdpOscTransport {
-            socket,
-            target,
-            target_address,
-        });
 
-        Ok(Self::with_transport(transport, pacer))
-    }
-
-    fn with_transport(transport: Arc<dyn OscTransport>, pacer: ChatboxPacer) -> Self {
-        let activity = ChatboxActivityHandle {
-            transport: Arc::clone(&transport),
-            state: Arc::new(Mutex::new(ChatboxActivityState {
-                active_utterances: HashSet::new(),
-                lifecycle: ChatboxActivityLifecycle::Running,
-                stop_off_attempted: false,
-                typing_on_sent: false,
-            })),
-        };
-
-        Self {
-            transport,
-            activity,
-            pacer,
-        }
-    }
-
-    pub(crate) fn activity_handle(&self) -> ChatboxActivityHandle {
-        self.activity.clone()
-    }
-
-    /// Shapes `text`, waits for the process-wide pacing turn, and sends it.
-    pub(crate) fn send(&self, text: &str) -> AppResult<OscSendResult> {
-        let shaped = shape_chatbox_text(text);
-        let permit = self
-            .pacer
-            .wait_for_turn(None)?
-            .ok_or_else(|| AppError::state("Uncancellable Chatbox send was cancelled."))?;
-        let mut result = permit.attempt(|| self.send_rendered(&shaped.text))?;
-
-        result.clipped = shaped.clipped;
-        result.rendered_text = shaped.text;
-
-        Ok(result)
-    }
-
-    /// Waits for the process-wide text-send turn. The wait polls `cancel`, so
-    /// runtime Stop can abort before transport is attempted; an aborted call
-    /// returns `Ok(None)` and does not consume an opportunity.
-    pub(crate) fn send_paced(
-        &self,
-        text: &str,
-        cancel: &AtomicBool,
-    ) -> AppResult<Option<OscSendResult>> {
-        let shaped = shape_chatbox_text(text);
-        let Some(permit) = self.pacer.wait_for_turn(Some(cancel))? else {
-            return Ok(None);
-        };
-        let mut result = {
-            let state = self
-                .activity
-                .state
-                .lock()
-                .map_err(|_| AppError::state("Chatbox activity state lock was poisoned."))?;
-
-            if state.lifecycle != ChatboxActivityLifecycle::Running
-                || cancel.load(Ordering::Relaxed)
-            {
-                return Ok(None);
-            }
-
-            permit.attempt(|| self.send_rendered(&shaped.text))?
-        };
-        result.clipped = shaped.clipped;
-        result.rendered_text = shaped.text;
-
-        Ok(Some(result))
-    }
-
-    pub(crate) fn send_final_paced(
-        &self,
-        utterance_id: &str,
-        text: &str,
-        cancel: &AtomicBool,
-    ) -> ChatboxFinalSendAttempt {
-        let text = self.send_paced(text, cancel);
-        let typing = self.activity.utterance_resolved(utterance_id);
-
-        ChatboxFinalSendAttempt { text, typing }
-    }
-
-    fn send_rendered(&self, text: &str) -> AppResult<OscSendResult> {
-        let packet = chatbox_input_packet(text);
-        let sent = self.transport.send_packet(&packet)?;
-
-        Ok(OscSendResult {
-            target: self.transport.target().to_string(),
-            byte_count: sent,
-            rendered_text: text.to_string(),
-            clipped: false,
+        Ok(Self {
+            transport: Arc::new(UdpOscTransport {
+                socket,
+                target,
+                target_address,
+            }),
         })
+    }
+
+    #[cfg(test)]
+    fn with_transport(transport: Arc<dyn OscTransport>) -> Self {
+        Self { transport }
+    }
+
+    pub(crate) fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+        let byte_count = self.transport.send_packet(&chatbox_input_packet(text))?;
+
+        Ok(ChatboxSendReceipt {
+            target: self.transport.target().to_string(),
+            byte_count,
+        })
+    }
+
+    pub(crate) fn send_typing(&self, is_typing: bool) -> AppResult<()> {
+        self.transport
+            .send_packet(&typing_indicator_packet(is_typing))?;
+        Ok(())
+    }
+}
+
+impl ChatboxTransport for ChatboxOscSender {
+    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+        Self::send_text(self, text)
+    }
+
+    fn send_typing(&self, is_typing: bool) -> AppResult<()> {
+        Self::send_typing(self, is_typing)
     }
 }
 
@@ -224,112 +113,6 @@ impl OscTransport for UdpOscTransport {
     }
 }
 
-impl ChatboxActivityHandle {
-    pub(crate) fn utterance_started(&self, utterance_id: &str) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::state("Chatbox activity state lock was poisoned."))?;
-
-        if state.lifecycle != ChatboxActivityLifecycle::Running {
-            return Ok(());
-        }
-
-        let was_empty = state.active_utterances.is_empty();
-
-        if !state.active_utterances.insert(utterance_id.to_string()) || !was_empty {
-            return Ok(());
-        }
-
-        self.transport.send_packet(&typing_indicator_packet(true))?;
-        state.typing_on_sent = true;
-
-        Ok(())
-    }
-
-    pub(crate) fn utterance_resolved(&self, utterance_id: &str) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::state("Chatbox activity state lock was poisoned."))?;
-
-        if state.lifecycle != ChatboxActivityLifecycle::Running
-            || !state.active_utterances.remove(utterance_id)
-            || !state.active_utterances.is_empty()
-        {
-            return Ok(());
-        }
-
-        self.transport
-            .send_packet(&typing_indicator_packet(false))?;
-        state.typing_on_sent = false;
-
-        Ok(())
-    }
-
-    pub(crate) fn request_stop(&self, cancel: &AtomicBool) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::state("Chatbox activity state lock was poisoned."))?;
-        cancel.store(true, Ordering::Relaxed);
-
-        if state.lifecycle != ChatboxActivityLifecycle::StopRequested {
-            state.stop_off_attempted = false;
-        }
-
-        state.lifecycle = ChatboxActivityLifecycle::StopRequested;
-        state.active_utterances.clear();
-
-        Ok(())
-    }
-
-    pub(crate) fn finish_stop(&self) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::state("Chatbox activity state lock was poisoned."))?;
-
-        if state.stop_off_attempted {
-            return Ok(());
-        }
-
-        state.lifecycle = ChatboxActivityLifecycle::StopRequested;
-        state.active_utterances.clear();
-        state.stop_off_attempted = true;
-        self.transport
-            .send_packet(&typing_indicator_packet(false))?;
-        state.typing_on_sent = false;
-
-        Ok(())
-    }
-
-    pub(crate) fn finish_after_error(&self) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::state("Chatbox activity state lock was poisoned."))?;
-
-        if state.lifecycle == ChatboxActivityLifecycle::ErrorFinished || state.stop_off_attempted {
-            return Ok(());
-        }
-
-        let should_clear =
-            state.lifecycle == ChatboxActivityLifecycle::StopRequested || state.typing_on_sent;
-        state.lifecycle = ChatboxActivityLifecycle::ErrorFinished;
-        state.active_utterances.clear();
-
-        if should_clear {
-            self.transport
-                .send_packet(&typing_indicator_packet(false))?;
-            state.stop_off_attempted = true;
-            state.typing_on_sent = false;
-        }
-
-        Ok(())
-    }
-}
-
 fn chatbox_input_packet(text: &str) -> OscPacket {
     OscPacket::Message(OscMessage {
         addr: OSC_CHATBOX_INPUT_ADDRESS.to_string(),
@@ -348,129 +131,14 @@ fn typing_indicator_packet(is_typing: bool) -> OscPacket {
     })
 }
 
-struct ShapedChatboxText {
-    text: String,
-    clipped: bool,
-}
-
-fn shape_chatbox_text(text: &str) -> ShapedChatboxText {
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let (input_limited, input_clipped) = clip_to_utf16_budget(&normalized);
-    let (visible, layout_clipped) = clip_to_visible_lines(input_limited);
-
-    ShapedChatboxText {
-        text: visible.to_string(),
-        clipped: input_clipped || layout_clipped,
-    }
-}
-
-fn clip_to_utf16_budget(text: &str) -> (&str, bool) {
-    let mut used_units = 0;
-
-    for (index, grapheme) in text.grapheme_indices(true) {
-        let grapheme_units = grapheme.encode_utf16().count();
-
-        if used_units + grapheme_units > CHATBOX_MAX_UTF16_UNITS {
-            let Some(prefix) = text.get(..index) else {
-                return ("", true);
-            };
-
-            return (prefix, true);
-        }
-
-        used_units += grapheme_units;
-    }
-
-    (text, false)
-}
-
-fn clip_to_visible_lines(text: &str) -> (&str, bool) {
-    let mut line_count = 1;
-    let mut current_width = 0.0;
-    let mut line_has_content = false;
-
-    for (index, grapheme) in text.grapheme_indices(true) {
-        let width = estimate_chatbox_width_px(grapheme);
-
-        if line_has_content && current_width + width > CHATBOX_WIDTH_PX {
-            if line_count >= CHATBOX_MAX_LINES {
-                let Some(prefix) = text.get(..index) else {
-                    return ("", true);
-                };
-
-                return (prefix.trim_end(), true);
-            }
-
-            line_count += 1;
-            current_width = 0.0;
-            line_has_content = false;
-
-            // VRChat keeps the source space in its input budget but does not
-            // render it as the first character on the wrapped line.
-            if grapheme.trim().is_empty() {
-                continue;
-            }
-        }
-
-        current_width += width;
-        line_has_content = true;
-    }
-
-    (text.trim_end(), false)
-}
-
-fn estimate_chatbox_width_px(grapheme: &str) -> f32 {
-    if grapheme.trim().is_empty() {
-        return 5.0;
-    }
-
-    let mut width = 0.0;
-
-    for character in grapheme.chars() {
-        width += if character.is_ascii_punctuation() {
-            5.0
-        } else if character.is_ascii() {
-            9.5
-        } else if is_cjk_or_full_width(character) {
-            18.0
-        } else if character.is_alphanumeric() {
-            9.5
-        } else {
-            18.0
-        };
-    }
-
-    width
-}
-
-fn is_cjk_or_full_width(character: char) -> bool {
-    matches!(
-        character as u32,
-        0x1100..=0x115F
-            | 0x2E80..=0xA4CF
-            | 0xAC00..=0xD7AF
-            | 0xF900..=0xFAFF
-            | 0xFE10..=0xFE19
-            | 0xFE30..=0xFE6F
-            | 0xFF00..=0xFF60
-            | 0xFFE0..=0xFFE6
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::chatbox_pacer::{ChatboxPacer, Clock};
     use rosc::decoder;
     use std::collections::VecDeque;
-    use std::sync::Barrier;
-    use std::thread;
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
-
-    struct ScriptedOscTransport {
-        failures: Mutex<VecDeque<bool>>,
-        packets: Mutex<Vec<OscPacket>>,
-    }
 
     struct AdvancingClock {
         now: Mutex<Instant>,
@@ -511,23 +179,44 @@ mod tests {
         }
     }
 
-    impl OscTransport for ScriptedOscTransport {
-        fn send_packet(&self, packet: &OscPacket) -> AppResult<usize> {
+    struct ScriptedOscTransport {
+        target: String,
+        failures: Mutex<VecDeque<bool>>,
+        packets: Mutex<Vec<OscPacket>>,
+    }
+
+    impl ScriptedOscTransport {
+        fn new(failures: impl IntoIterator<Item = bool>) -> Self {
+            Self {
+                target: "scripted".to_string(),
+                failures: Mutex::new(failures.into_iter().collect()),
+                packets: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn packets(&self) -> Vec<OscPacket> {
             self.packets
                 .lock()
-                .map_err(|_| AppError::state("Scripted OSC packet lock was poisoned."))?
-                .push(packet.clone());
+                .map(|packets| packets.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    impl OscTransport for ScriptedOscTransport {
+        fn send_packet(&self, packet: &OscPacket) -> AppResult<usize> {
+            if let Ok(mut packets) = self.packets.lock() {
+                packets.push(packet.clone());
+            }
             let should_fail = self
                 .failures
                 .lock()
-                .map_err(|_| AppError::state("Scripted OSC outcome lock was poisoned."))?
-                .pop_front()
+                .ok()
+                .and_then(|mut failures| failures.pop_front())
                 .unwrap_or(false);
-
             if should_fail {
                 return Err(AppError::osc_send(
-                    self.target(),
-                    "scripted send failure".to_string(),
+                    &self.target,
+                    "Scripted OSC failure.".to_string(),
                 ));
             }
 
@@ -537,25 +226,16 @@ mod tests {
         }
 
         fn target(&self) -> &str {
-            "scripted:test"
-        }
-    }
-
-    impl ScriptedOscTransport {
-        fn packets(&self) -> AppResult<Vec<OscPacket>> {
-            self.packets
-                .lock()
-                .map(|packets| packets.clone())
-                .map_err(|_| AppError::state("Scripted OSC packet lock was poisoned."))
+            &self.target
         }
     }
 
     #[test]
-    fn chatbox_test_packet_sends_final_text_immediately_without_notification_sound() {
+    fn chatbox_packets_use_the_vrchat_contract() {
         assert_eq!(
             chatbox_input_packet("test"),
             OscPacket::Message(OscMessage {
-                addr: OSC_CHATBOX_INPUT_ADDRESS.to_string(),
+                addr: "/chatbox/input".to_string(),
                 args: vec![
                     OscType::String("test".to_string()),
                     OscType::Bool(true),
@@ -563,61 +243,6 @@ mod tests {
                 ],
             })
         );
-    }
-
-    #[test]
-    fn chatbox_test_packet_can_be_encoded() {
-        let packet = chatbox_input_packet(OSC_TEST_MESSAGE);
-
-        assert!(encoder::encode(&packet).is_ok());
-    }
-
-    #[test]
-    fn runtime_restart_and_osc_test_share_actual_attempt_history() -> AppResult<()> {
-        let clock = Arc::new(AdvancingClock::new());
-        let pacer = ChatboxPacer::with_clock(clock.clone());
-        let cancel = AtomicBool::new(false);
-        let (first_runtime, _) = scripted_test_sender_with_pacer([false], pacer.clone());
-        let (restarted_runtime, _) = scripted_test_sender_with_pacer([false], pacer.clone());
-        let (osc_test, _) = scripted_test_sender_with_pacer([false], pacer.clone());
-        let (runtime_after_test, _) = scripted_test_sender_with_pacer([false], pacer);
-
-        assert!(matches!(
-            first_runtime.send_paced("first runtime", &cancel),
-            Ok(Some(_))
-        ));
-        assert!(matches!(
-            restarted_runtime.send_paced("restarted runtime", &cancel),
-            Ok(Some(_))
-        ));
-        osc_test.send("OSC test")?;
-        assert!(matches!(
-            runtime_after_test.send_paced("runtime after test", &cancel),
-            Ok(Some(_))
-        ));
-
-        assert_eq!(clock.total_sleep(), Duration::from_secs(3));
-
-        Ok(())
-    }
-
-    #[test]
-    fn failed_transport_attempt_still_delays_the_next_sender() -> AppResult<()> {
-        let clock = Arc::new(AdvancingClock::new());
-        let pacer = ChatboxPacer::with_clock(clock.clone());
-        let (failing_sender, _) = scripted_test_sender_with_pacer([true], pacer.clone());
-        let (next_sender, _) = scripted_test_sender_with_pacer([false], pacer);
-
-        assert!(failing_sender.send("fails").is_err());
-        next_sender.send("next")?;
-
-        assert_eq!(clock.total_sleep(), Duration::from_secs(1));
-
-        Ok(())
-    }
-
-    #[test]
-    fn typing_off_packet_uses_the_vrchat_boolean_contract() {
         assert_eq!(
             typing_indicator_packet(false),
             OscPacket::Message(OscMessage {
@@ -628,583 +253,94 @@ mod tests {
     }
 
     #[test]
-    fn localhost_target_uses_an_ipv4_address_for_the_ipv4_socket() -> AppResult<()> {
-        let receiver = UdpSocket::bind("127.0.0.1:0")
-            .map_err(|error| AppError::osc_bind(error.to_string()))?;
-        let port = receiver
-            .local_addr()
-            .map_err(|error| AppError::osc_bind(error.to_string()))?
-            .port();
-        let mut config = local_test_config(port);
-        config.host = "localhost".to_string();
-        let sender = ChatboxOscSender::new(&config, ChatboxPacer::default())?;
+    fn prepared_page_is_sent_without_rewriting_whitespace() -> AppResult<()> {
+        let transport = Arc::new(ScriptedOscTransport::new([false]));
+        let sender = ChatboxOscSender::with_transport(transport.clone());
+        let page = "first line\n  second  line";
 
-        sender.send("test")?;
+        sender.send_text(page)?;
 
-        assert_eq!(receive_osc_packet(&receiver)?, chatbox_input_packet("test"));
-
+        assert_eq!(transport.packets(), vec![chatbox_input_packet(page)]);
         Ok(())
     }
 
     #[test]
-    fn first_active_utterance_turns_typing_indicator_on() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver()?;
-        let activity = sender.activity_handle();
-
-        activity.utterance_started("speech-1")?;
-
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            OscPacket::Message(OscMessage {
-                addr: "/chatbox/typing".to_string(),
-                args: vec![OscType::Bool(true)],
-            })
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn typing_indicator_stays_on_until_every_utterance_resolves() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver()?;
-        let activity = sender.activity_handle();
-
-        activity.utterance_started("speech-1")?;
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(true)
-        );
-
-        activity.utterance_started("speech-1")?;
-        activity.utterance_started("speech-2")?;
-        assert_no_osc_packet(&receiver)?;
-
-        activity.utterance_resolved("speech-1")?;
-        assert_no_osc_packet(&receiver)?;
-
-        activity.utterance_resolved("speech-2")?;
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(false)
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn final_text_is_sent_before_the_last_utterance_turns_typing_off() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver()?;
-        let activity = sender.activity_handle();
-        let cancel = AtomicBool::new(false);
-
-        activity.utterance_started("speech-1")?;
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(true)
-        );
-
-        let attempt = sender.send_final_paced("speech-1", "final text", &cancel);
-
-        assert!(matches!(attempt.text, Ok(Some(_))));
-        assert!(attempt.typing.is_ok());
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            chatbox_input_packet("final text")
-        );
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(false)
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn final_send_failure_still_attempts_to_turn_typing_off() -> AppResult<()> {
-        let (sender, transport) = scripted_test_sender([false, true, false]);
-        let activity = sender.activity_handle();
-        let cancel = AtomicBool::new(false);
-
-        activity.utterance_started("speech-1")?;
-        let attempt = sender.send_final_paced("speech-1", "final text", &cancel);
-
-        assert!(attempt.text.is_err());
-        assert!(attempt.typing.is_ok());
-        assert_eq!(
-            transport.packets()?,
-            vec![
-                typing_indicator_packet(true),
-                chatbox_input_packet("final text"),
-                typing_indicator_packet(false),
-            ]
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn earlier_final_does_not_clear_a_later_active_utterance() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver()?;
-        let activity = sender.activity_handle();
-        let cancel = AtomicBool::new(false);
-
-        activity.utterance_started("speech-1")?;
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(true)
-        );
-        activity.utterance_started("speech-2")?;
-
-        let first = sender.send_final_paced("speech-1", "first final", &cancel);
-        assert!(matches!(first.text, Ok(Some(_))));
-        assert!(first.typing.is_ok());
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            chatbox_input_packet("first final")
-        );
-        assert_no_osc_packet(&receiver)?;
-
-        let second = sender.send_final_paced("speech-2", "second final", &cancel);
-        assert!(matches!(second.text, Ok(Some(_))));
-        assert!(second.typing.is_ok());
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            chatbox_input_packet("second final")
-        );
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(false)
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn stop_turns_typing_off_once_and_blocks_late_output() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver()?;
-        let activity = sender.activity_handle();
-        let cancel = AtomicBool::new(false);
-
-        activity.utterance_started("speech-1")?;
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(true)
-        );
-
-        activity.request_stop(&cancel)?;
-        assert!(cancel.load(Ordering::Relaxed));
-        assert_no_osc_packet(&receiver)?;
-
-        activity.finish_stop()?;
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(false)
-        );
-
-        activity.request_stop(&cancel)?;
-        activity.finish_stop()?;
-        activity.utterance_started("speech-2")?;
-        let attempt = sender.send_final_paced("speech-2", "late final", &cancel);
-
-        assert!(matches!(attempt.text, Ok(None)));
-        assert!(attempt.typing.is_ok());
-        assert_no_osc_packet(&receiver)?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn stop_sends_one_typing_off_even_without_an_active_utterance() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver()?;
-        let activity = sender.activity_handle();
-        let cancel = AtomicBool::new(false);
-
-        activity.request_stop(&cancel)?;
-        activity.finish_stop()?;
-
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(false)
-        );
-        activity.finish_stop()?;
-        assert_no_osc_packet(&receiver)?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn stop_cleanup_does_not_retry_its_failed_transition() -> AppResult<()> {
-        let (sender, transport) = scripted_test_sender([false, true]);
-        let activity = sender.activity_handle();
-        let cancel = AtomicBool::new(false);
-
-        activity.utterance_started("speech-1")?;
-        activity.request_stop(&cancel)?;
-        assert!(activity.finish_stop().is_err());
-
-        activity.finish_stop()?;
-        assert_eq!(
-            transport.packets()?,
-            vec![
-                typing_indicator_packet(true),
-                typing_indicator_packet(false),
-            ]
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn formal_stop_retries_after_failed_runtime_error_cleanup() -> AppResult<()> {
-        let (sender, transport) = scripted_test_sender([false, true, false]);
-        let activity = sender.activity_handle();
-        let cancel = AtomicBool::new(false);
-
-        activity.utterance_started("speech-1")?;
-        assert!(activity.finish_after_error().is_err());
-
-        activity.request_stop(&cancel)?;
-        activity.finish_stop()?;
-        assert_eq!(
-            transport.packets()?,
-            vec![
-                typing_indicator_packet(true),
-                typing_indicator_packet(false),
-                typing_indicator_packet(false),
-            ]
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn formal_stop_reasserts_off_after_successful_runtime_error_cleanup() -> AppResult<()> {
-        let (sender, transport) = scripted_test_sender([false, false, false]);
-        let activity = sender.activity_handle();
-        let cancel = AtomicBool::new(false);
-
-        activity.utterance_started("speech-1")?;
-        activity.finish_after_error()?;
-
-        activity.request_stop(&cancel)?;
-        activity.finish_stop()?;
-        assert_eq!(
-            transport.packets()?,
-            vec![
-                typing_indicator_packet(true),
-                typing_indicator_packet(false),
-                typing_indicator_packet(false),
-            ]
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn typing_transition_bypasses_an_in_progress_text_pacing_wait() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver()?;
-        sender.send("initial")?;
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            chatbox_input_packet("initial")
-        );
-        let activity = sender.activity_handle();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let worker_cancel = Arc::clone(&cancel);
-        let barrier = Arc::new(Barrier::new(2));
-        let worker_barrier = Arc::clone(&barrier);
-        let worker = thread::spawn(move || {
-            worker_barrier.wait();
-            sender.send_paced("delayed final", &worker_cancel)
-        });
-
-        barrier.wait();
-        thread::sleep(Duration::from_millis(150));
-        activity.utterance_started("speech-1")?;
-
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(true)
-        );
-
-        activity.request_stop(&cancel)?;
-        activity.finish_stop()?;
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(false)
-        );
-
-        let send_result = worker
-            .join()
-            .map_err(|_| AppError::runtime("Paced send test thread panicked."))?;
-        assert!(matches!(send_result, Ok(None)));
-
-        Ok(())
-    }
-
-    #[test]
-    fn runtime_error_clears_active_typing_and_latches_output_closed() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver()?;
-        let activity = sender.activity_handle();
-
-        activity.utterance_started("speech-1")?;
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(true)
-        );
-
-        activity.finish_after_error()?;
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            typing_indicator_packet(false)
-        );
-
-        activity.utterance_started("speech-2")?;
-        activity.finish_after_error()?;
-        assert_no_osc_packet(&receiver)?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn repeated_runtime_error_cleanup_without_typing_is_a_no_op() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver()?;
-        let activity = sender.activity_handle();
-
-        activity.finish_after_error()?;
-        assert_no_osc_packet(&receiver)?;
-
-        activity.finish_after_error()?;
-        assert_no_osc_packet(&receiver)?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn chatbox_send_clips_to_nine_visible_lines_without_inserting_breaks() -> AppResult<()> {
-        let text = "中".repeat(144);
-        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
-        let result = sender.send(&text)?;
-
-        assert_eq!(result.rendered_text, "中".repeat(135));
-        assert!(!result.rendered_text.contains('\n'));
-        assert!(result.clipped);
-
-        Ok(())
-    }
-
-    #[test]
-    fn chatbox_send_leaves_wrapping_to_vrchat() -> AppResult<()> {
-        let text = "x".repeat(40);
-        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
-        let result = sender.send(&text)?;
-
-        assert_eq!(result.rendered_text, text);
-        assert!(!result.rendered_text.contains('\n'));
-        assert!(!result.clipped);
-
-        Ok(())
-    }
-
-    #[test]
-    fn chatbox_send_hard_clips_input_to_144_utf16_code_units() -> AppResult<()> {
-        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
-        let result = sender.send(&"x".repeat(145))?;
-
-        assert_eq!(result.rendered_text, "x".repeat(144));
-        assert_eq!(result.rendered_text.encode_utf16().count(), 144);
-        assert!(result.clipped);
-
-        Ok(())
-    }
-
-    #[test]
-    fn chatbox_send_keeps_exactly_144_utf16_code_units() -> AppResult<()> {
-        let text = "x".repeat(144);
-        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
-        let result = sender.send(&text)?;
-
-        assert_eq!(result.rendered_text, text);
-        assert_eq!(result.rendered_text.encode_utf16().count(), 144);
-        assert!(!result.clipped);
-
-        Ok(())
-    }
-
-    #[test]
-    fn chatbox_send_counts_non_bmp_emoji_as_two_utf16_units() -> AppResult<()> {
-        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
-        let result = sender.send(&"😀".repeat(73))?;
-
-        assert_eq!(result.rendered_text, "😀".repeat(72));
-        assert_eq!(result.rendered_text.encode_utf16().count(), 144);
-        assert!(result.clipped);
-
-        Ok(())
-    }
-
-    #[test]
-    fn chatbox_send_does_not_split_a_combining_grapheme() -> AppResult<()> {
-        let grapheme = "e\u{301}";
-        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
-        let result = sender.send(&grapheme.repeat(73))?;
-
-        assert_eq!(result.rendered_text, grapheme.repeat(72));
-        assert_eq!(result.rendered_text.encode_utf16().count(), 144);
-        assert!(result.clipped);
-
-        Ok(())
-    }
-
-    #[test]
-    fn chatbox_send_does_not_split_a_zwj_emoji_sequence() -> AppResult<()> {
-        let family = "👨‍👩‍👧‍👦";
-        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
-        let result = sender.send(&family.repeat(14))?;
-
-        assert_eq!(family.encode_utf16().count(), 11);
-        assert_eq!(result.rendered_text, family.repeat(13));
-        assert_eq!(result.rendered_text.encode_utf16().count(), 143);
-        assert!(result.clipped);
-
-        Ok(())
-    }
-
-    #[test]
-    fn chatbox_send_normalizes_whitespace_without_reporting_clipping() -> AppResult<()> {
-        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
-        let result = sender.send("  hello\t \n world  ")?;
-
-        assert_eq!(result.rendered_text, "hello world");
-        assert!(!result.clipped);
-
-        Ok(())
-    }
-
-    fn local_test_config(port: u16) -> OscConfig {
-        OscConfig {
-            host: "127.0.0.1".to_string(),
-            port,
-            enabled: true,
+    fn runtime_restart_and_osc_test_share_actual_attempt_history() -> AppResult<()> {
+        let clock = Arc::new(AdvancingClock::new());
+        let pacer = ChatboxPacer::with_clock(clock.clone());
+
+        for text in ["runtime one", OSC_TEST_MESSAGE, "runtime two"] {
+            let sender =
+                ChatboxOscSender::with_transport(Arc::new(ScriptedOscTransport::new([false])));
+            pacer
+                .wait_for_turn(None)?
+                .ok_or_else(|| AppError::runtime("OSC attempt was cancelled."))?
+                .attempt(|| sender.send_text(text))?;
         }
+
+        assert_eq!(clock.total_sleep(), Duration::from_secs(2));
+        Ok(())
     }
 
-    fn local_test_sender_and_receiver() -> AppResult<(ChatboxOscSender, UdpSocket)> {
+    #[test]
+    fn failed_transport_attempt_still_reserves_the_next_opportunity() -> AppResult<()> {
+        let clock = Arc::new(AdvancingClock::new());
+        let pacer = ChatboxPacer::with_clock(clock.clone());
+        let failing = ChatboxOscSender::with_transport(Arc::new(ScriptedOscTransport::new([true])));
+        let succeeding =
+            ChatboxOscSender::with_transport(Arc::new(ScriptedOscTransport::new([false])));
+
+        assert!(
+            pacer
+                .wait_for_turn(None)?
+                .ok_or_else(|| AppError::runtime("Failed OSC attempt was cancelled."))?
+                .attempt(|| failing.send_text("failed"))
+                .is_err()
+        );
+        pacer
+            .wait_for_turn(None)?
+            .ok_or_else(|| AppError::runtime("Follow-up OSC attempt was cancelled."))?
+            .attempt(|| succeeding.send_text("succeeded"))?;
+
+        assert_eq!(clock.total_sleep(), Duration::from_secs(1));
+        Ok(())
+    }
+
+    #[test]
+    fn udp_transport_sends_exact_text_and_typing_packets() -> AppResult<()> {
         let receiver = UdpSocket::bind("127.0.0.1:0")
             .map_err(|error| AppError::osc_bind(error.to_string()))?;
-        let port = receiver
-            .local_addr()
-            .map_err(|error| AppError::osc_bind(error.to_string()))?
-            .port();
-        let sender = ChatboxOscSender::new(&local_test_config(port), ChatboxPacer::default())?;
-
-        Ok((sender, receiver))
-    }
-
-    fn scripted_test_sender(
-        failures: impl IntoIterator<Item = bool>,
-    ) -> (ChatboxOscSender, Arc<ScriptedOscTransport>) {
-        scripted_test_sender_with_pacer(failures, ChatboxPacer::default())
-    }
-
-    fn scripted_test_sender_with_pacer(
-        failures: impl IntoIterator<Item = bool>,
-        pacer: ChatboxPacer,
-    ) -> (ChatboxOscSender, Arc<ScriptedOscTransport>) {
-        let transport = Arc::new(ScriptedOscTransport {
-            failures: Mutex::new(failures.into_iter().collect()),
-            packets: Mutex::new(Vec::new()),
-        });
-        let sender_transport: Arc<dyn OscTransport> = transport.clone();
-        let sender = ChatboxOscSender::with_transport(sender_transport, pacer);
-
-        (sender, transport)
-    }
-
-    fn receive_osc_packet(receiver: &UdpSocket) -> AppResult<OscPacket> {
         receiver
             .set_read_timeout(Some(Duration::from_secs(1)))
             .map_err(|error| AppError::osc_bind(error.to_string()))?;
+        let port = receiver
+            .local_addr()
+            .map_err(|error| AppError::osc_bind(error.to_string()))?
+            .port();
+        let sender = ChatboxOscSender::new(&OscConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            enabled: true,
+        })?;
+
+        sender.send_text("exact\n  page")?;
+        sender.send_typing(false)?;
+
+        assert_eq!(
+            receive_packet(&receiver)?,
+            chatbox_input_packet("exact\n  page")
+        );
+        assert_eq!(receive_packet(&receiver)?, typing_indicator_packet(false));
+        Ok(())
+    }
+
+    fn receive_packet(receiver: &UdpSocket) -> AppResult<OscPacket> {
         let mut buffer = [0_u8; 1024];
         let (size, _) = receiver
             .recv_from(&mut buffer)
             .map_err(|error| AppError::osc_send("test receiver", error.to_string()))?;
         let (_, packet) = decoder::decode_udp(&buffer[..size])
             .map_err(|error| AppError::osc_encode(error.to_string()))?;
-
         Ok(packet)
-    }
-
-    fn assert_no_osc_packet(receiver: &UdpSocket) -> AppResult<()> {
-        receiver
-            .set_read_timeout(Some(Duration::from_millis(50)))
-            .map_err(|error| AppError::osc_bind(error.to_string()))?;
-        let mut buffer = [0_u8; 1024];
-
-        match receiver.recv_from(&mut buffer) {
-            Ok((size, _)) => Err(AppError::runtime(format!(
-                "Expected no OSC packet, but received {size} bytes."
-            ))),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                Ok(())
-            }
-            Err(error) => Err(AppError::osc_send("test receiver", error.to_string())),
-        }
-    }
-
-    #[test]
-    fn paced_send_is_cancelled_instead_of_waiting_out_the_interval() -> AppResult<()> {
-        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
-        sender.send("initial")?;
-        let cancel = AtomicBool::new(true);
-
-        let result = sender.send_paced("cancelled", &cancel)?;
-
-        assert!(result.is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn paced_send_sends_and_tracks_pacing_when_not_cancelled() -> AppResult<()> {
-        let receiver = UdpSocket::bind("127.0.0.1:0")
-            .map_err(|error| AppError::osc_bind(error.to_string()))?;
-        let port = receiver
-            .local_addr()
-            .map_err(|error| AppError::osc_bind(error.to_string()))?
-            .port();
-        let clock = Arc::new(AdvancingClock::new());
-        let sender = ChatboxOscSender::new(
-            &local_test_config(port),
-            ChatboxPacer::with_clock(clock.clone()),
-        )?;
-        let cancel = AtomicBool::new(false);
-
-        let first = sender
-            .send_paced(OSC_TEST_MESSAGE, &cancel)?
-            .ok_or_else(|| AppError::osc_send("test", "send was skipped".to_string()))?;
-        let second = sender
-            .send_paced("second", &cancel)?
-            .ok_or_else(|| AppError::osc_send("test", "second send was skipped".to_string()))?;
-
-        assert!(first.byte_count > 0);
-        assert!(!first.clipped);
-        assert!(second.byte_count > 0);
-        assert_eq!(clock.total_sleep(), Duration::from_secs(1));
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            chatbox_input_packet(OSC_TEST_MESSAGE)
-        );
-        assert_eq!(
-            receive_osc_packet(&receiver)?,
-            chatbox_input_packet("second")
-        );
-
-        Ok(())
     }
 }

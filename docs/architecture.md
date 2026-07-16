@@ -199,6 +199,12 @@ Stop is a hard generation boundary:
 An uncancellable request may finish during cleanup, but its result is ignored
 and the discard is visible in diagnostics.
 
+The current Completed publisher implements Stop and a runtime-fatal close as
+discard, not drain. Closing admission interrupts any pending pacing wait,
+discards every resident page including the remainder of a unit whose
+publication has begun, attempts the one typing-off cleanup, and then joins the
+publisher worker. Closing never publishes queued caption text.
+
 Typing indication follows normalized speech or pending publication activity,
 not provider completion alone. It turns off after successful resolution, a
 unit ending without text, a safe failure, and Stop. Caption publication and
@@ -234,10 +240,19 @@ Live is a deliberately lossy current view rather than transcript history. The
 App retains normalized state; Chatbox may skip or replace intermediate revisions
 to remain current and readable.
 
-## Target Independent Chatbox Publisher
+## Independent Chatbox Publisher
 
-The target publisher accepts non-blocking candidates and owns OSC timing.
-Capture, provider ingestion, and translation never wait for Chatbox pacing.
+The Phase 1 Completed publisher is implemented as an independent worker.
+Runtime producers submit whole caption-unit lifecycle events without waiting
+for a pacing opportunity or OSC; Completed text is paginated before queue
+admission. The worker owns typing transitions, ordered Completed publication,
+overload handling, and diagnostics, and uses the shared process-wide pacer for
+actual text-send attempts. Capture and provider ingestion never wait for
+Chatbox pacing. Live policy remains a Phase 3 extension of this publisher rather
+than current behavior. Publisher instances are Runtime-generation scoped; only
+the process-wide pacer survives Stop/Start, so an old Publisher handle can never
+submit into a new generation while the new generation still respects the old
+generation's most recent actual send attempt.
 
 Project publication rules:
 
@@ -245,6 +260,11 @@ Project publication rules:
   exploit the initial leaky-bucket burst;
 - a failed OSC attempt also consumes the pacing opportunity, preventing a retry
   storm;
+- provider deltas are never forwarded one-for-one to OSC.
+
+The following eligibility rules remain target Live behavior and are not part of
+the current Completed implementation:
+
 - for a path with real caption units, App preview may update during a unit's
   first second but Chatbox waits; if the unit completes in that interval, only
   its completed text is sent;
@@ -256,10 +276,9 @@ Project publication rules:
 - after that observation window, Live sends the newest eligible snapshot at
   each opportunity and discards obsolete unsent revisions;
 - a completed correction replaces an unsent draft and need not be resent when
-  it is identical to the last published view;
-- provider deltas are never forwarded one-for-one to OSC.
+  it is identical to the last published view.
 
-### Live rendering
+### Target Live rendering
 
 Live uses one recomputed rolling viewport, not a queue of historical screens:
 
@@ -280,7 +299,7 @@ the stale target rather than presenting it as a translation of newer source
 text. A previously published coherent bilingual message need not be cleared
 until newer source text is sent.
 
-### Completed rendering
+### Current Completed rendering
 
 Completed output preserves stable content rather than truncating it:
 
@@ -294,6 +313,25 @@ Completed output preserves stable content rather than truncating it:
   whole caption units that have not begun publication;
 - never drop arbitrary middle pages; retain complete text in the App and emit a
   diagnostic when Chatbox content is dropped.
+
+The current Phase 1 queue policy uses internal, non-user-configurable limits:
+
+- at most `32` resident pages that have not yet been sent successfully;
+- at most `30` seconds of residence for a unit that has not begun publication;
+- a unit becomes started at its first actual text-send attempt, not when it is
+  accepted, selected, or waiting for a pacing opportunity;
+- overload removes the oldest whole unstarted units until the new unit fits; if
+  the new unit cannot fit without splitting itself or displacing a started unit,
+  it is rejected as a whole;
+- a failed text-send attempt is not retried. It consumes the pacing opportunity,
+  aborts that unit, and discards the failed and remaining pages while later
+  units may continue;
+- Stop and runtime-fatal close discard all resident pages without draining them,
+  then attempt the one allowed typing-off cleanup.
+
+The `32`-page and `30`-second limits are provisional safety bounds. Phase 1
+real-machine VRChat validation must measure backlog and readability and adjust
+them before they are treated as settled product limits.
 
 All output respects VRChat's 144-character input cap, at most nine visible
 lines, real glyph-width wrapping, and grapheme-safe clipping. The implementation

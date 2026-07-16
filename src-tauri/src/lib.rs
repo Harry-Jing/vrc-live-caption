@@ -1,6 +1,7 @@
 mod audio;
 mod chatbox_layout;
 mod chatbox_pacer;
+mod chatbox_publisher;
 mod commands;
 mod config;
 mod error;
