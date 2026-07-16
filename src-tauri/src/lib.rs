@@ -1,4 +1,5 @@
 mod audio;
+mod chatbox_pacer;
 mod commands;
 mod config;
 mod error;
@@ -96,8 +97,12 @@ mod tests {
         fs::create_dir_all(&config_directory).map_err(|error| {
             AppError::config_io(format!("Failed to create test config directory: {error}"))
         })?;
-        let contents = serde_json::to_string(&saved_config).map_err(|error| {
+        let mut contents = serde_json::to_value(&saved_config).map_err(|error| {
             AppError::config_io(format!("Failed to serialize test config: {error}"))
+        })?;
+        contents["osc"]["minIntervalMs"] = serde_json::json!(750);
+        let contents = serde_json::to_string(&contents).map_err(|error| {
+            AppError::config_io(format!("Failed to serialize legacy test config: {error}"))
         })?;
         fs::write(config_directory.join("config.json"), contents).map_err(|error| {
             AppError::config_io(format!("Failed to write test config: {error}"))
@@ -110,6 +115,14 @@ mod tests {
             .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
         app.run_iteration(|_, _| {});
         let loaded_config = app.state::<state::AppState>().config()?;
+        let persisted_contents =
+            fs::read_to_string(config_directory.join("config.json")).map_err(|error| {
+                AppError::config_io(format!("Failed to read legacy test config: {error}"))
+            })?;
+        let persisted_config = serde_json::from_str::<serde_json::Value>(&persisted_contents)
+            .map_err(|error| {
+                AppError::config_io(format!("Failed to parse legacy test config: {error}"))
+            })?;
         drop(app);
 
         fs::remove_dir_all(&config_directory).map_err(|error| {
@@ -121,6 +134,10 @@ mod tests {
             Some("saved-device")
         );
         assert!(!loaded_config.osc.enabled);
+        assert_eq!(
+            persisted_config.pointer("/osc/minIntervalMs"),
+            Some(&serde_json::json!(750))
+        );
 
         Ok(())
     }

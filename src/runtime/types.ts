@@ -40,7 +40,6 @@ export type AppConfig = {
     host: string;
     port: number;
     enabled: boolean;
-    minIntervalMs: number;
   };
   ui: {
     showPartial: boolean;

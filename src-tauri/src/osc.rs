@@ -7,12 +7,13 @@
 //! and performs the actual wrapping. The width estimates approximate the
 //! measured TMP contract in `docs/research/vrchat-chatbox-reference.md`.
 //!
-//! `ChatboxOscSender` owns one UDP socket for its lifetime and paces repeated
-//! text sends with a minimum interval so VRChat's Chatbox rate limit does not
-//! drop updates. A cloneable activity handle shares that socket, aggregates
-//! active utterance ids, and sends typing transitions immediately without
-//! reading or changing the text pacing state.
+//! `ChatboxOscSender` owns one UDP socket for its lifetime. Every sender uses a
+//! process-wide `ChatboxPacer`, so Runtime restarts and OSC Test share the same
+//! text-attempt history. A cloneable activity handle shares the socket,
+//! aggregates active utterance ids, and sends typing transitions immediately
+//! without reading or changing the text pacing state.
 
+use crate::chatbox_pacer::ChatboxPacer;
 use crate::config::OscConfig;
 use crate::error::{AppError, AppResult};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
@@ -20,8 +21,6 @@ use std::collections::HashSet;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) const OSC_CHATBOX_INPUT_ADDRESS: &str = "/chatbox/input";
@@ -31,9 +30,6 @@ pub(crate) const OSC_TEST_MESSAGE: &str = "VRC Live Caption OSC test.";
 const CHATBOX_WIDTH_PX: f32 = 280.0;
 const CHATBOX_MAX_LINES: usize = 9;
 const CHATBOX_MAX_UTF16_UNITS: usize = 144;
-// Upper bound on one pacing sleep slice so a cancel request interrupts the
-// wait quickly instead of after the full minimum interval.
-const PACING_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct OscSendResult {
     pub(crate) target: String,
@@ -50,8 +46,7 @@ pub(crate) struct ChatboxFinalSendAttempt {
 pub(crate) struct ChatboxOscSender {
     transport: Arc<dyn OscTransport>,
     activity: ChatboxActivityHandle,
-    min_interval: Duration,
-    last_send: Option<Instant>,
+    pacer: ChatboxPacer,
 }
 
 trait OscTransport: Send + Sync {
@@ -86,7 +81,7 @@ enum ChatboxActivityLifecycle {
 }
 
 impl ChatboxOscSender {
-    pub(crate) fn new(config: &OscConfig) -> AppResult<Self> {
+    pub(crate) fn new(config: &OscConfig, pacer: ChatboxPacer) -> AppResult<Self> {
         let socket =
             UdpSocket::bind("0.0.0.0:0").map_err(|error| AppError::osc_bind(error.to_string()))?;
         socket
@@ -106,13 +101,10 @@ impl ChatboxOscSender {
             target_address,
         });
 
-        Ok(Self::with_transport(
-            transport,
-            Duration::from_millis(config.min_interval_ms),
-        ))
+        Ok(Self::with_transport(transport, pacer))
     }
 
-    fn with_transport(transport: Arc<dyn OscTransport>, min_interval: Duration) -> Self {
+    fn with_transport(transport: Arc<dyn OscTransport>, pacer: ChatboxPacer) -> Self {
         let activity = ChatboxActivityHandle {
             transport: Arc::clone(&transport),
             state: Arc::new(Mutex::new(ChatboxActivityState {
@@ -126,8 +118,7 @@ impl ChatboxOscSender {
         Self {
             transport,
             activity,
-            min_interval,
-            last_send: None,
+            pacer,
         }
     }
 
@@ -135,10 +126,14 @@ impl ChatboxOscSender {
         self.activity.clone()
     }
 
-    /// Shapes `text` for the Chatbox layout and sends it immediately.
+    /// Shapes `text`, waits for the process-wide pacing turn, and sends it.
     pub(crate) fn send(&self, text: &str) -> AppResult<OscSendResult> {
         let shaped = shape_chatbox_text(text);
-        let mut result = self.send_rendered(&shaped.text)?;
+        let permit = self
+            .pacer
+            .wait_for_turn(None)?
+            .ok_or_else(|| AppError::state("Uncancellable Chatbox send was cancelled."))?;
+        let mut result = permit.attempt(|| self.send_rendered(&shaped.text))?;
 
         result.clipped = shaped.clipped;
         result.rendered_text = shaped.text;
@@ -146,29 +141,19 @@ impl ChatboxOscSender {
         Ok(result)
     }
 
-    /// Like [`Self::send`], but first waits out the configured minimum
-    /// interval since the previous paced send. The wait polls `cancel`, so a
-    /// runtime stop aborts the send instead of flushing one more Chatbox
-    /// message after the user asked to stop; a cancelled call returns
-    /// `Ok(None)` and leaves the pacing state untouched.
+    /// Waits for the process-wide text-send turn. The wait polls `cancel`, so
+    /// runtime Stop can abort before transport is attempted; an aborted call
+    /// returns `Ok(None)` and does not consume an opportunity.
     pub(crate) fn send_paced(
-        &mut self,
+        &self,
         text: &str,
         cancel: &AtomicBool,
     ) -> AppResult<Option<OscSendResult>> {
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(None);
-            }
-
-            let Some(remaining) = self.remaining_pacing_wait() else {
-                break;
-            };
-
-            thread::sleep(remaining.min(PACING_POLL_INTERVAL));
-        }
-
-        let result = {
+        let shaped = shape_chatbox_text(text);
+        let Some(permit) = self.pacer.wait_for_turn(Some(cancel))? else {
+            return Ok(None);
+        };
+        let mut result = {
             let state = self
                 .activity
                 .state
@@ -181,15 +166,16 @@ impl ChatboxOscSender {
                 return Ok(None);
             }
 
-            self.send(text)?
+            permit.attempt(|| self.send_rendered(&shaped.text))?
         };
-        self.last_send = Some(Instant::now());
+        result.clipped = shaped.clipped;
+        result.rendered_text = shaped.text;
 
         Ok(Some(result))
     }
 
     pub(crate) fn send_final_paced(
-        &mut self,
+        &self,
         utterance_id: &str,
         text: &str,
         cancel: &AtomicBool,
@@ -198,16 +184,6 @@ impl ChatboxOscSender {
         let typing = self.activity.utterance_resolved(utterance_id);
 
         ChatboxFinalSendAttempt { text, typing }
-    }
-
-    fn remaining_pacing_wait(&self) -> Option<Duration> {
-        let elapsed = self.last_send?.elapsed();
-
-        if elapsed >= self.min_interval {
-            return None;
-        }
-
-        Some(self.min_interval - elapsed)
     }
 
     fn send_rendered(&self, text: &str) -> AppResult<OscSendResult> {
@@ -484,13 +460,55 @@ fn is_cjk_or_full_width(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chatbox_pacer::{ChatboxPacer, Clock};
     use rosc::decoder;
     use std::collections::VecDeque;
     use std::sync::Barrier;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     struct ScriptedOscTransport {
         failures: Mutex<VecDeque<bool>>,
         packets: Mutex<Vec<OscPacket>>,
+    }
+
+    struct AdvancingClock {
+        now: Mutex<Instant>,
+        sleeps: Mutex<Vec<Duration>>,
+    }
+
+    impl AdvancingClock {
+        fn new() -> Self {
+            Self {
+                now: Mutex::new(Instant::now()),
+                sleeps: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn total_sleep(&self) -> Duration {
+            self.sleeps
+                .lock()
+                .map(|sleeps| sleeps.iter().copied().sum())
+                .unwrap_or_default()
+        }
+    }
+
+    impl Clock for AdvancingClock {
+        fn now(&self) -> Instant {
+            self.now
+                .lock()
+                .map(|now| *now)
+                .unwrap_or_else(|poisoned| *poisoned.into_inner())
+        }
+
+        fn sleep(&self, duration: Duration) {
+            if let Ok(mut sleeps) = self.sleeps.lock() {
+                sleeps.push(duration);
+            }
+            if let Ok(mut now) = self.now.lock() {
+                *now += duration;
+            }
+        }
     }
 
     impl OscTransport for ScriptedOscTransport {
@@ -555,6 +573,50 @@ mod tests {
     }
 
     #[test]
+    fn runtime_restart_and_osc_test_share_actual_attempt_history() -> AppResult<()> {
+        let clock = Arc::new(AdvancingClock::new());
+        let pacer = ChatboxPacer::with_clock(clock.clone());
+        let cancel = AtomicBool::new(false);
+        let (first_runtime, _) = scripted_test_sender_with_pacer([false], pacer.clone());
+        let (restarted_runtime, _) = scripted_test_sender_with_pacer([false], pacer.clone());
+        let (osc_test, _) = scripted_test_sender_with_pacer([false], pacer.clone());
+        let (runtime_after_test, _) = scripted_test_sender_with_pacer([false], pacer);
+
+        assert!(matches!(
+            first_runtime.send_paced("first runtime", &cancel),
+            Ok(Some(_))
+        ));
+        assert!(matches!(
+            restarted_runtime.send_paced("restarted runtime", &cancel),
+            Ok(Some(_))
+        ));
+        osc_test.send("OSC test")?;
+        assert!(matches!(
+            runtime_after_test.send_paced("runtime after test", &cancel),
+            Ok(Some(_))
+        ));
+
+        assert_eq!(clock.total_sleep(), Duration::from_secs(3));
+
+        Ok(())
+    }
+
+    #[test]
+    fn failed_transport_attempt_still_delays_the_next_sender() -> AppResult<()> {
+        let clock = Arc::new(AdvancingClock::new());
+        let pacer = ChatboxPacer::with_clock(clock.clone());
+        let (failing_sender, _) = scripted_test_sender_with_pacer([true], pacer.clone());
+        let (next_sender, _) = scripted_test_sender_with_pacer([false], pacer);
+
+        assert!(failing_sender.send("fails").is_err());
+        next_sender.send("next")?;
+
+        assert_eq!(clock.total_sleep(), Duration::from_secs(1));
+
+        Ok(())
+    }
+
+    #[test]
     fn typing_off_packet_uses_the_vrchat_boolean_contract() {
         assert_eq!(
             typing_indicator_packet(false),
@@ -573,9 +635,9 @@ mod tests {
             .local_addr()
             .map_err(|error| AppError::osc_bind(error.to_string()))?
             .port();
-        let mut config = local_test_config(port, 500);
+        let mut config = local_test_config(port);
         config.host = "localhost".to_string();
-        let sender = ChatboxOscSender::new(&config)?;
+        let sender = ChatboxOscSender::new(&config, ChatboxPacer::default())?;
 
         sender.send("test")?;
 
@@ -586,7 +648,7 @@ mod tests {
 
     #[test]
     fn first_active_utterance_turns_typing_indicator_on() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver(500)?;
+        let (sender, receiver) = local_test_sender_and_receiver()?;
         let activity = sender.activity_handle();
 
         activity.utterance_started("speech-1")?;
@@ -604,7 +666,7 @@ mod tests {
 
     #[test]
     fn typing_indicator_stays_on_until_every_utterance_resolves() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver(500)?;
+        let (sender, receiver) = local_test_sender_and_receiver()?;
         let activity = sender.activity_handle();
 
         activity.utterance_started("speech-1")?;
@@ -631,7 +693,7 @@ mod tests {
 
     #[test]
     fn final_text_is_sent_before_the_last_utterance_turns_typing_off() -> AppResult<()> {
-        let (mut sender, receiver) = local_test_sender_and_receiver(500)?;
+        let (sender, receiver) = local_test_sender_and_receiver()?;
         let activity = sender.activity_handle();
         let cancel = AtomicBool::new(false);
 
@@ -659,7 +721,7 @@ mod tests {
 
     #[test]
     fn final_send_failure_still_attempts_to_turn_typing_off() -> AppResult<()> {
-        let (mut sender, transport) = scripted_test_sender([false, true, false]);
+        let (sender, transport) = scripted_test_sender([false, true, false]);
         let activity = sender.activity_handle();
         let cancel = AtomicBool::new(false);
 
@@ -682,7 +744,7 @@ mod tests {
 
     #[test]
     fn earlier_final_does_not_clear_a_later_active_utterance() -> AppResult<()> {
-        let (mut sender, receiver) = local_test_sender_and_receiver(0)?;
+        let (sender, receiver) = local_test_sender_and_receiver()?;
         let activity = sender.activity_handle();
         let cancel = AtomicBool::new(false);
 
@@ -719,7 +781,7 @@ mod tests {
 
     #[test]
     fn stop_turns_typing_off_once_and_blocks_late_output() -> AppResult<()> {
-        let (mut sender, receiver) = local_test_sender_and_receiver(500)?;
+        let (sender, receiver) = local_test_sender_and_receiver()?;
         let activity = sender.activity_handle();
         let cancel = AtomicBool::new(false);
 
@@ -753,7 +815,7 @@ mod tests {
 
     #[test]
     fn stop_sends_one_typing_off_even_without_an_active_utterance() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver(500)?;
+        let (sender, receiver) = local_test_sender_and_receiver()?;
         let activity = sender.activity_handle();
         let cancel = AtomicBool::new(false);
 
@@ -840,8 +902,12 @@ mod tests {
 
     #[test]
     fn typing_transition_bypasses_an_in_progress_text_pacing_wait() -> AppResult<()> {
-        let (mut sender, receiver) = local_test_sender_and_receiver(60_000)?;
-        sender.last_send = Some(Instant::now());
+        let (sender, receiver) = local_test_sender_and_receiver()?;
+        sender.send("initial")?;
+        assert_eq!(
+            receive_osc_packet(&receiver)?,
+            chatbox_input_packet("initial")
+        );
         let activity = sender.activity_handle();
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
@@ -878,7 +944,7 @@ mod tests {
 
     #[test]
     fn runtime_error_clears_active_typing_and_latches_output_closed() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver(500)?;
+        let (sender, receiver) = local_test_sender_and_receiver()?;
         let activity = sender.activity_handle();
 
         activity.utterance_started("speech-1")?;
@@ -902,7 +968,7 @@ mod tests {
 
     #[test]
     fn repeated_runtime_error_cleanup_without_typing_is_a_no_op() -> AppResult<()> {
-        let (sender, receiver) = local_test_sender_and_receiver(500)?;
+        let (sender, receiver) = local_test_sender_and_receiver()?;
         let activity = sender.activity_handle();
 
         activity.finish_after_error()?;
@@ -917,7 +983,7 @@ mod tests {
     #[test]
     fn chatbox_send_clips_to_nine_visible_lines_without_inserting_breaks() -> AppResult<()> {
         let text = "中".repeat(144);
-        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
         let result = sender.send(&text)?;
 
         assert_eq!(result.rendered_text, "中".repeat(135));
@@ -930,7 +996,7 @@ mod tests {
     #[test]
     fn chatbox_send_leaves_wrapping_to_vrchat() -> AppResult<()> {
         let text = "x".repeat(40);
-        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
         let result = sender.send(&text)?;
 
         assert_eq!(result.rendered_text, text);
@@ -942,7 +1008,7 @@ mod tests {
 
     #[test]
     fn chatbox_send_hard_clips_input_to_144_utf16_code_units() -> AppResult<()> {
-        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
         let result = sender.send(&"x".repeat(145))?;
 
         assert_eq!(result.rendered_text, "x".repeat(144));
@@ -955,7 +1021,7 @@ mod tests {
     #[test]
     fn chatbox_send_keeps_exactly_144_utf16_code_units() -> AppResult<()> {
         let text = "x".repeat(144);
-        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
         let result = sender.send(&text)?;
 
         assert_eq!(result.rendered_text, text);
@@ -967,7 +1033,7 @@ mod tests {
 
     #[test]
     fn chatbox_send_counts_non_bmp_emoji_as_two_utf16_units() -> AppResult<()> {
-        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
         let result = sender.send(&"😀".repeat(73))?;
 
         assert_eq!(result.rendered_text, "😀".repeat(72));
@@ -980,7 +1046,7 @@ mod tests {
     #[test]
     fn chatbox_send_does_not_split_a_combining_grapheme() -> AppResult<()> {
         let grapheme = "e\u{301}";
-        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
         let result = sender.send(&grapheme.repeat(73))?;
 
         assert_eq!(result.rendered_text, grapheme.repeat(72));
@@ -993,7 +1059,7 @@ mod tests {
     #[test]
     fn chatbox_send_does_not_split_a_zwj_emoji_sequence() -> AppResult<()> {
         let family = "👨‍👩‍👧‍👦";
-        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
         let result = sender.send(&family.repeat(14))?;
 
         assert_eq!(family.encode_utf16().count(), 11);
@@ -1006,7 +1072,7 @@ mod tests {
 
     #[test]
     fn chatbox_send_normalizes_whitespace_without_reporting_clipping() -> AppResult<()> {
-        let sender = ChatboxOscSender::new(&local_test_config(9000, 500))?;
+        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
         let result = sender.send("  hello\t \n world  ")?;
 
         assert_eq!(result.rendered_text, "hello world");
@@ -1015,25 +1081,22 @@ mod tests {
         Ok(())
     }
 
-    fn local_test_config(port: u16, min_interval_ms: u64) -> OscConfig {
+    fn local_test_config(port: u16) -> OscConfig {
         OscConfig {
             host: "127.0.0.1".to_string(),
             port,
             enabled: true,
-            min_interval_ms,
         }
     }
 
-    fn local_test_sender_and_receiver(
-        min_interval_ms: u64,
-    ) -> AppResult<(ChatboxOscSender, UdpSocket)> {
+    fn local_test_sender_and_receiver() -> AppResult<(ChatboxOscSender, UdpSocket)> {
         let receiver = UdpSocket::bind("127.0.0.1:0")
             .map_err(|error| AppError::osc_bind(error.to_string()))?;
         let port = receiver
             .local_addr()
             .map_err(|error| AppError::osc_bind(error.to_string()))?
             .port();
-        let sender = ChatboxOscSender::new(&local_test_config(port, min_interval_ms))?;
+        let sender = ChatboxOscSender::new(&local_test_config(port), ChatboxPacer::default())?;
 
         Ok((sender, receiver))
     }
@@ -1041,12 +1104,19 @@ mod tests {
     fn scripted_test_sender(
         failures: impl IntoIterator<Item = bool>,
     ) -> (ChatboxOscSender, Arc<ScriptedOscTransport>) {
+        scripted_test_sender_with_pacer(failures, ChatboxPacer::default())
+    }
+
+    fn scripted_test_sender_with_pacer(
+        failures: impl IntoIterator<Item = bool>,
+        pacer: ChatboxPacer,
+    ) -> (ChatboxOscSender, Arc<ScriptedOscTransport>) {
         let transport = Arc::new(ScriptedOscTransport {
             failures: Mutex::new(failures.into_iter().collect()),
             packets: Mutex::new(Vec::new()),
         });
         let sender_transport: Arc<dyn OscTransport> = transport.clone();
-        let sender = ChatboxOscSender::with_transport(sender_transport, Duration::from_millis(500));
+        let sender = ChatboxOscSender::with_transport(sender_transport, pacer);
 
         (sender, transport)
     }
@@ -1089,17 +1159,13 @@ mod tests {
 
     #[test]
     fn paced_send_is_cancelled_instead_of_waiting_out_the_interval() -> AppResult<()> {
-        let mut sender = ChatboxOscSender::new(&local_test_config(9000, 60_000))?;
-        // A fresh last_send forces the full one-minute pacing wait; the test
-        // only finishes quickly if cancellation beats that wait.
-        sender.last_send = Some(Instant::now());
-        let last_send_before = sender.last_send;
+        let sender = ChatboxOscSender::new(&local_test_config(9000), ChatboxPacer::default())?;
+        sender.send("initial")?;
         let cancel = AtomicBool::new(true);
 
         let result = sender.send_paced("cancelled", &cancel)?;
 
         assert!(result.is_none());
-        assert_eq!(sender.last_send, last_send_before);
 
         Ok(())
     }
@@ -1112,16 +1178,32 @@ mod tests {
             .local_addr()
             .map_err(|error| AppError::osc_bind(error.to_string()))?
             .port();
-        let mut sender = ChatboxOscSender::new(&local_test_config(port, 500))?;
+        let clock = Arc::new(AdvancingClock::new());
+        let sender = ChatboxOscSender::new(
+            &local_test_config(port),
+            ChatboxPacer::with_clock(clock.clone()),
+        )?;
         let cancel = AtomicBool::new(false);
 
-        let result = sender
+        let first = sender
             .send_paced(OSC_TEST_MESSAGE, &cancel)?
             .ok_or_else(|| AppError::osc_send("test", "send was skipped".to_string()))?;
+        let second = sender
+            .send_paced("second", &cancel)?
+            .ok_or_else(|| AppError::osc_send("test", "second send was skipped".to_string()))?;
 
-        assert!(result.byte_count > 0);
-        assert!(!result.clipped);
-        assert!(sender.last_send.is_some());
+        assert!(first.byte_count > 0);
+        assert!(!first.clipped);
+        assert!(second.byte_count > 0);
+        assert_eq!(clock.total_sleep(), Duration::from_secs(1));
+        assert_eq!(
+            receive_osc_packet(&receiver)?,
+            chatbox_input_packet(OSC_TEST_MESSAGE)
+        );
+        assert_eq!(
+            receive_osc_packet(&receiver)?,
+            chatbox_input_packet("second")
+        );
 
         Ok(())
     }

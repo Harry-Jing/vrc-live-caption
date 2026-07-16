@@ -162,10 +162,6 @@ function save() {
   next.stt.model = next.stt.model.trim();
   next.osc.host = next.osc.host.trim();
   next.osc.port = finiteOr(next.osc.port, saved.osc.port);
-  next.osc.minIntervalMs = finiteOr(
-    next.osc.minIntervalMs,
-    saved.osc.minIntervalMs,
-  );
 
   emit("saveConfig", next);
 }
@@ -367,16 +363,6 @@ function confirmDeleteOpenAiApiKey() {
             />
           </UFormField>
         </div>
-
-        <UFormField :label="uiText('settings.fields.oscInterval')">
-          <UInputNumber
-            v-model="form.osc.minIntervalMs"
-            class="w-full"
-            :format-options="{ useGrouping: false }"
-            :min="500"
-            :step="100"
-          />
-        </UFormField>
 
         <div class="grid gap-3 sm:grid-cols-2">
           <USwitch

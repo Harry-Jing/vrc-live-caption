@@ -5,6 +5,7 @@
 //! `config.json` and the in-memory copy cannot drift apart; secrets never
 //! pass through here.
 
+use crate::chatbox_pacer::ChatboxPacer;
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::events::{DiagnosticCategory, DiagnosticUpdate, emit_diagnostic};
@@ -19,6 +20,7 @@ const CONFIG_FILE_NAME: &str = "config.json";
 
 pub(crate) struct AppState {
     config: Mutex<AppConfig>,
+    chatbox_pacer: ChatboxPacer,
     pub(crate) runtime: RuntimeManager,
 }
 
@@ -26,12 +28,17 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             config: Mutex::new(AppConfig::default()),
+            chatbox_pacer: ChatboxPacer::default(),
             runtime: RuntimeManager::default(),
         }
     }
 }
 
 impl AppState {
+    pub(crate) fn chatbox_pacer(&self) -> ChatboxPacer {
+        self.chatbox_pacer.clone()
+    }
+
     pub(crate) fn config(&self) -> AppResult<AppConfig> {
         self.config
             .lock()
@@ -170,6 +177,7 @@ mod tests {
         let value = serde_json::to_value(AppConfig::default())?;
 
         assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(1)));
+        assert!(value.pointer("/osc/minIntervalMs").is_none());
 
         Ok(())
     }
@@ -196,6 +204,43 @@ mod tests {
             Some("saved-device")
         );
         assert!(!config.osc.enabled);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_valid_config_ignores_removed_chatbox_interval_and_preserves_other_settings()
+    -> AppResult<()> {
+        let config = parse_valid_config(
+            r#"{
+                "schemaVersion": 1,
+                "audio": {"inputDeviceId": "saved-device"},
+                "stt": {"provider": "mock", "language": "zh", "model": "saved-model"},
+                "osc": {
+                    "host": "192.0.2.10",
+                    "port": 9012,
+                    "enabled": false,
+                    "minIntervalMs": 750
+                },
+                "ui": {"showPartial": false}
+            }"#,
+        )?;
+
+        assert_eq!(config.schema_version, 1);
+        assert_eq!(
+            config.audio.input_device_id.as_deref(),
+            Some("saved-device")
+        );
+        assert!(matches!(
+            config.stt.provider,
+            crate::config::SttProvider::Mock
+        ));
+        assert_eq!(config.stt.language, "zh");
+        assert_eq!(config.stt.model, "saved-model");
+        assert_eq!(config.osc.host, "192.0.2.10");
+        assert_eq!(config.osc.port, 9012);
+        assert!(!config.osc.enabled);
+        assert!(!config.ui.show_partial);
 
         Ok(())
     }

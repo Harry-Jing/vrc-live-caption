@@ -93,7 +93,6 @@ const englishMessages = {
   "settings.fields.sttModel": "STT model",
   "settings.fields.oscHost": "OSC host",
   "settings.fields.port": "Port",
-  "settings.fields.oscInterval": "OSC interval (ms)",
   "settings.fields.chatboxOutput": "Chatbox output",
   "settings.fields.partialPreview": "App partial preview",
   "settings.loading": "Loading settings...",

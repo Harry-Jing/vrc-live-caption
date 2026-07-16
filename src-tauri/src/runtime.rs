@@ -18,6 +18,7 @@
 //! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
 
 use crate::audio::{open_input_capture, receive_audio};
+use crate::chatbox_pacer::ChatboxPacer;
 use crate::config::{AppConfig, OscConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
@@ -179,7 +180,12 @@ impl RuntimeManager {
         Ok(())
     }
 
-    pub(crate) fn start(&self, app: AppHandle, config: AppConfig) -> AppResult<()> {
+    pub(crate) fn start(
+        &self,
+        app: AppHandle,
+        config: AppConfig,
+        chatbox_pacer: ChatboxPacer,
+    ) -> AppResult<()> {
         config.validate()?;
 
         let mut guard = self
@@ -212,7 +218,7 @@ impl RuntimeManager {
         } else {
             None
         };
-        let osc_sender = match initialize_runtime_chatbox(&config.osc) {
+        let osc_sender = match initialize_runtime_chatbox(&config.osc, chatbox_pacer) {
             RuntimeChatboxInit::Disabled => None,
             RuntimeChatboxInit::Ready(sender) => Some(sender),
             RuntimeChatboxInit::Unavailable(error) => {
@@ -339,12 +345,15 @@ fn clear_finished_runtime(app: &AppHandle, handle: &mut Option<RuntimeHandle>) -
         .map_err(|_| AppError::runtime("Runtime thread panicked after stopping."))
 }
 
-fn initialize_runtime_chatbox(config: &OscConfig) -> RuntimeChatboxInit {
+fn initialize_runtime_chatbox(
+    config: &OscConfig,
+    chatbox_pacer: ChatboxPacer,
+) -> RuntimeChatboxInit {
     if !config.enabled {
         return RuntimeChatboxInit::Disabled;
     }
 
-    match ChatboxOscSender::new(config) {
+    match ChatboxOscSender::new(config, chatbox_pacer) {
         Ok(sender) => RuntimeChatboxInit::Ready(sender),
         Err(error) => RuntimeChatboxInit::Unavailable(error),
     }
@@ -1143,11 +1152,10 @@ mod tests {
             host: "does-not-resolve.invalid".to_string(),
             port: 9000,
             enabled: false,
-            min_interval_ms: 500,
         };
 
         assert!(matches!(
-            initialize_runtime_chatbox(&config),
+            initialize_runtime_chatbox(&config, ChatboxPacer::default()),
             RuntimeChatboxInit::Disabled
         ));
     }
@@ -1158,11 +1166,10 @@ mod tests {
             host: "[::1]".to_string(),
             port: 9000,
             enabled: true,
-            min_interval_ms: 500,
         };
 
         assert!(matches!(
-            initialize_runtime_chatbox(&config),
+            initialize_runtime_chatbox(&config, ChatboxPacer::default()),
             RuntimeChatboxInit::Unavailable(_)
         ));
     }
@@ -1735,9 +1742,8 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port,
             enabled: true,
-            min_interval_ms: 500,
         };
-        let sender = ChatboxOscSender::new(&config)?;
+        let sender = ChatboxOscSender::new(&config, ChatboxPacer::default())?;
 
         Ok((sender, receiver))
     }

@@ -58,12 +58,6 @@ impl AppConfig {
             return Err(AppError::config("OSC host cannot be empty."));
         }
 
-        if self.osc.min_interval_ms < 500 {
-            return Err(AppError::config(
-                "OSC minimum interval must be at least 500 ms.",
-            ));
-        }
-
         Ok(())
     }
 }
@@ -122,8 +116,6 @@ pub(crate) struct OscConfig {
     pub(crate) port: u16,
     #[serde(default = "default_true")]
     pub(crate) enabled: bool,
-    #[serde(default = "default_osc_min_interval_ms")]
-    pub(crate) min_interval_ms: u64,
 }
 
 impl Default for OscConfig {
@@ -132,7 +124,6 @@ impl Default for OscConfig {
             host: default_osc_host(),
             port: default_osc_port(),
             enabled: true,
-            min_interval_ms: default_osc_min_interval_ms(),
         }
     }
 }
@@ -168,10 +159,6 @@ fn default_osc_host() -> String {
 
 fn default_osc_port() -> u16 {
     9000
-}
-
-fn default_osc_min_interval_ms() -> u64 {
-    1200
 }
 
 fn default_true() -> bool {

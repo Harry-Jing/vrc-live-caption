@@ -33,11 +33,12 @@ reliability corrections and real-client validation remain.
 Goal: make the existing segmented `gpt-4o-mini-transcribe` Completed path a
 trustworthy baseline before changing the provider and wire contracts.
 
-- replace the configurable 1200 ms default / 500 ms floor with at least
-  `1000 ms` from the previous actual text-send attempt; a failed attempt also
-  consumes the opportunity;
-- migrate old config values and keep frontend validation, backend validation,
-  defaults, and help text consistent;
+- enforce one process-wide, fixed `1000 ms` interval from the previous actual
+  text-send attempt, shared by Runtime output and OSC Test; failed attempts also
+  consume the opportunity, and restarting Runtime does not reset the interval;
+- remove the legacy `osc.minIntervalMs` setting from the config contract and
+  settings UI; older config files may retain that ignored key while every other
+  setting continues to load unchanged;
 - implement the full Chatbox layout engine from
   [research/vrchat-chatbox-reference.md](./research/vrchat-chatbox-reference.md):
   144 UTF-16 code units, at most nine visible lines, measured glyph widths,
@@ -88,7 +89,7 @@ contract.
 - test webview reload resynchronization through the existing runtime status
   snapshot;
 - test duplicate, out-of-order, and late-after-Stop current-wire events;
-- test settings round trips and the Phase 1 config migration.
+- test settings round trips and the Phase 1 legacy-config compatibility path.
 
 Exit criteria:
 

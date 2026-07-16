@@ -66,9 +66,10 @@ pub(crate) fn list_audio_input_devices(app: AppHandle) -> AppResult<Vec<AudioInp
 #[tauri::command(async)]
 pub(crate) fn start_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let config = state.config()?;
+    let chatbox_pacer = state.chatbox_pacer();
 
     tracing::info!("starting outgoing caption runtime");
-    state.runtime.start(app, config)
+    state.runtime.start(app, config, chatbox_pacer)
 }
 
 #[tauri::command(async)]
@@ -129,8 +130,11 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
 #[tauri::command(async)]
 pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let config = state.config()?;
+    let chatbox_pacer = state.chatbox_pacer();
 
-    match ChatboxOscSender::new(&config.osc).and_then(|sender| sender.send(OSC_TEST_MESSAGE)) {
+    match ChatboxOscSender::new(&config.osc, chatbox_pacer)
+        .and_then(|sender| sender.send(OSC_TEST_MESSAGE))
+    {
         Ok(result) => {
             tracing::info!(
                 target = result.target,

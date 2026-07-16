@@ -28,7 +28,6 @@ const PREVIEW_DEFAULT_CONFIG: AppConfig = {
     host: "127.0.0.1",
     port: 9000,
     enabled: true,
-    minIntervalMs: 1200,
   },
   ui: {
     showPartial: true,
