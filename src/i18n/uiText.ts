@@ -36,10 +36,10 @@ const englishMessages = {
 
   "caption.preview.eyebrow": "Caption Preview",
   "caption.preview.title": "Current output",
+  "caption.mode.waiting": "Waiting",
   "caption.mode.listening": "Listening",
   "caption.mode.partial": "Partial",
   "caption.mode.final": "Final",
-  "caption.state.listening": "Listening...",
   "caption.state.waiting": "Waiting for transcript events.",
   "caption.finalAnnouncement": ({ text }: { text: string }) =>
     `Final caption: ${text}`,

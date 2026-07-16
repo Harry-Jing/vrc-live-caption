@@ -3,10 +3,11 @@
 // Simulated activity is delivered through the same event handlers as the real
 // backend, so preview mode exercises the actual caption state machine.
 
-import type { RuntimeBackend, RuntimeEventHandlers } from "./backend";
+import type { RuntimeBackend, RuntimeEventListener } from "./backend";
 import {
   APP_CONFIG_SCHEMA_VERSION,
   type AppConfig,
+  type DiagnosticCategory,
   type ProviderSecretStatus,
   type RuntimeCommand,
   type RuntimeStatus,
@@ -35,7 +36,7 @@ const PREVIEW_DEFAULT_CONFIG: AppConfig = {
 };
 
 export function createPreviewBackend(): RuntimeBackend {
-  let handlers: RuntimeEventHandlers | null = null;
+  const subscriptions = new Set<Readonly<{ listener: RuntimeEventListener }>>();
   let config = structuredClone(PREVIEW_DEFAULT_CONFIG);
   let openAiSecretSuffix: string | null = null;
   let nextEventNumber = 1;
@@ -50,9 +51,35 @@ export function createPreviewBackend(): RuntimeBackend {
     return `${prefix}-preview-${String(nextEventNumber)}`;
   }
 
+  function emit(event: Parameters<RuntimeEventListener>[0]) {
+    for (const subscription of subscriptions) {
+      subscription.listener(event);
+    }
+  }
+
   function emitStatus(status: RuntimeStatus, message: string) {
     latestStatus = { status, message, timestampMs: Date.now() };
-    handlers?.onStatus(latestStatus);
+    emit({ type: "status", payload: latestStatus });
+  }
+
+  function emitDiagnostic(
+    category: DiagnosticCategory,
+    code: string,
+    message: string,
+    detail: string,
+  ) {
+    emit({
+      type: "diagnostic",
+      payload: {
+        id: eventId("diagnostic"),
+        category,
+        severity: "info",
+        code,
+        message,
+        detail,
+        timestampMs: Date.now(),
+      },
+    });
   }
 
   function emitMockTranscript() {
@@ -65,25 +92,40 @@ export function createPreviewBackend(): RuntimeBackend {
       timestampMs,
     };
 
-    handlers?.onUtteranceStarted({
-      id: eventId("utterance-start"),
-      utteranceId,
-      timestampMs,
+    emit({
+      type: "utteranceStarted",
+      payload: {
+        id: eventId("utterance-start"),
+        utteranceId,
+        timestampMs,
+      },
     });
-    handlers?.onTranscriptPartial({
-      ...transcriptBase,
-      id: eventId("transcript"),
-      kind: "partial",
-      text: "Testing live caption preview...",
-      revision: 1,
+    emit({
+      type: "transcriptPartial",
+      payload: {
+        ...transcriptBase,
+        id: eventId("transcript"),
+        kind: "partial",
+        text: "Testing live caption preview...",
+        revision: 1,
+      },
     });
-    handlers?.onTranscriptFinal({
-      ...transcriptBase,
-      id: eventId("transcript"),
-      kind: "final",
-      text: "Testing live caption preview from the browser UI.",
-      revision: 2,
+    emit({
+      type: "transcriptFinal",
+      payload: {
+        ...transcriptBase,
+        id: eventId("transcript"),
+        kind: "final",
+        text: "Testing live caption preview from the mock runtime.",
+        revision: 2,
+      },
     });
+    emitDiagnostic(
+      "stt",
+      "stt.mock_transcript_emitted",
+      "Mock transcript emitted",
+      "The UI received normalized partial and final transcript events.",
+    );
   }
 
   function openAiSecretStatus(): ProviderSecretStatus {
@@ -111,34 +153,51 @@ export function createPreviewBackend(): RuntimeBackend {
   }
 
   return {
-    listen(eventHandlers: RuntimeEventHandlers) {
-      handlers = eventHandlers;
+    listen(eventListener: RuntimeEventListener) {
+      const subscription = { listener: eventListener };
+      subscriptions.add(subscription);
 
       return Promise.resolve(() => {
-        if (handlers === eventHandlers) {
-          handlers = null;
-        }
+        subscriptions.delete(subscription);
       });
     },
 
     runCommand(command: RuntimeCommand) {
       if (command === "start_runtime") {
+        if (["starting", "running", "stopping"].includes(latestStatus.status)) {
+          return Promise.reject(
+            new Error("The browser preview runtime is already active."),
+          );
+        }
+
         emitStatus("starting", "Starting browser preview runtime");
         emitStatus("running", "Browser preview runtime is running");
       } else if (command === "stop_runtime") {
+        if (
+          latestStatus.status === "idle" ||
+          latestStatus.status === "stopped"
+        ) {
+          emitStatus("stopped", "Browser preview runtime is already stopped");
+          return Promise.resolve();
+        }
+
+        emitStatus("stopping", "Stopping browser preview runtime");
         emitStatus("stopped", "Browser preview runtime stopped");
+        emitDiagnostic(
+          "runtime",
+          "runtime.stopped",
+          "Runtime stopped",
+          "Browser preview capture has been released.",
+        );
       } else if (command === "emit_mock_transcript") {
         emitMockTranscript();
       } else {
-        handlers?.onDiagnostic({
-          id: eventId("diagnostic"),
-          category: "osc",
-          severity: "info",
-          code: "osc.test_simulated",
-          message: "OSC test simulated",
-          detail: "Desktop-only command was simulated for UI preview.",
-          timestampMs: Date.now(),
-        });
+        emitDiagnostic(
+          "osc",
+          "osc.test_simulated",
+          "OSC test simulated",
+          "Desktop-only command was simulated for UI preview.",
+        );
       }
 
       return Promise.resolve();

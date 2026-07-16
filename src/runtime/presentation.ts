@@ -26,6 +26,7 @@ export const runtimeStatusColor: Record<RuntimeStatus, StatusBadgeColor> = {
 };
 
 export const captionModeColor: Record<CaptionMode, StatusBadgeColor> = {
+  waiting: "neutral",
   listening: "info",
   partial: "warning",
   final: "success",
@@ -50,10 +51,18 @@ export const runtimeStatusMessageKey = {
 } satisfies Record<RuntimeStatus, UiStaticMessageKey>;
 
 export const captionModeMessageKey = {
+  waiting: "caption.mode.waiting",
   listening: "caption.mode.listening",
   partial: "caption.mode.partial",
   final: "caption.mode.final",
 } satisfies Record<CaptionMode, UiStaticMessageKey>;
+
+export const captionModeIcon = {
+  waiting: "i-lucide-clock-3",
+  listening: "i-lucide-audio-lines",
+  partial: "i-lucide-message-square-more",
+  final: "i-lucide-circle-check",
+} satisfies Record<CaptionMode, string>;
 
 export const diagnosticSeverityMessageKey = {
   info: "diagnostics.severity.info",

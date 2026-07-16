@@ -2,12 +2,13 @@
 import { uiText } from "../i18n/uiText";
 import {
   captionModeColor,
+  captionModeIcon,
   captionModeMessageKey,
 } from "../runtime/presentation";
 import type { CaptionMode } from "../runtime/types";
 
 defineProps<{
-  hasFinalTranscript: boolean;
+  latestFinalTranscript: Readonly<{ id: string; text: string }> | null;
   mode: CaptionMode;
   text: string;
 }>();
@@ -24,7 +25,18 @@ defineProps<{
           {{ uiText("caption.preview.title") }}
         </h2>
       </div>
-      <UBadge :color="captionModeColor[mode]" variant="subtle">
+      <UBadge
+        :color="captionModeColor[mode]"
+        aria-atomic="true"
+        aria-live="polite"
+        role="status"
+        variant="subtle"
+      >
+        <UIcon
+          :name="captionModeIcon[mode]"
+          class="size-3.5"
+          aria-hidden="true"
+        />
         {{ uiText(captionModeMessageKey[mode]) }}
       </UBadge>
     </div>
@@ -35,11 +47,13 @@ defineProps<{
       {{ text }}
     </p>
     <p class="sr-only" aria-atomic="true" aria-live="polite">
-      {{
-        mode === "final" && hasFinalTranscript
-          ? uiText("caption.finalAnnouncement", { text })
-          : ""
-      }}
+      <span v-if="latestFinalTranscript" :key="latestFinalTranscript.id">
+        {{
+          uiText("caption.finalAnnouncement", {
+            text: latestFinalTranscript.text,
+          })
+        }}
+      </span>
     </p>
   </UCard>
 </template>

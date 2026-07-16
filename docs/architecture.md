@@ -134,6 +134,37 @@ Runtime lifecycle events are not replaced by caption snapshots. In particular,
 `utterance.ended` remains necessary for no-result and failed units, while
 `runtime.status` remains the pull/push resynchronization boundary.
 
+The current frontend normalizes Preview and Tauri delivery into one event
+stream and reduces it in a framework-free state module. That module owns strict
+revision ordering, terminal caption units, bounded recent-unit tombstones,
+Stop/Start admission, and pull-versus-push status reconciliation. Vue consumes
+only its projection: listening is a small activity state, while the latest
+completed caption remains visible until newer text is accepted.
+
+A local Stop intent closes caption admission immediately. Lifecycle IPC calls
+still execute in user order, so a Stop requested while Start is in flight runs
+after that Start settles and cannot return early before the new runtime handle
+exists. Non-lifecycle actions such as OSC Test do not enter this queue.
+Because the Rust Start command may return before its worker publishes status,
+the frontend also reconciles the pull snapshot while the transition remains
+`starting`; the loop stops as soon as Running, Error, or Stop is observed.
+
+On webview load, the frontend opens a bounded event buffer, starts all current
+Tauri channel registrations in parallel, and then pulls the runtime status.
+This prevents an older status snapshot from overwriting a newer pushed status.
+The current multi-channel, status-only snapshot cannot replay a caption emitted
+before its individual listener attached; eliminating that narrow reload window
+belongs with the versioned session/snapshot contract rather than an ad hoc Live
+implementation.
+
+This current-wire defense is deliberately narrower than the target generation
+contract. A local Start timestamp rejects events created before the new run,
+and recently tracked unit ids reject known prior-run events. Without generation
+on the payload, the frontend cannot distinguish a never-before-seen prior-run
+event timestamped after that local fence from a real current-run event. The
+Rust runtime generation boundary remains authoritative until the versioned wire
+adds explicit generation in Phase 3.
+
 ## Target Caption Snapshot Contract
 
 Provider adapters absorb raw delta, append, replacement, item, and ordering

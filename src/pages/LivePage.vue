@@ -86,7 +86,7 @@ const currentMicrophoneLabel = computed(() => {
     </header>
 
     <CaptionPreview
-      :has-final-transcript="latestFinalTranscript !== null"
+      :latest-final-transcript="latestFinalTranscript"
       :mode="captionMode"
       :text="activeCaptionText"
     />
@@ -97,6 +97,7 @@ const currentMicrophoneLabel = computed(() => {
         :is-busy="isRuntimeBusy"
         :pending-command="pendingRuntimeCommand"
         :runtime-status="runtimeStatus"
+        :show-mock-transcript="config?.stt.provider === 'mock'"
         @run="runCommand"
       />
 
@@ -170,7 +171,7 @@ const currentMicrophoneLabel = computed(() => {
               <p class="text-muted">
                 {{ uiText("live.recentActivity.latestFinalTranscript") }}
               </p>
-              <p class="mt-1 leading-6 text-highlighted">
+              <p class="mt-1 leading-6 break-words text-highlighted">
                 {{
                   latestFinalTranscript?.text ??
                   uiText("live.recentActivity.noFinalTranscript")

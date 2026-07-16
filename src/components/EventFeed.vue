@@ -9,8 +9,8 @@ import {
 import type { DiagnosticEvent, TranscriptEvent } from "../runtime/types";
 
 defineProps<{
-  diagnostics: DiagnosticEvent[];
-  finalTranscripts: TranscriptEvent[];
+  diagnostics: readonly DiagnosticEvent[];
+  finalTranscripts: readonly TranscriptEvent[];
 }>();
 </script>
 

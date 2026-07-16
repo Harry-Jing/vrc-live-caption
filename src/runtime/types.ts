@@ -7,7 +7,7 @@ export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";
 export type DiagnosticSeverity = "info" | "warning" | "error";
 export type TranscriptKind = "partial" | "stable" | "final";
 export type UtteranceEndReason = "noSpeech" | "sttFailed" | "discarded";
-export type CaptionMode = "listening" | "partial" | "final";
+export type CaptionMode = "waiting" | "listening" | "partial" | "final";
 
 export type RuntimeCommand =
   | "start_runtime"
@@ -99,3 +99,14 @@ export type DiagnosticEvent = {
   detail?: string;
   timestampMs: number;
 };
+
+// Current UI-facing event stream shared by every RuntimeBackend adapter. This
+// remains the existing Phase 1 wire shape; the versioned caption snapshot
+// contract is intentionally deferred.
+export type RuntimeEvent =
+  | { type: "status"; payload: RuntimeStatusEvent }
+  | { type: "diagnostic"; payload: DiagnosticEvent }
+  | { type: "utteranceStarted"; payload: UtteranceStartedEvent }
+  | { type: "utteranceEnded"; payload: UtteranceEndedEvent }
+  | { type: "transcriptPartial"; payload: TranscriptEvent }
+  | { type: "transcriptFinal"; payload: TranscriptEvent };

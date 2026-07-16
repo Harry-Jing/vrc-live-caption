@@ -90,8 +90,11 @@ Exit criteria:
 
 ## Phase 2: Frontend And Contract Test Foundation
 
-Status: partially started. Rust tests and the pull-side runtime status snapshot
-exist; Vitest and shared frontend behavior tests do not.
+Status: in progress. Vitest now runs in the normal frontend gate; a framework-
+free current-wire reducer and one shared Preview/Tauri behavior suite cover
+revision ordering, terminal units, Stop/Start fences, reload races, bounded
+history, subscription cleanup, and settings round trips. Component-level state
+tests and the later versioned caption contract remain.
 
 Goal: build the regression net before replacing the current transcript wire
 contract.

@@ -9,29 +9,19 @@ import { createTauriBackend } from "./tauriBackend";
 import type {
   AppConfig,
   AudioInputDevice,
-  DiagnosticEvent,
   ProviderSecretStatus,
   RuntimeCommand,
+  RuntimeEvent,
   RuntimeStatusEvent,
   SttProvider,
-  TranscriptEvent,
-  UtteranceEndedEvent,
-  UtteranceStartedEvent,
 } from "./types";
 
 export type Unsubscribe = () => void;
 
-export type RuntimeEventHandlers = {
-  onStatus: (event: RuntimeStatusEvent) => void;
-  onUtteranceStarted: (event: UtteranceStartedEvent) => void;
-  onTranscriptPartial: (event: TranscriptEvent) => void;
-  onTranscriptFinal: (event: TranscriptEvent) => void;
-  onUtteranceEnded: (event: UtteranceEndedEvent) => void;
-  onDiagnostic: (event: DiagnosticEvent) => void;
-};
+export type RuntimeEventListener = (event: RuntimeEvent) => void;
 
 export interface RuntimeBackend {
-  listen(handlers: RuntimeEventHandlers): Promise<Unsubscribe>;
+  listen(listener: RuntimeEventListener): Promise<Unsubscribe>;
   runCommand(command: RuntimeCommand): Promise<void>;
   getRuntimeStatus(): Promise<RuntimeStatusEvent>;
   getConfig(): Promise<AppConfig>;

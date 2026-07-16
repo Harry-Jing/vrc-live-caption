@@ -1,24 +1,23 @@
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { uiText } from "../i18n/uiText";
+import { createRuntimeBackend, type Unsubscribe } from "./backend";
+import { createLifecycleCommandQueue } from "./lifecycleCommandQueue";
 import {
-  createRuntimeBackend,
-  type RuntimeEventHandlers,
-  type Unsubscribe,
-} from "./backend";
+  createRuntimeState,
+  reduceRuntimeState,
+  selectRuntimeView,
+  type RuntimeStateInput,
+} from "./runtimeState";
 import type {
   AppConfig,
   AudioInputDevice,
-  CaptionMode,
-  DiagnosticEvent,
   ProviderSecretStatus,
   RuntimeCommand,
   RuntimeStatusEvent,
   SttProvider,
-  TranscriptEvent,
 } from "./types";
 
-const FINAL_TRANSCRIPT_LIMIT = 5;
-const DIAGNOSTIC_LIMIT = 50;
+const STARTING_STATUS_RECONCILE_INTERVAL_MS = 500;
 
 function normalizeError(error: unknown) {
   if (typeof error === "string") {
@@ -50,8 +49,10 @@ function createActionState() {
 
     try {
       await action();
+      return true;
     } catch (cause) {
       error.value = normalizeError(cause);
+      return false;
     } finally {
       pendingCount.value -= 1;
     }
@@ -62,20 +63,20 @@ function createActionState() {
 
 export function useRuntime() {
   const backend = createRuntimeBackend();
+  const runLifecycleCommand = createLifecycleCommandQueue((command) =>
+    backend.runCommand(command),
+  );
   const audioInputDevices = ref<AudioInputDevice[]>([]);
   const config = ref<AppConfig | null>(null);
   const secretStatuses = ref<
     Partial<Record<SttProvider, ProviderSecretStatus>>
   >({});
-  const runtimeStatus = ref<RuntimeStatusEvent>({
+  const initialRuntimeStatus: RuntimeStatusEvent = {
     status: "idle",
     message: uiText("runtime.status.initialIdleMessage"),
     timestampMs: Date.now(),
-  });
-  const activeUtteranceId = ref<string | null>(null);
-  const partialTranscript = ref<TranscriptEvent | null>(null);
-  const finalTranscripts = ref<TranscriptEvent[]>([]);
-  const diagnostics = ref<DiagnosticEvent[]>([]);
+  };
+  const runtimeState = shallowRef(createRuntimeState(initialRuntimeStatus));
   const requiresRuntimeRestart = ref(false);
   const pendingRuntimeCommand = ref<RuntimeCommand | null>(null);
   const runtimeAction = createActionState();
@@ -83,50 +84,144 @@ export function useRuntime() {
   const secretsAction = createActionState();
   let unsubscribeListeners: Unsubscribe | null = null;
   let isUnmounted = false;
-  let receivedStatusEventVersion = 0;
+  let nextLifecycleCommandAttemptId = 0;
+  let nextStatusSyncRequestId = 0;
+  let startingStatusReconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  let startingStatusSyncInFlight = false;
 
-  const latestFinalTranscript = computed<TranscriptEvent | null>(
-    () => finalTranscripts.value.at(0) ?? null,
+  const runtimeView = computed(() =>
+    selectRuntimeView(runtimeState.value, {
+      showPartial: config.value?.ui.showPartial ?? true,
+    }),
   );
-
-  // showPartial only gates partial transcript text. The listening indicator
-  // stays active regardless: it is the only feedback between speaking and the
-  // final transcript, and the only in-app signal that the microphone is live.
-  const captionMode = computed<CaptionMode>(() => {
-    if (partialTranscript.value && config.value?.ui.showPartial) {
-      return "partial";
-    }
-
-    if (activeUtteranceId.value) {
-      return "listening";
-    }
-
-    return "final";
-  });
+  const runtimeStatus = computed(() => runtimeView.value.runtimeStatus);
+  const finalTranscripts = computed(() => runtimeView.value.finalTranscripts);
+  const diagnostics = computed(() => runtimeView.value.diagnostics);
+  const captionMode = computed(() => runtimeView.value.captionMode);
 
   const activeCaptionText = computed(() => {
-    if (captionMode.value === "partial" && partialTranscript.value) {
-      return partialTranscript.value.text;
-    }
-
-    if (captionMode.value === "listening") {
-      return uiText("caption.state.listening");
-    }
-
-    return latestFinalTranscript.value?.text ?? uiText("caption.state.waiting");
+    return (
+      runtimeView.value.visibleTranscript?.text ??
+      uiText("caption.state.waiting")
+    );
   });
+
+  function dispatchRuntimeState(input: RuntimeStateInput) {
+    const previousState = runtimeState.value;
+    const nextState = reduceRuntimeState(previousState, input);
+    runtimeState.value = nextState;
+    updateStartingStatusReconciliation();
+
+    return nextState !== previousState;
+  }
+
+  function clearStartingStatusReconciliation() {
+    if (startingStatusReconcileTimer !== null) {
+      clearTimeout(startingStatusReconcileTimer);
+      startingStatusReconcileTimer = null;
+    }
+  }
+
+  function updateStartingStatusReconciliation() {
+    if (isUnmounted || runtimeState.value.runtimeStatus.status !== "starting") {
+      clearStartingStatusReconciliation();
+      return;
+    }
+
+    if (startingStatusReconcileTimer !== null || startingStatusSyncInFlight) {
+      return;
+    }
+
+    // Starting/Running pushes are best-effort and the Rust Start command can
+    // return before its worker updates the status snapshot. Poll only while the
+    // transition is genuinely unresolved so a missed push cannot strand the UI
+    // in Starting; Stop immediately changes the state and cancels this loop.
+    startingStatusReconcileTimer = setTimeout(() => {
+      startingStatusReconcileTimer = null;
+      void reconcileStartingStatus();
+    }, STARTING_STATUS_RECONCILE_INTERVAL_MS);
+  }
+
+  async function reconcileStartingStatus() {
+    if (isUnmounted || runtimeState.value.runtimeStatus.status !== "starting") {
+      return;
+    }
+
+    startingStatusSyncInFlight = true;
+
+    try {
+      await synchronizeRuntimeStatus();
+    } catch {
+      // A later interval retries while the transition still needs a snapshot.
+    } finally {
+      startingStatusSyncInFlight = false;
+      updateStartingStatusReconciliation();
+    }
+  }
 
   async function runCommand(command: RuntimeCommand) {
     pendingRuntimeCommand.value = command;
+    let lifecycleCommandAttemptId: number | null = null;
+
+    if (command === "start_runtime" || command === "stop_runtime") {
+      nextLifecycleCommandAttemptId += 1;
+      lifecycleCommandAttemptId = nextLifecycleCommandAttemptId;
+      const commandAccepted = dispatchRuntimeState({
+        type: "runtimeCommandRequested",
+        attemptId: lifecycleCommandAttemptId,
+        command,
+        timestampMs: Date.now(),
+      });
+
+      if (!commandAccepted) {
+        pendingRuntimeCommand.value = null;
+        return;
+      }
+    }
 
     try {
-      await runtimeAction.run(async () => {
-        await backend.runCommand(command);
+      const commandSucceeded = await runtimeAction.run(async () => {
+        if (command === "start_runtime" || command === "stop_runtime") {
+          await runLifecycleCommand(command);
+        } else {
+          await backend.runCommand(command);
+        }
 
         if (command === "start_runtime") {
           requiresRuntimeRestart.value = false;
         }
       });
+
+      if (
+        lifecycleCommandAttemptId !== null &&
+        (command === "start_runtime" || command === "stop_runtime")
+      ) {
+        dispatchRuntimeState(
+          commandSucceeded
+            ? {
+                type: "runtimeCommandSucceeded",
+                attemptId: lifecycleCommandAttemptId,
+                command,
+                timestampMs: Date.now(),
+              }
+            : {
+                type: "runtimeCommandFailed",
+                attemptId: lifecycleCommandAttemptId,
+                command,
+              },
+        );
+
+        try {
+          // Runtime events are best-effort. Reconcile every lifecycle command
+          // with the pull snapshot so a missed stopped/running push cannot
+          // leave the controls permanently in their optimistic state.
+          await synchronizeRuntimeStatus();
+        } catch {
+          // Keep the command result visible. Stop has already failed closed (or
+          // converged from its successful acknowledgement), while Start remains
+          // safely optimistic until a later status push or reload snapshot.
+        }
+      }
     } finally {
       if (pendingRuntimeCommand.value === command) {
         pendingRuntimeCommand.value = null;
@@ -196,62 +291,21 @@ export function useRuntime() {
     });
   }
 
-  // Only the utterance that owns the live caption state may clear it; a final
-  // or utterance-end for an older utterance must not wipe a newer one.
-  function clearUtteranceState(utteranceId: string) {
-    if (activeUtteranceId.value === utteranceId) {
-      activeUtteranceId.value = null;
-    }
-
-    if (partialTranscript.value?.utteranceId === utteranceId) {
-      partialTranscript.value = null;
-    }
-  }
-
-  function applyRuntimeStatus(event: RuntimeStatusEvent) {
-    runtimeStatus.value = event;
-
-    if (event.status === "starting") {
-      requiresRuntimeRestart.value = false;
-    }
-
-    if (event.status === "stopped" || event.status === "error") {
-      activeUtteranceId.value = null;
-      partialTranscript.value = null;
-    }
-  }
-
-  const eventHandlers: RuntimeEventHandlers = {
-    onStatus(event) {
-      receivedStatusEventVersion += 1;
-      applyRuntimeStatus(event);
-    },
-    onUtteranceStarted(event) {
-      activeUtteranceId.value = event.utteranceId;
-    },
-    onTranscriptPartial(event) {
-      partialTranscript.value = event;
-    },
-    onTranscriptFinal(event) {
-      clearUtteranceState(event.utteranceId);
-      finalTranscripts.value = [event, ...finalTranscripts.value].slice(
-        0,
-        FINAL_TRANSCRIPT_LIMIT,
-      );
-    },
-    onUtteranceEnded(event) {
-      clearUtteranceState(event.utteranceId);
-    },
-    onDiagnostic(event) {
-      diagnostics.value = [event, ...diagnostics.value].slice(
-        0,
-        DIAGNOSTIC_LIMIT,
-      );
-    },
-  };
-
   async function registerRuntimeListeners() {
-    const unsubscribe = await backend.listen(eventHandlers);
+    const unsubscribe = await backend.listen((event) => {
+      const eventAccepted = dispatchRuntimeState({
+        type: "backendEvent",
+        event,
+      });
+
+      if (
+        eventAccepted &&
+        event.type === "status" &&
+        event.payload.status === "starting"
+      ) {
+        requiresRuntimeRestart.value = false;
+      }
+    });
 
     if (isUnmounted) {
       unsubscribe();
@@ -261,25 +315,56 @@ export function useRuntime() {
     unsubscribeListeners = unsubscribe;
   }
 
-  async function synchronizeRuntimeStatus() {
-    const eventVersionBeforeRequest = receivedStatusEventVersion;
-    const snapshot = await backend.getRuntimeStatus();
+  function beginRuntimeStatusSync() {
+    nextStatusSyncRequestId += 1;
+    const requestId = nextStatusSyncRequestId;
+    dispatchRuntimeState({ type: "runtimeStatusSyncStarted", requestId });
 
-    // A status event may arrive while the command is in flight. Keep that
-    // event unless the snapshot is strictly newer; equal timestamps can occur
-    // within one millisecond and must not roll the UI backwards.
-    if (
-      receivedStatusEventVersion === eventVersionBeforeRequest ||
-      snapshot.timestampMs > runtimeStatus.value.timestampMs
-    ) {
-      applyRuntimeStatus(snapshot);
+    return requestId;
+  }
+
+  async function completeRuntimeStatusSync(requestId: number) {
+    try {
+      const snapshot = await backend.getRuntimeStatus();
+      dispatchRuntimeState({
+        type: "runtimeStatusSyncCompleted",
+        requestId,
+        snapshot,
+      });
+    } catch (error) {
+      dispatchRuntimeState({
+        type: "runtimeStatusSyncCancelled",
+        requestId,
+      });
+      throw error;
+    }
+  }
+
+  async function synchronizeRuntimeStatus() {
+    await completeRuntimeStatusSync(beginRuntimeStatusSync());
+  }
+
+  async function registerAndSynchronizeRuntime() {
+    const requestId = beginRuntimeStatusSync();
+
+    try {
+      // Open the reload buffer before registering listeners. Otherwise an event
+      // emitted between the last listener registration and the pull snapshot
+      // could be rejected against the synthetic initial status.
+      await registerRuntimeListeners();
+      await completeRuntimeStatusSync(requestId);
+    } catch (error) {
+      dispatchRuntimeState({
+        type: "runtimeStatusSyncCancelled",
+        requestId,
+      });
+      throw error;
     }
   }
 
   onMounted(async () => {
     await runtimeAction.run(async () => {
-      await registerRuntimeListeners();
-      await synchronizeRuntimeStatus();
+      await registerAndSynchronizeRuntime();
     });
     await Promise.all([
       loadConfig(),
@@ -290,6 +375,7 @@ export function useRuntime() {
 
   onBeforeUnmount(() => {
     isUnmounted = true;
+    clearStartingStatusReconciliation();
     unsubscribeListeners?.();
     unsubscribeListeners = null;
   });
@@ -307,7 +393,6 @@ export function useRuntime() {
     isSettingsBusy: settingsAction.isBusy,
     loadAudioInputDevices,
     pendingRuntimeCommand,
-    partialTranscript,
     runCommand,
     runtimeError: runtimeAction.error,
     runtimeStatus,

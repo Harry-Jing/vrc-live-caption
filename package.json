@@ -12,7 +12,7 @@
     "build": "vite build && vue-tsc --build",
     "check": "pnpm check:frontend && pnpm check:rust",
     "check:ci": "pnpm check:frontend && pnpm check:rust:locked",
-    "check:frontend": "pnpm format:check && pnpm lint && pnpm build",
+    "check:frontend": "pnpm format:check && pnpm lint && pnpm test:frontend && pnpm build",
     "check:rust": "cd src-tauri && cargo fmt --all -- --check && cargo check --workspace --all-targets && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
     "check:rust:locked": "cd src-tauri && cargo fmt --all -- --check && cargo check --workspace --all-targets --locked && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked",
     "commitlint": "commitlint",
@@ -22,7 +22,8 @@
     "lint:fix": "eslint . --fix",
     "prepare": "lefthook install",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:frontend": "vitest run"
   },
   "dependencies": {
     "@iconify/vue": "5.0.1",
@@ -52,6 +53,7 @@
     "prettier-plugin-tailwindcss": "^0.8.0",
     "typescript": "~6.0.3",
     "vite": "^8.1.4",
+    "vitest": "4.1.10",
     "vue-tsc": "^3.3.7"
   },
   "packageManager": "pnpm@11.11.0+sha512.4463f65fd80ed80d69bc1d4bf163ee94f605c7380fc318bb5b2ebe15f8cd12d49c51a4d59e951b401e764d3b6ca751cbf51bc50ed7001a6bcb4935e684c34882"
