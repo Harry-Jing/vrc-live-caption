@@ -207,8 +207,11 @@ publisher worker. Closing never publishes queued caption text.
 
 Typing indication follows normalized speech or pending publication activity,
 not provider completion alone. It turns off after successful resolution, a
-unit ending without text, a safe failure, and Stop. Caption publication and
-typing cleanup remain independently testable.
+unit ending without text, a safe failure, and Stop. While activity remains
+active, the publisher reasserts typing-on every four seconds because the
+VRChat client hides an unrefreshed indicator after about five seconds. Typing
+control packets remain outside the process-wide text pacer. Caption publication
+and typing cleanup remain independently testable.
 
 ## Chatbox Publication Modes
 

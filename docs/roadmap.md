@@ -57,7 +57,9 @@ trustworthy baseline before changing the provider and wire contracts.
 - add fake-time and fake-OSC Rust tests for Completed pacing, ordered pages,
   overload, Unicode boundaries, typing, send failures, and Stop races;
 - preserve the typing-indicator lifecycle across success, no-speech, per-unit
-  failure, and Stop;
+  failure, and Stop, reasserting typing-on every four seconds while activity
+  remains active so VRChat's approximately five-second inactivity hide does not
+  create a visible gap;
 - make Stop release capture, discard buffered/queued audio and unsent publisher
   pages, prevent new provider submissions, cancel or close in-flight work where
   possible, and reject every late caption for both App and Chatbox; Stop and a

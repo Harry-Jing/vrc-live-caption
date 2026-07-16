@@ -160,6 +160,30 @@ Local STT The Long-Term Default").
 Revisit if: per-segment latency or cost fails real usage, or a streaming
 provider is added.
 
+## Use A 30-Second Hard Maximum For The Bounded Cloud Path
+
+Date: 2026-07
+
+Decision: the current segmented OpenAI path closes normal utterances after the
+existing `1.2`-second silence boundary and uses `30` seconds as the absolute
+maximum for uninterrupted speech. The maximum is an internal adapter parameter,
+not a user setting or a product-wide provider contract.
+
+Reason: Phase 1 real-client testing found that the previous `12`-second maximum
+split an approximately `20`-second thought into two ordered caption units even
+though no speech was lost. Thirty seconds reduces premature mid-thought splits
+while keeping audio, upload size, latency, and failure impact bounded.
+
+Consequence: ordinary pauses still complete well before the hard maximum. A
+continuous monologue may now wait up to thirty seconds plus recognition time for
+its first Completed result, and a failed request can affect a larger unit.
+Chatbox page capacity, including future bilingual layout, remains downstream
+and does not define recognition boundaries.
+
+Revisit if: real-machine latency approaches the request timeout, longer units
+hurt recognition quality or recovery, or a future provider path owns different
+natural or streaming boundaries.
+
 ## Normalize Full Ongoing And Completed Snapshots
 
 Date: 2026-07
@@ -405,6 +429,7 @@ machines that are also running VRChat.
 ## Signal Speech Activity With The Typing Indicator
 
 Date: 2026-06
+Updated: 2026-07
 
 Decision: while normalized speech or publication activity is active, the app
 sends the VRChat typing indicator on. It turns off when that activity is
@@ -415,9 +440,13 @@ Reason: the default bounded cloud provider leaves a gap before completed text,
 while streaming paths may leave gaps between rolling publications. The typing
 indicator is VRChat's native presence signal for both cases.
 
-Consequence: stop must send one clearing typing-off message (the exception
-recorded in the stop decision). Provider completion, Chatbox publication, and
-typing cleanup remain independently testable.
+Consequence: real-client validation confirmed that VRChat hides an unrefreshed
+indicator after about five seconds, so the publisher reasserts typing-on every
+four seconds while activity remains active. These control-state packets do not
+consume process-wide text pacing opportunities. Stop must send one clearing
+typing-off message (the exception recorded in the stop decision). Provider
+completion, Chatbox publication, and typing cleanup remain independently
+testable.
 
 Revisit if: in-game validation shows the indicator confuses or annoys other
 players, or VRChat changes its semantics.

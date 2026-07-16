@@ -36,6 +36,21 @@ layout model below.
 The endpoint shape, `144`-character limit, and `9`-line limit are documented in
 [VRChat's current OSC input reference](https://docs.vrchat.com/docs/osc-as-input-controller#chatbox).
 
+### Typing indicator persistence
+
+An [official 2022 client update](https://ask.vrchat.com/t/developer-update-19-august-2022/12775)
+documented that the typing indicator automatically hides after five seconds of
+inactive input. A July 2026 Phase 1 real-client test reproduced that behavior:
+one `/chatbox/typing true` packet disappeared after about five seconds while the
+speaker continued talking for roughly twenty seconds.
+
+The Completed publisher therefore reasserts `/chatbox/typing true` every four
+seconds while normalized speech or publication activity remains active. The
+one-second margin covers ordinary scheduling delay. These control-state packets
+do not pass through `ChatboxPacer` and do not consume a `/chatbox/input`
+text-send opportunity. Activity resolution, failure, and Stop still turn the
+indicator off; Stop permits only its one typing-off cleanup attempt.
+
 ### Current rate-limit evidence
 
 VRChat 2026.2.1 removed the old flat Chatbox timeout and introduced a leaky

@@ -50,8 +50,24 @@ const SILENCE_TIMEOUT: Duration = Duration::from_millis(1200);
 // Voiced audio only; long enough to drop clicks and pops, short enough to
 // keep one-word utterances such as "Yes".
 const MIN_VOICED_SECONDS: f32 = 0.3;
-const MAX_SEGMENT_SECONDS: f32 = 12.0;
+// This is only the absolute fallback for uninterrupted speech; the 1.2-second
+// silence boundary still closes normal utterances earlier. Phase 1 VRChat
+// testing found that 12 seconds split an approximately 20-second thought even
+// though both ordered units were preserved, so the bounded cloud path now uses
+// 30 seconds. Keep this internal and re-measure latency before raising it again.
+const MAX_SEGMENT_SECONDS: f32 = 30.0;
 const PREROLL_SECONDS: f32 = 0.25;
+
+fn new_phase_one_segmenter(sample_rate: u32) -> SpeechSegmenter {
+    SpeechSegmenter::new(
+        sample_rate,
+        SPEECH_RMS_THRESHOLD,
+        SILENCE_TIMEOUT,
+        MIN_VOICED_SECONDS,
+        MAX_SEGMENT_SECONDS,
+        PREROLL_SECONDS,
+    )
+}
 
 pub(crate) struct RuntimeManager {
     handle: Mutex<Option<RuntimeHandle>>,
@@ -649,14 +665,7 @@ fn run_openai_runtime(
         segment_receiver,
         generation.clone(),
     )?;
-    let mut segmenter = SpeechSegmenter::new(
-        sample_rate,
-        SPEECH_RMS_THRESHOLD,
-        SILENCE_TIMEOUT,
-        MIN_VOICED_SECONDS,
-        MAX_SEGMENT_SECONDS,
-        PREROLL_SECONDS,
-    );
+    let mut segmenter = new_phase_one_segmenter(sample_rate);
     let mut utterance_id: Option<String> = None;
     let stream = capture.stream;
 
@@ -1347,6 +1356,56 @@ mod tests {
     use super::*;
     use crate::chatbox_publisher::{ChatboxSendReceipt, ChatboxTransport};
     use tauri::Listener;
+
+    #[test]
+    fn phase_one_segmenter_keeps_twenty_seconds_whole_until_silence() {
+        let sample_rate = 10;
+        let mut segmenter = new_phase_one_segmenter(sample_rate);
+        let started_at = Instant::now();
+
+        for sample_index in 0_u64..200 {
+            let update = segmenter.push_samples(
+                vec![0.2],
+                started_at + Duration::from_millis(sample_index * 100),
+            );
+            assert!(update.ready_segment.is_none());
+        }
+
+        assert_eq!(
+            segmenter.tick(started_at + Duration::from_millis(21_100)),
+            Some(vec![0.2; 200])
+        );
+    }
+
+    #[test]
+    fn phase_one_segmenter_continues_without_loss_after_the_thirty_second_limit() {
+        let mut segmenter = new_phase_one_segmenter(10);
+        let started_at = Instant::now();
+        let mut speech_starts = 0;
+        let mut ready_segments = Vec::new();
+
+        for sample_index in 0_u64..400 {
+            let update = segmenter.push_samples(
+                vec![0.2],
+                started_at + Duration::from_millis(sample_index * 100),
+            );
+            speech_starts += usize::from(update.speech_started);
+            if let Some(samples) = update.ready_segment {
+                ready_segments.push(samples);
+            }
+        }
+
+        if let Some(samples) = segmenter.finish() {
+            ready_segments.push(samples);
+        }
+
+        assert_eq!(speech_starts, 2);
+        assert_eq!(
+            ready_segments.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![300, 100]
+        );
+        assert_eq!(ready_segments.iter().map(Vec::len).sum::<usize>(), 400);
+    }
 
     #[test]
     fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResult<()> {

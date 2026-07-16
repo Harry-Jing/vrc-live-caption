@@ -18,6 +18,11 @@ use std::time::{Duration, Instant};
 
 const PROVISIONAL_MAX_RESIDENT_PAGES: usize = 32;
 const PROVISIONAL_MAX_UNSTARTED_AGE: Duration = Duration::from_secs(30);
+// VRChat auto-hides its OSC typing indicator after about five seconds without
+// fresh input. Reassert `true` every four seconds while activity remains active
+// so scheduler jitter does not create a visible gap. Typing packets deliberately
+// bypass ChatboxPacer and never consume a `/chatbox/input` text-send opportunity.
+const TYPING_REASSERT_INTERVAL: Duration = Duration::from_secs(4);
 
 pub(crate) trait ChatboxTransport: Send + Sync {
     fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt>;
@@ -134,6 +139,7 @@ struct PublisherState {
     typing_desired: bool,
     typing_epoch: u64,
     typing_attempted_epoch: Option<u64>,
+    next_typing_reassert_at: Option<Instant>,
     diagnostics: VecDeque<PublisherDiagnostic>,
 }
 
@@ -224,6 +230,7 @@ impl CompletedChatboxPublisher {
                 // Epoch zero represents the initial typing-off state; it does
                 // not need a transport transition.
                 typing_attempted_epoch: Some(0),
+                next_typing_reassert_at: None,
                 diagnostics: VecDeque::new(),
             }),
             wake: Condvar::new(),
@@ -682,6 +689,17 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
             return Ok(WorkerItem::Typing { epoch, is_typing });
         }
 
+        if state.typing_desired
+            && state
+                .next_typing_reassert_at
+                .is_some_and(|deadline| shared.pacer.now() >= deadline)
+        {
+            return Ok(WorkerItem::Typing {
+                epoch: state.typing_epoch,
+                is_typing: true,
+            });
+        }
+
         if let Some(diagnostic) = state.diagnostics.pop_front() {
             return Ok(WorkerItem::Diagnostic(diagnostic));
         }
@@ -701,10 +719,19 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
             return Ok(item);
         }
 
-        state = shared
-            .wake
-            .wait(state)
-            .map_err(|_| AppError::state("Completed publisher state lock was poisoned."))?;
+        if let Some(deadline) = state.next_typing_reassert_at {
+            let remaining = deadline.saturating_duration_since(shared.pacer.now());
+            let (next_state, _) = shared
+                .wake
+                .wait_timeout(state, remaining)
+                .map_err(|_| AppError::state("Completed publisher state lock was poisoned."))?;
+            state = next_state;
+        } else {
+            state = shared
+                .wake
+                .wait(state)
+                .map_err(|_| AppError::state("Completed publisher state lock was poisoned."))?;
+        }
     }
 }
 
@@ -742,10 +769,19 @@ fn process_typing(shared: &PublisherShared, epoch: u64, is_typing: bool) -> AppR
     let Some(result) = transport_result else {
         return Ok(());
     };
+    let attempted_at = shared.pacer.now();
     let mut state = shared
         .state
         .lock()
         .map_err(|_| AppError::state("Completed publisher state lock was poisoned."))?;
+
+    if is_typing
+        && state.lifecycle == PublisherLifecycle::Running
+        && state.typing_epoch == epoch
+        && state.typing_desired
+    {
+        state.next_typing_reassert_at = Some(attempted_at + TYPING_REASSERT_INTERVAL);
+    }
 
     if let Err(error) = result {
         state
@@ -788,6 +824,7 @@ fn discard_resident_pages_on_close(state: &mut PublisherState, reason: Publisher
     state.typing_desired = false;
     state.typing_epoch = state.typing_epoch.wrapping_add(1);
     state.typing_attempted_epoch = None;
+    state.next_typing_reassert_at = None;
 
     if page_count > 0 {
         state
@@ -965,6 +1002,7 @@ fn refresh_typing_desired(state: &mut PublisherState) {
         state.typing_desired = desired;
         state.typing_epoch = state.typing_epoch.wrapping_add(1);
         state.typing_attempted_epoch = None;
+        state.next_typing_reassert_at = None;
     }
 }
 
@@ -1229,6 +1267,54 @@ mod tests {
         }
     }
 
+    struct BlockTypingReassertTransport {
+        recording: RecordingTransport,
+        typing_on_attempts: AtomicUsize,
+        entered: Mutex<Option<mpsc::Sender<()>>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl BlockTypingReassertTransport {
+        fn new(entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
+            Self {
+                recording: RecordingTransport::new(),
+                typing_on_attempts: AtomicUsize::new(0),
+                entered: Mutex::new(Some(entered)),
+                release: Mutex::new(release),
+            }
+        }
+
+        fn wait_for_events(&self, count: usize) -> AppResult<Vec<TransportEvent>> {
+            self.recording.wait_for_events(count)
+        }
+    }
+
+    impl ChatboxTransport for BlockTypingReassertTransport {
+        fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+            self.recording.send_text(text)
+        }
+
+        fn send_typing(&self, is_typing: bool) -> AppResult<()> {
+            self.recording.record(TransportEvent::Typing(is_typing))?;
+            if is_typing && self.typing_on_attempts.fetch_add(1, Ordering::SeqCst) == 1 {
+                if let Ok(mut entered) = self.entered.lock()
+                    && let Some(entered) = entered.take()
+                {
+                    let _ = entered.send(());
+                }
+                self.release
+                    .lock()
+                    .map_err(|_| AppError::state("Blocking transport lock was poisoned."))?
+                    .recv()
+                    .map_err(|_| {
+                        AppError::runtime("Blocking typing reassertion was not released.")
+                    })?;
+            }
+
+            Ok(())
+        }
+    }
+
     #[derive(Clone, Debug)]
     struct TimedTransportEvent {
         at: Instant,
@@ -1355,6 +1441,52 @@ mod tests {
         assert_eq!(
             publisher.try_submit(event)?,
             PublisherSubmitOutcome::Handled
+        );
+        Ok(())
+    }
+
+    fn advance_publisher_clock(
+        clock: &ControlledClock,
+        publisher: &CompletedChatboxPublisher,
+        duration: Duration,
+    ) {
+        clock.advance(duration);
+        publisher.shared.wake.notify_all();
+    }
+
+    fn wait_for_next_typing_reassert(
+        clock: &ControlledClock,
+        publisher: &CompletedChatboxPublisher,
+    ) -> AppResult<Instant> {
+        let state = publisher
+            .shared
+            .state
+            .lock()
+            .map_err(|_| AppError::state("Publisher state lock was poisoned."))?;
+        let (state, _) = publisher
+            .shared
+            .wake
+            .wait_timeout_while(state, Duration::from_secs(1), |state| {
+                state
+                    .next_typing_reassert_at
+                    .is_none_or(|deadline| deadline <= clock.now())
+            })
+            .map_err(|_| AppError::state("Publisher state lock was poisoned."))?;
+        let deadline = state.next_typing_reassert_at.ok_or_else(|| {
+            AppError::runtime("Publisher did not schedule the next typing reassertion.")
+        })?;
+        Ok(deadline)
+    }
+
+    fn advance_to_next_typing_reassert(
+        clock: &ControlledClock,
+        publisher: &CompletedChatboxPublisher,
+    ) -> AppResult<()> {
+        let deadline = wait_for_next_typing_reassert(clock, publisher)?;
+        advance_publisher_clock(
+            clock,
+            publisher,
+            deadline.saturating_duration_since(clock.now()),
         );
         Ok(())
     }
@@ -1882,8 +2014,11 @@ mod tests {
         clock.release_automatic();
 
         assert_eq!(
-            transport.wait_for_events(3)?,
+            transport.wait_for_events(4)?,
             vec![
+                TransportEvent::Typing(true),
+                // The fake clock advances past the four-second refresh while
+                // the fresh unit keeps overall activity continuously active.
                 TransportEvent::Typing(true),
                 TransportEvent::Text("fresh".to_string()),
                 TransportEvent::Typing(false),
@@ -1955,6 +2090,323 @@ mod tests {
                 TransportEvent::Typing(false),
             ]
         );
+        publisher.request_close(PublisherCloseReason::Stop)?;
+        publisher.join()?;
+        Ok(())
+    }
+
+    #[test]
+    fn active_typing_is_reasserted_before_vrchat_hides_it() -> AppResult<()> {
+        let clock = Arc::new(ControlledClock::new());
+        let transport_clock: Arc<dyn Clock> = clock.clone();
+        let transport = Arc::new(ScriptedTransport::new(transport_clock, []));
+        let publisher = CompletedChatboxPublisher::start_with_limits(
+            transport.clone(),
+            ChatboxPacer::with_clock(clock.clone()),
+            RuntimeGeneration::active(),
+            Arc::new(|_| {}),
+            PublisherLimits {
+                max_resident_pages: 4,
+                max_unstarted_age: Duration::from_secs(30),
+            },
+        )?;
+
+        submit_handled(
+            &publisher,
+            CompletedPublisherEvent::Started {
+                unit_id: "long-speech".to_string(),
+            },
+        )?;
+
+        transport.wait_for_events(1)?;
+        for expected_count in 2..=4 {
+            advance_to_next_typing_reassert(clock.as_ref(), &publisher)?;
+            transport.wait_for_events(expected_count)?;
+        }
+        let events = transport.wait_for_events(4)?;
+        submit_handled(
+            &publisher,
+            CompletedPublisherEvent::Aborted {
+                unit_id: "long-speech".to_string(),
+            },
+        )?;
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.event.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(true),
+            ]
+        );
+        assert!(events.windows(2).all(|events| {
+            events[1].at.duration_since(events[0].at) == TYPING_REASSERT_INTERVAL
+        }));
+        assert_eq!(
+            transport
+                .wait_for_events(5)?
+                .into_iter()
+                .map(|event| event.event)
+                .collect::<Vec<_>>(),
+            vec![
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(false),
+            ]
+        );
+
+        publisher.request_close(PublisherCloseReason::Stop)?;
+        publisher.join()?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
+        let clock = Arc::new(ControlledClock::new());
+        let transport_clock: Arc<dyn Clock> = clock.clone();
+        let transport = Arc::new(ScriptedTransport::with_failures(transport_clock, [], [2]));
+        let (reporter, diagnostics) = recording_reporter();
+        let publisher = CompletedChatboxPublisher::start_with_limits(
+            transport.clone(),
+            ChatboxPacer::with_clock(clock.clone()),
+            RuntimeGeneration::active(),
+            reporter,
+            PublisherLimits {
+                max_resident_pages: 4,
+                max_unstarted_age: Duration::from_secs(30),
+            },
+        )?;
+
+        submit_handled(
+            &publisher,
+            CompletedPublisherEvent::Started {
+                unit_id: "typing-refresh-failure".to_string(),
+            },
+        )?;
+
+        transport.wait_for_events(1)?;
+        advance_to_next_typing_reassert(clock.as_ref(), &publisher)?;
+        transport.wait_for_events(2)?;
+        advance_to_next_typing_reassert(clock.as_ref(), &publisher)?;
+        let events = transport.wait_for_events(3)?;
+        assert!(events.windows(2).all(|events| {
+            events[1].at.duration_since(events[0].at) == TYPING_REASSERT_INTERVAL
+        }));
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event == TransportEvent::Typing(true))
+        );
+        submit_handled(
+            &publisher,
+            CompletedPublisherEvent::Aborted {
+                unit_id: "typing-refresh-failure".to_string(),
+            },
+        )?;
+        assert_eq!(
+            transport
+                .wait_for_events(4)?
+                .into_iter()
+                .map(|event| event.event)
+                .collect::<Vec<_>>(),
+            vec![
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(false),
+            ]
+        );
+        let diagnostics = diagnostics
+            .lock()
+            .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
+        assert!(diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic,
+            PublisherDiagnostic::TypingFailed {
+                is_typing: true,
+                ..
+            }
+        )));
+        drop(diagnostics);
+        publisher.request_close(PublisherCloseReason::Stop)?;
+        publisher.join()?;
+        Ok(())
+    }
+
+    #[test]
+    fn stop_cancels_a_pending_typing_reassertion() -> AppResult<()> {
+        let transport = Arc::new(RecordingTransport::new());
+        let clock = Arc::new(ControlledClock::new());
+        let generation = RuntimeGeneration::active();
+        let publisher = CompletedChatboxPublisher::start_with_limits(
+            transport.clone(),
+            ChatboxPacer::with_clock(clock.clone()),
+            generation.clone(),
+            Arc::new(|_| {}),
+            PublisherLimits {
+                max_resident_pages: 4,
+                max_unstarted_age: Duration::from_secs(30),
+            },
+        )?;
+
+        submit_handled(
+            &publisher,
+            CompletedPublisherEvent::Started {
+                unit_id: "stopped-before-refresh".to_string(),
+            },
+        )?;
+        transport.wait_for_events(1)?;
+        wait_for_next_typing_reassert(clock.as_ref(), &publisher)?;
+        advance_publisher_clock(clock.as_ref(), &publisher, Duration::from_secs(3));
+
+        generation.request_stop(Some(&publisher))?;
+        publisher.join()?;
+        generation.request_stop(Some(&publisher))?;
+        publisher.join()?;
+
+        assert_eq!(
+            transport.events()?,
+            vec![TransportEvent::Typing(true), TransportEvent::Typing(false)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<()> {
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let transport = Arc::new(BlockTypingReassertTransport::new(
+            entered_sender,
+            release_receiver,
+        ));
+        let clock = Arc::new(ControlledClock::new());
+        let generation = RuntimeGeneration::active();
+        let publisher = CompletedChatboxPublisher::start_with_limits(
+            transport.clone(),
+            ChatboxPacer::with_clock(clock.clone()),
+            generation.clone(),
+            Arc::new(|_| {}),
+            PublisherLimits {
+                max_resident_pages: 4,
+                max_unstarted_age: Duration::from_secs(30),
+            },
+        )?;
+
+        submit_handled(
+            &publisher,
+            CompletedPublisherEvent::Started {
+                unit_id: "typing-stop-race".to_string(),
+            },
+        )?;
+        transport.wait_for_events(1)?;
+        advance_to_next_typing_reassert(clock.as_ref(), &publisher)?;
+        entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Typing reassertion did not reach transport."))?;
+
+        let stop_generation = generation.clone();
+        let stop_publisher = publisher.clone();
+        let (stop_finished_sender, stop_finished_receiver) = mpsc::channel();
+        let stop = thread::spawn(move || {
+            let result = stop_generation.request_stop(Some(&stop_publisher));
+            let _ = stop_finished_sender.send(());
+            result
+        });
+
+        let stop_entered_deadline = Instant::now() + Duration::from_secs(1);
+        while !generation.is_hard_stopped() {
+            if Instant::now() >= stop_entered_deadline {
+                return Err(AppError::runtime("Stop did not enter request_stop."));
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(matches!(
+            stop_finished_receiver.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        release_sender
+            .send(())
+            .map_err(|_| AppError::runtime("Could not release the typing reassertion."))?;
+        stop_finished_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Stop did not finish after the typing attempt."))?;
+        stop.join()
+            .map_err(|_| AppError::runtime("Stop test thread panicked."))??;
+        publisher.join()?;
+
+        assert_eq!(
+            transport.wait_for_events(3)?,
+            vec![
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(true),
+                TransportEvent::Typing(false),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<()> {
+        let clock = Arc::new(AdvancingClock::new());
+        let transport_clock: Arc<dyn Clock> = clock.clone();
+        let transport = Arc::new(ScriptedTransport::new(transport_clock, []));
+        let text = "中".repeat(811);
+        let page_count = paginate_completed(&text)
+            .map_err(|error| AppError::runtime(describe_layout_error(error)))?
+            .len();
+        assert!(page_count >= 6);
+        let publisher = CompletedChatboxPublisher::start_with_limits(
+            transport.clone(),
+            ChatboxPacer::with_clock(clock),
+            RuntimeGeneration::active(),
+            Arc::new(|_| {}),
+            PublisherLimits {
+                max_resident_pages: page_count,
+                max_unstarted_age: Duration::from_secs(30),
+            },
+        )?;
+
+        submit_handled(
+            &publisher,
+            CompletedPublisherEvent::Started {
+                unit_id: "paced-around-typing".to_string(),
+            },
+        )?;
+        submit_handled(
+            &publisher,
+            CompletedPublisherEvent::Completed {
+                unit_id: "paced-around-typing".to_string(),
+                text,
+            },
+        )?;
+
+        let events = transport.wait_for_events(page_count + 3)?;
+        let text_attempts = events
+            .iter()
+            .filter_map(|event| match event.event {
+                TransportEvent::Text(_) => Some(event.at),
+                TransportEvent::Typing(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(text_attempts.len(), page_count);
+        assert!(
+            text_attempts.windows(2).all(|attempts| {
+                attempts[1].duration_since(attempts[0]) == Duration::from_secs(1)
+            })
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event == TransportEvent::Typing(true))
+                .count(),
+            2
+        );
+
         publisher.request_close(PublisherCloseReason::Stop)?;
         publisher.join()?;
         Ok(())
