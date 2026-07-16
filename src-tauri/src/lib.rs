@@ -1,4 +1,5 @@
 mod audio;
+mod chatbox_layout;
 mod chatbox_pacer;
 mod commands;
 mod config;

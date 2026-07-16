@@ -320,15 +320,44 @@ Additional confirmed validation:
 
 ## Implementation rules
 
-- Use real glyph widths, not a fixed character-count heuristic.
+- Use the verified Noto Sans and Noto CJK glyph advances for covered common
+  Chinese ideographs, Basic Latin/Latin-1 English, measured punctuation, and
+  mixtures of those characters, not a fixed character-count heuristic.
 - Wrap against the usable width budget of `280 px`.
 - Use grapheme clusters as the default processing boundary when simulating wrapping behavior.
 - Determine legal break opportunities from Unicode line-break behavior plus TMP leading/following restrictions.
-- Prefer legal break opportunities and fall back to the nearest legal break before hard clipping; if none exists, hard-break at a grapheme-cluster boundary.
+- Use soft wraps only to simulate visible lines and choose page boundaries. Do
+  not insert artificial newlines into a page; preserve only the source's
+  explicit line breaks.
+- Pages are a lossless partition of the source. If an explicit line-break
+  grapheme would create a tenth line, keep it at the start of the next page and
+  count it there; do not consume or move it merely because it crosses a page
+  boundary.
+- Re-layout every candidate page as standalone text and shrink it until it still
+  fits one page from start-of-text context. UAX or TMP state from a prior page
+  must not make a page appear safer than it will be when sent independently.
+- Prefer legal break opportunities and fall back to the nearest legal break
+  before a page boundary; if none exists, hard-break at a grapheme-cluster
+  boundary.
 - Spaces both consume width and act as break opportunities; if a wrap happens at a space, the next line should not keep that leading break-space.
+- If a zero-advance modifier joins a break-space into one grapheme, project the
+  space's internal legal break to the end of that grapheme. Never split the
+  grapheme merely to use the original UAX break position.
 - Continuous CJK text is breakable between characters by default, but breaks must still respect TMP leading/following restrictions.
-- For complex scripts that depend on shaping or reordering, use shaped glyph advances rather than per-codepoint widths.
-- Clip output to at most `9` visible lines after wrapping.
+- In the current pure-layout stage, other Unicode text uses conservative
+  best-effort advances while preserving grapheme clusters, content order, and
+  every page limit. An unsupported grapheme reserves the full `280 px` line
+  budget so an unknown wide glyph is not underestimated. This intentionally
+  sparse fallback does not relax the product-wide target of real glyph-width
+  wrapping; verified shaping and language-specific line breaking remain future
+  quality work for those languages.
+- If one grapheme alone exceeds the `144` UTF-16-unit budget, no compliant page
+  can both preserve and avoid splitting it. Return an explicit layout error
+  rather than splitting, dropping, or sending an over-limit grapheme.
+- Limit each page to at most `9` visible lines after wrapping. The pure
+  Completed layout returns all remaining text as later ordered pages instead of
+  clipping it; connecting those pages to a Publisher and Runtime remains a
+  later implementation stage.
 
 ## Known unknowns
 
