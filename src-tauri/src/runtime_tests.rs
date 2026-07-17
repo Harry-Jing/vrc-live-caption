@@ -1,6 +1,172 @@
 use super::*;
 use crate::chatbox_publisher::{ChatboxSendReceipt, ChatboxTransport};
+use crate::recognition_fakes::{
+    FakeOngoingCompletedRecognitionAdapter, FakeOngoingOnlyRecognitionAdapter,
+    ScriptedRecognitionContext, ScriptedText,
+};
 use tauri::Listener;
+
+fn scripted_context(generation: &RuntimeGeneration, model: &str) -> ScriptedRecognitionContext {
+    ScriptedRecognitionContext {
+        generation: generation.generation_id(),
+        stream_id: generation.stream_id().to_string(),
+        language: Some("en".to_string()),
+        provider: "mock".to_string(),
+        model: model.to_string(),
+    }
+}
+
+#[test]
+fn scripted_unitful_events_fan_out_to_the_aggregate_and_completed_publisher() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
+    let (publisher, text_receiver) = runtime_test_publisher(generation.clone())?;
+    let events = FakeOngoingCompletedRecognitionAdapter::new(scripted_context(
+        &generation,
+        "fake-ongoing-completed",
+    ))
+    .script_unit(
+        "scripted-unit",
+        100,
+        &[
+            ScriptedText::new("full", 120),
+            ScriptedText::new("full ongoing text", 140),
+        ],
+        ScriptedText::new("full completed text", 160),
+    );
+
+    for event in events {
+        assert!(generation.submit_recognition_event(app.handle(), Some(&publisher), event,)?);
+    }
+
+    let snapshot = caption_session.snapshot()?;
+    assert!(snapshot.active_units.is_empty());
+    assert_eq!(snapshot.captions.len(), 1);
+    assert_eq!(snapshot.captions[0].revision, 3);
+    assert_eq!(snapshot.captions[0].text, "full completed text");
+    assert_eq!(
+        snapshot.captions[0].state,
+        crate::caption_session::CaptionState::Completed
+    );
+    assert_eq!(
+        text_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Completed fake caption was not published."))?,
+        "full completed text"
+    );
+    assert!(text_receiver.try_recv().is_err());
+
+    publisher.request_close(PublisherCloseReason::RuntimeError)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn scripted_fan_out_rejects_out_of_order_duplicate_stopped_and_old_generation_events()
+-> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let first = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
+    let events = FakeOngoingCompletedRecognitionAdapter::new(scripted_context(
+        &first,
+        "fake-ongoing-completed",
+    ))
+    .script_unit(
+        "ordered-unit",
+        200,
+        &[
+            ScriptedText::new("revision one", 210),
+            ScriptedText::new("revision two full", 220),
+        ],
+        ScriptedText::new("revision three completed", 230),
+    );
+
+    assert!(first.submit_recognition_event(app.handle(), None, events[0].clone())?);
+    assert!(first.submit_recognition_event(app.handle(), None, events[2].clone())?);
+    assert!(!first.submit_recognition_event(app.handle(), None, events[1].clone())?);
+    assert!(first.submit_recognition_event(app.handle(), None, events[3].clone())?);
+    assert!(!first.submit_recognition_event(app.handle(), None, events[3].clone())?);
+    first.request_stop(None)?;
+    assert!(!first.submit_recognition_event(app.handle(), None, events[2].clone())?);
+
+    let second = RuntimeGeneration::activate(app.handle(), 2, caption_session.clone())?;
+    assert!(!second.submit_recognition_event(app.handle(), None, events[3].clone())?);
+    assert!(
+        caption_session
+            .snapshot()?
+            .captions
+            .iter()
+            .all(|caption| caption.generation != 2)
+    );
+
+    let unitless =
+        FakeOngoingOnlyRecognitionAdapter::new(scripted_context(&second, "fake-ongoing-only"))
+            .script_stream(&[
+                ScriptedText::new("unitless one", 300),
+                ScriptedText::new("unitless two full", 310),
+            ]);
+    for event in unitless {
+        assert!(second.submit_recognition_event(app.handle(), None, event)?);
+    }
+    let active_snapshot = caption_session.snapshot()?;
+    let current = active_snapshot
+        .captions
+        .iter()
+        .find(|caption| caption.generation == 2)
+        .ok_or_else(|| AppError::state("Unitless fake caption was not accepted."))?;
+    assert!(current.unit_id.is_none());
+    assert_eq!(current.revision, 2);
+    assert_eq!(current.state, crate::caption_session::CaptionState::Ongoing);
+
+    second.request_stop(None)?;
+    assert!(
+        caption_session
+            .snapshot()?
+            .captions
+            .iter()
+            .all(|caption| caption.generation != 2)
+    );
+    Ok(())
+}
+
+#[test]
+fn runtime_mock_injection_uses_the_active_generation_fan_out() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
+    let worker_generation = generation.clone();
+    let join_handle = thread::spawn(move || {
+        while !worker_generation.is_work_cancelled() {
+            thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let manager = RuntimeManager::default();
+    {
+        let mut handle = manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
+        *handle = Some(RuntimeHandle {
+            generation,
+            publisher: None,
+            join_handle,
+        });
+    }
+
+    manager.emit_mock_transcript(app.handle(), "en", "mock-model")?;
+
+    let snapshot = caption_session.snapshot()?;
+    assert!(snapshot.active_units.is_empty());
+    assert_eq!(snapshot.captions.len(), 1);
+    assert_eq!(
+        snapshot.captions[0].text,
+        "Testing live caption preview from the mock runtime."
+    );
+    assert_eq!(snapshot.captions[0].revision, 2);
+    manager.stop(app.handle())?;
+    Ok(())
+}
 
 #[test]
 fn phase_one_segmenter_keeps_twenty_seconds_whole_until_silence() {

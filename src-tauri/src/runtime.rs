@@ -34,6 +34,10 @@ use crate::events::{
 };
 use crate::openai_bounded::{CompletedAudioUnit, OpenAiBoundedOutcome, OpenAiBoundedSession};
 use crate::osc::ChatboxOscSender;
+use crate::recognition_fakes::{
+    FakeOngoingCompletedRecognitionAdapter, RecognitionEvent, ScriptedRecognitionContext,
+    ScriptedText,
+};
 use crate::runtime_control::{
     RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
     RuntimeSessionSnapshot,
@@ -313,6 +317,67 @@ impl RuntimeGeneration {
         Ok(true)
     }
 
+    pub(crate) fn submit_recognition_event<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        publisher: Option<&CompletedChatboxPublisher>,
+        event: RecognitionEvent,
+    ) -> AppResult<bool> {
+        let _output_gate = self
+            .output_gate
+            .lock()
+            .map_err(|_| AppError::state("Runtime generation lock was poisoned."))?;
+        if self.hard_stop_requested.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+
+        match event {
+            RecognitionEvent::UnitStarted {
+                generation,
+                stream_id,
+                unit_id,
+                started_at_ms,
+            } => {
+                let Some(snapshot) = self.caption_session.start_unit(
+                    generation,
+                    &stream_id,
+                    unit_id.clone(),
+                    started_at_ms,
+                )?
+                else {
+                    return Ok(false);
+                };
+                (self.caption_reporter)(snapshot);
+                emit_utterance_started(app, generation, stream_id, unit_id.clone(), started_at_ms);
+
+                if let Some(publisher) = publisher
+                    && let Err(error) =
+                        publisher.try_submit(CompletedPublisherEvent::Started { unit_id })
+                {
+                    emit_diagnostic(
+                        app,
+                        DiagnosticUpdate::from_error(&error, "Chatbox activity could not start"),
+                    );
+                }
+            }
+            RecognitionEvent::Caption(caption) => {
+                let unit_id = caption.unit_id.clone();
+                let text = caption.text.clone();
+                let is_completed = caption.state == crate::caption_session::CaptionState::Completed;
+                let Some(snapshot) = self.caption_session.accept_caption(caption)? else {
+                    return Ok(false);
+                };
+                (self.caption_reporter)(snapshot);
+
+                if is_completed && let (Some(publisher), Some(unit_id)) = (publisher, unit_id) {
+                    submit_completed_chatbox_candidate(app, publisher, self, unit_id, text);
+                }
+            }
+        }
+
+        Ok(true)
+    }
+
     fn end_caption_unit<R: Runtime>(
         &self,
         app: &AppHandle<R>,
@@ -430,6 +495,55 @@ impl RuntimeManager {
 
         if guard.is_some() {
             return Err(AppError::runtime("Runtime is already running."));
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn emit_mock_transcript<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        language: &str,
+        model: &str,
+    ) -> AppResult<()> {
+        let (generation, publisher) = {
+            let guard = self
+                .handle
+                .lock()
+                .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
+            let handle = guard.as_ref().ok_or_else(|| {
+                AppError::runtime("Mock Transcript requires an active runtime generation.")
+            })?;
+            (handle.generation.clone(), handle.publisher.clone())
+        };
+        let unit_id = next_utterance_id("mock");
+        let started_at_ms = now_ms();
+        let adapter = FakeOngoingCompletedRecognitionAdapter::new(ScriptedRecognitionContext {
+            generation: generation.generation_id(),
+            stream_id: generation.stream_id().to_string(),
+            language: Some(language.to_string()),
+            provider: "mock".to_string(),
+            model: model.to_string(),
+        });
+        let events = adapter.script_unit(
+            unit_id,
+            started_at_ms,
+            &[ScriptedText::new(
+                "Testing live caption preview...",
+                now_ms(),
+            )],
+            ScriptedText::new(
+                "Testing live caption preview from the mock runtime.",
+                now_ms(),
+            ),
+        );
+
+        for event in events {
+            if !generation.submit_recognition_event(app, publisher.as_ref(), event)? {
+                return Err(AppError::state(
+                    "Mock recognition event was rejected by the active generation.",
+                ));
+            }
         }
 
         Ok(())
@@ -1348,31 +1462,7 @@ fn transcribe_and_emit_final<R: Runtime>(
         return Ok(());
     };
 
-    match publisher.try_submit(CompletedPublisherEvent::Completed {
-        unit_id: utterance_id,
-        text,
-    }) {
-        Ok(PublisherSubmitOutcome::Handled) => {}
-        Ok(PublisherSubmitOutcome::Closed) => {
-            if generation.is_hard_stopped() {
-                emit_chatbox_send_skipped_on_stop(app);
-            } else {
-                emit_diagnostic(
-                    app,
-                    DiagnosticUpdate::info(
-                        DiagnosticCategory::Osc,
-                        "osc.completed_unit_discarded_after_close",
-                        "Completed Chatbox publication discarded",
-                        "The runtime output worker closed before this completed caption could enter its queue. The App caption remains available.",
-                    ),
-                );
-            }
-        }
-        Err(error) => emit_diagnostic(
-            app,
-            DiagnosticUpdate::from_error(&error, "Completed Chatbox publication was rejected"),
-        ),
-    }
+    submit_completed_chatbox_candidate(app, publisher, generation, utterance_id, text);
 
     Ok(())
 }
@@ -1411,6 +1501,37 @@ fn emit_chatbox_send_skipped_on_stop<R: Runtime>(app: &AppHandle<R>) {
             "Runtime stop was requested before this caption could be sent.",
         ),
     );
+}
+
+fn submit_completed_chatbox_candidate<R: Runtime>(
+    app: &AppHandle<R>,
+    publisher: &CompletedChatboxPublisher,
+    generation: &RuntimeGeneration,
+    unit_id: String,
+    text: String,
+) {
+    match publisher.try_submit(CompletedPublisherEvent::Completed { unit_id, text }) {
+        Ok(PublisherSubmitOutcome::Handled) => {}
+        Ok(PublisherSubmitOutcome::Closed) => {
+            if generation.is_hard_stopped() {
+                emit_chatbox_send_skipped_on_stop(app);
+            } else {
+                emit_diagnostic(
+                    app,
+                    DiagnosticUpdate::info(
+                        DiagnosticCategory::Osc,
+                        "osc.completed_unit_discarded_after_close",
+                        "Completed Chatbox publication discarded",
+                        "The runtime output worker closed before this completed caption could enter its queue. The App caption remains available.",
+                    ),
+                );
+            }
+        }
+        Err(error) => emit_diagnostic(
+            app,
+            DiagnosticUpdate::from_error(&error, "Completed Chatbox publication was rejected"),
+        ),
+    }
 }
 
 fn emit_publisher_diagnostic<R: Runtime>(app: &AppHandle<R>, diagnostic: PublisherDiagnostic) {

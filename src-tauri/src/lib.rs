@@ -10,6 +10,7 @@ mod error;
 mod events;
 mod openai_bounded;
 mod osc;
+mod recognition_fakes;
 mod runtime;
 mod runtime_control;
 mod secrets;
