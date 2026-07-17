@@ -98,6 +98,13 @@ pub(crate) enum SttProvider {
     OpenAi,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum PublicationMode {
+    Completed,
+    Live,
+}
+
 impl SttProvider {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {

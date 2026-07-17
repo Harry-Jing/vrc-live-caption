@@ -100,6 +100,15 @@ profile is sufficient:
 | Produced lanes | source, translation, both |
 | Optional features | timestamps, language detection, hotwords |
 
+Phase 3 now represents these facts per complete recognition path and resolves a
+publication request with one backend-owned planner. The current bounded OpenAI
+path is explicitly completed-only and append-only; deterministic Mock profiles
+cover bounded, ongoing-plus-completed, and unitless ongoing-only behavior. A
+ready plan contains the concrete Completed, unit-based Live, or unitless Live
+policy, while an incompatible plan preserves the requested mode and reports the
+modes supported by the selected path. Phase 3 selects the source lane only;
+translation and bilingual runtime completion remain Phase 5 work.
+
 Provider-specific stable-prefix data may remain inside an adapter. It is not a
 third application-wide caption state. Two-pass is future pipeline topology, not
 a `supports_two_pass` model flag.

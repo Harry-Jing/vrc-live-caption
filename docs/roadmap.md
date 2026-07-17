@@ -145,11 +145,13 @@ The implemented tracer bullet:
 - preserves separate lifecycle and diagnostic events, backend-authoritative
   Stop/generation rejection, App preview behavior, and the existing Completed
   Chatbox publication policy.
+- models complete recognition-path input, boundary, unit, per-lane update, and
+  per-lane revision behavior, and resolves source publication requests to an
+  explicit Completed, unit-based Live, or unitless Live policy without changing
+  an incompatible request.
 
 Remaining Phase 3 work:
 
-- describe capability for the complete provider path, including input shape,
-  boundary owner, per-lane update/completion behavior, and revision behavior;
 - extend the Phase 1 publisher with Completed and Live policies rather than
   letting providers publish directly;
 - implement the per-unit one-second Live observation window and, for a

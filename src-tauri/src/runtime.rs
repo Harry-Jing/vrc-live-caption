@@ -18,13 +18,14 @@
 //! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
 
 use crate::audio::{open_input_capture, receive_audio};
+use crate::capability_planner::{plan_publication, recognition_capabilities};
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore, CaptionSnapshotV1};
 use crate::chatbox_pacer::ChatboxPacer;
 use crate::chatbox_publisher::{
     CompletedChatboxPublisher, CompletedPublisherEvent, PublisherCloseReason, PublisherDiagnostic,
     PublisherReporter, PublisherSubmitOutcome,
 };
-use crate::config::{AppConfig, OscConfig, SttProvider};
+use crate::config::{AppConfig, OscConfig, PublicationMode, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, UtteranceEndReason,
@@ -453,6 +454,15 @@ impl RuntimeManager {
             expected_stop_epoch,
         } = request;
         config.validate()?;
+        // Phase 1 behavior remains Completed while Phase 3 establishes one
+        // provider-path planner. The persisted request is wired in the config
+        // migration slice; computing the current plan here keeps capability
+        // resolution on the real Start path without changing its outcome.
+        let _current_publication_plan = plan_publication(
+            &recognition_capabilities(&config.stt),
+            PublicationMode::Completed,
+            &[crate::caption_session::CaptionLane::Source],
+        );
 
         let mut guard = self
             .handle

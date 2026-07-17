@@ -1,4 +1,5 @@
 mod audio;
+mod capability_planner;
 mod caption_session;
 mod chatbox_layout;
 mod chatbox_pacer;
