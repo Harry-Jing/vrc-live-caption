@@ -82,6 +82,27 @@
   platform-specific behavior into a `cfg(...)` module when it grows beyond a
   small local branch or changes public behavior.
 
+## Rust Test Organization
+- Put new non-trivial unit-test modules in a descriptive sibling `*_tests.rs`
+  file instead of growing the implementation file. Existing small, focused
+  inline test modules may remain, but move one when its fixtures, fakes, or test
+  cases obscure the production code; roughly 200 lines is a review signal, not
+  a rigid threshold.
+- Load a sibling test module explicitly from the implementation file:
+
+  ```rust
+  #[cfg(test)]
+  #[path = "audio_tests.rs"]
+  mod tests;
+  ```
+
+  The sibling file contains the body of `tests`; do not wrap it in another
+  `mod tests`. It may continue to use `super` to access private implementation
+  details without widening the production API.
+- Reserve `src-tauri/tests/` for crate-boundary integration tests. Test-only
+  seams that production-module unit tests require may stay next to the
+  implementation behind `#[cfg(test)]`.
+
 ## Tauri Rules
 - Use Tauri v2 APIs only.
 - Keep permissions and capabilities tied to APIs the app actually uses.
