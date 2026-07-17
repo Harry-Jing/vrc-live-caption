@@ -27,9 +27,12 @@ rewrite while implementing later phases.
 
 ## Phase 1: Completed Cloud Baseline Hardening
 
-Status: the core microphone-to-OpenAI-to-App-to-Chatbox path, hard Stop,
-process-wide pacing, fixed Chatbox layout, and independent Completed publisher
-are implemented; real-client validation and the remaining exit evidence remain.
+Status: implementation and real-client baseline validation are complete. The
+core microphone-to-OpenAI-to-App-to-Chatbox path, hard Stop, process-wide
+pacing, fixed Chatbox layout, and independent Completed publisher are
+implemented, and the microphone-to-OpenAI-to-App-to-real-VRChat path has been
+validated on Windows. Cross-platform quality and native-bundle evidence remain
+release-hardening work.
 
 Goal: make the existing segmented `gpt-4o-mini-transcribe` Completed path a
 trustworthy baseline before changing the provider and wire contracts.
@@ -90,14 +93,15 @@ Exit criteria:
 
 ## Phase 2: Frontend And Contract Test Foundation
 
-Status: in progress. Vitest now runs in the normal frontend gate; framework-free
+Status: complete. Vitest runs in the normal frontend gate; framework-free
 lifecycle and caption-session reducers plus shared Preview/Tauri behavior suites
 cover revision ordering, terminal units, Stop/Start fences, reload races,
 bounded history, subscription cleanup, and settings round trips. A revisioned
 runtime-control snapshot distinguishes saved desired settings from the
 immutable active-session selection and derives next-Start changes across
-reloads. Component-level state tests remain; the versioned caption contract and
-reload-safe caption resynchronization have landed as the first Phase 3 slice.
+reloads. Component-level tests remain useful follow-on hardening rather than a
+Phase 2 exit condition; the versioned caption contract and reload-safe caption
+resynchronization continue as Phase 3 foundations.
 
 Goal: maintain the regression net around runtime contract changes.
 
@@ -122,10 +126,11 @@ Exit criteria:
 
 ## Phase 3: Normalized Recognition Sessions And Live-Capable Publisher
 
-Status: in progress. The behavior-preserving tracer bullet, capability planner,
-config migration, deterministic provider shapes, backend Live publisher, and
-user-facing publication controls are implemented. A real Live provider path
-and measured Windows/VRChat validation remain.
+Status: generic foundation code-complete. The behavior-preserving tracer
+bullet, capability planner, config migration, deterministic provider shapes,
+backend Live publisher, user-facing publication controls, and deterministic
+foundation tests are implemented. The first real Live provider path and its
+measured Windows/VRChat validation are Phase 4 work.
 
 Goal: establish the deep runtime seams shared by bounded cloud, Realtime cloud,
 and later local providers, without adding translation or a second recognizer.
@@ -172,16 +177,20 @@ The implemented tracer bullet:
   available when the saved next-Start plan is incompatible, and offers explicit
   supported-mode or recognition-path directions without automatic fallback.
 
-Remaining Phase 3 work:
+Follow-on work outside the completed Phase 3 generic foundation:
 
 - for recognition paths that own real caption units, implement natural-
   boundary-first segmentation plus a hard maximum for long uninterrupted
   speech; choose timings from recorded tests rather than an ordinary user
-  slider;
-- for a unitless continuous path, bound buffers, backpressure, reconnect, and
-  session lifetime without turning a timer or silence into a completed unit;
-- add a concrete non-Mock ongoing recognition path and validate its reconnect,
-  backpressure, session lifetime, and measured user value before advertising it.
+  slider; this remains path-specific capture/provider hardening rather than a
+  Phase 3 foundation gate;
+- if a real unitless continuous path is selected later, bound its buffers,
+  backpressure, reconnect, and session lifetime without turning a timer or
+  silence into a completed unit; no real unitless path is required to close
+  Phase 3;
+- add the first concrete non-Mock ongoing recognition path and validate its
+  reconnect, backpressure, session lifetime, and measured user value in Phase 4
+  before advertising it.
 
 Exit criteria:
 
