@@ -620,6 +620,38 @@ fn overlapping_units_do_not_publish_a_newer_draft_before_its_observation_window(
 }
 
 #[test]
+fn removing_a_non_head_ongoing_unit_republishes_the_recomputed_viewport() -> AppResult<()> {
+    let clock = Arc::new(ManualClock::new());
+    let transport = Arc::new(RecordingTransport::new([]));
+    let (publisher, _) = start_unit_publisher(clock.clone(), transport.clone())?;
+    let newer = caption(Some("newer"), 1, "newer", CaptionState::Ongoing);
+
+    observe(
+        &publisher,
+        &snapshot(
+            1,
+            &["older", "newer"],
+            vec![
+                newer.clone(),
+                caption(Some("older"), 1, "older", CaptionState::Ongoing),
+            ],
+        ),
+    )?;
+    clock.advance(Duration::from_secs(1));
+    publisher.shared.wake.notify_all();
+    assert_eq!(transport.wait_for_texts(1)?, ["newer older"]);
+
+    // The newer caption remains byte-for-byte identical while the older unit
+    // ends without completion and disappears from the authoritative aggregate.
+    observe(&publisher, &snapshot(2, &["newer"], vec![newer]))?;
+    clock.advance(Duration::from_secs(1));
+    publisher.shared.wake.notify_all();
+    assert_eq!(transport.wait_for_texts(2)?, ["newer older", "newer"]);
+
+    close(&publisher)
+}
+
+#[test]
 fn unitless_stream_waits_from_first_non_empty_and_sends_latest() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));

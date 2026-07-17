@@ -96,7 +96,7 @@ struct LivePublisherState {
     unit_first_seen: HashMap<String, Instant>,
     unitless_first_non_empty: Option<(String, Instant)>,
     candidate: Option<LiveCandidate>,
-    last_attempted: Option<LiveCandidateIdentity>,
+    last_attempted: Option<LiveCandidateAttempt>,
     last_published: Option<PublishedLiveView>,
     last_layout_failure: Option<LiveCandidateIdentity>,
     typing_desired: bool,
@@ -134,6 +134,17 @@ struct LiveCandidate {
     identity: LiveCandidateIdentity,
     view: String,
     ready_at: Instant,
+}
+
+struct LiveCandidateAttempt {
+    identity: LiveCandidateIdentity,
+    view: String,
+}
+
+impl LiveCandidateAttempt {
+    fn matches(&self, candidate: &LiveCandidate) -> bool {
+        self.identity == candidate.identity && self.view == candidate.view
+    }
 }
 
 struct PublishedLiveView {
@@ -674,7 +685,12 @@ fn next_live_worker_item(shared: &LivePublisherShared) -> AppResult<LiveWorkerIt
             .then_some(state.next_typing_reassert_at)
             .flatten();
         if let Some(candidate) = state.candidate.as_ref() {
-            let already_attempted = state.last_attempted.as_ref() == Some(&candidate.identity);
+            // The aggregate viewport can change when a non-head caption is
+            // removed even though the head caption identity stays unchanged.
+            let already_attempted = state
+                .last_attempted
+                .as_ref()
+                .is_some_and(|attempt| attempt.matches(candidate));
             let already_published = state.last_published.as_ref().is_some_and(|published| {
                 published.scope == candidate.identity.scope && published.view == candidate.view
             });
@@ -737,18 +753,23 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
             .map_err(|_| AppError::state("Live publisher state lock was poisoned."))
             .map(|mut state| {
                 let is_current = state.lifecycle == LivePublisherLifecycle::Running
+                    && state.candidate.as_ref().is_some_and(|candidate| {
+                        candidate.identity == selected.identity && candidate.view == selected.view
+                    })
                     && state
-                        .candidate
+                        .last_attempted
                         .as_ref()
-                        .is_some_and(|candidate| candidate.identity == selected.identity)
-                    && state.last_attempted.as_ref() != Some(&selected.identity)
+                        .is_none_or(|attempt| !attempt.matches(&selected))
                     && state.last_published.as_ref().is_none_or(|published| {
                         published.scope != selected.identity.scope
                             || published.view != selected.view
                     })
                     && shared.pacer.now() >= selected.ready_at;
                 if is_current {
-                    state.last_attempted = Some(selected.identity.clone());
+                    state.last_attempted = Some(LiveCandidateAttempt {
+                        identity: selected.identity.clone(),
+                        view: selected.view.clone(),
+                    });
                 }
                 is_current
             });
@@ -894,7 +915,10 @@ fn refresh_typing_desired(state: &mut LivePublisherState, policy: LiveObservatio
 
 fn candidate_needs_publication(state: &LivePublisherState) -> bool {
     state.candidate.as_ref().is_some_and(|candidate| {
-        state.last_attempted.as_ref() != Some(&candidate.identity)
+        state
+            .last_attempted
+            .as_ref()
+            .is_none_or(|attempt| !attempt.matches(candidate))
             && state.last_published.as_ref().is_none_or(|published| {
                 published.scope != candidate.identity.scope || published.view != candidate.view
             })
