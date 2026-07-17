@@ -282,3 +282,69 @@ fn completed_history_keeps_the_five_newest_units_in_newest_first_order()
 
     Ok(())
 }
+
+#[test]
+fn terminal_unit_replay_guard_stays_bounded_during_a_long_generation() -> crate::error::AppResult<()>
+{
+    let store = CaptionSessionStore::default();
+    let active = store
+        .begin_generation(5)?
+        .active
+        .ok_or_else(|| crate::error::AppError::state("Generation 5 was not active."))?;
+    let expected_replay_bound = TERMINAL_UNIT_REPLAY_LIMIT;
+    let retained_unit_id = "retained-completed".to_string();
+    store.start_unit(5, &active.stream_id, retained_unit_id.clone(), 0)?;
+    assert!(
+        store
+            .accept_caption(CaptionSnapshotV1 {
+                generation: 5,
+                stream_id: active.stream_id.clone(),
+                unit_id: Some(retained_unit_id.clone()),
+                lane: CaptionLane::Source,
+                revision: 1,
+                text: "retained".to_string(),
+                state: CaptionState::Completed,
+                language: Some("en".to_string()),
+                provider: "openai".to_string(),
+                model: "gpt-4o-mini-transcribe".to_string(),
+                unit_started_at_ms: Some(0),
+                timestamp_ms: 1,
+            })?
+            .is_some()
+    );
+
+    for index in 0..expected_replay_bound + 3 {
+        let unit_id = format!("no-result-{index}");
+        assert!(
+            store
+                .start_unit(5, &active.stream_id, unit_id.clone(), index as u64)?
+                .is_some()
+        );
+        assert!(
+            store
+                .end_unit_without_caption(5, &active.stream_id, &unit_id)?
+                .is_some()
+        );
+    }
+
+    assert!(
+        store
+            .start_unit(5, &active.stream_id, retained_unit_id, 1_000)?
+            .is_none()
+    );
+    assert!(
+        store
+            .start_unit(
+                5,
+                &active.stream_id,
+                format!("no-result-{}", expected_replay_bound + 2),
+                1_001,
+            )?
+            .is_none()
+    );
+
+    let state = store.lock()?;
+    assert_eq!(state.recent_terminal_units.len(), expected_replay_bound);
+
+    Ok(())
+}

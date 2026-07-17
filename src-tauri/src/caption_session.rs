@@ -1,7 +1,7 @@
 //! Backend-owned normalized caption-session state.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use crate::error::{AppError, AppResult};
@@ -64,8 +64,11 @@ pub(crate) enum CaptionState {
 }
 
 const COMPLETED_UNIT_LIMIT: usize = 5;
+// Unit IDs are backend-authoritative and must be unique. Keep a bounded recent
+// replay guard so an invalid duplicate cannot grow session memory without bound.
+const TERMINAL_UNIT_REPLAY_LIMIT: usize = 64;
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct CaptionUnitKey {
     generation: u64,
     stream_id: String,
@@ -80,7 +83,7 @@ struct CaptionSessionState {
     active_units: Vec<CaptionActiveUnitV1>,
     captions: Vec<CaptionSnapshotV1>,
     completed_units: VecDeque<CaptionUnitKey>,
-    terminal_units: HashSet<CaptionUnitKey>,
+    recent_terminal_units: VecDeque<CaptionUnitKey>,
 }
 
 #[derive(Clone, Default)]
@@ -101,7 +104,7 @@ impl CaptionSessionStore {
             stream_id: format!("recognition-{generation}-1"),
         });
         state.active_units.clear();
-        state.terminal_units.clear();
+        state.recent_terminal_units.clear();
         state
             .captions
             .retain(|caption| caption.state == CaptionState::Completed);
@@ -124,11 +127,12 @@ impl CaptionSessionStore {
             unit_id: unit_id.clone(),
         };
         if !Self::matches_active(&state, generation, stream_id)
-            || state.terminal_units.contains(&unit_key)
+            || state.recent_terminal_units.contains(&unit_key)
             || state
                 .active_units
                 .iter()
                 .any(|unit| unit.unit_id == unit_id)
+            || state.completed_units.contains(&unit_key)
         {
             return Ok(None);
         }
@@ -161,7 +165,7 @@ impl CaptionSessionStore {
         });
         if unit_key
             .as_ref()
-            .is_some_and(|unit_key| state.terminal_units.contains(unit_key))
+            .is_some_and(|unit_key| state.recent_terminal_units.contains(unit_key))
         {
             return Ok(None);
         }
@@ -203,7 +207,7 @@ impl CaptionSessionStore {
                 stream_id: caption.stream_id.clone(),
                 unit_id,
             };
-            state.terminal_units.insert(completed_unit.clone());
+            Self::record_terminal_unit(&mut state, completed_unit.clone());
             state
                 .completed_units
                 .retain(|current| current != &completed_unit);
@@ -240,11 +244,14 @@ impl CaptionSessionStore {
                 || caption.stream_id != stream_id
                 || caption.unit_id.as_deref() != Some(unit_id)
         });
-        state.terminal_units.insert(CaptionUnitKey {
-            generation,
-            stream_id: stream_id.to_string(),
-            unit_id: unit_id.to_string(),
-        });
+        Self::record_terminal_unit(
+            &mut state,
+            CaptionUnitKey {
+                generation,
+                stream_id: stream_id.to_string(),
+                unit_id: unit_id.to_string(),
+            },
+        );
         Self::advance_revision(&mut state);
 
         Ok(Some(Self::snapshot_from(&state)))
@@ -310,6 +317,16 @@ impl CaptionSessionStore {
                         || caption.unit_id.as_deref() != Some(expired.unit_id.as_str())
                 });
             }
+        }
+    }
+
+    fn record_terminal_unit(state: &mut CaptionSessionState, unit: CaptionUnitKey) {
+        state
+            .recent_terminal_units
+            .retain(|current| current != &unit);
+        state.recent_terminal_units.push_back(unit);
+        while state.recent_terminal_units.len() > TERMINAL_UNIT_REPLAY_LIMIT {
+            state.recent_terminal_units.pop_front();
         }
     }
 }
