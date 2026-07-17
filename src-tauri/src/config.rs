@@ -8,7 +8,7 @@
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 
-const APP_CONFIG_SCHEMA_VERSION: u32 = 1;
+pub(crate) const APP_CONFIG_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +22,8 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     pub(crate) osc: OscConfig,
     #[serde(default)]
+    pub(crate) publication: PublicationConfig,
+    #[serde(default)]
     pub(crate) ui: UiConfig,
 }
 
@@ -32,6 +34,7 @@ impl Default for AppConfig {
             audio: AudioConfig::default(),
             stt: SttConfig::default(),
             osc: OscConfig::default(),
+            publication: PublicationConfig::default(),
             ui: UiConfig::default(),
         }
     }
@@ -98,11 +101,19 @@ pub(crate) enum SttProvider {
     OpenAi,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum PublicationMode {
+    #[default]
     Completed,
     Live,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PublicationConfig {
+    #[serde(default)]
+    pub(crate) mode: PublicationMode,
 }
 
 impl SttProvider {

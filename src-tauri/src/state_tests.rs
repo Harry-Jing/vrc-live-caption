@@ -1,4 +1,5 @@
 use super::*;
+use crate::capability_planner::plan_runtime;
 use crate::runtime_control::{RuntimeChatboxSnapshot, RuntimeSelectedConfig};
 use crate::secrets::ProviderSecretStorage;
 use std::sync::{Arc, Barrier};
@@ -12,6 +13,7 @@ fn mock_session(config: &AppConfig, generation: u64) -> RuntimeSessionSnapshot {
         phase: RuntimeSessionPhase::Starting,
         started_from_config_revision: 0,
         selected: RuntimeSelectedConfig::from(config),
+        runtime_plan: plan_runtime(config),
         credential: None,
         chatbox: RuntimeChatboxSnapshot::Disabled {
             host: config.osc.host.clone(),
@@ -33,12 +35,16 @@ fn runtime_control_snapshot_has_a_versioned_authoritative_shape() -> AppResult<(
     let value = serde_json::to_value(snapshot)
         .map_err(|error| AppError::state(format!("Failed to serialize snapshot: {error}")))?;
 
-    assert_eq!(value["contractVersion"], serde_json::json!(1));
+    assert_eq!(value["contractVersion"], serde_json::json!(2));
     assert_eq!(value["revision"], serde_json::json!(0));
     assert_eq!(value["desired"]["revision"], serde_json::json!(0));
     assert_eq!(
         value["desired"]["config"]["schemaVersion"],
-        serde_json::json!(1)
+        serde_json::json!(2)
+    );
+    assert_eq!(
+        value["desired"]["runtimePlan"]["publication"]["state"],
+        serde_json::json!("ready")
     );
     assert!(value["session"].is_null());
     assert_eq!(value["pendingChanges"], serde_json::json!([]));
@@ -213,6 +219,31 @@ fn recorded_start_error_publishes_control_before_legacy_status() -> AppResult<()
 }
 
 #[test]
+fn incompatible_publication_fails_before_openai_credentials_are_resolved() -> AppResult<()> {
+    let mut config = AppConfig::default();
+    config.publication.mode = crate::config::PublicationMode::Live;
+    let plan = plan_runtime(&config);
+    let Err(error) = ensure_runtime_plan_is_startable(&plan) else {
+        return Err(AppError::state(
+            "Bounded OpenAI Live unexpectedly passed runtime preflight.",
+        ));
+    };
+
+    assert_eq!(error.code(), "config.invalid");
+    assert!(error.to_string().contains("publication.mode_unsupported"));
+    assert!(
+        !error.to_string().contains("API key"),
+        "planner failure must win over missing credentials"
+    );
+    assert_eq!(
+        config.publication.mode,
+        crate::config::PublicationMode::Live
+    );
+
+    Ok(())
+}
+
+#[test]
 fn thread_spawn_failure_preserves_the_session_it_already_installed() -> AppResult<()> {
     let state = AppState::default();
     let mut selected = AppConfig::default();
@@ -354,7 +385,11 @@ fn stop_is_not_blocked_by_a_desired_state_operation() -> AppResult<()> {
 fn default_config_serializes_schema_version() -> Result<(), serde_json::Error> {
     let value = serde_json::to_value(AppConfig::default())?;
 
-    assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(1)));
+    assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(2)));
+    assert_eq!(
+        value.pointer("/publication/mode"),
+        Some(&serde_json::json!("completed"))
+    );
     assert!(value.pointer("/osc/minIntervalMs").is_none());
 
     Ok(())
@@ -364,9 +399,13 @@ fn default_config_serializes_schema_version() -> Result<(), serde_json::Error> {
 fn parse_valid_config_fills_missing_fields_with_defaults() -> AppResult<()> {
     let config = parse_valid_config(r#"{"stt":{"language":"ja"}}"#)?;
 
-    assert_eq!(config.schema_version, 1);
+    assert_eq!(config.schema_version, 2);
     assert_eq!(config.stt.language, "ja");
     assert!(!config.stt.model.is_empty());
+    assert_eq!(
+        config.publication.mode,
+        crate::config::PublicationMode::Completed
+    );
 
     Ok(())
 }
@@ -404,7 +443,7 @@ fn parse_valid_config_ignores_removed_chatbox_interval_and_preserves_other_setti
             }"#,
     )?;
 
-    assert_eq!(config.schema_version, 1);
+    assert_eq!(config.schema_version, 2);
     assert_eq!(
         config.audio.input_device_id.as_deref(),
         Some("saved-device")
@@ -424,6 +463,49 @@ fn parse_valid_config_ignores_removed_chatbox_interval_and_preserves_other_setti
 }
 
 #[test]
+fn version_one_migration_forces_completed_even_if_an_unknown_field_used_live() -> AppResult<()> {
+    let config = parse_valid_config(
+        r#"{
+            "schemaVersion": 1,
+            "publication": {"mode": "live"},
+            "stt": {"language": "ja", "model": "saved-model"}
+        }"#,
+    )?;
+
+    assert_eq!(config.schema_version, 2);
+    assert_eq!(
+        config.publication.mode,
+        crate::config::PublicationMode::Completed
+    );
+    assert_eq!(config.stt.language, "ja");
+    assert_eq!(config.stt.model, "saved-model");
+
+    Ok(())
+}
+
+#[test]
+fn version_two_live_publication_round_trips() -> AppResult<()> {
+    let config = parse_valid_config(
+        r#"{
+            "schemaVersion": 2,
+            "publication": {"mode": "live"}
+        }"#,
+    )?;
+    let serialized = serde_json::to_string(&config).map_err(|error| {
+        AppError::config_io(format!("Failed to serialize test config: {error}"))
+    })?;
+    let reparsed = parse_valid_config(&serialized)?;
+
+    assert_eq!(reparsed, config);
+    assert_eq!(
+        reparsed.publication.mode,
+        crate::config::PublicationMode::Live
+    );
+
+    Ok(())
+}
+
+#[test]
 fn parse_valid_config_rejects_malformed_json() {
     assert!(parse_valid_config("{ not json").is_err());
 }
@@ -435,5 +517,5 @@ fn parse_valid_config_rejects_invalid_settings() {
 
 #[test]
 fn parse_valid_config_rejects_unknown_schema_version() {
-    assert!(parse_valid_config(r#"{"schemaVersion":2}"#).is_err());
+    assert!(parse_valid_config(r#"{"schemaVersion":3}"#).is_err());
 }

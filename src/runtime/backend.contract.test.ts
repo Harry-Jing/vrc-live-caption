@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { RuntimeBackend } from "./backend";
-import { createPreviewBackend } from "./previewBackend";
+import { createPreviewBackend, previewRuntimePlan } from "./previewBackend";
 import {
   createCaptionSessionState,
   reduceCaptionSessionState,
@@ -41,6 +41,7 @@ const fakeInitialConfig: AppConfig = {
     port: 9000,
     enabled: true,
   },
+  publication: { mode: "completed" },
   ui: { showPartial: true },
 };
 
@@ -93,12 +94,13 @@ function createFakeTauriBridge(): TauriBackendBridge {
 
   function controlSnapshot(): RuntimeControlSnapshot {
     return {
-      contractVersion: 1,
+      contractVersion: 2,
       revision: controlRevision,
       runtime: { ...latestStatus },
       desired: {
         revision: configRevision,
         config: structuredClone(config),
+        runtimePlan: previewRuntimePlan(config),
         providerSecrets: [],
       },
       session: session ? structuredClone(session) : null,
@@ -168,12 +170,14 @@ function createFakeTauriBridge(): TauriBackendBridge {
           audio: structuredClone(config.audio),
           stt: structuredClone(config.stt),
           osc: structuredClone(config.osc),
+          publication: structuredClone(config.publication),
         };
         session = {
           generation: nextGeneration,
           phase: "starting",
           startedFromConfigRevision: configRevision,
           selected,
+          runtimePlan: previewRuntimePlan(config),
           credential: null,
           chatbox: {
             state: selected.osc.enabled ? "ready" : "disabled",

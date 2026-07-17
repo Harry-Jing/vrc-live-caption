@@ -149,6 +149,10 @@ The implemented tracer bullet:
   per-lane revision behavior, and resolves source publication requests to an
   explicit Completed, unit-based Live, or unitless Live policy without changing
   an incompatible request.
+- persists the requested publication mode in config schema version 2, migrates
+  every older config to Completed, exposes desired and active runtime plans in
+  runtime-control contract version 2, and rejects incompatible Start requests
+  before credential or audio setup without rewriting the saved selection.
 
 Remaining Phase 3 work:
 
@@ -165,8 +169,8 @@ Remaining Phase 3 work:
   slider;
 - for a unitless continuous path, bound buffers, backpressure, reconnect, and
   session lifetime without turning a timer or silence into a completed unit;
-- add persisted Completed/Live selection and UI controls that explain each
-  timing choice and the selected path's actual update behavior;
+- add UI controls that explain each timing choice and the selected path's actual
+  update behavior;
 - when a selection is incompatible, offer two explicit directions: keep the
   model/provider and choose a supported publication mode, or keep the desired
   experience and choose a compatible model/provider;

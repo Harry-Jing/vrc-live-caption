@@ -6,6 +6,7 @@
 //! may be resolved transiently for Start, but are never stored in state or in
 //! a frontend-facing snapshot.
 
+use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
 use crate::chatbox_pacer::ChatboxPacer;
 use crate::config::{AppConfig, SttProvider};
@@ -119,6 +120,10 @@ impl AppState {
         if let Err(error) = config.validate() {
             return self.finish_start_failure(app, error, None, expected_stop_epoch);
         }
+        let runtime_plan = plan_runtime(&config);
+        if let Err(error) = ensure_runtime_plan_is_startable(&runtime_plan) {
+            return self.finish_start_failure(app, error, None, expected_stop_epoch);
+        }
         let (openai_api_key, credential) = if matches!(config.stt.provider, SttProvider::OpenAi) {
             let resolved = match openai_api_key() {
                 Ok(resolved) => resolved,
@@ -157,6 +162,7 @@ impl AppState {
             app.clone(),
             RuntimeStartRequest {
                 config,
+                runtime_plan,
                 chatbox_pacer: self.chatbox_pacer(),
                 caption_session: self.caption_session_store(),
                 generation_id: generation,
@@ -266,6 +272,7 @@ impl AppState {
             desired: RuntimeDesiredSnapshot {
                 revision: control.config_revision,
                 config: control.config.clone(),
+                runtime_plan: plan_runtime(&control.config),
                 provider_secrets: control.provider_secrets.clone(),
             },
             session: control.session.clone(),
@@ -546,6 +553,24 @@ impl AppState {
     }
 }
 
+fn ensure_runtime_plan_is_startable(plan: &RuntimePlanSnapshot) -> AppResult<()> {
+    match plan.publication.resolved_policy() {
+        Some(ResolvedPublicationPolicy::Completed) => Ok(()),
+        Some(
+            ResolvedPublicationPolicy::LiveUnit { .. }
+            | ResolvedPublicationPolicy::LiveUnitless { .. },
+        ) => Err(AppError::config(
+            "Live Chatbox publication is not available until its Phase 3 publisher is installed.",
+        )),
+        None => Err(AppError::config(format!(
+            "The selected recognition path and publication mode are incompatible ({}).",
+            plan.publication
+                .incompatibility_code()
+                .unwrap_or("publication.incompatible")
+        ))),
+    }
+}
+
 fn config_path<R: Runtime>(app: &AppHandle<R>) -> AppResult<PathBuf> {
     app.path()
         .app_config_dir()
@@ -556,12 +581,64 @@ fn config_path<R: Runtime>(app: &AppHandle<R>) -> AppResult<PathBuf> {
 }
 
 fn parse_valid_config(contents: &str) -> AppResult<AppConfig> {
-    let config = serde_json::from_str::<AppConfig>(contents)
+    let value = serde_json::from_str::<serde_json::Value>(contents)
         .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?;
+    let schema_version = match value.get("schemaVersion") {
+        None => 1,
+        Some(serde_json::Value::Number(version)) => version.as_u64().ok_or_else(|| {
+            AppError::config("Config schemaVersion must be a non-negative integer.")
+        })?,
+        Some(_) => {
+            return Err(AppError::config(
+                "Config schemaVersion must be a non-negative integer.",
+            ));
+        }
+    };
+
+    let config = match schema_version {
+        1 => {
+            let legacy =
+                serde_json::from_value::<PersistedAppConfigV1>(value).map_err(|error| {
+                    AppError::config_io(format!("Failed to parse version 1 app config: {error}."))
+                })?;
+            AppConfig {
+                schema_version: crate::config::APP_CONFIG_SCHEMA_VERSION,
+                audio: legacy.audio,
+                stt: legacy.stt,
+                osc: legacy.osc,
+                publication: crate::config::PublicationConfig::default(),
+                ui: legacy.ui,
+            }
+        }
+        version if version == u64::from(crate::config::APP_CONFIG_SCHEMA_VERSION) => {
+            serde_json::from_value::<AppConfig>(value).map_err(|error| {
+                AppError::config_io(format!("Failed to parse app config: {error}."))
+            })?
+        }
+        version => {
+            return Err(AppError::config(format!(
+                "Unsupported config schema version {version}. Expected 1 or {}.",
+                crate::config::APP_CONFIG_SCHEMA_VERSION
+            )));
+        }
+    };
 
     config.validate()?;
 
     Ok(config)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedAppConfigV1 {
+    #[serde(default)]
+    audio: crate::config::AudioConfig,
+    #[serde(default)]
+    stt: crate::config::SttConfig,
+    #[serde(default)]
+    osc: crate::config::OscConfig,
+    #[serde(default)]
+    ui: crate::config::UiConfig,
 }
 
 #[cfg(test)]

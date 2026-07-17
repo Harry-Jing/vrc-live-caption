@@ -186,6 +186,8 @@ Saved settings and the effective runtime session are separate state. Rust owns
 one revisioned control snapshot containing:
 
 - the latest saved, non-secret configuration and its revision;
+- the backend-derived recognition capabilities and publication plan for those
+  saved settings;
 - redacted provider-secret status and credential revision;
 - the current runtime lifecycle status;
 - the immutable selection captured for the current runtime generation, if one
@@ -198,6 +200,13 @@ secret mutations. Later saves change the desired state for the next Start;
 they never mutate the running generation or silently restart it. Pure UI
 preferences remain outside the session comparison and may take effect
 immediately.
+
+Config schema version 2 persists publication timing separately from OSC
+transport settings. Missing-version and version-1 files migrate in memory to
+Completed, even if an older ignored field happened to use the future Live
+spelling; the next explicit Save writes version 2 atomically. Incompatible
+settings remain saved and visible. Start rejects them from the derived plan
+before credential lookup, microphone setup, or generation creation.
 
 Stop does not wait behind that desired-state boundary. It advances a runtime
 stop epoch before taking the runtime-handle lock, so an earlier Start that is

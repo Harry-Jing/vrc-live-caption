@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { RuntimeBackend } from "./backend";
-import { createPreviewBackend } from "./previewBackend";
+import { createPreviewBackend, previewRuntimePlan } from "./previewBackend";
 import { createTauriBackend, type TauriBackendBridge } from "./tauriBackend";
 import {
   APP_CONFIG_SCHEMA_VERSION,
@@ -21,6 +21,7 @@ const initialConfig: AppConfig = {
     model: "gpt-4o-mini-transcribe",
   },
   osc: { enabled: true, host: "127.0.0.1", port: 9000 },
+  publication: { mode: "completed" },
   ui: { showPartial: true },
 };
 
@@ -30,12 +31,13 @@ function createControlBridge(): TauriBackendBridge {
     Set<(event: Readonly<{ payload: unknown }>) => void>
   >();
   let snapshot: RuntimeControlSnapshot = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 1,
     runtime: { status: "idle", timestampMs: 1 },
     desired: {
       revision: 1,
       config: initialConfig,
+      runtimePlan: previewRuntimePlan(initialConfig),
       providerSecrets: [],
     },
     session: null,
@@ -108,6 +110,9 @@ function createControlBridge(): TauriBackendBridge {
     ) {
       pending.push("chatboxOutput");
     }
+    if (selected.publication.mode !== config.publication.mode) {
+      pending.push("publication");
+    }
 
     return pending;
   }
@@ -142,7 +147,9 @@ function createControlBridge(): TauriBackendBridge {
               audio: structuredClone(selected.audio),
               stt: structuredClone(selected.stt),
               osc: structuredClone(selected.osc),
+              publication: structuredClone(selected.publication),
             },
+            runtimePlan: previewRuntimePlan(selected),
             credential: null,
             chatbox: {
               state: selected.osc.enabled ? "ready" : "disabled",
@@ -188,6 +195,7 @@ function createControlBridge(): TauriBackendBridge {
             ...snapshot.desired,
             revision: snapshot.desired.revision + 1,
             config,
+            runtimePlan: previewRuntimePlan(config),
           },
           pendingChanges: pendingChanges(config),
         };
@@ -348,7 +356,7 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
     const started = await backend.startRuntime();
     unsubscribe();
 
-    expect(initial.contractVersion).toBe(1);
+    expect(initial.contractVersion).toBe(2);
     expect(initial.session).toBeNull();
     expect(started.session?.selected.stt.provider).toBe("openai");
     expect(observed.at(-1)?.revision).toBe(started.revision);
@@ -362,6 +370,7 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
       audio: { inputDeviceId: "next-device" },
       stt: { provider: "mock", language: "zh", model: "next-model" },
       osc: { enabled: false, host: "192.0.2.30", port: 9012 },
+      publication: { mode: "live" },
       ui: { showPartial: false },
     };
 
@@ -373,7 +382,9 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
       "microphone",
       "recognition",
       "chatboxOutput",
+      "publication",
     ]);
+    expect(saved.desired.runtimePlan.publication.state).toBe("ready");
 
     const reverted = await backend.saveConfig({
       ...initialConfig,
@@ -400,6 +411,21 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
     });
     expect(saved.session).toEqual(started.session);
     expect(saved.pendingChanges).toContain("credential");
+  });
+
+  test("preserves an incompatible saved mode and returns the backend plan", async () => {
+    const backend = create();
+    const saved = await backend.saveConfig({
+      ...initialConfig,
+      publication: { mode: "live" },
+    });
+
+    expect(saved.desired.config.publication.mode).toBe("live");
+    expect(saved.desired.runtimePlan.publication).toMatchObject({
+      state: "incompatible",
+      requestedMode: "live",
+      supportedModes: ["completed"],
+    });
   });
 
   test("uses the immutable Mock session metadata after desired settings change", async () => {

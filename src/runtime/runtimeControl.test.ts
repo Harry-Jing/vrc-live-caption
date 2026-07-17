@@ -4,6 +4,7 @@ import {
   reconcileRuntimeControlSnapshot,
   runtimeStatusNeedsControlReconciliation,
 } from "./runtimeControl";
+import { previewRuntimePlan } from "./previewBackend";
 import {
   APP_CONFIG_SCHEMA_VERSION,
   type AppConfig,
@@ -15,12 +16,14 @@ const desiredConfig: AppConfig = {
   audio: { inputDeviceId: "next-device" },
   stt: { provider: "mock", language: "zh", model: "next-model" },
   osc: { enabled: false, host: "192.0.2.20", port: 9010 },
+  publication: { mode: "live" },
   ui: { showPartial: false },
 };
+const desiredRuntimePlan = previewRuntimePlan(desiredConfig);
 
 test("projects desired settings separately from the immutable active session", () => {
   const snapshot: RuntimeControlSnapshot = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 4,
     runtime: {
       status: "running",
@@ -30,6 +33,7 @@ test("projects desired settings separately from the immutable active session", (
     desired: {
       revision: 2,
       config: desiredConfig,
+      runtimePlan: desiredRuntimePlan,
       providerSecrets: [
         {
           provider: "openai",
@@ -52,7 +56,17 @@ test("projects desired settings separately from the immutable active session", (
           model: "gpt-4o-mini-transcribe",
         },
         osc: { enabled: true, host: "127.0.0.1", port: 9000 },
+        publication: { mode: "completed" },
       },
+      runtimePlan: previewRuntimePlan({
+        ...desiredConfig,
+        stt: {
+          provider: "openai",
+          language: "en",
+          model: "gpt-4o-mini-transcribe",
+        },
+        publication: { mode: "completed" },
+      }),
       credential: {
         provider: "openai",
         storage: "systemCredentialStore",
@@ -66,7 +80,12 @@ test("projects desired settings separately from the immutable active session", (
       },
       uploadsMicrophoneAudio: true,
     },
-    pendingChanges: ["microphone", "recognition", "chatboxOutput"],
+    pendingChanges: [
+      "microphone",
+      "recognition",
+      "chatboxOutput",
+      "publication",
+    ],
   };
 
   const accepted = reconcileRuntimeControlSnapshot(null, snapshot);
@@ -82,12 +101,14 @@ test("projects desired settings separately from the immutable active session", (
       model: "gpt-4o-mini-transcribe",
     },
     osc: { enabled: true, host: "127.0.0.1", port: 9000 },
+    publication: { mode: "completed" },
   });
   expect(projection.currentSession).toBe(snapshot.session);
   expect(projection.pendingSessionChanges).toEqual([
     "microphone",
     "recognition",
     "chatboxOutput",
+    "publication",
   ]);
   expect(projection.sessionUploadsMicrophoneAudio).toBe(true);
   expect(projection.secretStatuses.openai?.configured).toBe(false);
@@ -95,12 +116,13 @@ test("projects desired settings separately from the immutable active session", (
 
 test("ignores duplicate and older authoritative control snapshots", () => {
   const current = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 8,
     runtime: { status: "running", timestampMs: 80 },
     desired: {
       revision: 3,
       config: desiredConfig,
+      runtimePlan: desiredRuntimePlan,
       providerSecrets: [],
     },
     session: null,
@@ -118,12 +140,13 @@ test("ignores duplicate and older authoritative control snapshots", () => {
 
 test("accepts a newer snapshot and uses desired settings when no session exists", () => {
   const current = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 3,
     runtime: { status: "idle", timestampMs: 30 },
     desired: {
       revision: 1,
       config: desiredConfig,
+      runtimePlan: desiredRuntimePlan,
       providerSecrets: [],
     },
     session: null,
@@ -146,7 +169,7 @@ test("accepts a newer snapshot and uses desired settings when no session exists"
 
 test("requests a control pull when a legacy status outpaces a missed control event", () => {
   const startingSnapshot = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 4,
     runtime: {
       status: "starting",
@@ -156,6 +179,7 @@ test("requests a control pull when a legacy status outpaces a missed control eve
     desired: {
       revision: 1,
       config: desiredConfig,
+      runtimePlan: desiredRuntimePlan,
       providerSecrets: [],
     },
     session: null,
@@ -184,12 +208,13 @@ test("requests a control pull when a legacy status outpaces a missed control eve
 
 test("requests a control pull for an accepted same-timestamp status mismatch", () => {
   const snapshot = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 4,
     runtime: { status: "starting", timestampMs: 40 },
     desired: {
       revision: 1,
       config: desiredConfig,
+      runtimePlan: desiredRuntimePlan,
       providerSecrets: [],
     },
     session: null,

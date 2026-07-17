@@ -113,6 +113,8 @@ const pendingSessionChangesDescription = computed(() => {
           return uiText("settings.feedback.nextStart.change.credential");
         case "chatboxOutput":
           return uiText("settings.feedback.nextStart.change.chatboxOutput");
+        case "publication":
+          return uiText("settings.feedback.nextStart.change.publication");
       }
     })
     .join(", ");

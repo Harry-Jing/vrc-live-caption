@@ -1,7 +1,7 @@
 //! Provider-path capabilities and publication compatibility planning.
 
 use crate::caption_session::CaptionLane;
-use crate::config::{PublicationMode, SttConfig, SttProvider};
+use crate::config::{AppConfig, PublicationMode, SttConfig, SttProvider};
 use serde::Serialize;
 
 pub(crate) const MOCK_BOUNDED_MODEL: &str = "mock-bounded";
@@ -116,6 +116,50 @@ pub(crate) enum PublicationPlan {
         reason: PublicationIncompatibility,
         supported_modes: Vec<PublicationMode>,
     },
+}
+
+impl PublicationPlan {
+    pub(crate) fn resolved_policy(&self) -> Option<ResolvedPublicationPolicy> {
+        match self {
+            Self::Ready { policy, .. } => Some(*policy),
+            Self::Incompatible { .. } => None,
+        }
+    }
+
+    pub(crate) fn incompatibility_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Ready { .. } => None,
+            Self::Incompatible { reason, .. } => Some(match reason {
+                PublicationIncompatibility::NoLanesSelected => "publication.no_lanes_selected",
+                PublicationIncompatibility::LaneUnavailable { .. } => {
+                    "publication.lane_unavailable"
+                }
+                PublicationIncompatibility::ModeUnsupported { .. } => {
+                    "publication.mode_unsupported"
+                }
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimePlanSnapshot {
+    pub(crate) recognition: RecognitionCapabilityProfile,
+    pub(crate) publication: PublicationPlan,
+}
+
+pub(crate) fn plan_runtime(config: &AppConfig) -> RuntimePlanSnapshot {
+    let recognition = recognition_capabilities(&config.stt);
+    let publication = plan_publication(
+        &recognition,
+        config.publication.mode,
+        &[CaptionLane::Source],
+    );
+    RuntimePlanSnapshot {
+        recognition,
+        publication,
+    }
 }
 
 pub(crate) fn recognition_capabilities(stt: &SttConfig) -> RecognitionCapabilityProfile {

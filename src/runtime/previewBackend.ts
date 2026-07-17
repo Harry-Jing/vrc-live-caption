@@ -13,6 +13,7 @@ import {
   type ProviderSecretStatus,
   type RuntimeCommand,
   type RuntimeControlSnapshot,
+  type RuntimePlan,
   type RuntimeSession,
   type RuntimeStatus,
   type RuntimeStatusEvent,
@@ -34,10 +35,105 @@ const PREVIEW_DEFAULT_CONFIG: AppConfig = {
     port: 9000,
     enabled: true,
   },
+  publication: {
+    mode: "completed",
+  },
   ui: {
     showPartial: true,
   },
 };
+
+export function previewRuntimePlan(config: AppConfig): RuntimePlan {
+  const recognition =
+    config.stt.provider === "openai"
+      ? {
+          path: "openAiBounded" as const,
+          inputShape: "completedAudioUnits" as const,
+          boundaryOwner: "application" as const,
+          unitBehavior: "unitBased" as const,
+          lanes: [
+            {
+              lane: "source" as const,
+              updates: "completedOnly" as const,
+              revisions: "appendOnly" as const,
+            },
+          ],
+        }
+      : config.stt.model === "mock-bounded"
+        ? {
+            path: "mockBounded" as const,
+            inputShape: "completedAudioUnits" as const,
+            boundaryOwner: "application" as const,
+            unitBehavior: "unitBased" as const,
+            lanes: [
+              {
+                lane: "source" as const,
+                updates: "completedOnly" as const,
+                revisions: "appendOnly" as const,
+              },
+            ],
+          }
+        : config.stt.model === "mock-ongoing-only"
+          ? {
+              path: "mockOngoingOnly" as const,
+              inputShape: "continuousAudioFrames" as const,
+              boundaryOwner: "none" as const,
+              unitBehavior: "unitless" as const,
+              lanes: [
+                {
+                  lane: "source" as const,
+                  updates: "ongoingOnly" as const,
+                  revisions: "revisableFullSnapshot" as const,
+                },
+              ],
+            }
+          : {
+              path: "mockOngoingCompleted" as const,
+              inputShape: "continuousAudioFrames" as const,
+              boundaryOwner: "provider" as const,
+              unitBehavior: "unitBased" as const,
+              lanes: [
+                {
+                  lane: "source" as const,
+                  updates: "ongoingAndCompleted" as const,
+                  revisions: "revisableFullSnapshot" as const,
+                },
+              ],
+            };
+  const sourceUpdates = recognition.lanes[0]?.updates;
+  if (!sourceUpdates) {
+    throw new Error("Preview recognition profile must produce a source lane.");
+  }
+  const compatible =
+    config.publication.mode === "completed"
+      ? sourceUpdates !== "ongoingOnly"
+      : sourceUpdates !== "completedOnly";
+
+  return {
+    recognition,
+    publication: compatible
+      ? {
+          state: "ready",
+          mode: config.publication.mode,
+          policy:
+            config.publication.mode === "completed"
+              ? { policy: "completed" }
+              : recognition.unitBehavior === "unitBased"
+                ? { policy: "liveUnit", observationWindowMs: 1000 }
+                : { policy: "liveUnitless", firstNonEmptyDelayMs: 1000 },
+          selectedLanes: ["source"],
+        }
+      : {
+          state: "incompatible",
+          requestedMode: config.publication.mode,
+          selectedLanes: ["source"],
+          reason: { reason: "modeUnsupported", lanes: ["source"] },
+          supportedModes: [
+            config.publication.mode === "completed" ? "live" : "completed",
+          ],
+        },
+  };
+}
 
 export function createPreviewBackend(): RuntimeBackend {
   const subscriptions = new Set<Readonly<{ listener: RuntimeEventListener }>>();
@@ -216,12 +312,13 @@ export function createPreviewBackend(): RuntimeBackend {
 
   function controlSnapshot(): RuntimeControlSnapshot {
     return {
-      contractVersion: 1,
+      contractVersion: 2,
       revision: controlRevision,
       runtime: { ...latestStatus },
       desired: {
         revision: configRevision,
         config: structuredClone(config),
+        runtimePlan: previewRuntimePlan(config),
         providerSecrets: [openAiSecretStatus()],
       },
       session: session ? structuredClone(session) : null,
@@ -259,6 +356,9 @@ export function createPreviewBackend(): RuntimeBackend {
     ) {
       pending.push("chatboxOutput");
     }
+    if (session.selected.publication.mode !== config.publication.mode) {
+      pending.push("publication");
+    }
 
     return pending;
   }
@@ -281,6 +381,7 @@ export function createPreviewBackend(): RuntimeBackend {
       audio: structuredClone(config.audio),
       stt: structuredClone(config.stt),
       osc: structuredClone(config.osc),
+      publication: structuredClone(config.publication),
     };
 
     return {
@@ -288,6 +389,7 @@ export function createPreviewBackend(): RuntimeBackend {
       phase,
       startedFromConfigRevision: configRevision,
       selected,
+      runtimePlan: previewRuntimePlan(config),
       credential:
         selected.stt.provider === "openai" && openAiSecretSuffix !== null
           ? {
@@ -310,6 +412,22 @@ export function createPreviewBackend(): RuntimeBackend {
     if (["starting", "running", "stopping"].includes(latestStatus.status)) {
       return Promise.reject(
         new Error("The browser preview runtime is already active."),
+      );
+    }
+
+    const runtimePlan = previewRuntimePlan(config);
+    if (runtimePlan.publication.state === "incompatible") {
+      return Promise.reject(
+        new Error(
+          "The selected recognition path and publication mode are incompatible.",
+        ),
+      );
+    }
+    if (runtimePlan.publication.policy.policy !== "completed") {
+      return Promise.reject(
+        new Error(
+          "Live publication is not installed in this Phase 3 preview step yet.",
+        ),
       );
     }
 

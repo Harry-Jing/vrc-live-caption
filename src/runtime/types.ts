@@ -10,6 +10,61 @@ export type CaptionMode = "waiting" | "listening" | "partial" | "final";
 
 export type CaptionLane = "source" | "translation";
 export type CaptionState = "ongoing" | "completed";
+export type PublicationMode = "completed" | "live";
+export type RecognitionPath =
+  "openAiBounded" | "mockBounded" | "mockOngoingCompleted" | "mockOngoingOnly";
+export type RecognitionInputShape =
+  "completedAudioUnits" | "continuousAudioFrames";
+export type BoundaryOwner = "application" | "provider" | "none";
+export type CaptionUnitBehavior = "unitBased" | "unitless";
+export type LaneUpdateBehavior =
+  "completedOnly" | "ongoingAndCompleted" | "ongoingOnly";
+export type RevisionBehavior = "appendOnly" | "revisableFullSnapshot";
+
+export type RecognitionCapabilityProfile = Readonly<{
+  path: RecognitionPath;
+  inputShape: RecognitionInputShape;
+  boundaryOwner: BoundaryOwner;
+  unitBehavior: CaptionUnitBehavior;
+  lanes: readonly Readonly<{
+    lane: CaptionLane;
+    updates: LaneUpdateBehavior;
+    revisions: RevisionBehavior;
+  }>[];
+}>;
+
+export type ResolvedPublicationPolicy =
+  | Readonly<{ policy: "completed" }>
+  | Readonly<{ policy: "liveUnit"; observationWindowMs: number }>
+  | Readonly<{
+      policy: "liveUnitless";
+      firstNonEmptyDelayMs: number;
+    }>;
+
+export type PublicationPlan =
+  | Readonly<{
+      state: "ready";
+      mode: PublicationMode;
+      policy: ResolvedPublicationPolicy;
+      selectedLanes: readonly CaptionLane[];
+    }>
+  | Readonly<{
+      state: "incompatible";
+      requestedMode: PublicationMode;
+      selectedLanes: readonly CaptionLane[];
+      reason:
+        | Readonly<{ reason: "noLanesSelected" }>
+        | Readonly<{
+            reason: "laneUnavailable" | "modeUnsupported";
+            lanes: readonly CaptionLane[];
+          }>;
+      supportedModes: readonly PublicationMode[];
+    }>;
+
+export type RuntimePlan = Readonly<{
+  recognition: RecognitionCapabilityProfile;
+  publication: PublicationPlan;
+}>;
 
 export type CaptionSnapshotV1 = Readonly<{
   generation: number;
@@ -58,7 +113,7 @@ export const RUNTIME_EVENTS = {
 
 export const RUNTIME_CONTROL_EVENT = "runtime-control-changed" as const;
 
-export const APP_CONFIG_SCHEMA_VERSION = 1 as const;
+export const APP_CONFIG_SCHEMA_VERSION = 2 as const;
 
 export type AppConfig = {
   schemaVersion: typeof APP_CONFIG_SCHEMA_VERSION;
@@ -74,6 +129,9 @@ export type AppConfig = {
     host: string;
     port: number;
     enabled: boolean;
+  };
+  publication: {
+    mode: PublicationMode;
   };
   ui: {
     showPartial: boolean;
@@ -95,7 +153,7 @@ export type ProviderSecretStatus = {
 };
 
 export type RuntimePendingChange =
-  "microphone" | "recognition" | "credential" | "chatboxOutput";
+  "microphone" | "recognition" | "credential" | "chatboxOutput" | "publication";
 
 export type RuntimeSessionPhase = "starting" | "running" | "stopping" | "error";
 
@@ -128,19 +186,21 @@ export type RuntimeSession = {
   generation: number;
   phase: RuntimeSessionPhase;
   startedFromConfigRevision: number;
-  selected: Pick<AppConfig, "audio" | "stt" | "osc">;
+  selected: Pick<AppConfig, "audio" | "stt" | "osc" | "publication">;
+  runtimePlan: RuntimePlan;
   credential: RuntimeSessionCredential | null;
   chatbox: RuntimeSessionChatbox;
   uploadsMicrophoneAudio: boolean;
 };
 
 export type RuntimeControlSnapshot = {
-  contractVersion: 1;
+  contractVersion: 2;
   revision: number;
   runtime: RuntimeStatusEvent;
   desired: {
     revision: number;
     config: AppConfig;
+    runtimePlan: RuntimePlan;
     providerSecrets: ProviderSecretStatus[];
   };
   session: RuntimeSession | null;

@@ -18,14 +18,14 @@
 //! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
 
 use crate::audio::{open_input_capture, receive_audio};
-use crate::capability_planner::{plan_publication, recognition_capabilities};
+use crate::capability_planner::RuntimePlanSnapshot;
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore, CaptionSnapshotV1};
 use crate::chatbox_pacer::ChatboxPacer;
 use crate::chatbox_publisher::{
     CompletedChatboxPublisher, CompletedPublisherEvent, PublisherCloseReason, PublisherDiagnostic,
     PublisherReporter, PublisherSubmitOutcome,
 };
-use crate::config::{AppConfig, OscConfig, PublicationMode, SttProvider};
+use crate::config::{AppConfig, OscConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, UtteranceEndReason,
@@ -82,6 +82,7 @@ pub(crate) struct RuntimeManager {
 
 pub(crate) struct RuntimeStartRequest {
     pub(crate) config: AppConfig,
+    pub(crate) runtime_plan: RuntimePlanSnapshot,
     pub(crate) chatbox_pacer: ChatboxPacer,
     pub(crate) caption_session: CaptionSessionStore,
     pub(crate) generation_id: u64,
@@ -445,6 +446,7 @@ impl RuntimeManager {
     {
         let RuntimeStartRequest {
             config,
+            runtime_plan,
             chatbox_pacer,
             caption_session,
             generation_id,
@@ -454,15 +456,6 @@ impl RuntimeManager {
             expected_stop_epoch,
         } = request;
         config.validate()?;
-        // Phase 1 behavior remains Completed while Phase 3 establishes one
-        // provider-path planner. The persisted request is wired in the config
-        // migration slice; computing the current plan here keeps capability
-        // resolution on the real Start path without changing its outcome.
-        let _current_publication_plan = plan_publication(
-            &recognition_capabilities(&config.stt),
-            PublicationMode::Completed,
-            &[crate::caption_session::CaptionLane::Source],
-        );
 
         let mut guard = self
             .handle
@@ -523,6 +516,7 @@ impl RuntimeManager {
             phase: RuntimeSessionPhase::Starting,
             started_from_config_revision: config_revision,
             selected: RuntimeSelectedConfig::from(&config),
+            runtime_plan,
             credential,
             chatbox,
             uploads_microphone_audio: matches!(config.stt.provider, SttProvider::OpenAi),

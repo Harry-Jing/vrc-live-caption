@@ -1,11 +1,12 @@
 //! Authoritative saved-settings and effective-runtime-session contract.
 
-use crate::config::{AppConfig, AudioConfig, OscConfig, SttConfig, SttProvider};
+use crate::capability_planner::RuntimePlanSnapshot;
+use crate::config::{AppConfig, AudioConfig, OscConfig, PublicationConfig, SttConfig, SttProvider};
 use crate::events::RuntimeStatusEvent;
 use crate::secrets::{ProviderSecretStatus, ProviderSecretStorage};
 use serde::Serialize;
 
-pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 1;
+pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +24,7 @@ pub(crate) struct RuntimeControlSnapshot {
 pub(crate) struct RuntimeDesiredSnapshot {
     pub(crate) revision: u64,
     pub(crate) config: AppConfig,
+    pub(crate) runtime_plan: RuntimePlanSnapshot,
     pub(crate) provider_secrets: Vec<ProviderSecretStatus>,
 }
 
@@ -33,6 +35,7 @@ pub(crate) struct RuntimeSessionSnapshot {
     pub(crate) phase: RuntimeSessionPhase,
     pub(crate) started_from_config_revision: u64,
     pub(crate) selected: RuntimeSelectedConfig,
+    pub(crate) runtime_plan: RuntimePlanSnapshot,
     pub(crate) credential: Option<RuntimeCredentialSnapshot>,
     pub(crate) chatbox: RuntimeChatboxSnapshot,
     pub(crate) uploads_microphone_audio: bool,
@@ -81,6 +84,7 @@ pub(crate) struct RuntimeSelectedConfig {
     pub(crate) audio: AudioConfig,
     pub(crate) stt: SttConfig,
     pub(crate) osc: OscConfig,
+    pub(crate) publication: PublicationConfig,
 }
 
 impl From<&AppConfig> for RuntimeSelectedConfig {
@@ -89,6 +93,7 @@ impl From<&AppConfig> for RuntimeSelectedConfig {
             audio: config.audio.clone(),
             stt: config.stt.clone(),
             osc: config.osc.clone(),
+            publication: config.publication.clone(),
         }
     }
 }
@@ -100,6 +105,7 @@ pub(crate) enum PendingSessionChange {
     Recognition,
     Credential,
     ChatboxOutput,
+    Publication,
 }
 
 pub(crate) fn pending_session_changes(
@@ -124,6 +130,9 @@ pub(crate) fn pending_session_changes(
     if desired.osc != selected.osc {
         changes.push(PendingSessionChange::ChatboxOutput);
     }
+    if desired.publication != selected.publication {
+        changes.push(PendingSessionChange::Publication);
+    }
 
     changes
 }
@@ -140,6 +149,18 @@ mod tests {
         desired.ui.show_partial = false;
 
         assert!(pending_session_changes(&desired, &selected, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn publication_change_requires_a_new_session_without_becoming_an_osc_change() {
+        let selected = RuntimeSelectedConfig::from(&AppConfig::default());
+        let mut desired = AppConfig::default();
+        desired.publication.mode = crate::config::PublicationMode::Live;
+
+        assert_eq!(
+            pending_session_changes(&desired, &selected, 0, 0),
+            vec![PendingSessionChange::Publication]
+        );
     }
 
     #[test]

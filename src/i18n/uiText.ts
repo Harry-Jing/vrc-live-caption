@@ -108,6 +108,7 @@ const englishMessages = {
   "settings.feedback.nextStart.change.recognition": "speech recognition",
   "settings.feedback.nextStart.change.credential": "provider credentials",
   "settings.feedback.nextStart.change.chatboxOutput": "Chatbox output",
+  "settings.feedback.nextStart.change.publication": "publication timing",
   "settings.sections.audio": "Audio",
   "settings.sections.speechProvider": "Speech provider",
   "settings.sections.chatboxOutput": "Chatbox output",

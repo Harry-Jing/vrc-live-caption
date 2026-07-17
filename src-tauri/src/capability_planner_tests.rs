@@ -160,3 +160,24 @@ fn planner_requires_at_least_one_selected_lane() {
         }
     );
 }
+
+#[test]
+fn runtime_plan_keeps_openai_live_as_the_requested_incompatible_mode() {
+    let mut config = crate::config::AppConfig::default();
+    config.publication.mode = PublicationMode::Live;
+
+    let plan = plan_runtime(&config);
+
+    assert_eq!(plan.recognition.path, RecognitionPath::OpenAiBounded);
+    assert!(matches!(
+        plan.publication,
+        PublicationPlan::Incompatible {
+            requested_mode: PublicationMode::Live,
+            ..
+        }
+    ));
+    assert_eq!(
+        plan.publication.incompatibility_code(),
+        Some("publication.mode_unsupported")
+    );
+}
