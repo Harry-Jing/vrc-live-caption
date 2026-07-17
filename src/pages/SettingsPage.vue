@@ -11,6 +11,7 @@ const {
   config,
   currentSession,
   deleteProviderSecret,
+  desiredRuntimePlan,
   isSecretsBusy,
   isSettingsBusy,
   loadAudioInputDevices,
@@ -58,6 +59,7 @@ async function handleSaveConfig(nextConfig: AppConfig, onSettled: () => void) {
     <SettingsForm
       :audio-input-devices="audioInputDevices"
       :config="config"
+      :desired-runtime-plan="desiredRuntimePlan"
       :is-secrets-busy="isSecretsBusy"
       :is-settings-busy="isSettingsBusy"
       :pending-session-changes="pendingSessionChanges"

@@ -219,6 +219,13 @@ spelling; the next explicit Save writes version 2 atomically. Incompatible
 settings remain saved and visible. Start rejects them from the derived plan
 before credential lookup, microphone setup, or generation creation.
 
+The frontend renders the backend-derived desired plan for the next Start and
+prefers the immutable active plan while a session is running. A locally edited
+draft is shown as unverified until Save; an incompatible desired plan blocks a
+new Start but never Stop. Settings keeps both public modes visible and offers
+explicit supported-mode or recognition-path directions, each requiring the
+user to choose and save rather than applying an automatic fallback.
+
 Stop does not wait behind that desired-state boundary. It advances a runtime
 stop epoch before taking the runtime-handle lock, so an earlier Start that is
 still waiting on config or credential I/O cannot install a generation after

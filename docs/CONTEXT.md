@@ -27,6 +27,11 @@ new architecture.
   exercise bounded, unitful ongoing/completed, and unitless ongoing-only
   source shapes, and a latest-wins Live worker shares pacing and Stop boundaries
   with the unchanged Completed path.
+- Implemented Phase 3 publication controls: Settings keeps Completed and Live
+  visible, treats unsaved edits as unverified, and presents backend-derived
+  compatibility plus explicit alternatives without changing the saved choice.
+  Live displays the active plan ahead of next-Start intent, so later saves never
+  rewrite or block Stop for the running session.
 - Target publication choices: Completed and Live, resolved from the selected
   provider path and content lanes rather than one global final-only rule.
 - First translation implementation: completed normalized source text into one

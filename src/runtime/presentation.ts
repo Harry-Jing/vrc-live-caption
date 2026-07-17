@@ -3,11 +3,13 @@
 // provider without choosing its presentation fails the typecheck instead of
 // silently rendering a default.
 
-import type { UiStaticMessageKey } from "../i18n/uiText";
+import { uiText, type UiStaticMessageKey } from "../i18n/uiText";
 import type {
   CaptionMode,
   DiagnosticCategory,
   DiagnosticSeverity,
+  PublicationMode,
+  RuntimePlan,
   RuntimeStatus,
   SttProvider,
 } from "./types";
@@ -82,3 +84,121 @@ export const sttProviderMessageKey = {
   openai: "stt.providers.openai",
   mock: "stt.providers.mock",
 } satisfies Record<SttProvider, UiStaticMessageKey>;
+
+export const publicationModeMessageKey = {
+  completed: "publication.mode.completed",
+  live: "publication.mode.live",
+} satisfies Record<PublicationMode, UiStaticMessageKey>;
+
+export const publicationModeDescriptionMessageKey = {
+  completed: "publication.option.completed.description",
+  live: "publication.option.live.description",
+} satisfies Record<PublicationMode, UiStaticMessageKey>;
+
+export type PublicationPlanView =
+  | Readonly<{ state: "unavailable" }>
+  | Readonly<{
+      state: "ready";
+      mode: PublicationMode;
+      policy: "completed";
+      delayMs: null;
+    }>
+  | Readonly<{
+      state: "ready";
+      mode: PublicationMode;
+      policy: "liveUnit" | "liveUnitless";
+      delayMs: number;
+    }>
+  | Readonly<{
+      state: "incompatible";
+      mode: PublicationMode;
+      supportedModes: readonly PublicationMode[];
+    }>;
+
+export type PublicationSettingsView =
+  Readonly<{ state: "unverified" }> | PublicationPlanView;
+
+export type PublicationReadyView = Extract<
+  PublicationPlanView,
+  Readonly<{ state: "ready" }>
+>;
+
+export function publicationPlanView(
+  runtimePlan: RuntimePlan | null,
+): PublicationPlanView {
+  if (runtimePlan === null) {
+    return { state: "unavailable" };
+  }
+
+  const { publication } = runtimePlan;
+
+  if (publication.state === "incompatible") {
+    return {
+      state: "incompatible",
+      mode: publication.requestedMode,
+      supportedModes: publication.supportedModes,
+    };
+  }
+
+  if (publication.policy.policy === "completed") {
+    return {
+      state: "ready",
+      mode: publication.mode,
+      policy: "completed",
+      delayMs: null,
+    };
+  }
+
+  return {
+    state: "ready",
+    mode: publication.mode,
+    policy: publication.policy.policy,
+    delayMs:
+      publication.policy.policy === "liveUnit"
+        ? publication.policy.observationWindowMs
+        : publication.policy.firstNonEmptyDelayMs,
+  };
+}
+
+export function publicationDisplayPlanView(
+  activeRuntimePlan: RuntimePlan | null,
+  desiredRuntimePlan: RuntimePlan | null,
+): PublicationPlanView {
+  return publicationPlanView(activeRuntimePlan ?? desiredRuntimePlan);
+}
+
+export function publicationSettingsView(
+  desiredRuntimePlan: RuntimePlan | null,
+  isFormDirty: boolean,
+): PublicationSettingsView {
+  if (isFormDirty) {
+    return { state: "unverified" };
+  }
+
+  return publicationPlanView(desiredRuntimePlan);
+}
+
+export function publicationPlanDescription(plan: PublicationReadyView): string {
+  switch (plan.policy) {
+    case "completed":
+      return uiText("publication.policy.completed");
+    case "liveUnit":
+      return uiText("publication.policy.liveUnit", {
+        delayMs: plan.delayMs,
+      });
+    case "liveUnitless":
+      return uiText("publication.policy.liveUnitless", {
+        delayMs: plan.delayMs,
+      });
+  }
+}
+
+export function publicationStartIsBlocked(
+  hasActiveSession: boolean,
+  desiredRuntimePlan: RuntimePlan | null,
+): boolean {
+  return (
+    !hasActiveSession &&
+    desiredRuntimePlan?.publication.state === "incompatible"
+  );
+}

@@ -1,13 +1,30 @@
 <script setup lang="ts">
-import { computed, ref, toRaw, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  toRaw,
+  watch,
+} from "vue";
+import { onBeforeRouteLeave } from "vue-router";
 import { uiText } from "../i18n/uiText";
-import { sttProviderMessageKey } from "../runtime/presentation";
+import {
+  publicationModeDescriptionMessageKey,
+  publicationModeMessageKey,
+  publicationPlanDescription,
+  publicationSettingsView,
+  sttProviderMessageKey,
+} from "../runtime/presentation";
 import {
   STT_PROVIDERS,
   type AppConfig,
   type AudioInputDevice,
+  type PublicationMode,
   type ProviderSecretStatus,
   type RuntimePendingChange,
+  type RuntimePlan,
   type RuntimeSessionPhase,
   type SttProvider,
 } from "../runtime/types";
@@ -15,6 +32,7 @@ import {
 const props = defineProps<{
   audioInputDevices: AudioInputDevice[];
   config: AppConfig | null;
+  desiredRuntimePlan: RuntimePlan | null;
   isSecretsBusy: boolean;
   isSettingsBusy: boolean;
   pendingSessionChanges: readonly RuntimePendingChange[];
@@ -38,6 +56,7 @@ const form = ref<AppConfig | null>(null);
 const apiKeyInput = ref("");
 const isConfigSaveSubmitting = ref(false);
 const isRemoveKeyModalOpen = ref(false);
+const recognitionFields = ref<HTMLElement | null>(null);
 let lastSyncedConfigJson: string | null = null;
 
 watch(
@@ -176,6 +195,59 @@ const providerItems = computed(() =>
   })),
 );
 
+const PUBLICATION_MODES = [
+  "completed",
+  "live",
+] as const satisfies readonly PublicationMode[];
+
+const publicationModeItems = PUBLICATION_MODES.map((value) => ({
+  label: uiText(publicationModeMessageKey[value]),
+  description: uiText(publicationModeDescriptionMessageKey[value]),
+  value,
+}));
+
+const isFormDirty = computed(() => {
+  if (!form.value || lastSyncedConfigJson === null) {
+    return false;
+  }
+
+  // Serialize through the reactive proxy so Vue tracks nested field edits.
+  return JSON.stringify(form.value) !== lastSyncedConfigJson;
+});
+
+const publicationView = computed(() =>
+  publicationSettingsView(props.desiredRuntimePlan, isFormDirty.value),
+);
+
+const publicationDescription = computed(() =>
+  publicationView.value.state === "ready"
+    ? publicationPlanDescription(publicationView.value)
+    : "",
+);
+
+function confirmDiscardDraft() {
+  return (
+    !isFormDirty.value ||
+    window.confirm(uiText("settings.unsavedChanges.confirmLeave"))
+  );
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!isFormDirty.value) {
+    return;
+  }
+
+  event.preventDefault();
+}
+
+onBeforeRouteLeave(() => confirmDiscardDraft());
+onMounted(() => {
+  window.addEventListener("beforeunload", handleBeforeUnload);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("beforeunload", handleBeforeUnload);
+});
+
 const selectedInputDevice = computed({
   get: () => form.value?.audio.inputDeviceId ?? DEFAULT_DEVICE_VALUE,
   set: (value: string) => {
@@ -230,6 +302,22 @@ function closeRemoveKeyModal() {
 function confirmDeleteOpenAiApiKey() {
   isRemoveKeyModalOpen.value = false;
   emit("deleteProviderSecret", "openai");
+}
+
+function selectPublicationMode(mode: PublicationMode) {
+  if (form.value) {
+    form.value.publication.mode = mode;
+  }
+}
+
+async function focusRecognitionPath() {
+  await nextTick();
+
+  recognitionFields.value?.scrollIntoView({
+    behavior: "auto",
+    block: "center",
+  });
+  recognitionFields.value?.querySelector<HTMLElement>("button, input")?.focus();
 }
 </script>
 
@@ -309,7 +397,7 @@ function confirmDeleteOpenAiApiKey() {
 
       <USeparator />
 
-      <section class="grid gap-4">
+      <section ref="recognitionFields" class="grid gap-4">
         <h3 class="text-sm font-semibold text-highlighted">
           {{ uiText("settings.sections.speechProvider") }}
         </h3>
@@ -420,6 +508,89 @@ function confirmDeleteOpenAiApiKey() {
         <h3 class="text-sm font-semibold text-highlighted">
           {{ uiText("settings.sections.chatboxOutput") }}
         </h3>
+
+        <UFormField
+          :label="uiText('settings.fields.publicationMode')"
+          :description="uiText('settings.publication.description')"
+        >
+          <URadioGroup
+            v-model="form.publication.mode"
+            :disabled="areConfigControlsDisabled"
+            :items="publicationModeItems"
+            :legend="uiText('settings.fields.publicationMode')"
+            name="publicationMode"
+            orientation="horizontal"
+            :ui="{ legend: 'sr-only' }"
+            variant="card"
+          />
+        </UFormField>
+
+        <p
+          v-if="publicationView.state === 'unavailable'"
+          class="text-xs text-muted"
+        >
+          {{ uiText("settings.publication.loading") }}
+        </p>
+
+        <UAlert
+          v-else-if="publicationView.state === 'unverified'"
+          color="info"
+          icon="i-lucide-info"
+          :title="uiText('settings.publication.unverified.title')"
+          :description="uiText('settings.publication.unverified.description')"
+          variant="subtle"
+        />
+
+        <UAlert
+          v-else-if="publicationView.state === 'incompatible'"
+          color="error"
+          icon="i-lucide-circle-alert"
+          role="alert"
+          :title="
+            uiText('settings.publication.incompatible.title', {
+              mode: uiText(publicationModeMessageKey[publicationView.mode]),
+            })
+          "
+          :description="uiText('settings.publication.incompatible.description')"
+          variant="subtle"
+        >
+          <template #actions>
+            <UButton
+              v-for="mode in publicationView.supportedModes"
+              :key="mode"
+              color="neutral"
+              :label="
+                uiText('settings.publication.incompatible.useMode', {
+                  mode: uiText(publicationModeMessageKey[mode]),
+                })
+              "
+              size="xs"
+              type="button"
+              variant="outline"
+              @click="selectPublicationMode(mode)"
+            />
+            <UButton
+              color="neutral"
+              :label="
+                uiText('settings.publication.incompatible.changePath', {
+                  mode: uiText(publicationModeMessageKey[publicationView.mode]),
+                })
+              "
+              size="xs"
+              type="button"
+              variant="outline"
+              @click="focusRecognitionPath"
+            />
+          </template>
+        </UAlert>
+
+        <p v-else class="text-xs text-muted">
+          {{
+            uiText("settings.publication.ready", {
+              description: publicationDescription,
+            })
+          }}
+        </p>
 
         <div class="grid gap-3 sm:grid-cols-[1fr_140px]">
           <UFormField :label="uiText('settings.fields.oscHost')">

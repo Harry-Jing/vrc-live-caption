@@ -123,9 +123,9 @@ Exit criteria:
 ## Phase 3: Normalized Recognition Sessions And Live-Capable Publisher
 
 Status: in progress. The behavior-preserving tracer bullet, capability planner,
-config migration, deterministic provider shapes, and backend Live publisher are
-implemented. A real Live provider path, the user-facing controls, and measured
-Windows/VRChat validation remain.
+config migration, deterministic provider shapes, backend Live publisher, and
+user-facing publication controls are implemented. A real Live provider path
+and measured Windows/VRChat validation remain.
 
 Goal: establish the deep runtime seams shared by bounded cloud, Realtime cloud,
 and later local providers, without adding translation or a second recognizer.
@@ -165,6 +165,12 @@ The implemented tracer bullet:
   viewport rendering, completion correction, four-second typing reassertion,
   shared actual-attempt pacing, and Stop/worker-failure cleanup without changing
   bounded OpenAI Completed behavior.
+- keeps Completed and Live visible in Settings, derives compatibility and
+  next-Start gating from the backend plan, and treats unsaved edits as
+  unverified rather than reusing a stale plan;
+- displays the immutable active plan while a session is running, leaves Stop
+  available when the saved next-Start plan is incompatible, and offers explicit
+  supported-mode or recognition-path directions without automatic fallback.
 
 Remaining Phase 3 work:
 
@@ -174,11 +180,6 @@ Remaining Phase 3 work:
   slider;
 - for a unitless continuous path, bound buffers, backpressure, reconnect, and
   session lifetime without turning a timer or silence into a completed unit;
-- add UI controls that explain each timing choice and the selected path's actual
-  update behavior;
-- when a selection is incompatible, offer two explicit directions: keep the
-  model/provider and choose a supported publication mode, or keep the desired
-  experience and choose a compatible model/provider;
 - add a concrete non-Mock ongoing recognition path and validate its reconnect,
   backpressure, session lifetime, and measured user value before advertising it.
 

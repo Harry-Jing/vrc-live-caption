@@ -5,15 +5,23 @@ import RuntimeControls from "../components/RuntimeControls.vue";
 import { uiText } from "../i18n/uiText";
 import { formatTime } from "../runtime/format";
 import { useRuntimeContext } from "../runtime/context";
-import { sttProviderMessageKey } from "../runtime/presentation";
+import {
+  publicationDisplayPlanView,
+  publicationModeMessageKey,
+  publicationPlanDescription,
+  publicationStartIsBlocked,
+  sttProviderMessageKey,
+} from "../runtime/presentation";
 
 const {
   activeCaptionText,
+  activeRuntimePlan,
   audioInputDevices,
   captionMode,
   currentSession,
   currentSetupConfig,
   diagnostics,
+  desiredRuntimePlan,
   finalTranscripts,
   isRuntimeBusy,
   pendingSessionChanges,
@@ -100,6 +108,39 @@ const pendingSessionChangesDescription = computed(() =>
       : "live.currentSetup.pendingChanges.description",
   ),
 );
+
+const hasActiveSession = computed(() =>
+  ["starting", "running", "stopping"].includes(
+    currentSession.value?.phase ?? "",
+  ),
+);
+
+const currentPublication = computed(() =>
+  publicationDisplayPlanView(activeRuntimePlan.value, desiredRuntimePlan.value),
+);
+
+const currentPublicationLabel = computed(() => {
+  const publication = currentPublication.value;
+
+  if (publication.state === "unavailable") {
+    return uiText("live.publication.unavailable");
+  }
+
+  const mode = uiText(publicationModeMessageKey[publication.mode]);
+
+  if (publication.state === "incompatible") {
+    return uiText("live.publication.incompatibleValue", { mode });
+  }
+
+  return uiText("live.publication.readyValue", {
+    description: publicationPlanDescription(publication),
+    mode,
+  });
+});
+
+const isStartBlocked = computed(() =>
+  publicationStartIsBlocked(hasActiveSession.value, desiredRuntimePlan.value),
+);
 </script>
 
 <template>
@@ -146,6 +187,26 @@ const pendingSessionChangesDescription = computed(() =>
       variant="subtle"
     />
 
+    <UAlert
+      v-if="isStartBlocked"
+      color="error"
+      icon="i-lucide-circle-alert"
+      role="alert"
+      :title="uiText('live.publication.blocked.title')"
+      :description="uiText('live.publication.blocked.description')"
+      variant="subtle"
+    >
+      <template #actions>
+        <UButton
+          color="neutral"
+          :label="uiText('live.publication.blocked.action')"
+          size="xs"
+          to="/settings"
+          variant="outline"
+        />
+      </template>
+    </UAlert>
+
     <CaptionPreview
       :latest-final-transcript="latestFinalTranscript"
       :mode="captionMode"
@@ -156,6 +217,7 @@ const pendingSessionChangesDescription = computed(() =>
       <RuntimeControls
         :error-message="runtimeError"
         :is-busy="isRuntimeBusy"
+        :is-start-blocked="isStartBlocked"
         :pending-command="pendingRuntimeCommand"
         :runtime-status="runtimeStatus"
         :show-mock-transcript="showMockTranscript"
@@ -205,6 +267,16 @@ const pendingSessionChangesDescription = computed(() =>
               </dt>
               <dd class="text-right font-medium text-highlighted">
                 {{ currentSetupConfig?.stt.model ?? uiText("common.loading") }}
+              </dd>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <dt class="text-muted">
+                {{ uiText("live.currentSetup.publication") }}
+              </dt>
+              <dd
+                class="min-w-0 text-right font-medium break-words text-highlighted"
+              >
+                {{ currentPublicationLabel }}
               </dd>
             </div>
             <div class="flex items-center justify-between gap-4">
