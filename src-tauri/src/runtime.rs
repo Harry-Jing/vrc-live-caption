@@ -18,8 +18,10 @@
 //! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
 
 use crate::audio::{open_input_capture, receive_audio};
-use crate::capability_planner::RuntimePlanSnapshot;
-use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore, CaptionSnapshotV1};
+use crate::capability_planner::{MOCK_BOUNDED_MODEL, MOCK_ONGOING_ONLY_MODEL, RuntimePlanSnapshot};
+use crate::caption_session::{
+    CaptionLane, CaptionSessionSnapshotV1, CaptionSessionStore, CaptionSnapshotV1,
+};
 use crate::chatbox_pacer::ChatboxPacer;
 use crate::chatbox_publisher::{
     CompletedChatboxPublisher, CompletedPublisherEvent, PublisherCloseReason, PublisherDiagnostic,
@@ -35,8 +37,8 @@ use crate::events::{
 use crate::openai_bounded::{CompletedAudioUnit, OpenAiBoundedOutcome, OpenAiBoundedSession};
 use crate::osc::ChatboxOscSender;
 use crate::recognition_fakes::{
-    FakeOngoingCompletedRecognitionAdapter, RecognitionEvent, ScriptedRecognitionContext,
-    ScriptedText,
+    FakeBoundedRecognitionAdapter, FakeOngoingCompletedRecognitionAdapter,
+    FakeOngoingOnlyRecognitionAdapter, RecognitionEvent, ScriptedRecognitionContext, ScriptedText,
 };
 use crate::runtime_control::{
     RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
@@ -444,6 +446,26 @@ impl RuntimeGeneration {
         &self.stream_id
     }
 
+    fn next_unitless_source_revision(&self) -> AppResult<u64> {
+        let current_revision = self
+            .caption_session
+            .snapshot()?
+            .captions
+            .into_iter()
+            .find(|caption| {
+                caption.generation == self.generation_id
+                    && caption.stream_id == self.stream_id
+                    && caption.unit_id.is_none()
+                    && caption.lane == CaptionLane::Source
+            })
+            .map(|caption| caption.revision)
+            .unwrap_or(0);
+
+        current_revision.checked_add(1).ok_or_else(|| {
+            AppError::state("Mock unitless recognition revision counter was exhausted.")
+        })
+    }
+
     fn cancel_work(&self) {
         self.work_cancelled.store(true, Ordering::SeqCst);
     }
@@ -518,25 +540,48 @@ impl RuntimeManager {
         };
         let unit_id = next_utterance_id("mock");
         let started_at_ms = now_ms();
-        let adapter = FakeOngoingCompletedRecognitionAdapter::new(ScriptedRecognitionContext {
+        let context = ScriptedRecognitionContext {
             generation: generation.generation_id(),
             stream_id: generation.stream_id().to_string(),
             language: Some(language.to_string()),
             provider: "mock".to_string(),
             model: model.to_string(),
-        });
-        let events = adapter.script_unit(
-            unit_id,
-            started_at_ms,
-            &[ScriptedText::new(
-                "Testing live caption preview...",
-                now_ms(),
-            )],
-            ScriptedText::new(
-                "Testing live caption preview from the mock runtime.",
-                now_ms(),
+        };
+        let events = match model {
+            MOCK_BOUNDED_MODEL => FakeBoundedRecognitionAdapter::new(context).script_completed(
+                unit_id,
+                started_at_ms,
+                ScriptedText::new(
+                    "Testing bounded caption preview from the mock runtime.",
+                    now_ms(),
+                ),
             ),
-        );
+            MOCK_ONGOING_ONLY_MODEL => {
+                let first_revision = generation.next_unitless_source_revision()?;
+                FakeOngoingOnlyRecognitionAdapter::new(context).script_stream_from(
+                    first_revision,
+                    &[
+                        ScriptedText::new("Testing live caption preview...", now_ms()),
+                        ScriptedText::new(
+                            "Testing live caption preview from the ongoing-only mock runtime.",
+                            now_ms(),
+                        ),
+                    ],
+                )
+            }
+            _ => FakeOngoingCompletedRecognitionAdapter::new(context).script_unit(
+                unit_id,
+                started_at_ms,
+                &[ScriptedText::new(
+                    "Testing live caption preview...",
+                    now_ms(),
+                )],
+                ScriptedText::new(
+                    "Testing live caption preview from the mock runtime.",
+                    now_ms(),
+                ),
+            ),
+        };
 
         for event in events {
             if !generation.submit_recognition_event(app, publisher.as_ref(), event)? {

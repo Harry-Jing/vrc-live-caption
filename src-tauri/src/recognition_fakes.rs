@@ -1,4 +1,5 @@
-//! Deterministic normalized recognition adapters for runtime contract tests.
+//! Deterministic normalized recognition adapters for runtime contract tests
+//! and the developer-facing Mock provider.
 
 use crate::caption_session::{CaptionLane, CaptionSnapshotV1, CaptionState};
 
@@ -37,12 +38,10 @@ impl ScriptedText {
     }
 }
 
-#[cfg(test)]
 pub(crate) struct FakeBoundedRecognitionAdapter {
     context: ScriptedRecognitionContext,
 }
 
-#[cfg(test)]
 impl FakeBoundedRecognitionAdapter {
     pub(crate) fn new(context: ScriptedRecognitionContext) -> Self {
         Self { context }
@@ -112,18 +111,24 @@ impl FakeOngoingCompletedRecognitionAdapter {
     }
 }
 
-#[cfg(test)]
 pub(crate) struct FakeOngoingOnlyRecognitionAdapter {
     context: ScriptedRecognitionContext,
 }
 
-#[cfg(test)]
 impl FakeOngoingOnlyRecognitionAdapter {
     pub(crate) fn new(context: ScriptedRecognitionContext) -> Self {
         Self { context }
     }
 
     pub(crate) fn script_stream(&self, snapshots: &[ScriptedText]) -> Vec<RecognitionEvent> {
+        self.script_stream_from(1, snapshots)
+    }
+
+    pub(crate) fn script_stream_from(
+        &self,
+        first_revision: u64,
+        snapshots: &[ScriptedText],
+    ) -> Vec<RecognitionEvent> {
         snapshots
             .iter()
             .cloned()
@@ -133,7 +138,7 @@ impl FakeOngoingOnlyRecognitionAdapter {
                     &self.context,
                     None,
                     None,
-                    revision_for_index(index),
+                    first_revision.saturating_add(index_as_u64(index)),
                     scripted,
                     CaptionState::Ongoing,
                 ))
@@ -180,9 +185,11 @@ fn caption_from_script(
 }
 
 fn revision_for_index(index: usize) -> u64 {
-    u64::try_from(index)
-        .unwrap_or(u64::MAX.saturating_sub(1))
-        .saturating_add(1)
+    index_as_u64(index).saturating_add(1)
+}
+
+fn index_as_u64(index: usize) -> u64 {
+    u64::try_from(index).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

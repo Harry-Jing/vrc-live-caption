@@ -169,6 +169,50 @@ fn runtime_mock_injection_uses_the_active_generation_fan_out() -> AppResult<()> 
 }
 
 #[test]
+fn runtime_mock_injection_honors_the_unitless_ongoing_profile_across_calls() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
+    let worker_generation = generation.clone();
+    let join_handle = thread::spawn(move || {
+        while !worker_generation.is_work_cancelled() {
+            thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let manager = RuntimeManager::default();
+    {
+        let mut handle = manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
+        *handle = Some(RuntimeHandle {
+            generation,
+            publisher: None,
+            join_handle,
+        });
+    }
+
+    manager.emit_mock_transcript(app.handle(), "en", MOCK_ONGOING_ONLY_MODEL)?;
+    manager.emit_mock_transcript(app.handle(), "en", MOCK_ONGOING_ONLY_MODEL)?;
+
+    let snapshot = caption_session.snapshot()?;
+    assert!(snapshot.active_units.is_empty());
+    assert_eq!(snapshot.captions.len(), 1);
+    assert!(snapshot.captions[0].unit_id.is_none());
+    assert_eq!(
+        snapshot.captions[0].state,
+        crate::caption_session::CaptionState::Ongoing
+    );
+    assert_eq!(snapshot.captions[0].revision, 4);
+    assert_eq!(
+        snapshot.captions[0].text,
+        "Testing live caption preview from the ongoing-only mock runtime."
+    );
+    manager.stop(app.handle())?;
+    Ok(())
+}
+
+#[test]
 fn phase_one_segmenter_keeps_twenty_seconds_whole_until_silence() {
     let sample_rate = 10;
     let mut segmenter = new_phase_one_segmenter(sample_rate);
