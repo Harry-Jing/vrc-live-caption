@@ -26,17 +26,20 @@ use crate::chatbox_publisher::{
 use crate::config::{AppConfig, OscConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, RuntimeStatusEvent, TranscriptUpdate,
-    UtteranceEndReason, emit_diagnostic, emit_status, emit_transcript_final, emit_utterance_ended,
+    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate, UtteranceEndReason,
+    emit_diagnostic, emit_status, emit_transcript_final, emit_utterance_ended,
     emit_utterance_started, next_utterance_id,
 };
 use crate::osc::ChatboxOscSender;
-use crate::secrets::openai_api_key as load_openai_api_key;
+use crate::runtime_control::{
+    RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
+    RuntimeSessionSnapshot,
+};
 use crate::segmenter::SpeechSegmenter;
 use crate::stt::{build_stt_client, transcribe_openai_wav};
 use reqwest::blocking::Client;
 use secrecy::SecretString;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -71,7 +74,23 @@ fn new_phase_one_segmenter(sample_rate: u32) -> SpeechSegmenter {
 
 pub(crate) struct RuntimeManager {
     handle: Mutex<Option<RuntimeHandle>>,
-    status: Mutex<RuntimeStatusEvent>,
+    stop_epoch: AtomicU64,
+}
+
+pub(crate) struct RuntimeStartRequest {
+    pub(crate) config: AppConfig,
+    pub(crate) chatbox_pacer: ChatboxPacer,
+    pub(crate) generation_id: u64,
+    pub(crate) config_revision: u64,
+    pub(crate) openai_api_key: Option<SecretString>,
+    pub(crate) credential: Option<RuntimeCredentialSnapshot>,
+    pub(crate) expected_stop_epoch: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeStartOutcome {
+    Started,
+    SupersededByStop,
 }
 
 struct RuntimeHandle {
@@ -207,35 +226,52 @@ impl Default for RuntimeManager {
     fn default() -> Self {
         Self {
             handle: Mutex::new(None),
-            status: Mutex::new(RuntimeStatusEvent::idle()),
+            stop_epoch: AtomicU64::new(0),
         }
     }
 }
 
 impl RuntimeManager {
-    pub(crate) fn status_snapshot(&self) -> AppResult<RuntimeStatusEvent> {
-        self.status
-            .lock()
-            .map(|status| status.clone())
-            .map_err(|_| AppError::state("Runtime status lock was poisoned."))
+    pub(crate) fn stop_epoch(&self) -> u64 {
+        self.stop_epoch.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn replace_status(&self, status: RuntimeStatusEvent) -> AppResult<()> {
+    pub(crate) fn start_epoch_is_current(&self, expected_stop_epoch: u64) -> bool {
+        self.stop_epoch() == expected_stop_epoch
+    }
+
+    pub(crate) fn ensure_start_available<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<()> {
         let mut guard = self
-            .status
+            .handle
             .lock()
-            .map_err(|_| AppError::state("Runtime status lock was poisoned."))?;
-        *guard = status;
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
+        clear_finished_runtime(app, &mut guard)?;
+
+        if guard.is_some() {
+            return Err(AppError::runtime("Runtime is already running."));
+        }
 
         Ok(())
     }
 
-    pub(crate) fn start(
+    pub(crate) fn start<F>(
         &self,
         app: AppHandle,
-        config: AppConfig,
-        chatbox_pacer: ChatboxPacer,
-    ) -> AppResult<()> {
+        request: RuntimeStartRequest,
+        install_session: F,
+    ) -> AppResult<RuntimeStartOutcome>
+    where
+        F: FnOnce(RuntimeSessionSnapshot) -> AppResult<()>,
+    {
+        let RuntimeStartRequest {
+            config,
+            chatbox_pacer,
+            generation_id,
+            config_revision,
+            openai_api_key,
+            credential,
+            expected_stop_epoch,
+        } = request;
         config.validate()?;
 
         let mut guard = self
@@ -244,47 +280,70 @@ impl RuntimeManager {
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
         clear_finished_runtime(&app, &mut guard)?;
 
+        // Stop increments its epoch before waiting for this handle lock. The
+        // comparison and handle installation are therefore one linearized
+        // decision: an earlier Start cannot come back to life after Stop has
+        // already returned while Start was resolving slow desired-state I/O.
+        if !self.start_epoch_is_current(expected_stop_epoch) {
+            return Ok(RuntimeStartOutcome::SupersededByStop);
+        }
+
         if guard.is_some() {
             return Err(AppError::runtime("Runtime is already running."));
         }
 
-        let openai_api_key = if matches!(config.stt.provider, SttProvider::OpenAi) {
-            match load_openai_api_key() {
-                Ok(api_key) => Some(api_key),
-                Err(error) => {
-                    emit_diagnostic(
-                        &app,
-                        DiagnosticUpdate::error(
-                            DiagnosticCategory::Config,
-                            "config.openai_api_key_missing",
-                            "Cloud STT is not configured",
-                            error.to_string(),
-                        ),
-                    );
-
-                    return Err(error);
-                }
-            }
-        } else {
-            None
-        };
         let generation = RuntimeGeneration::active();
-        let publisher = match initialize_runtime_publisher(
-            &app,
-            &config.osc,
-            chatbox_pacer,
-            generation.clone(),
-        ) {
-            RuntimePublisherInit::Disabled => None,
-            RuntimePublisherInit::Ready(publisher) => Some(publisher),
+        let publisher_init =
+            initialize_runtime_publisher(&app, &config.osc, chatbox_pacer, generation.clone());
+        let requested_host = config.osc.host.clone();
+        let requested_port = config.osc.port;
+        let (publisher, chatbox) = match publisher_init {
+            RuntimePublisherInit::Disabled => (
+                None,
+                RuntimeChatboxSnapshot::Disabled {
+                    host: requested_host,
+                    port: requested_port,
+                },
+            ),
+            RuntimePublisherInit::Ready(publisher) => (
+                Some(publisher),
+                RuntimeChatboxSnapshot::Ready {
+                    host: requested_host,
+                    port: requested_port,
+                },
+            ),
             RuntimePublisherInit::Unavailable(error) => {
                 emit_diagnostic(
                     &app,
                     DiagnosticUpdate::from_error(&error, "Chatbox OSC output could not start"),
                 );
-                None
+                (
+                    None,
+                    RuntimeChatboxSnapshot::Unavailable {
+                        host: requested_host,
+                        port: requested_port,
+                        reason_code: error.code().to_string(),
+                    },
+                )
             }
         };
+
+        let session = RuntimeSessionSnapshot {
+            generation: generation_id,
+            phase: RuntimeSessionPhase::Starting,
+            started_from_config_revision: config_revision,
+            selected: RuntimeSelectedConfig::from(&config),
+            credential,
+            chatbox,
+            uploads_microphone_audio: matches!(config.stt.provider, SttProvider::OpenAi),
+        };
+        if let Err(error) = install_session(session) {
+            let _ = generation.request_stop(publisher.as_ref());
+            if let Some(publisher) = &publisher {
+                let _ = publisher.join();
+            }
+            return Err(error);
+        }
 
         let thread_generation = generation.clone();
         let thread_publisher = publisher.clone();
@@ -317,10 +376,15 @@ impl RuntimeManager {
             join_handle,
         });
 
-        Ok(())
+        Ok(RuntimeStartOutcome::Started)
     }
 
     pub(crate) fn stop<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<()> {
+        // Publish the stop intent before waiting for the handle. A Start that
+        // has not committed its handle yet observes the changed epoch and
+        // aborts; a Start already inside the handle lock is stopped below.
+        self.stop_epoch.fetch_add(1, Ordering::SeqCst);
+
         // Hold the lock through the join so a concurrent start cannot spawn a
         // new runtime while the old worker is still finishing its last request.
         let mut guard = self
@@ -388,7 +452,10 @@ impl RuntimeManager {
     }
 }
 
-fn clear_finished_runtime(app: &AppHandle, handle: &mut Option<RuntimeHandle>) -> AppResult<()> {
+fn clear_finished_runtime<R: Runtime>(
+    app: &AppHandle<R>,
+    handle: &mut Option<RuntimeHandle>,
+) -> AppResult<()> {
     let is_finished = handle
         .as_ref()
         .map(|handle| handle.join_handle.is_finished())
@@ -1463,6 +1530,59 @@ mod tests {
             .map_err(|_| AppError::runtime("Runtime stop test thread panicked."))??;
         assert!(generation_closed_before_join);
 
+        Ok(())
+    }
+
+    #[test]
+    fn finished_error_handle_is_reaped_before_a_restart_availability_check() -> AppResult<()> {
+        let app = tauri::test::mock_app();
+        let manager = RuntimeManager::default();
+        let (finished_sender, finished_receiver) = std::sync::mpsc::channel();
+        let join_handle = thread::spawn(move || {
+            let _ = finished_sender.send(());
+        });
+        finished_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Finished runtime test thread did not exit."))?;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !join_handle.is_finished() {
+            if Instant::now() >= deadline {
+                return Err(AppError::runtime(
+                    "Finished runtime test thread did not become joinable.",
+                ));
+            }
+            thread::yield_now();
+        }
+        {
+            let mut handle = manager
+                .handle
+                .lock()
+                .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
+            *handle = Some(RuntimeHandle {
+                generation: RuntimeGeneration::active(),
+                publisher: None,
+                join_handle,
+            });
+        }
+
+        manager.ensure_start_available(app.handle())?;
+        let handle = manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
+        assert!(handle.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn stop_invalidates_an_uncommitted_start_epoch() -> AppResult<()> {
+        let app = tauri::test::mock_app();
+        let manager = RuntimeManager::default();
+        let expected_stop_epoch = manager.stop_epoch();
+
+        assert!(manager.start_epoch_is_current(expected_stop_epoch));
+        manager.stop(app.handle())?;
+        assert!(!manager.start_epoch_is_current(expected_stop_epoch));
         Ok(())
     }
 

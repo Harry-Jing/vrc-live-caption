@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useToast } from "@nuxt/ui/composables";
+import { computed } from "vue";
 import SettingsForm from "../components/SettingsForm.vue";
 import { uiText } from "../i18n/uiText";
 import { useRuntimeContext } from "../runtime/context";
@@ -8,22 +9,30 @@ import type { AppConfig } from "../runtime/types";
 const {
   audioInputDevices,
   config,
+  currentSession,
   deleteProviderSecret,
   isSecretsBusy,
   isSettingsBusy,
   loadAudioInputDevices,
-  requiresRuntimeRestart,
+  pendingSessionChanges,
   saveConfig,
   saveProviderSecret,
   secretStatuses,
   secretsError,
+  sessionUploadsMicrophoneAudio,
   settingsError,
 } = useRuntimeContext();
 
 const toast = useToast();
+const activeSessionUploadsMicrophoneAudio = computed(
+  () =>
+    sessionUploadsMicrophoneAudio.value &&
+    (currentSession.value?.phase === "starting" ||
+      currentSession.value?.phase === "running"),
+);
 
-async function handleSaveConfig(nextConfig: AppConfig) {
-  const didSave = await saveConfig(nextConfig);
+async function handleSaveConfig(nextConfig: AppConfig, onSettled: () => void) {
+  const didSave = await saveConfig(nextConfig).finally(onSettled);
 
   if (didSave) {
     toast.add({
@@ -51,7 +60,9 @@ async function handleSaveConfig(nextConfig: AppConfig) {
       :config="config"
       :is-secrets-busy="isSecretsBusy"
       :is-settings-busy="isSettingsBusy"
-      :requires-runtime-restart="requiresRuntimeRestart"
+      :pending-session-changes="pendingSessionChanges"
+      :session-phase="currentSession?.phase ?? null"
+      :session-uploads-microphone-audio="activeSessionUploadsMicrophoneAudio"
       :secret-statuses="secretStatuses"
       :secrets-error="secretsError"
       :settings-error="settingsError"

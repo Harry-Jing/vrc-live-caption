@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 const APP_CONFIG_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AppConfig {
     #[serde(default = "default_app_config_schema_version")]
@@ -62,13 +62,13 @@ impl AppConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AudioConfig {
     pub(crate) input_device_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SttConfig {
     #[serde(default)]
@@ -89,7 +89,7 @@ impl Default for SttConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum SttProvider {
     Mock,
@@ -107,7 +107,7 @@ impl SttProvider {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OscConfig {
     #[serde(default = "default_osc_host")]
@@ -128,7 +128,7 @@ impl Default for OscConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UiConfig {
     #[serde(default = "default_true")]

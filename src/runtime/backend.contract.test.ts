@@ -10,9 +10,12 @@ import { createTauriBackend, type TauriBackendBridge } from "./tauriBackend";
 import {
   APP_CONFIG_SCHEMA_VERSION,
   RUNTIME_EVENTS,
+  RUNTIME_CONTROL_EVENT,
   type AppConfig,
   type DiagnosticCategory,
+  type RuntimeControlSnapshot,
   type RuntimeEvent,
+  type RuntimeSession,
   type RuntimeStatusEvent,
 } from "./types";
 
@@ -42,6 +45,10 @@ function createFakeTauriBridge(): TauriBackendBridge {
   let nextEventNumber = 0;
   let nextTimestampMs = 10;
   let config = structuredClone(fakeInitialConfig);
+  let configRevision = 1;
+  let controlRevision = 1;
+  let nextGeneration = 0;
+  let session: RuntimeSession | null = null;
   let latestStatus: RuntimeStatusEvent = {
     status: "idle",
     message: "Runtime is idle",
@@ -66,7 +73,28 @@ function createFakeTauriBridge(): TauriBackendBridge {
 
   function emitStatus(status: RuntimeStatusEvent["status"], message: string) {
     latestStatus = { status, message, timestampMs: timestamp() };
+    publishControl();
     emit(RUNTIME_EVENTS.status, latestStatus);
+  }
+
+  function controlSnapshot(): RuntimeControlSnapshot {
+    return {
+      contractVersion: 1,
+      revision: controlRevision,
+      runtime: { ...latestStatus },
+      desired: {
+        revision: configRevision,
+        config: structuredClone(config),
+        providerSecrets: [],
+      },
+      session: session ? structuredClone(session) : null,
+      pendingChanges: [],
+    };
+  }
+
+  function publishControl() {
+    controlRevision += 1;
+    emit(RUNTIME_CONTROL_EVENT, controlSnapshot());
   }
 
   function emitDiagnostic(
@@ -107,26 +135,63 @@ function createFakeTauriBridge(): TauriBackendBridge {
           return Promise.reject(new Error("Runtime is already active."));
         }
 
+        nextGeneration += 1;
+        const selected = {
+          audio: structuredClone(config.audio),
+          stt: structuredClone(config.stt),
+          osc: structuredClone(config.osc),
+        };
+        session = {
+          generation: nextGeneration,
+          phase: "starting",
+          startedFromConfigRevision: configRevision,
+          selected,
+          credential: null,
+          chatbox: {
+            state: selected.osc.enabled ? "ready" : "disabled",
+            host: selected.osc.host,
+            port: selected.osc.port,
+          },
+          uploadsMicrophoneAudio: selected.stt.provider === "openai",
+        };
         emitStatus("starting", "Starting runtime");
+        session = { ...session, phase: "running" };
         emitStatus("running", "Runtime is running");
+        result = controlSnapshot();
       } else if (command === "stop_runtime") {
         if (
           latestStatus.status === "idle" ||
           latestStatus.status === "stopped"
         ) {
+          session = null;
           emitStatus("stopped", "Runtime is already stopped");
         } else {
+          if (session) {
+            session = { ...session, phase: "stopping" };
+          }
           emitStatus("stopping", "Stopping runtime");
+          session = null;
           emitStatus("stopped", "Runtime stopped");
           emitDiagnostic("runtime", "runtime.stopped", "Runtime stopped");
         }
+        result = controlSnapshot();
       } else if (command === "emit_mock_transcript") {
+        if (
+          latestStatus.status !== "running" ||
+          session?.selected.stt.provider !== "mock"
+        ) {
+          return Promise.reject(
+            new Error(
+              "Mock Transcript requires an active Mock runtime session.",
+            ),
+          );
+        }
         const utteranceId = eventId("utterance");
         const timestampMs = timestamp();
         const base = {
           utteranceId,
-          language: "en",
-          provider: "openai",
+          language: session.selected.stt.language,
+          provider: session.selected.stt.provider,
           timestampMs,
         };
 
@@ -156,13 +221,13 @@ function createFakeTauriBridge(): TauriBackendBridge {
         );
       } else if (command === "send_osc_test_message") {
         emitDiagnostic("osc", "osc.test_simulated", "OSC test simulated");
-      } else if (command === "get_runtime_status") {
-        result = { ...latestStatus };
-      } else if (command === "get_app_config") {
-        result = structuredClone(config);
+      } else if (command === "get_runtime_control_snapshot") {
+        result = controlSnapshot();
       } else if (command === "save_app_config") {
         config = structuredClone(args?.["config"] as AppConfig);
-        result = structuredClone(config);
+        configRevision += 1;
+        publishControl();
+        result = controlSnapshot();
       }
 
       return Promise.resolve(result as Result);
@@ -196,6 +261,28 @@ const backendCases: readonly Readonly<{
 ];
 
 describe.each(backendCases)("$name contract", ({ create }) => {
+  test("publishes control before each legacy lifecycle status", async () => {
+    const backend = create();
+    const observed: string[] = [];
+    const unsubscribeControl = await backend.listenControl(() => {
+      observed.push("control");
+    });
+    const unsubscribeEvents = await backend.listen((event) => {
+      if (event.type === "status") {
+        observed.push("status");
+      }
+    });
+
+    try {
+      await backend.startRuntime();
+    } finally {
+      unsubscribeEvents();
+      unsubscribeControl();
+    }
+
+    expect(observed).toEqual(["control", "status", "control", "status"]);
+  });
+
   test("normalizes the same completed lifecycle and Stop behavior", async () => {
     const backend = create();
     const events: RuntimeEvent[] = [];
@@ -204,12 +291,21 @@ describe.each(backendCases)("$name contract", ({ create }) => {
     });
 
     try {
-      await backend.runCommand("start_runtime");
-      expect((await backend.getRuntimeStatus()).status).toBe("running");
+      const initialConfig = (await backend.getControlSnapshot()).desired.config;
+      await backend.saveConfig({
+        ...initialConfig,
+        stt: { ...initialConfig.stt, provider: "mock" },
+      });
+      await backend.startRuntime();
+      expect((await backend.getControlSnapshot()).runtime.status).toBe(
+        "running",
+      );
 
       await backend.runCommand("emit_mock_transcript");
-      await backend.runCommand("stop_runtime");
-      expect((await backend.getRuntimeStatus()).status).toBe("stopped");
+      await backend.stopRuntime();
+      expect((await backend.getControlSnapshot()).runtime.status).toBe(
+        "stopped",
+      );
     } finally {
       unsubscribe();
     }
@@ -232,14 +328,14 @@ describe.each(backendCases)("$name contract", ({ create }) => {
     expect(partial?.payload).toMatchObject({
       kind: "partial",
       language: "en",
-      provider: "openai",
+      provider: "mock",
       revision: 1,
       text: "Testing live caption preview...",
     });
     expect(final?.payload).toMatchObject({
       kind: "final",
       language: "en",
-      provider: "openai",
+      provider: "mock",
       revision: 2,
       text: expectedFinalText,
     });
@@ -263,14 +359,14 @@ describe.each(backendCases)("$name contract", ({ create }) => {
     });
 
     try {
-      await backend.runCommand("start_runtime");
+      await backend.startRuntime();
       const eventCount = events.length;
 
-      await expect(backend.runCommand("start_runtime")).rejects.toThrow(
-        /already active/u,
-      );
+      await expect(backend.startRuntime()).rejects.toThrow(/already active/u);
       expect(events).toHaveLength(eventCount);
-      expect((await backend.getRuntimeStatus()).status).toBe("running");
+      expect((await backend.getControlSnapshot()).runtime.status).toBe(
+        "running",
+      );
     } finally {
       unsubscribe();
     }
@@ -316,7 +412,7 @@ describe.each(backendCases)("$name contract", ({ create }) => {
 
   test("round-trips settings without changing unrelated fields", async () => {
     const backend = create();
-    const initial = await backend.getConfig();
+    const initial = (await backend.getControlSnapshot()).desired.config;
     const changed: AppConfig = {
       ...initial,
       audio: { inputDeviceId: "chosen-device" },
@@ -324,8 +420,10 @@ describe.each(backendCases)("$name contract", ({ create }) => {
       ui: { showPartial: false },
     };
 
-    expect(await backend.saveConfig(changed)).toEqual(changed);
-    expect(await backend.getConfig()).toEqual(changed);
+    expect((await backend.saveConfig(changed)).desired.config).toEqual(changed);
+    expect((await backend.getControlSnapshot()).desired.config).toEqual(
+      changed,
+    );
   });
 });
 

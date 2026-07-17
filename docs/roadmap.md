@@ -93,8 +93,10 @@ Exit criteria:
 Status: in progress. Vitest now runs in the normal frontend gate; a framework-
 free current-wire reducer and one shared Preview/Tauri behavior suite cover
 revision ordering, terminal units, Stop/Start fences, reload races, bounded
-history, subscription cleanup, and settings round trips. Component-level state
-tests and the later versioned caption contract remain.
+history, subscription cleanup, and settings round trips. A revisioned runtime
+control snapshot now distinguishes saved desired settings from the immutable
+active-session selection and derives next-Start changes across reloads.
+Component-level state tests and the later versioned caption contract remain.
 
 Goal: build the regression net before replacing the current transcript wire
 contract.
@@ -103,10 +105,13 @@ contract.
 - extract caption/lifecycle state into framework-free modules;
 - run one behavior suite against both the preview backend and the Tauri gateway
   so they cannot drift;
-- test webview reload resynchronization through the existing runtime status
+- test webview reload resynchronization through the revisioned runtime-control
   snapshot;
 - test duplicate, out-of-order, and late-after-Stop current-wire events;
 - test settings round trips and the Phase 1 legacy-config compatibility path.
+- keep saved configuration, redacted secret status, active-session selection,
+  and derived next-Start changes in one revisioned control contract shared by
+  Preview and Tauri backends.
 
 Exit criteria:
 

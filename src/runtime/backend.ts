@@ -9,30 +9,31 @@ import { createTauriBackend } from "./tauriBackend";
 import type {
   AppConfig,
   AudioInputDevice,
-  ProviderSecretStatus,
   RuntimeCommand,
+  RuntimeControlSnapshot,
   RuntimeEvent,
-  RuntimeStatusEvent,
   SttProvider,
 } from "./types";
 
 export type Unsubscribe = () => void;
 
 export type RuntimeEventListener = (event: RuntimeEvent) => void;
+export type RuntimeControlListener = (snapshot: RuntimeControlSnapshot) => void;
 
 export interface RuntimeBackend {
   listen(listener: RuntimeEventListener): Promise<Unsubscribe>;
+  listenControl(listener: RuntimeControlListener): Promise<Unsubscribe>;
   runCommand(command: RuntimeCommand): Promise<void>;
-  getRuntimeStatus(): Promise<RuntimeStatusEvent>;
-  getConfig(): Promise<AppConfig>;
-  saveConfig(config: AppConfig): Promise<AppConfig>;
+  startRuntime(): Promise<RuntimeControlSnapshot>;
+  stopRuntime(): Promise<RuntimeControlSnapshot>;
+  getControlSnapshot(): Promise<RuntimeControlSnapshot>;
+  saveConfig(config: AppConfig): Promise<RuntimeControlSnapshot>;
   listAudioInputDevices(): Promise<AudioInputDevice[]>;
-  getProviderSecretStatus(provider: SttProvider): Promise<ProviderSecretStatus>;
   saveProviderSecret(
     provider: SttProvider,
     secret: string,
-  ): Promise<ProviderSecretStatus>;
-  deleteProviderSecret(provider: SttProvider): Promise<ProviderSecretStatus>;
+  ): Promise<RuntimeControlSnapshot>;
+  deleteProviderSecret(provider: SttProvider): Promise<RuntimeControlSnapshot>;
 }
 
 function createUnsupportedBackend(): RuntimeBackend {
@@ -41,12 +42,13 @@ function createUnsupportedBackend(): RuntimeBackend {
 
   return {
     listen: reject,
+    listenControl: reject,
     runCommand: reject,
-    getRuntimeStatus: reject,
-    getConfig: reject,
+    startRuntime: reject,
+    stopRuntime: reject,
+    getControlSnapshot: reject,
     saveConfig: reject,
     listAudioInputDevices: reject,
-    getProviderSecretStatus: reject,
     saveProviderSecret: reject,
     deleteProviderSecret: reject,
   };

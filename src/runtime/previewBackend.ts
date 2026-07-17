@@ -10,6 +10,8 @@ import {
   type DiagnosticCategory,
   type ProviderSecretStatus,
   type RuntimeCommand,
+  type RuntimeControlSnapshot,
+  type RuntimeSession,
   type RuntimeStatus,
   type RuntimeStatusEvent,
   type SttProvider,
@@ -37,8 +39,17 @@ const PREVIEW_DEFAULT_CONFIG: AppConfig = {
 
 export function createPreviewBackend(): RuntimeBackend {
   const subscriptions = new Set<Readonly<{ listener: RuntimeEventListener }>>();
+  const controlSubscriptions = new Set<
+    Readonly<{ listener: (snapshot: RuntimeControlSnapshot) => void }>
+  >();
   let config = structuredClone(PREVIEW_DEFAULT_CONFIG);
   let openAiSecretSuffix: string | null = null;
+  let secretRevision = 0;
+  let configRevision = 1;
+  let controlRevision = 1;
+  let nextGeneration = 0;
+  let session: RuntimeSession | null = null;
+  let sessionSecretRevision: number | null = null;
   let nextEventNumber = 1;
   let latestStatus: RuntimeStatusEvent = {
     status: "idle",
@@ -59,6 +70,7 @@ export function createPreviewBackend(): RuntimeBackend {
 
   function emitStatus(status: RuntimeStatus, message: string) {
     latestStatus = { status, message, timestampMs: Date.now() };
+    publishControl();
     emit({ type: "status", payload: latestStatus });
   }
 
@@ -82,13 +94,22 @@ export function createPreviewBackend(): RuntimeBackend {
     });
   }
 
-  function emitMockTranscript() {
+  function emitMockTranscript(): Error | null {
+    if (
+      latestStatus.status !== "running" ||
+      session?.selected.stt.provider !== "mock"
+    ) {
+      return new Error(
+        "Mock Transcript requires an active Mock runtime session.",
+      );
+    }
+
     const utteranceId = eventId("utterance");
     const timestampMs = Date.now();
     const transcriptBase = {
       utteranceId,
-      language: config.stt.language,
-      provider: config.stt.provider,
+      language: session.selected.stt.language,
+      provider: session.selected.stt.provider,
       timestampMs,
     };
 
@@ -126,6 +147,8 @@ export function createPreviewBackend(): RuntimeBackend {
       "Mock transcript emitted",
       "The UI received normalized partial and final transcript events.",
     );
+
+    return null;
   }
 
   function openAiSecretStatus(): ProviderSecretStatus {
@@ -138,18 +161,139 @@ export function createPreviewBackend(): RuntimeBackend {
     };
   }
 
-  function secretStatusFor(provider: SttProvider): ProviderSecretStatus {
-    if (provider === "openai") {
-      return openAiSecretStatus();
+  function controlSnapshot(): RuntimeControlSnapshot {
+    return {
+      contractVersion: 1,
+      revision: controlRevision,
+      runtime: { ...latestStatus },
+      desired: {
+        revision: configRevision,
+        config: structuredClone(config),
+        providerSecrets: [openAiSecretStatus()],
+      },
+      session: session ? structuredClone(session) : null,
+      pendingChanges: pendingChanges(),
+    };
+  }
+
+  function pendingChanges(): RuntimeControlSnapshot["pendingChanges"] {
+    if (session === null) {
+      return [];
     }
 
-    return {
-      provider,
-      configured: false,
-      storage: null,
-      displaySuffix: null,
-      error: null,
+    const pending: RuntimeControlSnapshot["pendingChanges"] = [];
+
+    if (session.selected.audio.inputDeviceId !== config.audio.inputDeviceId) {
+      pending.push("microphone");
+    }
+    if (
+      session.selected.stt.provider !== config.stt.provider ||
+      session.selected.stt.language !== config.stt.language ||
+      session.selected.stt.model !== config.stt.model
+    ) {
+      pending.push("recognition");
+    }
+    if (
+      session.selected.stt.provider === "openai" &&
+      sessionSecretRevision !== secretRevision
+    ) {
+      pending.push("credential");
+    }
+    if (
+      session.selected.osc.enabled !== config.osc.enabled ||
+      session.selected.osc.host !== config.osc.host ||
+      session.selected.osc.port !== config.osc.port
+    ) {
+      pending.push("chatboxOutput");
+    }
+
+    return pending;
+  }
+
+  function oscConfigForTest() {
+    return session?.selected.osc ?? config.osc;
+  }
+
+  function publishControl() {
+    controlRevision += 1;
+    const snapshot = controlSnapshot();
+
+    for (const subscription of controlSubscriptions) {
+      subscription.listener(structuredClone(snapshot));
+    }
+  }
+
+  function createSession(phase: RuntimeSession["phase"]): RuntimeSession {
+    const selected = {
+      audio: structuredClone(config.audio),
+      stt: structuredClone(config.stt),
+      osc: structuredClone(config.osc),
     };
+
+    return {
+      generation: nextGeneration,
+      phase,
+      startedFromConfigRevision: configRevision,
+      selected,
+      credential:
+        selected.stt.provider === "openai" && openAiSecretSuffix !== null
+          ? {
+              provider: "openai",
+              storage: "systemCredentialStore",
+              displaySuffix: openAiSecretSuffix,
+              revision: secretRevision,
+            }
+          : null,
+      chatbox: {
+        state: selected.osc.enabled ? "ready" : "disabled",
+        host: selected.osc.host,
+        port: selected.osc.port,
+      },
+      uploadsMicrophoneAudio: selected.stt.provider === "openai",
+    };
+  }
+
+  function startRuntimeControl(): Promise<RuntimeControlSnapshot> {
+    if (["starting", "running", "stopping"].includes(latestStatus.status)) {
+      return Promise.reject(
+        new Error("The browser preview runtime is already active."),
+      );
+    }
+
+    nextGeneration += 1;
+    sessionSecretRevision =
+      config.stt.provider === "openai" ? secretRevision : null;
+    session = createSession("starting");
+    emitStatus("starting", "Starting browser preview runtime");
+    session = { ...session, phase: "running" };
+    emitStatus("running", "Browser preview runtime is running");
+
+    return Promise.resolve(controlSnapshot());
+  }
+
+  function stopRuntimeControl(): Promise<RuntimeControlSnapshot> {
+    if (latestStatus.status === "idle" || latestStatus.status === "stopped") {
+      session = null;
+      sessionSecretRevision = null;
+      emitStatus("stopped", "Browser preview runtime is already stopped");
+      return Promise.resolve(controlSnapshot());
+    }
+
+    if (session) {
+      session = { ...session, phase: "stopping" };
+    }
+    emitStatus("stopping", "Stopping browser preview runtime");
+    session = null;
+    sessionSecretRevision = null;
+    emitStatus("stopped", "Browser preview runtime stopped");
+    emitDiagnostic(
+      "runtime",
+      "runtime.stopped",
+      "Runtime stopped",
+      "Browser preview capture has been released.",
+    );
+
+    return Promise.resolve(controlSnapshot());
   }
 
   return {
@@ -162,58 +306,53 @@ export function createPreviewBackend(): RuntimeBackend {
       });
     },
 
+    listenControl(listener) {
+      const subscription = { listener };
+      controlSubscriptions.add(subscription);
+
+      return Promise.resolve(() => {
+        controlSubscriptions.delete(subscription);
+      });
+    },
+
     runCommand(command: RuntimeCommand) {
       if (command === "start_runtime") {
-        if (["starting", "running", "stopping"].includes(latestStatus.status)) {
-          return Promise.reject(
-            new Error("The browser preview runtime is already active."),
-          );
-        }
-
-        emitStatus("starting", "Starting browser preview runtime");
-        emitStatus("running", "Browser preview runtime is running");
+        return startRuntimeControl().then(() => undefined);
       } else if (command === "stop_runtime") {
-        if (
-          latestStatus.status === "idle" ||
-          latestStatus.status === "stopped"
-        ) {
-          emitStatus("stopped", "Browser preview runtime is already stopped");
-          return Promise.resolve();
-        }
-
-        emitStatus("stopping", "Stopping browser preview runtime");
-        emitStatus("stopped", "Browser preview runtime stopped");
-        emitDiagnostic(
-          "runtime",
-          "runtime.stopped",
-          "Runtime stopped",
-          "Browser preview capture has been released.",
-        );
+        return stopRuntimeControl().then(() => undefined);
       } else if (command === "emit_mock_transcript") {
-        emitMockTranscript();
+        const error = emitMockTranscript();
+
+        if (error) {
+          return Promise.reject(error);
+        }
       } else {
+        const oscConfig = oscConfigForTest();
+
         emitDiagnostic(
           "osc",
           "osc.test_simulated",
           "OSC test simulated",
-          "Desktop-only command was simulated for UI preview.",
+          `Desktop-only OSC test to ${oscConfig.host}:${String(oscConfig.port)} was simulated for UI preview.`,
         );
       }
 
       return Promise.resolve();
     },
 
-    getRuntimeStatus() {
-      return Promise.resolve({ ...latestStatus });
-    },
+    startRuntime: startRuntimeControl,
 
-    getConfig() {
-      return Promise.resolve(structuredClone(config));
+    stopRuntime: stopRuntimeControl,
+
+    getControlSnapshot() {
+      return Promise.resolve(controlSnapshot());
     },
 
     saveConfig(nextConfig: AppConfig) {
       config = structuredClone(nextConfig);
-      return Promise.resolve(structuredClone(config));
+      configRevision += 1;
+      publishControl();
+      return Promise.resolve(controlSnapshot());
     },
 
     listAudioInputDevices() {
@@ -224,10 +363,6 @@ export function createPreviewBackend(): RuntimeBackend {
           isDefault: true,
         },
       ]);
-    },
-
-    getProviderSecretStatus(provider: SttProvider) {
-      return Promise.resolve(secretStatusFor(provider));
     },
 
     saveProviderSecret(provider: SttProvider, secret: string) {
@@ -249,15 +384,19 @@ export function createPreviewBackend(): RuntimeBackend {
       }
 
       openAiSecretSuffix = trimmed.slice(-4);
-      return Promise.resolve(openAiSecretStatus());
+      secretRevision += 1;
+      publishControl();
+      return Promise.resolve(controlSnapshot());
     },
 
     deleteProviderSecret(provider: SttProvider) {
       if (provider === "openai") {
         openAiSecretSuffix = null;
+        secretRevision += 1;
+        publishControl();
       }
 
-      return Promise.resolve(secretStatusFor(provider));
+      return Promise.resolve(controlSnapshot());
     },
   };
 }

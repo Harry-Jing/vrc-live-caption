@@ -3,6 +3,15 @@ import { uiText } from "../i18n/uiText";
 import { createRuntimeBackend, type Unsubscribe } from "./backend";
 import { createLifecycleCommandQueue } from "./lifecycleCommandQueue";
 import {
+  projectRuntimeControlSnapshot,
+  reconcileRuntimeControlSnapshot,
+  runtimeStatusNeedsControlReconciliation,
+} from "./runtimeControl";
+import {
+  createRuntimeReadinessGate,
+  type RuntimeReadinessSnapshot,
+} from "./runtimeReadiness";
+import {
   createRuntimeState,
   reduceRuntimeState,
   selectRuntimeView,
@@ -11,13 +20,13 @@ import {
 import type {
   AppConfig,
   AudioInputDevice,
-  ProviderSecretStatus,
   RuntimeCommand,
+  RuntimeControlSnapshot,
   RuntimeStatusEvent,
   SttProvider,
 } from "./types";
 
-const STARTING_STATUS_RECONCILE_INTERVAL_MS = 500;
+const RUNTIME_CONTROL_RECONCILE_INTERVAL_MS = 500;
 
 function normalizeError(error: unknown) {
   if (typeof error === "string") {
@@ -63,31 +72,73 @@ function createActionState() {
 
 export function useRuntime() {
   const backend = createRuntimeBackend();
-  const runLifecycleCommand = createLifecycleCommandQueue((command) =>
-    backend.runCommand(command),
-  );
+  const runLifecycleCommand = createLifecycleCommandQueue(async (command) => {
+    const snapshot =
+      command === "start_runtime"
+        ? await backend.startRuntime()
+        : await backend.stopRuntime();
+    applyControlSnapshot(snapshot);
+  });
   const audioInputDevices = ref<AudioInputDevice[]>([]);
-  const config = ref<AppConfig | null>(null);
-  const secretStatuses = ref<
-    Partial<Record<SttProvider, ProviderSecretStatus>>
-  >({});
+  const controlSnapshot = shallowRef<RuntimeControlSnapshot | null>(null);
   const initialRuntimeStatus: RuntimeStatusEvent = {
     status: "idle",
     message: uiText("runtime.status.initialIdleMessage"),
     timestampMs: Date.now(),
   };
   const runtimeState = shallowRef(createRuntimeState(initialRuntimeStatus));
-  const requiresRuntimeRestart = ref(false);
   const pendingRuntimeCommand = ref<RuntimeCommand | null>(null);
   const runtimeAction = createActionState();
   const settingsAction = createActionState();
   const secretsAction = createActionState();
+  const runtimeReadiness = shallowRef<RuntimeReadinessSnapshot>({
+    ready: false,
+    isBusy: false,
+    error: "",
+  });
   let unsubscribeListeners: Unsubscribe | null = null;
   let isUnmounted = false;
   let nextLifecycleCommandAttemptId = 0;
   let nextStatusSyncRequestId = 0;
-  let startingStatusReconcileTimer: ReturnType<typeof setTimeout> | null = null;
-  let startingStatusSyncInFlight = false;
+  let runtimeControlGapObserved = false;
+  let runtimeControlPullsInFlight = 0;
+  let runtimeControlReconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  let runtimeControlReconcileInFlight = false;
+  const runtimeReadinessGate = createRuntimeReadinessGate(
+    normalizeError,
+    (snapshot) => {
+      runtimeReadiness.value = snapshot;
+      updateRuntimeControlReconciliation();
+    },
+  );
+
+  const controlView = computed(() =>
+    projectRuntimeControlSnapshot(controlSnapshot.value),
+  );
+  const config = computed(() => controlView.value.config);
+  const currentSession = computed(() => controlView.value.currentSession);
+  const currentSetupConfig = computed(
+    () => controlView.value.currentSetupConfig,
+  );
+  const pendingSessionChanges = computed(
+    () => controlView.value.pendingSessionChanges,
+  );
+  const sessionUploadsMicrophoneAudio = computed(
+    () => controlView.value.sessionUploadsMicrophoneAudio,
+  );
+  const secretStatuses = computed(() => controlView.value.secretStatuses);
+  const runtimeError = computed(
+    () => runtimeReadiness.value.error || runtimeAction.error.value,
+  );
+  const isRuntimeBusy = computed(
+    () => runtimeReadiness.value.isBusy || runtimeAction.isBusy.value,
+  );
+  const settingsError = computed(
+    () => settingsAction.error.value || runtimeReadiness.value.error,
+  );
+  const secretsError = computed(
+    () => secretsAction.error.value || runtimeReadiness.value.error,
+  );
 
   const runtimeView = computed(() =>
     selectRuntimeView(runtimeState.value, {
@@ -110,56 +161,110 @@ export function useRuntime() {
     const previousState = runtimeState.value;
     const nextState = reduceRuntimeState(previousState, input);
     runtimeState.value = nextState;
-    updateStartingStatusReconciliation();
+    updateRuntimeControlReconciliation();
 
     return nextState !== previousState;
   }
 
-  function clearStartingStatusReconciliation() {
-    if (startingStatusReconcileTimer !== null) {
-      clearTimeout(startingStatusReconcileTimer);
-      startingStatusReconcileTimer = null;
+  function storeControlSnapshot(snapshot: RuntimeControlSnapshot) {
+    const previous = controlSnapshot.value;
+    const next = reconcileRuntimeControlSnapshot(previous, snapshot);
+
+    if (next === previous) {
+      return false;
+    }
+
+    controlSnapshot.value = next;
+    return true;
+  }
+
+  function applyControlSnapshot(snapshot: RuntimeControlSnapshot) {
+    if (!storeControlSnapshot(snapshot)) {
+      return false;
+    }
+
+    dispatchRuntimeState({
+      type: "backendEvent",
+      event: { type: "status", payload: snapshot.runtime },
+    });
+    return true;
+  }
+
+  function clearRuntimeControlReconciliation() {
+    if (runtimeControlReconcileTimer !== null) {
+      clearTimeout(runtimeControlReconcileTimer);
+      runtimeControlReconcileTimer = null;
     }
   }
 
-  function updateStartingStatusReconciliation() {
-    if (isUnmounted || runtimeState.value.runtimeStatus.status !== "starting") {
-      clearStartingStatusReconciliation();
+  function updateRuntimeControlReconciliation() {
+    if (
+      runtimeControlGapObserved &&
+      !runtimeStatusNeedsControlReconciliation(
+        controlSnapshot.value,
+        runtimeStatus.value,
+      )
+    ) {
+      runtimeControlGapObserved = false;
+    }
+
+    const needsReconciliation =
+      runtimeStatus.value.status === "starting" || runtimeControlGapObserved;
+
+    if (isUnmounted || !needsReconciliation) {
+      clearRuntimeControlReconciliation();
       return;
     }
 
-    if (startingStatusReconcileTimer !== null || startingStatusSyncInFlight) {
+    if (
+      runtimeControlReconcileTimer !== null ||
+      runtimeControlReconcileInFlight ||
+      runtimeControlPullsInFlight > 0 ||
+      runtimeReadiness.value.isBusy
+    ) {
       return;
     }
 
-    // Starting/Running pushes are best-effort and the Rust Start command can
-    // return before its worker updates the status snapshot. Poll only while the
-    // transition is genuinely unresolved so a missed push cannot strand the UI
-    // in Starting; Stop immediately changes the state and cancels this loop.
-    startingStatusReconcileTimer = setTimeout(() => {
-      startingStatusReconcileTimer = null;
-      void reconcileStartingStatus();
-    }, STARTING_STATUS_RECONCILE_INTERVAL_MS);
+    // Both control and legacy status events are best-effort. Poll only while a
+    // Start remains unresolved or an accepted legacy status proves the full
+    // control snapshot fell behind. A successful pull/control event cancels the
+    // loop; failures retry without entering a user action's error scope.
+    runtimeControlReconcileTimer = setTimeout(() => {
+      runtimeControlReconcileTimer = null;
+      void reconcileRuntimeControl();
+    }, RUNTIME_CONTROL_RECONCILE_INTERVAL_MS);
   }
 
-  async function reconcileStartingStatus() {
-    if (isUnmounted || runtimeState.value.runtimeStatus.status !== "starting") {
+  async function reconcileRuntimeControl() {
+    const needsReconciliation =
+      runtimeStatus.value.status === "starting" || runtimeControlGapObserved;
+
+    if (
+      isUnmounted ||
+      !needsReconciliation ||
+      runtimeControlReconcileInFlight ||
+      runtimeControlPullsInFlight > 0
+    ) {
       return;
     }
 
-    startingStatusSyncInFlight = true;
+    runtimeControlReconcileInFlight = true;
 
     try {
-      await synchronizeRuntimeStatus();
+      await synchronizeRuntimeControl();
     } catch {
       // A later interval retries while the transition still needs a snapshot.
     } finally {
-      startingStatusSyncInFlight = false;
-      updateStartingStatusReconciliation();
+      runtimeControlReconcileInFlight = false;
+      updateRuntimeControlReconciliation();
     }
   }
 
   async function runCommand(command: RuntimeCommand) {
+    if (!(await ensureRuntimeReady()) || isUnmounted) {
+      return;
+    }
+
     pendingRuntimeCommand.value = command;
     let lifecycleCommandAttemptId: number | null = null;
 
@@ -186,10 +291,6 @@ export function useRuntime() {
         } else {
           await backend.runCommand(command);
         }
-
-        if (command === "start_runtime") {
-          requiresRuntimeRestart.value = false;
-        }
       });
 
       if (
@@ -211,15 +312,13 @@ export function useRuntime() {
               },
         );
 
-        try {
-          // Runtime events are best-effort. Reconcile every lifecycle command
-          // with the pull snapshot so a missed stopped/running push cannot
-          // leave the controls permanently in their optimistic state.
-          await synchronizeRuntimeStatus();
-        } catch {
-          // Keep the command result visible. Stop has already failed closed (or
-          // converged from its successful acknowledgement), while Start remains
-          // safely optimistic until a later status push or reload snapshot.
+        if (!commandSucceeded) {
+          try {
+            await synchronizeRuntimeControl();
+          } catch {
+            // Keep the command failure visible if the authoritative pull also
+            // fails. A later control event or reload can still resynchronize.
+          }
         }
       }
     } finally {
@@ -229,26 +328,12 @@ export function useRuntime() {
     }
   }
 
-  async function loadConfig() {
-    await settingsAction.run(async () => {
-      config.value = await backend.getConfig();
-    });
-  }
-
   async function saveConfig(nextConfig: AppConfig) {
-    requiresRuntimeRestart.value = false;
     let didSave = false;
-    const requiresRestart = ["starting", "running", "stopping"].includes(
-      runtimeStatus.value.status,
-    );
 
     await settingsAction.run(async () => {
-      config.value = await backend.saveConfig(nextConfig);
+      applyControlSnapshot(await backend.saveConfig(nextConfig));
       didSave = true;
-
-      if (requiresRestart) {
-        requiresRuntimeRestart.value = true;
-      }
     });
 
     return didSave;
@@ -260,59 +345,59 @@ export function useRuntime() {
     });
   }
 
-  function setSecretStatus(
-    provider: SttProvider,
-    status: ProviderSecretStatus,
-  ) {
-    secretStatuses.value = { ...secretStatuses.value, [provider]: status };
-  }
-
-  async function loadProviderSecretStatus(provider: SttProvider) {
-    await secretsAction.run(async () => {
-      setSecretStatus(
-        provider,
-        await backend.getProviderSecretStatus(provider),
-      );
-    });
-  }
-
   async function saveProviderSecret(provider: SttProvider, secret: string) {
     await secretsAction.run(async () => {
-      setSecretStatus(
-        provider,
-        await backend.saveProviderSecret(provider, secret),
-      );
+      applyControlSnapshot(await backend.saveProviderSecret(provider, secret));
     });
   }
 
   async function deleteProviderSecret(provider: SttProvider) {
     await secretsAction.run(async () => {
-      setSecretStatus(provider, await backend.deleteProviderSecret(provider));
+      applyControlSnapshot(await backend.deleteProviderSecret(provider));
     });
   }
 
   async function registerRuntimeListeners() {
-    const unsubscribe = await backend.listen((event) => {
-      const eventAccepted = dispatchRuntimeState({
-        type: "backendEvent",
-        event,
-      });
-
-      if (
-        eventAccepted &&
-        event.type === "status" &&
-        event.payload.status === "starting"
-      ) {
-        requiresRuntimeRestart.value = false;
-      }
-    });
-
-    if (isUnmounted) {
-      unsubscribe();
+    if (unsubscribeListeners !== null) {
       return;
     }
 
-    unsubscribeListeners = unsubscribe;
+    let unsubscribe: Unsubscribe | null = null;
+
+    try {
+      unsubscribe = await backend.listen((event) => {
+        const eventAccepted = dispatchRuntimeState({
+          type: "backendEvent",
+          event,
+        });
+
+        if (eventAccepted && event.type === "status") {
+          runtimeControlGapObserved = runtimeStatusNeedsControlReconciliation(
+            controlSnapshot.value,
+            event.payload,
+          );
+          updateRuntimeControlReconciliation();
+        }
+      });
+      const unsubscribeControl = await backend.listenControl((snapshot) => {
+        applyControlSnapshot(snapshot);
+        runtimeReadinessGate.markReady();
+      });
+
+      if (isUnmounted) {
+        unsubscribe();
+        unsubscribeControl();
+        throw new Error("Runtime listener registration was cancelled.");
+      }
+
+      unsubscribeListeners = () => {
+        unsubscribe?.();
+        unsubscribeControl();
+      };
+    } catch (error) {
+      unsubscribe?.();
+      throw error;
+    }
   }
 
   function beginRuntimeStatusSync() {
@@ -323,28 +408,39 @@ export function useRuntime() {
     return requestId;
   }
 
-  async function completeRuntimeStatusSync(requestId: number) {
+  async function completeRuntimeControlSync(requestId: number) {
+    runtimeControlPullsInFlight += 1;
+
     try {
-      const snapshot = await backend.getRuntimeStatus();
+      const incoming = await backend.getControlSnapshot();
+      storeControlSnapshot(incoming);
+      const snapshot = controlSnapshot.value?.runtime ?? incoming.runtime;
       dispatchRuntimeState({
         type: "runtimeStatusSyncCompleted",
         requestId,
         snapshot,
       });
+
+      if (unsubscribeListeners !== null) {
+        runtimeReadinessGate.markReady();
+      }
     } catch (error) {
       dispatchRuntimeState({
         type: "runtimeStatusSyncCancelled",
         requestId,
       });
       throw error;
+    } finally {
+      runtimeControlPullsInFlight -= 1;
+      updateRuntimeControlReconciliation();
     }
   }
 
-  async function synchronizeRuntimeStatus() {
-    await completeRuntimeStatusSync(beginRuntimeStatusSync());
+  async function synchronizeRuntimeControl() {
+    await completeRuntimeControlSync(beginRuntimeStatusSync());
   }
 
-  async function registerAndSynchronizeRuntime() {
+  async function establishRuntimeReadiness() {
     const requestId = beginRuntimeStatusSync();
 
     try {
@@ -352,7 +448,7 @@ export function useRuntime() {
       // emitted between the last listener registration and the pull snapshot
       // could be rejected against the synthetic initial status.
       await registerRuntimeListeners();
-      await completeRuntimeStatusSync(requestId);
+      await completeRuntimeControlSync(requestId);
     } catch (error) {
       dispatchRuntimeState({
         type: "runtimeStatusSyncCancelled",
@@ -362,20 +458,21 @@ export function useRuntime() {
     }
   }
 
+  function ensureRuntimeReady() {
+    return runtimeReadinessGate.ensure(establishRuntimeReadiness);
+  }
+
   onMounted(async () => {
-    await runtimeAction.run(async () => {
-      await registerAndSynchronizeRuntime();
-    });
-    await Promise.all([
-      loadConfig(),
-      loadAudioInputDevices(),
-      loadProviderSecretStatus("openai"),
-    ]);
+    await ensureRuntimeReady();
+
+    if (!isUnmounted) {
+      await loadAudioInputDevices();
+    }
   });
 
   onBeforeUnmount(() => {
     isUnmounted = true;
-    clearStartingStatusReconciliation();
+    clearRuntimeControlReconciliation();
     unsubscribeListeners?.();
     unsubscribeListeners = null;
   });
@@ -385,22 +482,25 @@ export function useRuntime() {
     audioInputDevices,
     captionMode,
     config,
+    currentSession,
+    currentSetupConfig,
     deleteProviderSecret,
     diagnostics,
     finalTranscripts,
-    isRuntimeBusy: runtimeAction.isBusy,
+    isRuntimeBusy,
     isSecretsBusy: secretsAction.isBusy,
     isSettingsBusy: settingsAction.isBusy,
     loadAudioInputDevices,
     pendingRuntimeCommand,
+    pendingSessionChanges,
     runCommand,
-    runtimeError: runtimeAction.error,
+    runtimeError,
     runtimeStatus,
     saveConfig,
     saveProviderSecret,
     secretStatuses,
-    secretsError: secretsAction.error,
-    settingsError: settingsAction.error,
-    requiresRuntimeRestart,
+    sessionUploadsMicrophoneAudio,
+    secretsError,
+    settingsError,
   };
 }

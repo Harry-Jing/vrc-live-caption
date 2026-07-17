@@ -132,7 +132,9 @@ than given a new application meaning.
 
 Runtime lifecycle events are not replaced by caption snapshots. In particular,
 `utterance.ended` remains necessary for no-result and failed units, while
-`runtime.status` remains the pull/push resynchronization boundary.
+`runtime.status` remains a lifecycle signal consumed by the caption reducer.
+The revisioned runtime-control snapshot is the pull/push resynchronization
+boundary for lifecycle status, saved settings, and the effective session.
 
 The current frontend normalizes Preview and Tauri delivery into one event
 stream and reduces it in a framework-free state module. That module owns strict
@@ -141,21 +143,64 @@ Stop/Start admission, and pull-versus-push status reconciliation. Vue consumes
 only its projection: listening is a small activity state, while the latest
 completed caption remains visible until newer text is accepted.
 
-A local Stop intent closes caption admission immediately. Lifecycle IPC calls
-still execute in user order, so a Stop requested while Start is in flight runs
-after that Start settles and cannot return early before the new runtime handle
-exists. Non-lifecycle actions such as OSC Test do not enter this queue.
+A local Stop intent closes caption admission immediately. Stop IPC bypasses an
+in-flight Start so the backend can advance the hard-stop epoch without waiting
+for config or credential I/O. Later Starts wait until both older lifecycle
+operations settle. Non-lifecycle actions such as OSC Test do not enter this
+coordinator.
 Because the Rust Start command may return before its worker publishes status,
 the frontend also reconciles the pull snapshot while the transition remains
 `starting`; the loop stops as soon as Running, Error, or Stop is observed.
 
 On webview load, the frontend opens a bounded event buffer, starts all current
-Tauri channel registrations in parallel, and then pulls the runtime status.
-This prevents an older status snapshot from overwriting a newer pushed status.
-The current multi-channel, status-only snapshot cannot replay a caption emitted
-before its individual listener attached; eliminating that narrow reload window
-belongs with the versioned session/snapshot contract rather than an ad hoc Live
-implementation.
+Tauri channel registrations, and then pulls the full runtime-control snapshot.
+This prevents an older pull result from overwriting a newer pushed control
+revision or lifecycle event. The control snapshot does not contain caption
+history, so it still cannot replay a caption emitted before its individual
+listener attached; eliminating that narrow reload window belongs with the
+versioned caption-session contract rather than an ad hoc Live implementation.
+
+### Runtime Control Snapshot
+
+Saved settings and the effective runtime session are separate state. Rust owns
+one revisioned control snapshot containing:
+
+- the latest saved, non-secret configuration and its revision;
+- redacted provider-secret status and credential revision;
+- the current runtime lifecycle status;
+- the immutable selection captured for the current runtime generation, if one
+  exists;
+- derived categories whose saved values differ from that active selection.
+
+Start captures the selected audio, recognition, Chatbox, and credential state
+through the same serialized control-operation boundary used by config and
+secret mutations. Later saves change the desired state for the next Start;
+they never mutate the running generation or silently restart it. Pure UI
+preferences remain outside the session comparison and may take effect
+immediately.
+
+Stop does not wait behind that desired-state boundary. It advances a runtime
+stop epoch before taking the runtime-handle lock, so an earlier Start that is
+still waiting on config or credential I/O cannot install a generation after
+Stop. If Start has already crossed the final epoch check, the same handle lock
+orders its short commit before Stop, which then cuts off that generation. The
+frontend likewise dispatches Stop immediately instead of queuing it behind an
+in-flight Start; later Starts wait until both operations settle.
+
+The active-session snapshot contains only safe metadata. It may identify which
+provider credential revision was captured, but never contains the credential
+itself. An error may retain the failed generation for diagnosis; Stopped clears
+the active session.
+
+Control mutations return the resulting full snapshot and publish the same
+shape on one Tauri event with a monotonic control revision. The event remains
+best-effort: on load or after a suspected gap, the frontend pulls the full
+snapshot and ignores older revisions. Pending-change indicators are always
+derived by comparing desired and active state, so reverting a saved setting to
+the active value clears the indicator without another restart. Credentials are
+the deliberate exception: plaintext is never retained for equality checks, so
+any credential mutation advances its revision and remains pending until Stop or
+the next Start captures that revision.
 
 This current-wire defense is deliberately narrower than the target generation
 contract. A local Start timestamp rejects events created before the new run,

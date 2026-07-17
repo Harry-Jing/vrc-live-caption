@@ -26,11 +26,17 @@ pub(crate) enum ProviderSecretStorage {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderSecretStatus {
-    provider: String,
-    configured: bool,
-    storage: Option<ProviderSecretStorage>,
-    display_suffix: Option<String>,
-    error: Option<String>,
+    pub(crate) provider: String,
+    pub(crate) configured: bool,
+    pub(crate) storage: Option<ProviderSecretStorage>,
+    pub(crate) display_suffix: Option<String>,
+    pub(crate) error: Option<String>,
+}
+
+pub(crate) struct ResolvedProviderSecret {
+    pub(crate) secret: SecretString,
+    pub(crate) storage: ProviderSecretStorage,
+    pub(crate) display_suffix: Option<String>,
 }
 
 impl ProviderSecretStatus {
@@ -66,6 +72,25 @@ pub(crate) fn provider_secret_status(provider: SttProvider) -> ProviderSecretSta
     }
 }
 
+#[cfg(not(test))]
+pub(crate) fn provider_secret_statuses() -> Vec<ProviderSecretStatus> {
+    [SttProvider::Mock, SttProvider::OpenAi]
+        .into_iter()
+        .map(provider_secret_status)
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn provider_secret_statuses() -> Vec<ProviderSecretStatus> {
+    // Unit tests must not open an operator's real credential store or trigger
+    // an OS authorization prompt. Production builds use the implementation
+    // above; credential-store behavior is isolated behind the secrets module.
+    vec![
+        ProviderSecretStatus::unconfigured(SttProvider::Mock),
+        ProviderSecretStatus::unconfigured(SttProvider::OpenAi),
+    ]
+}
+
 pub(crate) fn save_provider_secret(provider: SttProvider, secret: String) -> AppResult<()> {
     let secret = Zeroizing::new(secret);
     let secret = normalize_secret(secret.as_str())?;
@@ -83,11 +108,28 @@ pub(crate) fn delete_provider_secret(provider: SttProvider) -> AppResult<()> {
     }
 }
 
-pub(crate) fn openai_api_key() -> AppResult<SecretString> {
+pub(crate) fn openai_api_key() -> AppResult<ResolvedProviderSecret> {
     match read_system_secret(OPENAI_ACCOUNT) {
-        Ok(Some(secret)) => Ok(secret),
-        Ok(None) => environment_openai_secret().ok_or_else(missing_openai_api_key),
-        Err(error) => environment_openai_secret().ok_or(error),
+        Ok(Some(secret)) => Ok(resolved_secret(
+            secret,
+            ProviderSecretStorage::SystemCredentialStore,
+        )),
+        Ok(None) => environment_openai_secret()
+            .map(|secret| resolved_secret(secret, ProviderSecretStorage::Environment))
+            .ok_or_else(missing_openai_api_key),
+        Err(error) => environment_openai_secret()
+            .map(|secret| resolved_secret(secret, ProviderSecretStorage::Environment))
+            .ok_or(error),
+    }
+}
+
+fn resolved_secret(secret: SecretString, storage: ProviderSecretStorage) -> ResolvedProviderSecret {
+    let display_suffix = display_suffix(secret.expose_secret());
+
+    ResolvedProviderSecret {
+        secret,
+        storage,
+        display_suffix,
     }
 }
 

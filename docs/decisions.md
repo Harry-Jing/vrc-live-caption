@@ -262,6 +262,41 @@ its result is ignored rather than emitted to the App.
 
 Revisit if: users ask for a stop mode that finishes the current utterance.
 
+## Separate Saved Settings From Effective Runtime Sessions
+
+Date: 2026-07
+
+Decision: saved configuration is desired state for the next Start. Each Start
+captures an immutable, generation-scoped selection of audio, recognition,
+Chatbox, and provider-credential state. Saving runtime-bound settings during an
+active session neither mutates that session nor restarts it automatically. Pure
+UI preferences may apply immediately.
+
+Rust exposes one revisioned, redacted control snapshot containing desired
+configuration, runtime status, the active session selection, provider-secret
+status, and derived pending-change categories. The frontend displays that
+snapshot instead of inferring the active session from its editable config form.
+
+Reason: a successful save previously made the UI look as if a running session
+had changed even though Rust had already cloned its configuration and secret.
+A local sticky restart flag could not survive reload, could not clear when the
+user reverted a value, and could not account safely for credential changes.
+
+Consequence: users can distinguish "saved for next Start" from "currently in
+use." Runtime-bound changes are compared structurally with the active session;
+reverting a non-secret setting clears the pending state. Credential identity is
+represented only by redacted metadata and a process-local revision, so any
+credential mutation remains pending without comparing plaintext. Commands that
+mutate control state return the resulting authoritative snapshot, and missed
+events can be repaired by pulling it again. Stop bypasses slow desired-state
+I/O and invalidates any earlier Start that has not committed a runtime
+generation; it is never queued behind config persistence or credential-store
+access.
+
+Revisit if: a future provider supports a specifically designed hot-reconfigure
+operation. That must be an explicit capability and generation transition, not
+an incidental side effect of Save.
+
 ## Identify Audio Devices By Stable Id
 
 Date: 2026-06

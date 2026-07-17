@@ -7,11 +7,12 @@ import type {
 } from "./backend";
 import {
   RUNTIME_EVENTS,
+  RUNTIME_CONTROL_EVENT,
   type AppConfig,
   type AudioInputDevice,
   type DiagnosticEvent,
-  type ProviderSecretStatus,
   type RuntimeCommand,
+  type RuntimeControlSnapshot,
   type RuntimeStatusEvent,
   type SttProvider,
   type TranscriptEvent,
@@ -127,41 +128,53 @@ export function createTauriBackend(
       return unsubscribe;
     },
 
+    async listenControl(listener) {
+      const unlisten = await bridge.listen(RUNTIME_CONTROL_EVENT, (event) => {
+        listener(event.payload as RuntimeControlSnapshot);
+      });
+
+      return () => {
+        unlisten();
+      };
+    },
+
     async runCommand(command: RuntimeCommand) {
       await bridge.invoke(command);
     },
 
-    getRuntimeStatus() {
-      return bridge.invoke<RuntimeStatusEvent>("get_runtime_status");
+    startRuntime() {
+      return bridge.invoke<RuntimeControlSnapshot>("start_runtime");
     },
 
-    getConfig() {
-      return bridge.invoke<AppConfig>("get_app_config");
+    stopRuntime() {
+      return bridge.invoke<RuntimeControlSnapshot>("stop_runtime");
+    },
+
+    getControlSnapshot() {
+      return bridge.invoke<RuntimeControlSnapshot>(
+        "get_runtime_control_snapshot",
+      );
     },
 
     saveConfig(config: AppConfig) {
-      return bridge.invoke<AppConfig>("save_app_config", { config });
+      return bridge.invoke<RuntimeControlSnapshot>("save_app_config", {
+        config,
+      });
     },
 
     listAudioInputDevices() {
       return bridge.invoke<AudioInputDevice[]>("list_audio_input_devices");
     },
 
-    getProviderSecretStatus(provider: SttProvider) {
-      return bridge.invoke<ProviderSecretStatus>("get_provider_secret_status", {
-        provider,
-      });
-    },
-
     saveProviderSecret(provider: SttProvider, secret: string) {
-      return bridge.invoke<ProviderSecretStatus>("save_provider_secret", {
+      return bridge.invoke<RuntimeControlSnapshot>("save_provider_secret", {
         provider,
         secret,
       });
     },
 
     deleteProviderSecret(provider: SttProvider) {
-      return bridge.invoke<ProviderSecretStatus>("delete_provider_secret", {
+      return bridge.invoke<RuntimeControlSnapshot>("delete_provider_secret", {
         provider,
       });
     },

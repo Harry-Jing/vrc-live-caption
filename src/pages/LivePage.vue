@@ -11,10 +11,12 @@ const {
   activeCaptionText,
   audioInputDevices,
   captionMode,
-  config,
+  currentSession,
+  currentSetupConfig,
   diagnostics,
   finalTranscripts,
   isRuntimeBusy,
+  pendingSessionChanges,
   pendingRuntimeCommand,
   runCommand,
   runtimeError,
@@ -27,7 +29,7 @@ const latestFinalTranscript = computed(
 );
 
 const currentMicrophoneLabel = computed(() => {
-  const currentConfig = config.value;
+  const currentConfig = currentSetupConfig.value;
 
   if (!currentConfig) {
     return uiText("common.loading");
@@ -50,6 +52,54 @@ const currentMicrophoneLabel = computed(() => {
     uiText("audio.devices.savedDisconnected")
   );
 });
+
+const currentOscTarget = computed(() => {
+  const session = currentSession.value;
+
+  if (session) {
+    return `${session.chatbox.host}:${String(session.chatbox.port)}`;
+  }
+
+  const currentConfig = currentSetupConfig.value;
+
+  return currentConfig
+    ? `${currentConfig.osc.host}:${String(currentConfig.osc.port)}`
+    : uiText("common.loading");
+});
+
+const chatboxBadge = computed(() => {
+  const session = currentSession.value;
+
+  if (session?.chatbox.state === "unavailable") {
+    return {
+      color: "error" as const,
+      label: uiText("live.chatbox.unavailable"),
+    };
+  }
+
+  const enabled = session
+    ? session.chatbox.state === "ready"
+    : (currentSetupConfig.value?.osc.enabled ?? false);
+
+  return {
+    color: enabled ? ("success" as const) : ("neutral" as const),
+    label: uiText(enabled ? "live.chatbox.on" : "live.chatbox.off"),
+  };
+});
+
+const showMockTranscript = computed(
+  () =>
+    runtimeStatus.value.status === "running" &&
+    currentSession.value?.selected.stt.provider === "mock",
+);
+
+const pendingSessionChangesDescription = computed(() =>
+  uiText(
+    currentSession.value?.phase === "error"
+      ? "live.currentSetup.pendingChanges.failedDescription"
+      : "live.currentSetup.pendingChanges.description",
+  ),
+);
 </script>
 
 <template>
@@ -67,23 +117,34 @@ const currentMicrophoneLabel = computed(() => {
       </div>
 
       <div class="flex flex-wrap gap-2">
+        <UBadge
+          v-if="currentSetupConfig && !currentSession"
+          color="info"
+          variant="subtle"
+        >
+          {{ uiText("live.currentSetup.nextStartBadge") }}
+        </UBadge>
         <UBadge color="neutral" variant="subtle">
           {{
-            config
-              ? uiText(sttProviderMessageKey[config.stt.provider])
+            currentSetupConfig
+              ? uiText(sttProviderMessageKey[currentSetupConfig.stt.provider])
               : uiText("common.loading")
           }}
         </UBadge>
-        <UBadge
-          :color="config?.osc.enabled ? 'success' : 'neutral'"
-          variant="subtle"
-        >
-          {{
-            uiText(config?.osc.enabled ? "live.chatbox.on" : "live.chatbox.off")
-          }}
+        <UBadge :color="chatboxBadge.color" variant="subtle">
+          {{ chatboxBadge.label }}
         </UBadge>
       </div>
     </header>
+
+    <UAlert
+      v-if="pendingSessionChanges.length > 0"
+      color="warning"
+      icon="i-lucide-triangle-alert"
+      :title="uiText('live.currentSetup.pendingChanges.title')"
+      :description="pendingSessionChangesDescription"
+      variant="subtle"
+    />
 
     <CaptionPreview
       :latest-final-transcript="latestFinalTranscript"
@@ -97,7 +158,7 @@ const currentMicrophoneLabel = computed(() => {
         :is-busy="isRuntimeBusy"
         :pending-command="pendingRuntimeCommand"
         :runtime-status="runtimeStatus"
-        :show-mock-transcript="config?.stt.provider === 'mock'"
+        :show-mock-transcript="showMockTranscript"
         @run="runCommand"
       />
 
@@ -106,7 +167,17 @@ const currentMicrophoneLabel = computed(() => {
           <template #header>
             <div class="flex items-center justify-between gap-4">
               <h2 class="text-base font-semibold text-highlighted">
-                {{ uiText("live.currentSetup.title") }}
+                {{
+                  uiText(
+                    currentSession?.phase === "error"
+                      ? "live.currentSetup.failedSessionTitle"
+                      : currentSession
+                        ? "live.currentSetup.activeSessionTitle"
+                        : currentSetupConfig
+                          ? "live.currentSetup.nextStartTitle"
+                          : "live.currentSetup.title",
+                  )
+                }}
               </h2>
               <UButton
                 :label="uiText('live.currentSetup.edit')"
@@ -133,7 +204,7 @@ const currentMicrophoneLabel = computed(() => {
                 {{ uiText("live.currentSetup.sttModel") }}
               </dt>
               <dd class="text-right font-medium text-highlighted">
-                {{ config?.stt.model ?? uiText("common.loading") }}
+                {{ currentSetupConfig?.stt.model ?? uiText("common.loading") }}
               </dd>
             </div>
             <div class="flex items-center justify-between gap-4">
@@ -141,11 +212,7 @@ const currentMicrophoneLabel = computed(() => {
                 {{ uiText("live.currentSetup.oscTarget") }}
               </dt>
               <dd class="font-medium text-highlighted">
-                {{
-                  config
-                    ? `${config.osc.host}:${config.osc.port}`
-                    : uiText("common.loading")
-                }}
+                {{ currentOscTarget }}
               </dd>
             </div>
           </dl>

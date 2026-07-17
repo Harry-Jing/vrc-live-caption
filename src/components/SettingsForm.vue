@@ -7,6 +7,8 @@ import {
   type AppConfig,
   type AudioInputDevice,
   type ProviderSecretStatus,
+  type RuntimePendingChange,
+  type RuntimeSessionPhase,
   type SttProvider,
 } from "../runtime/types";
 
@@ -15,7 +17,9 @@ const props = defineProps<{
   config: AppConfig | null;
   isSecretsBusy: boolean;
   isSettingsBusy: boolean;
-  requiresRuntimeRestart: boolean;
+  pendingSessionChanges: readonly RuntimePendingChange[];
+  sessionPhase: RuntimeSessionPhase | null;
+  sessionUploadsMicrophoneAudio: boolean;
   secretStatuses: Partial<Record<SttProvider, ProviderSecretStatus>>;
   secretsError: string;
   settingsError: string;
@@ -24,7 +28,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   deleteProviderSecret: [provider: SttProvider];
   refreshDevices: [];
-  saveConfig: [config: AppConfig];
+  saveConfig: [config: AppConfig, onSettled: () => void];
   saveProviderSecret: [provider: SttProvider, secret: string];
 }>();
 
@@ -32,17 +36,32 @@ const emit = defineEmits<{
 // mutating shared state, and a save round-trip re-syncs it wholesale.
 const form = ref<AppConfig | null>(null);
 const apiKeyInput = ref("");
+const isConfigSaveSubmitting = ref(false);
 const isRemoveKeyModalOpen = ref(false);
+let lastSyncedConfigJson: string | null = null;
 
 watch(
   () => props.config,
   (config) => {
+    const configJson = config ? JSON.stringify(config) : null;
+
+    // Full control snapshots may replace the desired config object when only
+    // lifecycle state changed. Do not erase an in-progress form draft unless
+    // the saved config contents actually changed.
+    if (configJson === lastSyncedConfigJson) {
+      return;
+    }
+
+    lastSyncedConfigJson = configJson;
     form.value = config ? structuredClone(toRaw(config)) : null;
   },
   { immediate: true },
 );
 
 const openAiSecretStatus = computed(() => props.secretStatuses.openai ?? null);
+const areConfigControlsDisabled = computed(
+  () => isConfigSaveSubmitting.value || props.isSettingsBusy,
+);
 
 const canSaveOpenAiApiKey = computed(
   () =>
@@ -81,6 +100,38 @@ const openAiSecretColor = computed<"error" | "neutral" | "success">(() => {
 
   return status?.configured ? "success" : "neutral";
 });
+
+const pendingSessionChangesDescription = computed(() => {
+  const changes = props.pendingSessionChanges
+    .map((change) => {
+      switch (change) {
+        case "microphone":
+          return uiText("settings.feedback.nextStart.change.microphone");
+        case "recognition":
+          return uiText("settings.feedback.nextStart.change.recognition");
+        case "credential":
+          return uiText("settings.feedback.nextStart.change.credential");
+        case "chatboxOutput":
+          return uiText("settings.feedback.nextStart.change.chatboxOutput");
+      }
+    })
+    .join(", ");
+
+  return uiText(
+    props.sessionPhase === "error"
+      ? "settings.feedback.nextStart.failedDescription"
+      : "settings.feedback.nextStart.description",
+    { changes },
+  );
+});
+
+const removeOpenAiSecretDescription = computed(() =>
+  uiText(
+    props.sessionUploadsMicrophoneAudio
+      ? "settings.credentials.openai.removeDialog.activeSessionDescription"
+      : "settings.credentials.openai.removeDialog.description",
+  ),
+);
 
 // Sentinel for "use the system default device": the config stores null, but
 // reka-ui's Select forbids empty-string item values.
@@ -133,17 +184,6 @@ const selectedInputDevice = computed({
   },
 });
 
-// Watch the status object, not `.configured`: overwriting an existing key is
-// a configured->configured transition, but every save returns a new object.
-watch(
-  () => openAiSecretStatus.value,
-  (status) => {
-    if (status?.configured) {
-      apiKeyInput.value = "";
-    }
-  },
-);
-
 // UInputNumber yields undefined when cleared; keep the last saved value
 // instead of letting backend serde defaults silently replace it.
 function finiteOr(value: number, fallback: number) {
@@ -153,7 +193,7 @@ function finiteOr(value: number, fallback: number) {
 function save() {
   const saved = props.config;
 
-  if (!form.value || !saved) {
+  if (!form.value || !saved || areConfigControlsDisabled.value) {
     return;
   }
 
@@ -163,11 +203,18 @@ function save() {
   next.osc.host = next.osc.host.trim();
   next.osc.port = finiteOr(next.osc.port, saved.osc.port);
 
-  emit("saveConfig", next);
+  isConfigSaveSubmitting.value = true;
+  emit("saveConfig", next, () => {
+    isConfigSaveSubmitting.value = false;
+  });
 }
 
 function saveOpenAiApiKey() {
   emit("saveProviderSecret", "openai", apiKeyInput.value);
+  // Do not retain plaintext in the form while waiting for secure-store I/O.
+  // Full control snapshots are unrelated acknowledgements and must never be
+  // used to decide when this local secret input is cleared.
+  apiKeyInput.value = "";
 }
 
 function requestDeleteOpenAiApiKey() {
@@ -197,7 +244,7 @@ function confirmDeleteOpenAiApiKey() {
           </p>
         </div>
         <UButton
-          :disabled="isSettingsBusy"
+          :disabled="areConfigControlsDisabled"
           icon="i-lucide-refresh-cw"
           :label="uiText('settings.actions.refreshDevices')"
           size="sm"
@@ -219,12 +266,26 @@ function confirmDeleteOpenAiApiKey() {
     />
 
     <UAlert
-      v-if="requiresRuntimeRestart"
+      v-if="pendingSessionChanges.length > 0"
       class="mb-4"
       color="warning"
       icon="i-lucide-triangle-alert"
-      :title="uiText('settings.feedback.restartRequired.title')"
-      :description="uiText('settings.feedback.restartRequired.description')"
+      :title="uiText('settings.feedback.nextStart.title')"
+      :description="pendingSessionChangesDescription"
+      variant="subtle"
+    />
+
+    <UAlert
+      v-if="
+        form && sessionUploadsMicrophoneAudio && form.stt.provider !== 'openai'
+      "
+      class="mb-4"
+      color="warning"
+      icon="i-lucide-cloud-upload"
+      :title="uiText('settings.credentials.openai.activeCloudSession.title')"
+      :description="
+        uiText('settings.credentials.openai.activeCloudSession.description')
+      "
       variant="subtle"
     />
 
@@ -238,6 +299,7 @@ function confirmDeleteOpenAiApiKey() {
           <USelect
             v-model="selectedInputDevice"
             class="w-full"
+            :disabled="areConfigControlsDisabled"
             :items="inputDeviceItems"
           />
         </UFormField>
@@ -255,17 +317,26 @@ function confirmDeleteOpenAiApiKey() {
             <USelect
               v-model="form.stt.provider"
               class="w-full"
+              :disabled="areConfigControlsDisabled"
               :items="providerItems"
             />
           </UFormField>
 
           <UFormField :label="uiText('settings.fields.language')">
-            <UInput v-model="form.stt.language" class="w-full" />
+            <UInput
+              v-model="form.stt.language"
+              class="w-full"
+              :disabled="areConfigControlsDisabled"
+            />
           </UFormField>
         </div>
 
         <UFormField :label="uiText('settings.fields.sttModel')">
-          <UInput v-model="form.stt.model" class="w-full" />
+          <UInput
+            v-model="form.stt.model"
+            class="w-full"
+            :disabled="areConfigControlsDisabled"
+          />
         </UFormField>
 
         <div
@@ -350,13 +421,18 @@ function confirmDeleteOpenAiApiKey() {
 
         <div class="grid gap-3 sm:grid-cols-[1fr_140px]">
           <UFormField :label="uiText('settings.fields.oscHost')">
-            <UInput v-model="form.osc.host" class="w-full" />
+            <UInput
+              v-model="form.osc.host"
+              class="w-full"
+              :disabled="areConfigControlsDisabled"
+            />
           </UFormField>
 
           <UFormField :label="uiText('settings.fields.port')">
             <UInputNumber
               v-model="form.osc.port"
               class="w-full"
+              :disabled="areConfigControlsDisabled"
               :format-options="{ useGrouping: false }"
               :max="65535"
               :min="1"
@@ -367,17 +443,19 @@ function confirmDeleteOpenAiApiKey() {
         <div class="grid gap-3 sm:grid-cols-2">
           <USwitch
             v-model="form.osc.enabled"
+            :disabled="areConfigControlsDisabled"
             :label="uiText('settings.fields.chatboxOutput')"
           />
           <USwitch
             v-model="form.ui.showPartial"
+            :disabled="areConfigControlsDisabled"
             :label="uiText('settings.fields.partialPreview')"
           />
         </div>
       </section>
 
       <UButton
-        :disabled="isSettingsBusy"
+        :disabled="areConfigControlsDisabled"
         icon="i-lucide-save"
         :label="uiText('settings.actions.save')"
         type="submit"
@@ -397,9 +475,7 @@ function confirmDeleteOpenAiApiKey() {
   <UModal
     v-model:open="isRemoveKeyModalOpen"
     :title="uiText('settings.credentials.openai.removeDialog.title')"
-    :description="
-      uiText('settings.credentials.openai.removeDialog.description')
-    "
+    :description="removeOpenAiSecretDescription"
   >
     <template #footer>
       <div class="flex w-full justify-end gap-2">

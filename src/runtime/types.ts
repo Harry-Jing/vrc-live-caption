@@ -24,6 +24,8 @@ export const RUNTIME_EVENTS = {
   diagnostic: "diagnostic-event",
 } as const;
 
+export const RUNTIME_CONTROL_EVENT = "runtime-control-changed" as const;
+
 export const APP_CONFIG_SCHEMA_VERSION = 1 as const;
 
 export type AppConfig = {
@@ -58,6 +60,59 @@ export type ProviderSecretStatus = {
   storage: ProviderSecretStorage | null;
   displaySuffix: string | null;
   error: string | null;
+};
+
+export type RuntimePendingChange =
+  "microphone" | "recognition" | "credential" | "chatboxOutput";
+
+export type RuntimeSessionPhase = "starting" | "running" | "stopping" | "error";
+
+export type RuntimeSessionCredential = {
+  provider: SttProvider;
+  storage: ProviderSecretStorage;
+  displaySuffix: string | null;
+  revision: number;
+};
+
+export type RuntimeSessionChatbox =
+  | {
+      state: "disabled";
+      host: string;
+      port: number;
+    }
+  | {
+      state: "ready";
+      host: string;
+      port: number;
+    }
+  | {
+      state: "unavailable";
+      host: string;
+      port: number;
+      reasonCode: string;
+    };
+
+export type RuntimeSession = {
+  generation: number;
+  phase: RuntimeSessionPhase;
+  startedFromConfigRevision: number;
+  selected: Pick<AppConfig, "audio" | "stt" | "osc">;
+  credential: RuntimeSessionCredential | null;
+  chatbox: RuntimeSessionChatbox;
+  uploadsMicrophoneAudio: boolean;
+};
+
+export type RuntimeControlSnapshot = {
+  contractVersion: 1;
+  revision: number;
+  runtime: RuntimeStatusEvent;
+  desired: {
+    revision: number;
+    config: AppConfig;
+    providerSecrets: ProviderSecretStatus[];
+  };
+  session: RuntimeSession | null;
+  pendingChanges: RuntimePendingChange[];
 };
 
 export type RuntimeStatusEvent = {

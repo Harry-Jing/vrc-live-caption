@@ -8,6 +8,7 @@ mod error;
 mod events;
 mod osc;
 mod runtime;
+mod runtime_control;
 mod secrets;
 mod segmenter;
 mod state;
@@ -31,15 +32,13 @@ pub fn run() {
 
     configure_builder(tauri::Builder::default())
         .invoke_handler(tauri::generate_handler![
-            commands::get_app_config,
             commands::save_app_config,
             commands::list_audio_input_devices,
             commands::start_runtime,
             commands::stop_runtime,
-            commands::get_runtime_status,
+            commands::get_runtime_control_snapshot,
             commands::emit_mock_transcript,
             commands::send_osc_test_message,
-            commands::get_provider_secret_status,
             commands::save_provider_secret,
             commands::delete_provider_secret
         ])
@@ -51,7 +50,7 @@ pub fn run() {
             // runtime must never rely on event-emit failures to learn that
             // the app is closing.
             if matches!(event, tauri::RunEvent::Exit)
-                && let Err(error) = app.state::<state::AppState>().runtime.stop(app)
+                && let Err(error) = app.state::<state::AppState>().stop_runtime(app)
             {
                 tracing::warn!(error_message = %error, "failed to stop runtime on exit");
             }
@@ -65,6 +64,33 @@ mod tests {
     use crate::error::{AppError, AppResult};
     use std::fs;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn runtime_control_snapshot_is_the_only_control_read_command_exposed() {
+        let production_lib = include_str!("lib.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default();
+        let build_manifest = include_str!("../build.rs");
+        let desktop_capability = include_str!("../capabilities/default.json");
+
+        assert!(production_lib.contains("commands::get_runtime_control_snapshot"));
+        assert!(build_manifest.contains("\"get_runtime_control_snapshot\""));
+        assert!(desktop_capability.contains("\"allow-get-runtime-control-snapshot\""));
+
+        for (command, permission) in [
+            ("get_app_config", "allow-get-app-config"),
+            ("get_runtime_status", "allow-get-runtime-status"),
+            (
+                "get_provider_secret_status",
+                "allow-get-provider-secret-status",
+            ),
+        ] {
+            assert!(!production_lib.contains(&format!("commands::{command}")));
+            assert!(!build_manifest.contains(&format!("\"{command}\"")));
+            assert!(!desktop_capability.contains(&format!("\"{permission}\"")));
+        }
+    }
 
     #[test]
     #[expect(
@@ -116,7 +142,11 @@ mod tests {
             .build(context)
             .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
         app.run_iteration(|_, _| {});
-        let loaded_config = app.state::<state::AppState>().config()?;
+        let loaded_config = app
+            .state::<state::AppState>()
+            .runtime_control_snapshot()?
+            .desired
+            .config;
         let persisted_contents =
             fs::read_to_string(config_directory.join("config.json")).map_err(|error| {
                 AppError::config_io(format!("Failed to read legacy test config: {error}"))

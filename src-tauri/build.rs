@@ -1,14 +1,12 @@
 // Keep this ACL manifest in sync with the invoke handler in src/lib.rs.
 const APP_COMMANDS: &[&str] = &[
-    "get_app_config",
     "save_app_config",
     "list_audio_input_devices",
     "start_runtime",
     "stop_runtime",
-    "get_runtime_status",
+    "get_runtime_control_snapshot",
     "emit_mock_transcript",
     "send_osc_test_message",
-    "get_provider_secret_status",
     "save_provider_secret",
     "delete_provider_secret",
 ];

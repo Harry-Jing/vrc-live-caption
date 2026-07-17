@@ -62,11 +62,21 @@ const englishMessages = {
   "live.title": "Speak, preview, send final text",
   "live.chatbox.on": "Chatbox on",
   "live.chatbox.off": "Chatbox off",
+  "live.chatbox.unavailable": "Chatbox unavailable",
   "live.currentSetup.title": "Current setup",
+  "live.currentSetup.activeSessionTitle": "Active session setup",
+  "live.currentSetup.failedSessionTitle": "Failed session setup",
+  "live.currentSetup.nextStartTitle": "Next Start setup",
+  "live.currentSetup.nextStartBadge": "Next Start",
+  "live.currentSetup.pendingChanges.title": "Saved changes are pending",
+  "live.currentSetup.pendingChanges.description":
+    "The active session is unchanged. Saved settings will apply after Stop and the next Start.",
+  "live.currentSetup.pendingChanges.failedDescription":
+    "The failed session is retained for diagnostics. Saved settings will be used on the next Start.",
   "live.currentSetup.edit": "Edit",
   "live.currentSetup.microphone": "Microphone",
   "live.currentSetup.sttModel": "STT model",
-  "live.currentSetup.oscTarget": "OSC target",
+  "live.currentSetup.oscTarget": "OSC / Test target",
   "live.recentActivity.title": "Recent activity",
   "live.recentActivity.open": "Open",
   "live.recentActivity.latestFinalTranscript": "Latest final transcript",
@@ -81,9 +91,23 @@ const englishMessages = {
   "settings.actions.save": "Save Settings",
   "settings.errors.actionFailed": "Settings action failed",
   "settings.feedback.saved": "Settings saved",
-  "settings.feedback.restartRequired.title": "Restart required",
-  "settings.feedback.restartRequired.description":
-    "These changes will take effect the next time the runtime starts.",
+  "settings.feedback.nextStart.title": "Saved for the next Start",
+  "settings.feedback.nextStart.description": ({
+    changes,
+  }: {
+    changes: string;
+  }) =>
+    `The active session is unchanged. Saved changes to ${changes} will take effect after Stop and the next Start.`,
+  "settings.feedback.nextStart.failedDescription": ({
+    changes,
+  }: {
+    changes: string;
+  }) =>
+    `The failed session is retained for diagnostics. Saved changes to ${changes} will be used on the next Start.`,
+  "settings.feedback.nextStart.change.microphone": "microphone",
+  "settings.feedback.nextStart.change.recognition": "speech recognition",
+  "settings.feedback.nextStart.change.credential": "provider credentials",
+  "settings.feedback.nextStart.change.chatboxOutput": "Chatbox output",
   "settings.sections.audio": "Audio",
   "settings.sections.speechProvider": "Speech provider",
   "settings.sections.chatboxOutput": "Chatbox output",
@@ -100,6 +124,10 @@ const englishMessages = {
   "settings.credentials.openai.title": "OpenAI credentials",
   "settings.credentials.openai.cloudDisclosure":
     "When OpenAI cloud speech recognition is selected, microphone audio is uploaded to OpenAI for transcription.",
+  "settings.credentials.openai.activeCloudSession.title":
+    "The active session still uses OpenAI",
+  "settings.credentials.openai.activeCloudSession.description":
+    "The provider selection shown in this form does not change the active session. Microphone audio will continue to be uploaded to OpenAI until you Stop the runtime.",
   "settings.credentials.openai.apiKey": "API key",
   "settings.credentials.openai.apiKeyPlaceholder": "sk-...",
   "settings.credentials.openai.actions.save": "Save Key",
@@ -120,6 +148,8 @@ const englishMessages = {
   "settings.credentials.openai.removeDialog.title": "Remove OpenAI API key?",
   "settings.credentials.openai.removeDialog.description":
     "The saved key will be removed from the system credential store. You can add it again later.",
+  "settings.credentials.openai.removeDialog.activeSessionDescription":
+    "The saved key will be removed from the system credential store. The active session keeps the credential captured at Start until you Stop the runtime.",
   "settings.credentials.openai.removeDialog.cancel": "Cancel",
   "settings.credentials.openai.removeDialog.confirm": "Remove API key",
 

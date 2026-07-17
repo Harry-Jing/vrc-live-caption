@@ -16,6 +16,7 @@
 //! an event reached the webview.
 
 use crate::error::AppError;
+use crate::runtime_control::RuntimeControlSnapshot;
 use crate::state::AppState;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 const EVENT_RUNTIME_STATUS: &str = "runtime-status";
+const EVENT_RUNTIME_CONTROL_CHANGED: &str = "runtime-control-changed";
 const EVENT_TRANSCRIPT_PARTIAL: &str = "transcript-partial";
 const EVENT_TRANSCRIPT_FINAL: &str = "transcript-final";
 const EVENT_UTTERANCE_STARTED: &str = "utterance-started";
@@ -31,7 +33,7 @@ const EVENT_DIAGNOSTIC: &str = "diagnostic-event";
 
 static NEXT_EVENT_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RuntimeStatusEvent {
     pub(crate) status: RuntimeStatus,
@@ -45,7 +47,7 @@ impl RuntimeStatusEvent {
         Self::new(RuntimeStatus::Idle, Some("Runtime is idle".to_string()))
     }
 
-    fn new(status: RuntimeStatus, message: Option<String>) -> Self {
+    pub(crate) fn new(status: RuntimeStatus, message: Option<String>) -> Self {
         Self {
             status,
             message,
@@ -54,7 +56,7 @@ impl RuntimeStatusEvent {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum RuntimeStatus {
     Idle,
@@ -259,21 +261,44 @@ pub(crate) fn emit_status<R: Runtime>(
     // Update the pull-side snapshot before best-effort delivery. If the
     // webview is reloading and misses this emit, its next status query still
     // observes the lifecycle transition.
-    match app.try_state::<AppState>() {
-        Some(state) => {
-            if let Err(error) = state.runtime.replace_status(event.clone()) {
+    let snapshot = match app.try_state::<AppState>() {
+        Some(state) => match state.record_runtime_status(event.clone()) {
+            Ok(snapshot) => Some(snapshot),
+            Err(error) => {
                 tracing::warn!(
                     code = error.code(),
                     error_message = %error,
-                    "failed to update runtime status snapshot"
+                    "failed to update authoritative runtime control status"
                 );
+                None
             }
-        }
+        },
         None => {
             tracing::warn!("runtime status emitted before app state was managed");
+            None
         }
-    }
+    };
 
+    if let Some(snapshot) = snapshot {
+        emit_recorded_status(app, snapshot);
+    } else {
+        emit_event(app, EVENT_RUNTIME_STATUS, event);
+    }
+}
+
+pub(crate) fn emit_runtime_control_changed<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshot: RuntimeControlSnapshot,
+) {
+    emit_event(app, EVENT_RUNTIME_CONTROL_CHANGED, snapshot);
+}
+
+pub(crate) fn emit_recorded_status<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshot: RuntimeControlSnapshot,
+) {
+    let event = snapshot.runtime.clone();
+    emit_runtime_control_changed(app, snapshot);
     emit_event(app, EVENT_RUNTIME_STATUS, event);
 }
 
@@ -406,9 +431,9 @@ mod tests {
         app.listen(EVENT_RUNTIME_STATUS, move |_| {
             let snapshot = listener_handle
                 .state::<AppState>()
-                .runtime
-                .status_snapshot()
-                .and_then(|status| {
+                .runtime_control_snapshot()
+                .and_then(|control| {
+                    let status = control.runtime;
                     serde_json::to_value(status).map_err(|error| {
                         AppError::runtime(format!("Failed to serialize status snapshot: {error}"))
                     })
@@ -428,6 +453,45 @@ mod tests {
         assert_eq!(snapshot["status"], "running");
         assert_eq!(snapshot["message"], "Listening for microphone speech");
 
+        Ok(())
+    }
+
+    #[test]
+    fn authoritative_control_event_precedes_the_legacy_status_event() -> AppResult<()> {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
+        let (event_sender, event_receiver) = std::sync::mpsc::channel();
+        let control_sender = event_sender.clone();
+        app.listen(EVENT_RUNTIME_CONTROL_CHANGED, move |event| {
+            let _ = control_sender.send(("control", event.payload().to_string()));
+        });
+        app.listen(EVENT_RUNTIME_STATUS, move |event| {
+            let _ = event_sender.send(("status", event.payload().to_string()));
+        });
+
+        emit_status(
+            app.handle(),
+            RuntimeStatus::Running,
+            Some("running".to_string()),
+        );
+
+        let (first_kind, first_payload) = event_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Control event was not delivered."))?;
+        let (second_kind, _) = event_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Legacy status event was not delivered."))?;
+        let control =
+            serde_json::from_str::<serde_json::Value>(&first_payload).map_err(|error| {
+                AppError::runtime(format!("Failed to parse control event: {error}"))
+            })?;
+
+        assert_eq!(first_kind, "control");
+        assert_eq!(second_kind, "status");
+        assert_eq!(control["runtime"]["status"], "running");
+        assert_eq!(control["revision"], 1);
         Ok(())
     }
 

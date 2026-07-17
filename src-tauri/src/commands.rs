@@ -9,29 +9,23 @@ use crate::audio::{AudioInputDevice, list_input_devices};
 use crate::config::{AppConfig, SttProvider};
 use crate::error::AppResult;
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, RuntimeStatusEvent, TranscriptUpdate, emit_diagnostic,
-    emit_transcript_final, emit_transcript_partial, emit_utterance_started, next_utterance_id,
+    DiagnosticCategory, DiagnosticUpdate, TranscriptUpdate, emit_diagnostic,
+    emit_runtime_control_changed, emit_transcript_final, emit_transcript_partial,
+    emit_utterance_started, next_utterance_id,
 };
 use crate::osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
-use crate::secrets::{
-    ProviderSecretStatus, delete_provider_secret as delete_secret, provider_secret_status,
-    save_provider_secret as save_secret,
-};
+use crate::runtime_control::RuntimeControlSnapshot;
 use crate::state::AppState;
 use tauri::{AppHandle, State};
-
-#[tauri::command(async)]
-pub(crate) fn get_app_config(app: AppHandle, state: State<'_, AppState>) -> AppResult<AppConfig> {
-    state.load_config(&app)
-}
 
 #[tauri::command(async)]
 pub(crate) fn save_app_config(
     app: AppHandle,
     state: State<'_, AppState>,
     config: AppConfig,
-) -> AppResult<AppConfig> {
-    let saved_config = state.save_config(&app, config)?;
+) -> AppResult<RuntimeControlSnapshot> {
+    let snapshot = state.save_config(&app, config)?;
+    emit_runtime_control_changed(&app, snapshot.clone());
 
     emit_diagnostic(
         &app,
@@ -43,7 +37,7 @@ pub(crate) fn save_app_config(
         ),
     );
 
-    Ok(saved_config)
+    Ok(snapshot)
 }
 
 #[tauri::command(async)]
@@ -64,75 +58,85 @@ pub(crate) fn list_audio_input_devices(app: AppHandle) -> AppResult<Vec<AudioInp
 }
 
 #[tauri::command(async)]
-pub(crate) fn start_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    let config = state.config()?;
-    let chatbox_pacer = state.chatbox_pacer();
-
+pub(crate) fn start_runtime(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<RuntimeControlSnapshot> {
     tracing::info!("starting outgoing caption runtime");
-    state.runtime.start(app, config, chatbox_pacer)
+    let snapshot = state.start_runtime(&app)?;
+    emit_runtime_control_changed(&app, snapshot.clone());
+    Ok(snapshot)
 }
 
 #[tauri::command(async)]
-pub(crate) fn stop_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+pub(crate) fn stop_runtime(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<RuntimeControlSnapshot> {
     tracing::info!("stopping outgoing caption runtime");
-    state.runtime.stop(&app)
+    let snapshot = state.stop_runtime(&app)?;
+    emit_runtime_control_changed(&app, snapshot.clone());
+    Ok(snapshot)
 }
 
 #[tauri::command(async)]
-pub(crate) fn get_runtime_status(state: State<'_, AppState>) -> AppResult<RuntimeStatusEvent> {
-    state.runtime.status_snapshot()
+pub(crate) fn get_runtime_control_snapshot(
+    state: State<'_, AppState>,
+) -> AppResult<RuntimeControlSnapshot> {
+    state.runtime_control_snapshot()
 }
 
 #[tauri::command(async)]
 pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    let config = state.config()?;
-    let utterance_id = next_utterance_id("mock");
-    let language = config.stt.language.clone();
-    let provider = config.stt.provider.as_str().to_string();
+    state.with_running_mock_session(|session| {
+        let utterance_id = next_utterance_id("mock");
+        let language = session.selected.stt.language.clone();
+        let provider = session.selected.stt.provider.as_str().to_string();
 
-    tracing::info!(utterance_id = %utterance_id, "emitting mock transcript");
+        tracing::info!(utterance_id = %utterance_id, "emitting mock transcript");
 
-    emit_utterance_started(&app, utterance_id.clone());
-    emit_transcript_partial(
-        &app,
-        TranscriptUpdate {
-            utterance_id: utterance_id.clone(),
-            text: "Testing live caption preview...".to_string(),
-            language: language.clone(),
-            provider: provider.clone(),
-            revision: 1,
-        },
-    );
-    emit_transcript_final(
-        &app,
-        TranscriptUpdate {
-            utterance_id,
-            text: "Testing live caption preview from the mock runtime.".to_string(),
-            language,
-            provider,
-            revision: 2,
-        },
-    );
+        emit_utterance_started(&app, utterance_id.clone());
+        emit_transcript_partial(
+            &app,
+            TranscriptUpdate {
+                utterance_id: utterance_id.clone(),
+                text: "Testing live caption preview...".to_string(),
+                language: language.clone(),
+                provider: provider.clone(),
+                revision: 1,
+            },
+        );
+        emit_transcript_final(
+            &app,
+            TranscriptUpdate {
+                utterance_id,
+                text: "Testing live caption preview from the mock runtime.".to_string(),
+                language,
+                provider,
+                revision: 2,
+            },
+        );
 
-    emit_diagnostic(
-        &app,
-        DiagnosticUpdate::info(
-            DiagnosticCategory::Stt,
-            "stt.mock_transcript_emitted",
-            "Mock transcript emitted",
-            "The UI received normalized partial and final transcript events.",
-        ),
-    );
+        emit_diagnostic(
+            &app,
+            DiagnosticUpdate::info(
+                DiagnosticCategory::Stt,
+                "stt.mock_transcript_emitted",
+                "Mock transcript emitted",
+                "The UI received normalized partial and final transcript events.",
+            ),
+        );
 
-    Ok(())
+        Ok(())
+    })
 }
 
 #[tauri::command(async)]
 pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    let config = state.config()?;
+    let osc_config = state.osc_config_for_test()?;
     let chatbox_pacer = state.chatbox_pacer();
 
-    match ChatboxOscSender::new(&config.osc).and_then(|sender| {
+    match ChatboxOscSender::new(&osc_config).and_then(|sender| {
         chatbox_pacer
             .wait_for_turn(None)?
             .ok_or_else(|| crate::error::AppError::state("OSC Test pacing was cancelled."))?
@@ -178,17 +182,14 @@ pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) 
 }
 
 #[tauri::command(async)]
-pub(crate) fn get_provider_secret_status(provider: SttProvider) -> AppResult<ProviderSecretStatus> {
-    Ok(provider_secret_status(provider))
-}
-
-#[tauri::command(async)]
 pub(crate) fn save_provider_secret(
     app: AppHandle,
+    state: State<'_, AppState>,
     provider: SttProvider,
     secret: String,
-) -> AppResult<ProviderSecretStatus> {
-    save_secret(provider, secret)?;
+) -> AppResult<RuntimeControlSnapshot> {
+    let snapshot = state.save_provider_secret(provider, secret)?;
+    emit_runtime_control_changed(&app, snapshot.clone());
 
     emit_diagnostic(
         &app,
@@ -200,15 +201,17 @@ pub(crate) fn save_provider_secret(
         ),
     );
 
-    Ok(provider_secret_status(provider))
+    Ok(snapshot)
 }
 
 #[tauri::command(async)]
 pub(crate) fn delete_provider_secret(
     app: AppHandle,
+    state: State<'_, AppState>,
     provider: SttProvider,
-) -> AppResult<ProviderSecretStatus> {
-    delete_secret(provider)?;
+) -> AppResult<RuntimeControlSnapshot> {
+    let snapshot = state.delete_provider_secret(provider)?;
+    emit_runtime_control_changed(&app, snapshot.clone());
 
     emit_diagnostic(
         &app,
@@ -220,5 +223,5 @@ pub(crate) fn delete_provider_secret(
         ),
     );
 
-    Ok(provider_secret_status(provider))
+    Ok(snapshot)
 }
