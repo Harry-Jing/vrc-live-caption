@@ -77,33 +77,11 @@ fn authoritative_control_event_precedes_the_legacy_status_event() -> AppResult<(
 }
 
 #[test]
-fn transcript_payload_includes_stable_runtime_contract_fields() {
-    let event = TranscriptEvent {
-        id: "event-1".to_string(),
-        utterance_id: "utterance-1".to_string(),
-        kind: TranscriptKind::Partial,
-        text: "hello".to_string(),
-        language: "en-US".to_string(),
-        provider: "mock".to_string(),
-        revision: 1,
-        timestamp_ms: 42,
-    };
-    let value = serde_json::to_value(event).unwrap_or_else(|serialization_error| {
-            serde_json::json!({ "serializationError": serialization_error.to_string() })
-        });
-
-    assert_eq!(value["id"], "event-1");
-    assert_eq!(value["utteranceId"], "utterance-1");
-    assert_eq!(value["kind"], "partial");
-    assert_eq!(value["language"], "en-US");
-    assert_eq!(value["provider"], "mock");
-    assert_eq!(value["revision"], 1);
-}
-
-#[test]
 fn utterance_started_payload_uses_stable_wire_format() {
     let event = UtteranceStartedEvent {
         id: "utterance-start-1".to_string(),
+        generation: 7,
+        stream_id: "recognition-7-1".to_string(),
         utterance_id: "speech-1".to_string(),
         timestamp_ms: 42,
     };
@@ -111,6 +89,8 @@ fn utterance_started_payload_uses_stable_wire_format() {
             serde_json::json!({ "serializationError": serialization_error.to_string() })
         });
 
+    assert_eq!(value["generation"], 7);
+    assert_eq!(value["streamId"], "recognition-7-1");
     assert_eq!(value["utteranceId"], "speech-1");
     assert_eq!(value["timestampMs"], 42);
 }
@@ -119,6 +99,8 @@ fn utterance_started_payload_uses_stable_wire_format() {
 fn utterance_ended_payload_uses_stable_wire_format() {
     let event = UtteranceEndedEvent {
         id: "utterance-end-1".to_string(),
+        generation: 7,
+        stream_id: "recognition-7-1".to_string(),
         utterance_id: "speech-1".to_string(),
         reason: UtteranceEndReason::NoSpeech,
         timestamp_ms: 42,
@@ -127,6 +109,8 @@ fn utterance_ended_payload_uses_stable_wire_format() {
             serde_json::json!({ "serializationError": serialization_error.to_string() })
         });
 
+    assert_eq!(value["generation"], 7);
+    assert_eq!(value["streamId"], "recognition-7-1");
     assert_eq!(value["utteranceId"], "speech-1");
     assert_eq!(value["reason"], "noSpeech");
 

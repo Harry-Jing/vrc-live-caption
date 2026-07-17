@@ -5,9 +5,42 @@ export type SttProvider = (typeof STT_PROVIDERS)[number];
 export type ProviderSecretStorage = "systemCredentialStore" | "environment";
 export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";
 export type DiagnosticSeverity = "info" | "warning" | "error";
-export type TranscriptKind = "partial" | "stable" | "final";
 export type UtteranceEndReason = "noSpeech" | "sttFailed" | "discarded";
 export type CaptionMode = "waiting" | "listening" | "partial" | "final";
+
+export type CaptionLane = "source" | "translation";
+export type CaptionState = "ongoing" | "completed";
+
+export type CaptionSnapshotV1 = Readonly<{
+  generation: number;
+  streamId: string;
+  unitId: string | null;
+  lane: CaptionLane;
+  revision: number;
+  text: string;
+  state: CaptionState;
+  language: string | null;
+  provider: string;
+  model: string;
+  unitStartedAtMs: number | null;
+  timestampMs: number;
+}>;
+
+export type CaptionSessionSnapshotV1 = Readonly<{
+  contractVersion: 1;
+  snapshotRevision: number;
+  active: Readonly<{
+    generation: number;
+    streamId: string;
+  }> | null;
+  activeUnits: readonly Readonly<{
+    unitId: string;
+    startedAtMs: number;
+  }>[];
+  captions: readonly CaptionSnapshotV1[];
+}>;
+
+export type CaptionDisplay = CaptionSnapshotV1 & Readonly<{ id: string }>;
 
 export type RuntimeCommand =
   | "start_runtime"
@@ -17,8 +50,7 @@ export type RuntimeCommand =
 
 export const RUNTIME_EVENTS = {
   status: "runtime-status",
-  transcriptPartial: "transcript-partial",
-  transcriptFinal: "transcript-final",
+  captionSessionChanged: "caption-session-changed",
   utteranceStarted: "utterance-started",
   utteranceEnded: "utterance-ended",
   diagnostic: "diagnostic-event",
@@ -121,25 +153,18 @@ export type RuntimeStatusEvent = {
   timestampMs: number;
 };
 
-export type TranscriptEvent = {
-  id: string;
-  utteranceId: string;
-  kind: TranscriptKind;
-  text: string;
-  language: string;
-  provider: string;
-  revision: number;
-  timestampMs: number;
-};
-
 export type UtteranceStartedEvent = {
   id: string;
+  generation: number;
+  streamId: string;
   utteranceId: string;
   timestampMs: number;
 };
 
 export type UtteranceEndedEvent = {
   id: string;
+  generation: number;
+  streamId: string;
   utteranceId: string;
   reason: UtteranceEndReason;
   timestampMs: number;
@@ -155,13 +180,12 @@ export type DiagnosticEvent = {
   timestampMs: number;
 };
 
-// Current UI-facing event stream shared by every RuntimeBackend adapter. This
-// remains the existing Phase 1 wire shape; the versioned caption snapshot
-// contract is intentionally deferred.
 export type RuntimeEvent =
   | { type: "status"; payload: RuntimeStatusEvent }
   | { type: "diagnostic"; payload: DiagnosticEvent }
   | { type: "utteranceStarted"; payload: UtteranceStartedEvent }
   | { type: "utteranceEnded"; payload: UtteranceEndedEvent }
-  | { type: "transcriptPartial"; payload: TranscriptEvent }
-  | { type: "transcriptFinal"; payload: TranscriptEvent };
+  | {
+      type: "captionSessionChanged";
+      payload: CaptionSessionSnapshotV1;
+    };

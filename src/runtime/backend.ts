@@ -9,6 +9,7 @@ import { createTauriBackend } from "./tauriBackend";
 import type {
   AppConfig,
   AudioInputDevice,
+  CaptionSessionSnapshotV1,
   RuntimeCommand,
   RuntimeControlSnapshot,
   RuntimeEvent,
@@ -27,6 +28,7 @@ export interface RuntimeBackend {
   startRuntime(): Promise<RuntimeControlSnapshot>;
   stopRuntime(): Promise<RuntimeControlSnapshot>;
   getControlSnapshot(): Promise<RuntimeControlSnapshot>;
+  getCaptionSessionSnapshot(): Promise<CaptionSessionSnapshotV1>;
   saveConfig(config: AppConfig): Promise<RuntimeControlSnapshot>;
   listAudioInputDevices(): Promise<AudioInputDevice[]>;
   saveProviderSecret(
@@ -47,6 +49,7 @@ function createUnsupportedBackend(): RuntimeBackend {
     startRuntime: reject,
     stopRuntime: reject,
     getControlSnapshot: reject,
+    getCaptionSessionSnapshot: reject,
     saveConfig: reject,
     listAudioInputDevices: reject,
     saveProviderSecret: reject,

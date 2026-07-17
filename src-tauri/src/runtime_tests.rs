@@ -292,25 +292,21 @@ fn stopped_generation_does_not_begin_provider_work() -> AppResult<()> {
         let _ = ended_sender.send(event.payload().to_string());
     });
     let generation = RuntimeGeneration::active();
+    let segment = test_speech_segment(&generation, "not-submitted")?;
     generation.request_stop(None)?;
     let provider_called = Arc::new(AtomicBool::new(false));
     let provider_called_by_worker = Arc::clone(&provider_called);
     let config = AppConfig::default();
-    let http_client = Client::builder()
-        .build()
-        .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
 
     transcribe_and_emit_final(
         app.handle(),
         &config,
-        &SecretString::from("test-key".to_string()),
-        &http_client,
-        test_speech_segment("not-submitted"),
+        segment,
         None,
         &generation,
-        &move |_client, _config, _api_key, _sample_rate, _samples| {
+        &move |_unit| {
             provider_called_by_worker.store(true, Ordering::Relaxed);
-            Ok("must not be returned".to_string())
+            Ok(OpenAiBoundedOutcome::NoSpeech)
         },
     )?;
 
@@ -334,27 +330,22 @@ fn late_empty_and_error_results_are_discarded_after_stop() -> AppResult<()> {
         let _ = diagnostic_sender.send(event.payload().to_string());
     });
     let config = AppConfig::default();
-    let http_client = Client::builder()
-        .build()
-        .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
-
     for (utterance_id, return_error) in [("late-empty", false), ("late-error", true)] {
         let generation = RuntimeGeneration::active();
         let provider_generation = generation.clone();
+        let segment = test_speech_segment(&generation, utterance_id)?;
         transcribe_and_emit_final(
             app.handle(),
             &config,
-            &SecretString::from("test-key".to_string()),
-            &http_client,
-            test_speech_segment(utterance_id),
+            segment,
             None,
             &generation,
-            &move |_client, _config, _api_key, _sample_rate, _samples| {
+            &move |_unit| {
                 provider_generation.request_stop(None)?;
                 if return_error {
                     Err(AppError::stt("Late provider failure."))
                 } else {
-                    Ok(String::new())
+                    Ok(OpenAiBoundedOutcome::NoSpeech)
                 }
             },
         )?;
@@ -421,11 +412,11 @@ fn stop_between_starting_and_mock_runtime_blocks_late_running() -> AppResult<()>
 fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<()> {
     let app = tauri::test::mock_app();
     let app_handle = app.handle().clone();
-    let (final_sender, final_receiver) = std::sync::mpsc::channel();
+    let (caption_sender, caption_receiver) = std::sync::mpsc::channel();
     let (diagnostic_sender, diagnostic_receiver) = std::sync::mpsc::channel();
     let (ended_sender, ended_receiver) = std::sync::mpsc::channel();
-    app.listen("transcript-final", move |event| {
-        let _ = final_sender.send(event.payload().to_string());
+    app.listen("caption-session-changed", move |event| {
+        let _ = caption_sender.send(event.payload().to_string());
     });
     app.listen("diagnostic-event", move |event| {
         let _ = diagnostic_sender.send(event.payload().to_string());
@@ -434,7 +425,8 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
         let _ = ended_sender.send(event.payload().to_string());
     });
 
-    let generation = RuntimeGeneration::active();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
     let (stopped_publisher, stopped_text_receiver) = runtime_test_publisher(generation.clone())?;
     assert_eq!(
         stopped_publisher.try_submit(CompletedPublisherEvent::Started {
@@ -444,23 +436,19 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
     );
     let worker_generation = generation.clone();
     let worker_publisher = stopped_publisher.clone();
+    let stopped_segment =
+        test_announced_speech_segment(app.handle(), &generation, "stopped-in-flight")?;
     let (in_flight_sender, in_flight_receiver) = std::sync::mpsc::channel();
     let (release_sender, release_receiver) = std::sync::mpsc::channel();
     let config = AppConfig::default();
-    let http_client = Client::builder()
-        .build()
-        .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
-
     let worker = thread::spawn(move || {
         transcribe_and_emit_final(
             &app_handle,
             &config,
-            &SecretString::from("test-key".to_string()),
-            &http_client,
-            test_speech_segment("stopped-in-flight"),
+            stopped_segment,
             Some(&worker_publisher),
             &worker_generation,
-            &move |_client, _config, _api_key, _sample_rate, _samples| {
+            &move |unit| {
                 in_flight_sender.send(()).map_err(|_| {
                     AppError::runtime("Could not announce the in-flight test segment.")
                 })?;
@@ -468,7 +456,7 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
                     AppError::runtime("Could not release the in-flight test segment.")
                 })?;
 
-                Ok("late final".to_string())
+                Ok(completed_test_outcome(unit, "late final"))
             },
         )
     });
@@ -480,13 +468,12 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
     stopped_publisher.join()?;
 
     let current_app_handle = app.handle().clone();
-    let current_generation = RuntimeGeneration::active();
+    let current_generation = RuntimeGeneration::activate(app.handle(), 2, caption_session.clone())?;
     let (current_publisher, current_text_receiver) =
         runtime_test_publisher(current_generation.clone())?;
     let current_config = AppConfig::default();
-    let current_http_client = Client::builder()
-        .build()
-        .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
+    let current_segment =
+        test_announced_speech_segment(app.handle(), &current_generation, "current")?;
 
     assert_eq!(
         current_publisher.try_submit(CompletedPublisherEvent::Started {
@@ -497,12 +484,17 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
     transcribe_and_emit_final(
         &current_app_handle,
         &current_config,
-        &SecretString::from("test-key".to_string()),
-        &current_http_client,
-        test_speech_segment("current"),
+        current_segment,
         Some(&current_publisher),
         &current_generation,
-        &|_client, _config, _api_key, _sample_rate, _samples| Ok("current final".to_string()),
+        &|unit| {
+            Ok(completed_test_outcome_in_scope(
+                unit,
+                "current final",
+                2,
+                "recognition-2-1",
+            ))
+        },
     )?;
     let current_text = current_text_receiver
         .recv_timeout(Duration::from_secs(1))
@@ -518,13 +510,15 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
         .join()
         .map_err(|_| AppError::runtime("STT test worker panicked."))??;
 
-    let final_event = receive_json_event(&final_receiver, "current final transcript")?;
-    assert_eq!(final_event["utteranceId"], "current");
-    assert_eq!(final_event["text"], "current final");
-    assert!(matches!(
-        final_receiver.recv_timeout(Duration::from_millis(50)),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-    ));
+    let completed_event = receive_completed_caption_event(&caption_receiver, "current final")?;
+    assert_eq!(completed_event["active"]["generation"], 2);
+    assert_eq!(completed_event["active"]["streamId"], "recognition-2-1");
+    assert_eq!(completed_event["captions"][0]["unitId"], "current");
+    assert_eq!(completed_event["captions"][0]["lane"], "source");
+    assert_eq!(completed_event["captions"][0]["state"], "completed");
+    let final_snapshot = caption_session.snapshot()?;
+    assert_eq!(final_snapshot.captions.len(), 1);
+    assert_eq!(final_snapshot.captions[0].text, "current final");
     let ended_event = receive_json_event(&ended_receiver, "discarded old utterance")?;
     assert_eq!(ended_event["utteranceId"], "stopped-in-flight");
     assert_eq!(ended_event["reason"], "discarded");
@@ -549,16 +543,16 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
 fn runtime_error_close_preserves_an_in_flight_app_final_but_rejects_chatbox() -> AppResult<()> {
     let app = tauri::test::mock_app();
     let app_handle = app.handle().clone();
-    let (final_sender, final_receiver) = std::sync::mpsc::channel();
+    let (caption_sender, caption_receiver) = std::sync::mpsc::channel();
     let (diagnostic_sender, diagnostic_receiver) = std::sync::mpsc::channel();
-    app.listen("transcript-final", move |event| {
-        let _ = final_sender.send(event.payload().to_string());
+    app.listen("caption-session-changed", move |event| {
+        let _ = caption_sender.send(event.payload().to_string());
     });
     app.listen("diagnostic-event", move |event| {
         let _ = diagnostic_sender.send(event.payload().to_string());
     });
 
-    let generation = RuntimeGeneration::active();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, CaptionSessionStore::default())?;
     let (publisher, text_receiver) = runtime_test_publisher(generation.clone())?;
     assert_eq!(
         publisher.try_submit(CompletedPublisherEvent::Started {
@@ -568,29 +562,25 @@ fn runtime_error_close_preserves_an_in_flight_app_final_but_rejects_chatbox() ->
     );
     let worker_generation = generation.clone();
     let worker_publisher = publisher.clone();
+    let segment = test_announced_speech_segment(app.handle(), &generation, "in-flight-error")?;
     let (entered_sender, entered_receiver) = std::sync::mpsc::channel();
     let (release_sender, release_receiver) = std::sync::mpsc::channel();
     let config = AppConfig::default();
-    let http_client = Client::builder()
-        .build()
-        .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
     let worker = thread::spawn(move || {
         transcribe_and_emit_final(
             &app_handle,
             &config,
-            &SecretString::from("test-key".to_string()),
-            &http_client,
-            test_speech_segment("in-flight-error"),
+            segment,
             Some(&worker_publisher),
             &worker_generation,
-            &move |_client, _config, _api_key, _sample_rate, _samples| {
+            &move |unit| {
                 entered_sender.send(()).map_err(|_| {
                     AppError::runtime("Could not announce the in-flight test request.")
                 })?;
                 release_receiver.recv().map_err(|_| {
                     AppError::runtime("Could not release the in-flight test request.")
                 })?;
-                Ok("preserved in App".to_string())
+                Ok(completed_test_outcome(unit, "preserved in App"))
             },
         )
     });
@@ -608,9 +598,21 @@ fn runtime_error_close_preserves_an_in_flight_app_final_but_rejects_chatbox() ->
         .join()
         .map_err(|_| AppError::runtime("In-flight test worker panicked."))??;
 
-    let final_event = receive_json_event(&final_receiver, "in-flight final transcript")?;
-    assert_eq!(final_event["utteranceId"], "in-flight-error");
-    assert_eq!(final_event["text"], "preserved in App");
+    let completed_event = receive_completed_caption_event(&caption_receiver, "preserved in App")?;
+    assert_eq!(completed_event["captions"][0]["unitId"], "in-flight-error");
+    assert_eq!(completed_event["captions"][0]["lane"], "source");
+    assert_eq!(completed_event["captions"][0]["revision"], 1);
+    assert_eq!(completed_event["captions"][0]["state"], "completed");
+    finish_runtime_output(
+        app.handle(),
+        &generation,
+        None,
+        PublisherCloseReason::RuntimeError,
+    );
+    let closed_snapshot = generation.caption_session.snapshot()?;
+    assert!(closed_snapshot.active.is_none());
+    assert_eq!(closed_snapshot.captions.len(), 1);
+    assert_eq!(closed_snapshot.captions[0].text, "preserved in App");
     assert!(matches!(
         text_receiver.recv_timeout(Duration::from_millis(50)),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout)
@@ -634,28 +636,33 @@ fn runtime_error_close_preserves_an_in_flight_app_final_but_rejects_chatbox() ->
 fn capture_error_preserves_in_flight_app_final_and_discards_queued_speech() -> AppResult<()> {
     let app = tauri::test::mock_app();
     let app_handle = app.handle().clone();
-    let (final_sender, final_receiver) = std::sync::mpsc::channel();
+    let (caption_sender, caption_receiver) = std::sync::mpsc::channel();
     let (ended_sender, ended_receiver) = std::sync::mpsc::channel();
-    app.listen("transcript-final", move |event| {
-        let _ = final_sender.send(event.payload().to_string());
+    app.listen("caption-session-changed", move |event| {
+        let _ = caption_sender.send(event.payload().to_string());
     });
     app.listen("utterance-ended", move |event| {
         let _ = ended_sender.send(event.payload().to_string());
     });
 
-    let generation = RuntimeGeneration::active();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, CaptionSessionStore::default())?;
     let (segment_sender, segment_receiver) = sync_channel(STT_QUEUE_CAPACITY);
     let (in_flight_sender, in_flight_receiver) = std::sync::mpsc::channel();
     let config = AppConfig::default();
-    let http_client = Client::builder()
-        .build()
-        .map_err(|error| AppError::stt(format!("Failed to build test client: {error}")))?;
 
     segment_sender
-        .send(test_speech_segment("in-flight"))
+        .send(test_announced_speech_segment(
+            app.handle(),
+            &generation,
+            "in-flight",
+        )?)
         .map_err(|_| AppError::runtime("Failed to queue the in-flight test segment."))?;
     segment_sender
-        .send(test_speech_segment("queued"))
+        .send(test_announced_speech_segment(
+            app.handle(),
+            &generation,
+            "queued",
+        )?)
         .map_err(|_| AppError::runtime("Failed to queue the pending test segment."))?;
 
     let worker_generation = generation.clone();
@@ -664,12 +671,10 @@ fn capture_error_preserves_in_flight_app_final_and_discards_queued_speech() -> A
         run_stt_worker(
             app_handle,
             config,
-            SecretString::from("test-key".to_string()),
-            http_client,
             None,
             segment_receiver,
             worker_generation,
-            move |_client, _config, _api_key, _sample_rate, _samples| {
+            move |unit| {
                 in_flight_sender.send(()).map_err(|_| {
                     AppError::runtime("Could not announce the in-flight test segment.")
                 })?;
@@ -677,7 +682,7 @@ fn capture_error_preserves_in_flight_app_final_and_discards_queued_speech() -> A
                     thread::yield_now();
                 }
 
-                Ok("in-flight final".to_string())
+                Ok(completed_test_outcome(unit, "in-flight final"))
             },
         );
     });
@@ -698,9 +703,10 @@ fn capture_error_preserves_in_flight_app_final_and_discards_queued_speech() -> A
         .ok_or_else(|| AppError::runtime("Capture failure was not returned after cleanup."))?;
     assert_eq!(error.code(), "audio.failed");
 
-    let final_event = receive_json_event(&final_receiver, "final transcript")?;
-    assert_eq!(final_event["utteranceId"], "in-flight");
-    assert_eq!(final_event["text"], "in-flight final");
+    let completed_event = receive_completed_caption_event(&caption_receiver, "in-flight final")?;
+    assert_eq!(completed_event["captions"][0]["unitId"], "in-flight");
+    assert_eq!(completed_event["captions"][0]["lane"], "source");
+    assert_eq!(completed_event["captions"][0]["state"], "completed");
 
     let ended_event = receive_json_event(&ended_receiver, "discarded utterance")?;
     assert_eq!(ended_event["utteranceId"], "queued");
@@ -960,12 +966,73 @@ fn runtime_test_publisher(
     Ok((publisher, text_receiver))
 }
 
-fn test_speech_segment(utterance_id: &str) -> SpeechSegment {
-    SpeechSegment {
-        utterance_id: utterance_id.to_string(),
-        sample_rate: 16_000,
+fn test_speech_segment(
+    generation: &RuntimeGeneration,
+    utterance_id: &str,
+) -> AppResult<CompletedAudioUnit> {
+    let started_at_ms = 42;
+    if generation
+        .caption_session
+        .start_unit(
+            generation.generation_id(),
+            generation.stream_id(),
+            utterance_id.to_string(),
+            started_at_ms,
+        )?
+        .is_none()
+    {
+        return Err(AppError::state("Test caption unit could not start."));
+    }
+
+    Ok(test_audio_unit(utterance_id, started_at_ms))
+}
+
+fn test_announced_speech_segment<R: Runtime>(
+    app: &AppHandle<R>,
+    generation: &RuntimeGeneration,
+    utterance_id: &str,
+) -> AppResult<CompletedAudioUnit> {
+    let started_at_ms = 42;
+    if !generation.start_caption_unit(app, utterance_id.to_string(), started_at_ms)? {
+        return Err(AppError::state("Test caption unit could not be announced."));
+    }
+
+    Ok(test_audio_unit(utterance_id, started_at_ms))
+}
+
+fn test_audio_unit(utterance_id: &str, started_at_ms: u64) -> CompletedAudioUnit {
+    CompletedAudioUnit {
+        unit_id: utterance_id.to_string(),
+        started_at_ms,
+        sample_rate_hz: 16_000,
         samples: vec![0.0; 160],
     }
+}
+
+fn completed_test_outcome(unit: &CompletedAudioUnit, text: &str) -> OpenAiBoundedOutcome {
+    completed_test_outcome_in_scope(unit, text, 1, "recognition-1-1")
+}
+
+fn completed_test_outcome_in_scope(
+    unit: &CompletedAudioUnit,
+    text: &str,
+    generation: u64,
+    stream_id: &str,
+) -> OpenAiBoundedOutcome {
+    OpenAiBoundedOutcome::Completed(CaptionSnapshotV1 {
+        generation,
+        stream_id: stream_id.to_string(),
+        unit_id: Some(unit.unit_id.clone()),
+        lane: crate::caption_session::CaptionLane::Source,
+        revision: 1,
+        text: text.to_string(),
+        state: crate::caption_session::CaptionState::Completed,
+        language: Some("en".to_string()),
+        provider: "openai".to_string(),
+        model: "gpt-4o-mini-transcribe".to_string(),
+        unit_started_at_ms: Some(unit.started_at_ms),
+        timestamp_ms: 84,
+    })
 }
 
 fn receive_json_event(
@@ -979,4 +1046,29 @@ fn receive_json_event(
     serde_json::from_str(&payload).map_err(|error| {
         AppError::runtime(format!("Failed to parse the {event_name} event: {error}"))
     })
+}
+
+fn receive_completed_caption_event(
+    receiver: &std::sync::mpsc::Receiver<String>,
+    expected_text: &str,
+) -> AppResult<serde_json::Value> {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let payload = receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| AppError::runtime("Did not receive the completed caption snapshot."))?;
+        let event = serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
+            AppError::runtime(format!(
+                "Failed to parse the caption-session event: {error}"
+            ))
+        })?;
+        let has_expected_caption = event["captions"].as_array().is_some_and(|captions| {
+            captions
+                .iter()
+                .any(|caption| caption["state"] == "completed" && caption["text"] == expected_text)
+        });
+        if has_expected_caption {
+            return Ok(event);
+        }
+    }
 }

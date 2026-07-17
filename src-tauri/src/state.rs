@@ -6,6 +6,7 @@
 //! may be resolved transiently for Start, but are never stored in state or in
 //! a frontend-facing snapshot.
 
+use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
 use crate::chatbox_pacer::ChatboxPacer;
 use crate::config::{AppConfig, SttProvider};
 use crate::error::{AppError, AppResult};
@@ -44,6 +45,7 @@ pub(crate) struct AppState {
     // may be added under this gate.
     runtime_action_gate: Mutex<()>,
     chatbox_pacer: ChatboxPacer,
+    caption_session: CaptionSessionStore,
     pub(crate) runtime: RuntimeManager,
 }
 
@@ -80,6 +82,7 @@ impl Default for AppState {
             desired_state_gate: Mutex::new(()),
             runtime_action_gate: Mutex::new(()),
             chatbox_pacer: ChatboxPacer::default(),
+            caption_session: CaptionSessionStore::default(),
             runtime: RuntimeManager::default(),
         }
     }
@@ -155,6 +158,7 @@ impl AppState {
             RuntimeStartRequest {
                 config,
                 chatbox_pacer: self.chatbox_pacer(),
+                caption_session: self.caption_session_store(),
                 generation_id: generation,
                 config_revision,
                 openai_api_key,
@@ -191,6 +195,14 @@ impl AppState {
     pub(crate) fn runtime_control_snapshot(&self) -> AppResult<RuntimeControlSnapshot> {
         let control = self.lock_control()?;
         Ok(Self::snapshot_from(&control))
+    }
+
+    pub(crate) fn caption_session_snapshot(&self) -> AppResult<CaptionSessionSnapshotV1> {
+        self.caption_session.snapshot()
+    }
+
+    pub(crate) fn caption_session_store(&self) -> CaptionSessionStore {
+        self.caption_session.clone()
     }
 
     pub(crate) fn session_snapshot(&self) -> AppResult<Option<RuntimeSessionSnapshot>> {

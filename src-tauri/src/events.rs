@@ -1,6 +1,6 @@
 //! Normalized runtime events emitted to the Vue frontend.
 //!
-//! These events are the UI-facing contract for status, transcripts, and
+//! These events are the UI-facing contract for status, caption sessions, and
 //! diagnostics. Provider-specific raw events should be normalized before they
 //! reach this module so Vue components and output sinks do not depend on STT
 //! provider protocols.
@@ -15,6 +15,7 @@
 //! rather than propagated. The runtime's lifecycle never depends on whether
 //! an event reached the webview.
 
+use crate::caption_session::CaptionSessionSnapshotV1;
 use crate::error::AppError;
 use crate::runtime_control::RuntimeControlSnapshot;
 use crate::state::AppState;
@@ -25,8 +26,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 const EVENT_RUNTIME_STATUS: &str = "runtime-status";
 const EVENT_RUNTIME_CONTROL_CHANGED: &str = "runtime-control-changed";
-const EVENT_TRANSCRIPT_PARTIAL: &str = "transcript-partial";
-const EVENT_TRANSCRIPT_FINAL: &str = "transcript-final";
+const EVENT_CAPTION_SESSION_CHANGED: &str = "caption-session-changed";
 const EVENT_UTTERANCE_STARTED: &str = "utterance-started";
 const EVENT_UTTERANCE_ENDED: &str = "utterance-ended";
 const EVENT_DIAGNOSTIC: &str = "diagnostic-event";
@@ -67,48 +67,15 @@ pub(crate) enum RuntimeStatus {
     Error,
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TranscriptEvent {
-    id: String,
-    utterance_id: String,
-    kind: TranscriptKind,
-    text: String,
-    language: String,
-    provider: String,
-    revision: u32,
-    timestamp_ms: u64,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum TranscriptKind {
-    Partial,
-    // Stable is part of the normalized transcript contract for future providers.
-    #[expect(
-        dead_code,
-        reason = "stable transcript events are not emitted in the MVP yet"
-    )]
-    Stable,
-    Final,
-}
-
-#[derive(Clone)]
-pub(crate) struct TranscriptUpdate {
-    pub(crate) utterance_id: String,
-    pub(crate) text: String,
-    pub(crate) language: String,
-    pub(crate) provider: String,
-    pub(crate) revision: u32,
-}
-
-/// Start of a confirmed utterance. Emitted before any transcript text exists,
-/// so transcript events never carry placeholder text such as a listening
+/// Start of a confirmed utterance. Emitted before any caption text exists, so
+/// caption snapshots never carry placeholder text such as a listening
 /// indicator.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UtteranceStartedEvent {
     id: String,
+    generation: u64,
+    stream_id: String,
     utterance_id: String,
     timestamp_ms: u64,
 }
@@ -117,13 +84,15 @@ struct UtteranceStartedEvent {
 #[serde(rename_all = "camelCase")]
 struct UtteranceEndedEvent {
     id: String,
+    generation: u64,
+    stream_id: String,
     utterance_id: String,
     reason: UtteranceEndReason,
     timestamp_ms: u64,
 }
 
-/// Why an utterance terminated without a final transcript. Successful
-/// utterances end with `transcript-final` instead of this event.
+/// Why an utterance terminated without a completed caption. Successful
+/// utterances resolve through the caption-session aggregate instead.
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum UtteranceEndReason {
@@ -293,6 +262,13 @@ pub(crate) fn emit_runtime_control_changed<R: Runtime>(
     emit_event(app, EVENT_RUNTIME_CONTROL_CHANGED, snapshot);
 }
 
+pub(crate) fn emit_caption_session_changed<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshot: CaptionSessionSnapshotV1,
+) {
+    emit_event(app, EVENT_CAPTION_SESSION_CHANGED, snapshot);
+}
+
 pub(crate) fn emit_recorded_status<R: Runtime>(
     app: &AppHandle<R>,
     snapshot: RuntimeControlSnapshot,
@@ -302,44 +278,44 @@ pub(crate) fn emit_recorded_status<R: Runtime>(
     emit_event(app, EVENT_RUNTIME_STATUS, event);
 }
 
-pub(crate) fn emit_transcript_partial<R: Runtime>(app: &AppHandle<R>, update: TranscriptUpdate) {
-    emit_transcript(
-        app,
-        EVENT_TRANSCRIPT_PARTIAL,
-        TranscriptKind::Partial,
-        update,
-    );
-}
-
-pub(crate) fn emit_transcript_final<R: Runtime>(app: &AppHandle<R>, update: TranscriptUpdate) {
-    emit_transcript(app, EVENT_TRANSCRIPT_FINAL, TranscriptKind::Final, update);
-}
-
-pub(crate) fn emit_utterance_started<R: Runtime>(app: &AppHandle<R>, utterance_id: String) {
+pub(crate) fn emit_utterance_started<R: Runtime>(
+    app: &AppHandle<R>,
+    generation: u64,
+    stream_id: String,
+    utterance_id: String,
+    timestamp_ms: u64,
+) {
     emit_event(
         app,
         EVENT_UTTERANCE_STARTED,
         UtteranceStartedEvent {
             id: next_event_id("utterance-start"),
+            generation,
+            stream_id,
             utterance_id,
-            timestamp_ms: now_ms(),
+            timestamp_ms,
         },
     );
 }
 
 pub(crate) fn emit_utterance_ended<R: Runtime>(
     app: &AppHandle<R>,
+    generation: u64,
+    stream_id: String,
     utterance_id: String,
     reason: UtteranceEndReason,
+    timestamp_ms: u64,
 ) {
     emit_event(
         app,
         EVENT_UTTERANCE_ENDED,
         UtteranceEndedEvent {
             id: next_event_id("utterance-end"),
+            generation,
+            stream_id,
             utterance_id,
             reason,
-            timestamp_ms: now_ms(),
+            timestamp_ms,
         },
     );
 }
@@ -364,28 +340,6 @@ pub(crate) fn next_utterance_id(prefix: &str) -> String {
     next_event_id(prefix)
 }
 
-fn emit_transcript<R: Runtime>(
-    app: &AppHandle<R>,
-    event_name: &str,
-    kind: TranscriptKind,
-    update: TranscriptUpdate,
-) {
-    emit_event(
-        app,
-        event_name,
-        TranscriptEvent {
-            id: next_event_id("transcript"),
-            utterance_id: update.utterance_id,
-            kind,
-            text: update.text,
-            language: update.language,
-            provider: update.provider,
-            revision: update.revision,
-            timestamp_ms: now_ms(),
-        },
-    );
-}
-
 /// Emission is best-effort by design: Tauri events are at-most-once with no
 /// acknowledgement, and in practice an emit only fails while the webview is
 /// being torn down. No caller can act on such a failure, so it is logged here
@@ -406,7 +360,7 @@ fn next_event_id(prefix: &str) -> String {
     format!("{prefix}-{}-{sequence}", now_ms())
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)

@@ -6,12 +6,14 @@
 //! would freeze the window for that duration.
 
 use crate::audio::{AudioInputDevice, list_input_devices};
+use crate::caption_session::{
+    CaptionLane, CaptionSessionSnapshotV1, CaptionSnapshotV1, CaptionState,
+};
 use crate::config::{AppConfig, SttProvider};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, TranscriptUpdate, emit_diagnostic,
-    emit_runtime_control_changed, emit_transcript_final, emit_transcript_partial,
-    emit_utterance_started, next_utterance_id,
+    DiagnosticCategory, DiagnosticUpdate, emit_caption_session_changed, emit_diagnostic,
+    emit_runtime_control_changed, emit_utterance_started, next_utterance_id, now_ms,
 };
 use crate::osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
 use crate::runtime_control::RuntimeControlSnapshot;
@@ -87,35 +89,71 @@ pub(crate) fn get_runtime_control_snapshot(
 }
 
 #[tauri::command(async)]
+pub(crate) fn get_caption_session_snapshot(
+    state: State<'_, AppState>,
+) -> AppResult<CaptionSessionSnapshotV1> {
+    state.caption_session_snapshot()
+}
+
+#[tauri::command(async)]
 pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    let caption_session = state.caption_session_store();
     state.with_running_mock_session(|session| {
         let utterance_id = next_utterance_id("mock");
         let language = session.selected.stt.language.clone();
         let provider = session.selected.stt.provider.as_str().to_string();
+        let generation = session.generation;
+        let snapshot = caption_session.snapshot()?;
+        let stream_id = snapshot
+            .active
+            .filter(|active| active.generation == generation)
+            .map(|active| active.stream_id)
+            .ok_or_else(|| AppError::state("Running Mock session has no active caption stream."))?;
+        let started_at_ms = now_ms();
 
         tracing::info!(utterance_id = %utterance_id, "emitting mock transcript");
 
-        emit_utterance_started(&app, utterance_id.clone());
-        emit_transcript_partial(
+        let started = caption_session
+            .start_unit(generation, &stream_id, utterance_id.clone(), started_at_ms)?
+            .ok_or_else(|| AppError::state("Mock caption unit could not start."))?;
+        emit_caption_session_changed(&app, started);
+        emit_utterance_started(
             &app,
-            TranscriptUpdate {
-                utterance_id: utterance_id.clone(),
-                text: "Testing live caption preview...".to_string(),
-                language: language.clone(),
-                provider: provider.clone(),
-                revision: 1,
-            },
+            generation,
+            stream_id.clone(),
+            utterance_id.clone(),
+            started_at_ms,
         );
-        emit_transcript_final(
-            &app,
-            TranscriptUpdate {
-                utterance_id,
-                text: "Testing live caption preview from the mock runtime.".to_string(),
-                language,
-                provider,
+
+        let base_caption = CaptionSnapshotV1 {
+            generation,
+            stream_id,
+            unit_id: Some(utterance_id),
+            lane: CaptionLane::Source,
+            revision: 1,
+            text: "Testing live caption preview...".to_string(),
+            state: CaptionState::Ongoing,
+            language: Some(language),
+            provider,
+            model: session.selected.stt.model.clone(),
+            unit_started_at_ms: Some(started_at_ms),
+            timestamp_ms: now_ms(),
+        };
+        let ongoing = caption_session
+            .accept_caption(base_caption.clone())?
+            .ok_or_else(|| AppError::state("Mock ongoing caption was rejected."))?;
+        emit_caption_session_changed(&app, ongoing);
+
+        let completed = caption_session
+            .accept_caption(CaptionSnapshotV1 {
                 revision: 2,
-            },
-        );
+                text: "Testing live caption preview from the mock runtime.".to_string(),
+                state: CaptionState::Completed,
+                timestamp_ms: now_ms(),
+                ..base_caption
+            })?
+            .ok_or_else(|| AppError::state("Mock completed caption was rejected."))?;
+        emit_caption_session_changed(&app, completed);
 
         emit_diagnostic(
             &app,
@@ -123,7 +161,7 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
                 DiagnosticCategory::Stt,
                 "stt.mock_transcript_emitted",
                 "Mock transcript emitted",
-                "The UI received normalized partial and final transcript events.",
+                "The UI received ongoing and completed caption-session snapshots.",
             ),
         );
 

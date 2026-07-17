@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { decodeCaptionSessionSnapshotV1 } from "./captionSession";
 import type {
   RuntimeBackend,
   RuntimeEventListener,
@@ -15,7 +16,6 @@ import {
   type RuntimeControlSnapshot,
   type RuntimeStatusEvent,
   type SttProvider,
-  type TranscriptEvent,
   type UtteranceEndedEvent,
   type UtteranceStartedEvent,
 } from "./types";
@@ -77,17 +77,10 @@ export function createTauriBackend(
             },
           ),
           listenFor(
-            RUNTIME_EVENTS.transcriptPartial,
-            (payload) => payload as TranscriptEvent,
+            RUNTIME_EVENTS.captionSessionChanged,
+            decodeCaptionSessionSnapshotV1,
             (payload) => {
-              listener({ type: "transcriptPartial", payload });
-            },
-          ),
-          listenFor(
-            RUNTIME_EVENTS.transcriptFinal,
-            (payload) => payload as TranscriptEvent,
-            (payload) => {
-              listener({ type: "transcriptFinal", payload });
+              listener({ type: "captionSessionChanged", payload });
             },
           ),
           listenFor(
@@ -154,6 +147,14 @@ export function createTauriBackend(
       return bridge.invoke<RuntimeControlSnapshot>(
         "get_runtime_control_snapshot",
       );
+    },
+
+    async getCaptionSessionSnapshot() {
+      const payload = await bridge.invoke<unknown>(
+        "get_caption_session_snapshot",
+      );
+
+      return decodeCaptionSessionSnapshotV1(payload);
     },
 
     saveConfig(config: AppConfig) {

@@ -6,9 +6,9 @@
 //! Startup failures such as invalid config or unavailable microphone remain fatal.
 //!
 //! Every utterance announced with `utterance-started` resolves with either a
-//! final transcript or an `utterance-ended` event, so the UI never waits on a
-//! transcript that cannot arrive. Transcript events carry recognition text
-//! only; listening indicators are derived from lifecycle events in the UI.
+//! completed caption in the caption-session aggregate or an `utterance-ended`
+//! event, so the UI never waits on recognition that cannot arrive. Listening
+//! indicators remain distinct lifecycle events rather than placeholder text.
 //!
 //! Stop is a hard cutoff: the microphone is released within one receive timeout,
 //! buffered and queued speech is discarded instead of drained, and no App or
@@ -18,6 +18,7 @@
 //! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
 
 use crate::audio::{open_input_capture, receive_audio};
+use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore, CaptionSnapshotV1};
 use crate::chatbox_pacer::ChatboxPacer;
 use crate::chatbox_publisher::{
     CompletedChatboxPublisher, CompletedPublisherEvent, PublisherCloseReason, PublisherDiagnostic,
@@ -26,17 +27,18 @@ use crate::chatbox_publisher::{
 use crate::config::{AppConfig, OscConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, TranscriptUpdate, UtteranceEndReason,
-    emit_diagnostic, emit_status, emit_transcript_final, emit_utterance_ended,
-    emit_utterance_started, next_utterance_id,
+    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, UtteranceEndReason,
+    emit_caption_session_changed, emit_diagnostic, emit_status, emit_utterance_ended,
+    emit_utterance_started, next_utterance_id, now_ms,
 };
+use crate::openai_bounded::{CompletedAudioUnit, OpenAiBoundedOutcome, OpenAiBoundedSession};
 use crate::osc::ChatboxOscSender;
 use crate::runtime_control::{
     RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
     RuntimeSessionSnapshot,
 };
 use crate::segmenter::SpeechSegmenter;
-use crate::stt::{build_stt_client, transcribe_openai_wav};
+use crate::stt::build_stt_client;
 use reqwest::blocking::Client;
 use secrecy::SecretString;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -80,6 +82,7 @@ pub(crate) struct RuntimeManager {
 pub(crate) struct RuntimeStartRequest {
     pub(crate) config: AppConfig,
     pub(crate) chatbox_pacer: ChatboxPacer,
+    pub(crate) caption_session: CaptionSessionStore,
     pub(crate) generation_id: u64,
     pub(crate) config_revision: u64,
     pub(crate) openai_api_key: Option<SecretString>,
@@ -101,15 +104,18 @@ struct RuntimeHandle {
 
 #[derive(Clone)]
 pub(crate) struct RuntimeGeneration {
+    generation_id: u64,
+    stream_id: String,
+    caption_session: CaptionSessionStore,
+    caption_reporter: CaptionSessionReporter,
     output_gate: Arc<Mutex<()>>,
     hard_stop_requested: Arc<AtomicBool>,
     work_cancelled: Arc<AtomicBool>,
 }
 
-struct SpeechSegment {
-    utterance_id: String,
-    sample_rate: u32,
-    samples: Vec<f32>,
+struct ActiveSpeechUnit {
+    unit_id: String,
+    started_at_ms: u64,
 }
 
 struct NoFinalUtteranceResolution {
@@ -123,9 +129,54 @@ enum RuntimePublisherInit {
     Unavailable(AppError),
 }
 
+type CaptionSessionReporter = Arc<dyn Fn(CaptionSessionSnapshotV1) + Send + Sync>;
+
 impl RuntimeGeneration {
+    fn activate<R: Runtime>(
+        app: &AppHandle<R>,
+        generation_id: u64,
+        caption_session: CaptionSessionStore,
+    ) -> AppResult<Self> {
+        let snapshot = caption_session.begin_generation(generation_id)?;
+        let active = snapshot.active.as_ref().ok_or_else(|| {
+            AppError::state("Caption session rejected a non-monotonic runtime generation.")
+        })?;
+        if active.generation != generation_id {
+            return Err(AppError::state(
+                "Caption session activated a different runtime generation.",
+            ));
+        }
+        let stream_id = active.stream_id.clone();
+
+        let reporter_app = app.clone();
+        let caption_reporter: CaptionSessionReporter = Arc::new(move |snapshot| {
+            emit_caption_session_changed(&reporter_app, snapshot);
+        });
+        caption_reporter(snapshot);
+
+        Ok(Self {
+            generation_id,
+            stream_id,
+            caption_session,
+            caption_reporter,
+            output_gate: Arc::new(Mutex::new(())),
+            hard_stop_requested: Arc::new(AtomicBool::new(false)),
+            work_cancelled: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) fn active() -> Self {
+        let caption_session = CaptionSessionStore::default();
+        if let Err(error) = caption_session.begin_generation(1) {
+            tracing::error!(error_message = %error, "test caption session could not start");
+        }
+
         Self {
+            generation_id: 1,
+            stream_id: "recognition-1-1".to_string(),
+            caption_session,
+            caption_reporter: Arc::new(|_| {}),
             output_gate: Arc::new(Mutex::new(())),
             hard_stop_requested: Arc::new(AtomicBool::new(false)),
             work_cancelled: Arc::new(AtomicBool::new(false)),
@@ -146,7 +197,17 @@ impl RuntimeGeneration {
         // Stop has one linearizable cutoff across both sinks. A commit that
         // validated before the explicit marker belongs before Stop; every
         // later commit is rejected by this generation forever.
-        self.close_publisher_at_boundary(publisher, PublisherCloseReason::Stop)
+        let publisher_result =
+            self.close_publisher_at_boundary(publisher, PublisherCloseReason::Stop);
+        let caption_result = self.close_caption_session_at_boundary();
+
+        match (publisher_result, caption_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(publisher_error), Err(caption_error)) => Err(AppError::state(format!(
+                "Runtime outputs could not close cleanly: {publisher_error} {caption_error}"
+            ))),
+        }
     }
 
     fn close_publisher_at_boundary(
@@ -196,6 +257,124 @@ impl RuntimeGeneration {
 
         commit();
         Ok(true)
+    }
+
+    fn start_caption_unit<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        unit_id: String,
+        started_at_ms: u64,
+    ) -> AppResult<bool> {
+        let _output_gate = self
+            .output_gate
+            .lock()
+            .map_err(|_| AppError::state("Runtime generation lock was poisoned."))?;
+        if self.hard_stop_requested.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+
+        let Some(snapshot) = self.caption_session.start_unit(
+            self.generation_id,
+            &self.stream_id,
+            unit_id.clone(),
+            started_at_ms,
+        )?
+        else {
+            return Ok(false);
+        };
+        (self.caption_reporter)(snapshot);
+        emit_utterance_started(
+            app,
+            self.generation_id,
+            self.stream_id.clone(),
+            unit_id,
+            started_at_ms,
+        );
+
+        Ok(true)
+    }
+
+    fn accept_caption(&self, caption: CaptionSnapshotV1) -> AppResult<bool> {
+        let _output_gate = self
+            .output_gate
+            .lock()
+            .map_err(|_| AppError::state("Runtime generation lock was poisoned."))?;
+        if self.hard_stop_requested.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+
+        let Some(snapshot) = self.caption_session.accept_caption(caption)? else {
+            return Ok(false);
+        };
+        (self.caption_reporter)(snapshot);
+
+        Ok(true)
+    }
+
+    fn end_caption_unit<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        unit_id: String,
+        reason: UtteranceEndReason,
+    ) -> AppResult<bool> {
+        let _output_gate = self
+            .output_gate
+            .lock()
+            .map_err(|_| AppError::state("Runtime generation lock was poisoned."))?;
+        if self.hard_stop_requested.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+
+        let Some(snapshot) = self.caption_session.end_unit_without_caption(
+            self.generation_id,
+            &self.stream_id,
+            &unit_id,
+        )?
+        else {
+            return Ok(false);
+        };
+        (self.caption_reporter)(snapshot);
+        emit_utterance_ended(
+            app,
+            self.generation_id,
+            self.stream_id.clone(),
+            unit_id,
+            reason,
+            now_ms(),
+        );
+
+        Ok(true)
+    }
+
+    fn close_caption_session_at_boundary(&self) -> AppResult<()> {
+        let (_output_gate, gate_was_poisoned) = match self.output_gate.lock() {
+            Ok(gate) => (gate, false),
+            Err(poisoned) => (poisoned.into_inner(), true),
+        };
+        let close_result = self.caption_session.close_generation(self.generation_id);
+        if let Ok(Some(snapshot)) = &close_result {
+            (self.caption_reporter)(snapshot.clone());
+        }
+
+        if gate_was_poisoned {
+            let close_note = match close_result {
+                Ok(_) => " Caption-session shutdown was still recorded.".to_string(),
+                Err(error) => format!(" Caption-session shutdown also failed: {error}"),
+            };
+            return Err(AppError::state(format!(
+                "Runtime generation lock was poisoned.{close_note}"
+            )));
+        }
+
+        close_result.map(|_| ())
+    }
+
+    fn generation_id(&self) -> u64 {
+        self.generation_id
+    }
+
+    fn stream_id(&self) -> &str {
+        &self.stream_id
     }
 
     fn cancel_work(&self) {
@@ -266,6 +445,7 @@ impl RuntimeManager {
         let RuntimeStartRequest {
             config,
             chatbox_pacer,
+            caption_session,
             generation_id,
             config_revision,
             openai_api_key,
@@ -292,7 +472,7 @@ impl RuntimeManager {
             return Err(AppError::runtime("Runtime is already running."));
         }
 
-        let generation = RuntimeGeneration::active();
+        let generation = RuntimeGeneration::activate(&app, generation_id, caption_session)?;
         let publisher_init =
             initialize_runtime_publisher(&app, &config.osc, chatbox_pacer, generation.clone());
         let requested_host = config.osc.host.clone();
@@ -622,6 +802,13 @@ fn finish_runtime_output<R: Runtime>(
             DiagnosticUpdate::from_error(&error, "Completed publisher failed while closing"),
         );
     }
+
+    if let Err(error) = generation.close_caption_session_at_boundary() {
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate::from_error(&error, "Caption session could not close"),
+        );
+    }
 }
 
 fn run_runtime(
@@ -733,7 +920,7 @@ fn run_openai_runtime(
         generation.clone(),
     )?;
     let mut segmenter = new_phase_one_segmenter(sample_rate);
-    let mut utterance_id: Option<String> = None;
+    let mut active_unit: Option<ActiveSpeechUnit> = None;
     let stream = capture.stream;
 
     // Once the worker exists, no capture error may return before shutdown has
@@ -747,9 +934,10 @@ fn run_openai_runtime(
                         &app,
                         segmenter.sample_rate(),
                         samples,
-                        &mut utterance_id,
+                        &mut active_unit,
                         &segment_sender,
                         publisher.as_ref(),
+                        &generation,
                     )?;
                 }
                 continue;
@@ -759,9 +947,15 @@ fn run_openai_runtime(
 
             if update.speech_started {
                 let next_utterance = next_utterance_id("speech");
-                emit_utterance_started(&app, next_utterance.clone());
+                let started_at_ms = now_ms();
+                if !generation.start_caption_unit(&app, next_utterance.clone(), started_at_ms)? {
+                    return Ok(());
+                }
                 start_chatbox_activity(&app, publisher.as_ref(), &next_utterance);
-                utterance_id = Some(next_utterance);
+                active_unit = Some(ActiveSpeechUnit {
+                    unit_id: next_utterance,
+                    started_at_ms,
+                });
             }
 
             if let Some(samples) = update.ready_segment {
@@ -769,9 +963,10 @@ fn run_openai_runtime(
                     &app,
                     segmenter.sample_rate(),
                     samples,
-                    &mut utterance_id,
+                    &mut active_unit,
                     &segment_sender,
                     publisher.as_ref(),
+                    &generation,
                 )?;
             }
         }
@@ -816,11 +1011,12 @@ fn run_openai_runtime(
     let tail_speech_discarded = segmenter.finish().is_some();
 
     if tail_speech_discarded {
-        if let Some(utterance_id) = utterance_id {
+        if let Some(active_unit) = active_unit {
             end_utterance_without_final(
                 &app,
                 publisher.as_ref(),
-                utterance_id,
+                &generation,
+                active_unit.unit_id,
                 UtteranceEndReason::Discarded,
             );
         }
@@ -842,7 +1038,7 @@ fn run_openai_runtime(
 fn finish_stt_worker_after_capture(
     capture_result: AppResult<()>,
     stop_requested: &AtomicBool,
-    segment_sender: SyncSender<SpeechSegment>,
+    segment_sender: SyncSender<CompletedAudioUnit>,
     stt_worker: JoinHandle<()>,
 ) -> AppResult<()> {
     stop_requested.store(true, Ordering::Relaxed);
@@ -871,22 +1067,24 @@ fn queue_speech_segment(
     app: &AppHandle,
     sample_rate: u32,
     samples: Vec<f32>,
-    utterance_id: &mut Option<String>,
-    segment_sender: &SyncSender<SpeechSegment>,
+    active_unit: &mut Option<ActiveSpeechUnit>,
+    segment_sender: &SyncSender<CompletedAudioUnit>,
     publisher: Option<&CompletedChatboxPublisher>,
+    generation: &RuntimeGeneration,
 ) -> AppResult<()> {
     // The segmenter only yields segments that reached the voiced minimum, and
     // crossing the voiced minimum announces the utterance first, so an id is
     // always present here. A missing id means segmentation broke that
     // invariant, and silently minting a fresh id would send the UI a
-    // transcript for an utterance that was never announced.
-    let utterance_id = utterance_id.take().ok_or_else(|| {
+    // caption for an utterance that was never announced.
+    let active_unit = active_unit.take().ok_or_else(|| {
         AppError::runtime("Speech segment was ready without an announced utterance.")
     })?;
 
-    match segment_sender.try_send(SpeechSegment {
-        utterance_id,
-        sample_rate,
+    match segment_sender.try_send(CompletedAudioUnit {
+        unit_id: active_unit.unit_id,
+        started_at_ms: active_unit.started_at_ms,
+        sample_rate_hz: sample_rate,
         samples,
     }) {
         Ok(()) => Ok(()),
@@ -899,14 +1097,15 @@ fn queue_speech_segment(
                     "Speech segment dropped",
                     format!(
                         "STT is still processing earlier audio, so {:.1} seconds of captured speech was skipped.",
-                        segment.samples.len() as f32 / segment.sample_rate as f32
+                        segment.samples.len() as f32 / segment.sample_rate_hz as f32
                     ),
                 ),
             );
             end_utterance_without_final(
                 app,
                 publisher,
-                segment.utterance_id,
+                generation,
+                segment.unit_id,
                 UtteranceEndReason::Discarded,
             );
 
@@ -916,7 +1115,8 @@ fn queue_speech_segment(
             end_utterance_without_final(
                 app,
                 publisher,
-                segment.utterance_id,
+                generation,
+                segment.unit_id,
                 UtteranceEndReason::Discarded,
             );
 
@@ -933,41 +1133,38 @@ fn spawn_stt_worker(
     openai_api_key: SecretString,
     http_client: Client,
     publisher: Option<CompletedChatboxPublisher>,
-    segment_receiver: Receiver<SpeechSegment>,
+    segment_receiver: Receiver<CompletedAudioUnit>,
     generation: RuntimeGeneration,
 ) -> AppResult<JoinHandle<()>> {
     thread::Builder::new()
         .name("vrc-live-caption-stt-worker".to_string())
         .spawn(move || {
+            let bounded_session = OpenAiBoundedSession::new(
+                generation.generation_id(),
+                generation.stream_id().to_string(),
+                config.stt.clone(),
+                http_client,
+                openai_api_key,
+            );
             run_stt_worker(
                 app,
                 config,
-                openai_api_key,
-                http_client,
                 publisher,
                 segment_receiver,
                 generation,
-                |client, config, api_key, sample_rate, samples| {
-                    transcribe_openai_wav(client, &config.stt, api_key, sample_rate, samples)
-                },
+                move |unit| bounded_session.recognize(unit),
             )
         })
         .map_err(|error| AppError::runtime(format!("Failed to start STT worker thread: {error}")))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Worker lifecycle dependencies stay explicit; the final argument is the test seam for cloud transcription."
-)]
 fn run_stt_worker<R: Runtime>(
     app: AppHandle<R>,
     config: AppConfig,
-    openai_api_key: SecretString,
-    http_client: Client,
     publisher: Option<CompletedChatboxPublisher>,
-    segment_receiver: Receiver<SpeechSegment>,
+    segment_receiver: Receiver<CompletedAudioUnit>,
     generation: RuntimeGeneration,
-    transcribe: impl Fn(&Client, &AppConfig, &SecretString, u32, &[f32]) -> AppResult<String>,
+    recognize: impl Fn(&CompletedAudioUnit) -> AppResult<OpenAiBoundedOutcome>,
 ) {
     let mut discarded_segments: usize = 0;
     while let Ok(segment) = segment_receiver.recv() {
@@ -976,7 +1173,8 @@ fn run_stt_worker<R: Runtime>(
             end_utterance_without_final(
                 &app,
                 publisher.as_ref(),
-                segment.utterance_id,
+                &generation,
+                segment.unit_id,
                 UtteranceEndReason::Discarded,
             );
             continue;
@@ -985,12 +1183,10 @@ fn run_stt_worker<R: Runtime>(
         if let Err(error) = transcribe_and_emit_final(
             &app,
             &config,
-            &openai_api_key,
-            &http_client,
             segment,
             publisher.as_ref(),
             &generation,
-            &transcribe,
+            &recognize,
         ) {
             tracing::warn!(
                 code = error.code(),
@@ -1022,25 +1218,20 @@ fn run_stt_worker<R: Runtime>(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "The transcript operation keeps its runtime sinks explicit; the final argument is the test seam for cloud transcription."
-)]
 fn transcribe_and_emit_final<R: Runtime>(
     app: &AppHandle<R>,
     config: &AppConfig,
-    openai_api_key: &SecretString,
-    http_client: &Client,
-    segment: SpeechSegment,
+    segment: CompletedAudioUnit,
     publisher: Option<&CompletedChatboxPublisher>,
     generation: &RuntimeGeneration,
-    transcribe: &impl Fn(&Client, &AppConfig, &SecretString, u32, &[f32]) -> AppResult<String>,
+    recognize: &impl Fn(&CompletedAudioUnit) -> AppResult<OpenAiBoundedOutcome>,
 ) -> AppResult<()> {
     if !generation.try_begin_work() {
         end_utterance_without_final(
             app,
             publisher,
-            segment.utterance_id,
+            generation,
+            segment.unit_id,
             UtteranceEndReason::Discarded,
         );
         emit_diagnostic(
@@ -1064,47 +1255,42 @@ fn transcribe_and_emit_final<R: Runtime>(
             "Sending speech segment to STT",
             format!(
                 "Captured {:.1} seconds for final transcription.",
-                segment.samples.len() as f32 / segment.sample_rate as f32
+                segment.samples.len() as f32 / segment.sample_rate_hz as f32
             ),
         ),
     );
 
-    let utterance_id = segment.utterance_id.clone();
-    let text = match transcribe(
-        http_client,
-        config,
-        openai_api_key,
-        segment.sample_rate,
-        &segment.samples,
-    ) {
-        Ok(text) => text,
+    let utterance_id = segment.unit_id.clone();
+    let outcome = match recognize(&segment) {
+        Ok(outcome) => outcome,
         Err(error) => {
-            let committed = generation.commit_if_active(|| {
-                // Resolve the utterance for the UI; the caller reports error details.
-                end_utterance_without_final(
-                    app,
-                    publisher,
-                    utterance_id.clone(),
-                    UtteranceEndReason::SttFailed,
-                );
-            })?;
+            let committed = generation.end_caption_unit(
+                app,
+                utterance_id.clone(),
+                UtteranceEndReason::SttFailed,
+            )?;
             if !committed {
-                discard_late_transcription_result(app, publisher, utterance_id);
+                discard_late_transcription_result(app, publisher, generation, utterance_id);
                 return Ok(());
             }
+            abort_chatbox_activity(app, publisher, &utterance_id);
 
             return Err(error);
         }
     };
 
-    if text.is_empty() {
-        let committed = generation.commit_if_active(|| {
-            end_utterance_without_final(
+    let caption = match outcome {
+        OpenAiBoundedOutcome::NoSpeech => {
+            let committed = generation.end_caption_unit(
                 app,
-                publisher,
                 utterance_id.clone(),
                 UtteranceEndReason::NoSpeech,
-            );
+            )?;
+            if !committed {
+                discard_late_transcription_result(app, publisher, generation, utterance_id);
+                return Ok(());
+            }
+            abort_chatbox_activity(app, publisher, &utterance_id);
             emit_diagnostic(
                 app,
                 DiagnosticUpdate::info(
@@ -1114,29 +1300,15 @@ fn transcribe_and_emit_final<R: Runtime>(
                     "The captured segment did not contain recognized words.",
                 ),
             );
-        })?;
-        if !committed {
-            discard_late_transcription_result(app, publisher, utterance_id);
+            return Ok(());
         }
-
-        return Ok(());
-    }
-
-    let committed = generation.commit_if_active(|| {
-        emit_transcript_final(
-            app,
-            TranscriptUpdate {
-                utterance_id: utterance_id.clone(),
-                text: text.clone(),
-                language: config.stt.language.clone(),
-                provider: config.stt.provider.as_str().to_string(),
-                revision: 1,
-            },
-        );
-    })?;
+        OpenAiBoundedOutcome::Completed(caption) => caption,
+    };
+    let text = caption.text.clone();
+    let committed = generation.accept_caption(caption)?;
 
     if !committed {
-        discard_late_transcription_result(app, publisher, utterance_id);
+        discard_late_transcription_result(app, publisher, generation, utterance_id);
         return Ok(());
     }
 
@@ -1187,7 +1359,7 @@ fn transcribe_and_emit_final<R: Runtime>(
                         DiagnosticCategory::Osc,
                         "osc.completed_unit_discarded_after_close",
                         "Completed Chatbox publication discarded",
-                        "The runtime output worker closed before this completed caption could enter its queue. The App transcript remains available.",
+                        "The runtime output worker closed before this completed caption could enter its queue. The App caption remains available.",
                     ),
                 );
             }
@@ -1204,9 +1376,16 @@ fn transcribe_and_emit_final<R: Runtime>(
 fn discard_late_transcription_result<R: Runtime>(
     app: &AppHandle<R>,
     publisher: Option<&CompletedChatboxPublisher>,
+    generation: &RuntimeGeneration,
     utterance_id: String,
 ) {
-    end_utterance_without_final(app, publisher, utterance_id, UtteranceEndReason::Discarded);
+    end_utterance_without_final(
+        app,
+        publisher,
+        generation,
+        utterance_id,
+        UtteranceEndReason::Discarded,
+    );
     emit_diagnostic(
         app,
         DiagnosticUpdate::info(
@@ -1225,7 +1404,7 @@ fn emit_chatbox_send_skipped_on_stop<R: Runtime>(app: &AppHandle<R>) {
             DiagnosticCategory::Osc,
             "osc.send_skipped_on_stop",
             "Chatbox send skipped",
-            "Runtime stop was requested before this transcript could be sent.",
+            "Runtime stop was requested before this caption could be sent.",
         ),
     );
 }
@@ -1253,7 +1432,7 @@ fn emit_publisher_diagnostic<R: Runtime>(app: &AppHandle<R>, diagnostic: Publish
             "osc.completed_unit_dropped_overload",
             "Completed caption dropped from Chatbox backlog",
             format!(
-                "Dropped the oldest unstarted caption unit {unit_id} as one complete {page_count}-page publication because the Chatbox backlog was full. The App transcript remains available."
+                "Dropped the oldest unstarted caption unit {unit_id} as one complete {page_count}-page publication because the Chatbox backlog was full. The App caption remains available."
             ),
         ),
         PublisherDiagnostic::UnitRejectedOverload {
@@ -1264,7 +1443,7 @@ fn emit_publisher_diagnostic<R: Runtime>(app: &AppHandle<R>, diagnostic: Publish
             "osc.completed_unit_rejected_overload",
             "Completed caption could not enter the Chatbox backlog",
             format!(
-                "Rejected caption unit {unit_id} as one complete {page_count}-page publication because it could not fit safely within the bounded Chatbox backlog. No partial pages were queued; the App transcript remains available."
+                "Rejected caption unit {unit_id} as one complete {page_count}-page publication because it could not fit safely within the bounded Chatbox backlog. No partial pages were queued; the App caption remains available."
             ),
         ),
         PublisherDiagnostic::UnitExpired {
@@ -1275,7 +1454,7 @@ fn emit_publisher_diagnostic<R: Runtime>(app: &AppHandle<R>, diagnostic: Publish
             "osc.completed_unit_expired",
             "Completed caption expired from Chatbox backlog",
             format!(
-                "Discarded unstarted caption unit {unit_id} as one complete {page_count}-page publication after it exceeded the provisional backlog age. The App transcript remains available."
+                "Discarded unstarted caption unit {unit_id} as one complete {page_count}-page publication after it exceeded the provisional backlog age. The App caption remains available."
             ),
         ),
         PublisherDiagnostic::LayoutFailed { unit_id, reason } => DiagnosticUpdate::warning(
@@ -1361,9 +1540,20 @@ fn start_chatbox_activity(
 fn end_utterance_without_final<R: Runtime>(
     app: &AppHandle<R>,
     publisher: Option<&CompletedChatboxPublisher>,
+    generation: &RuntimeGeneration,
     utterance_id: String,
     reason: UtteranceEndReason,
 ) {
+    let aggregate_resolved = match generation.end_caption_unit(app, utterance_id.clone(), reason) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            emit_diagnostic(
+                app,
+                DiagnosticUpdate::from_error(&error, "Caption unit could not resolve"),
+            );
+            false
+        }
+    };
     let resolution = NoFinalUtteranceResolution {
         utterance_id,
         reason,
@@ -1371,7 +1561,16 @@ fn end_utterance_without_final<R: Runtime>(
 
     if let Err(error) =
         complete_no_final_utterance(publisher, resolution, |utterance_id, reason| {
-            emit_utterance_ended(app, utterance_id, reason);
+            if !aggregate_resolved {
+                emit_utterance_ended(
+                    app,
+                    generation.generation_id(),
+                    generation.stream_id().to_string(),
+                    utterance_id,
+                    reason,
+                    now_ms(),
+                );
+            }
         })
     {
         emit_diagnostic(

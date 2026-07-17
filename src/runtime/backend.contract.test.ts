@@ -2,6 +2,11 @@ import { describe, expect, test } from "vitest";
 import type { RuntimeBackend } from "./backend";
 import { createPreviewBackend } from "./previewBackend";
 import {
+  createCaptionSessionState,
+  reduceCaptionSessionState,
+  selectCaptionSessionView,
+} from "./captionSession";
+import {
   createRuntimeState,
   reduceRuntimeState,
   selectRuntimeView,
@@ -12,6 +17,8 @@ import {
   RUNTIME_EVENTS,
   RUNTIME_CONTROL_EVENT,
   type AppConfig,
+  type CaptionSessionSnapshotV1,
+  type CaptionSnapshotV1,
   type DiagnosticCategory,
   type RuntimeControlSnapshot,
   type RuntimeEvent,
@@ -54,6 +61,13 @@ function createFakeTauriBridge(): TauriBackendBridge {
     message: "Runtime is idle",
     timestampMs: 1,
   };
+  let captionSession: CaptionSessionSnapshotV1 = {
+    contractVersion: 1,
+    snapshotRevision: 0,
+    active: null,
+    activeUnits: [],
+    captions: [],
+  };
 
   function eventId(prefix: string) {
     nextEventNumber += 1;
@@ -95,6 +109,20 @@ function createFakeTauriBridge(): TauriBackendBridge {
   function publishControl() {
     controlRevision += 1;
     emit(RUNTIME_CONTROL_EVENT, controlSnapshot());
+  }
+
+  function publishCaptionSession(
+    next: Omit<
+      CaptionSessionSnapshotV1,
+      "contractVersion" | "snapshotRevision"
+    >,
+  ) {
+    captionSession = {
+      contractVersion: 1,
+      snapshotRevision: captionSession.snapshotRevision + 1,
+      ...next,
+    };
+    emit(RUNTIME_EVENTS.captionSessionChanged, structuredClone(captionSession));
   }
 
   function emitDiagnostic(
@@ -154,6 +182,16 @@ function createFakeTauriBridge(): TauriBackendBridge {
           },
           uploadsMicrophoneAudio: selected.stt.provider === "openai",
         };
+        publishCaptionSession({
+          active: {
+            generation: nextGeneration,
+            streamId: `recognition-${String(nextGeneration)}-1`,
+          },
+          activeUnits: [],
+          captions: captionSession.captions.filter(
+            (caption) => caption.state === "completed",
+          ),
+        });
         emitStatus("starting", "Starting runtime");
         session = { ...session, phase: "running" };
         emitStatus("running", "Runtime is running");
@@ -170,6 +208,13 @@ function createFakeTauriBridge(): TauriBackendBridge {
             session = { ...session, phase: "stopping" };
           }
           emitStatus("stopping", "Stopping runtime");
+          publishCaptionSession({
+            active: null,
+            activeUnits: [],
+            captions: captionSession.captions.filter(
+              (caption) => caption.state === "completed",
+            ),
+          });
           session = null;
           emitStatus("stopped", "Runtime stopped");
           emitDiagnostic("runtime", "runtime.stopped", "Runtime stopped");
@@ -188,31 +233,63 @@ function createFakeTauriBridge(): TauriBackendBridge {
         }
         const utteranceId = eventId("utterance");
         const timestampMs = timestamp();
+        const active = captionSession.active;
+
+        if (active === null) {
+          return Promise.reject(new Error("Recognition stream is missing."));
+        }
         const base = {
-          utteranceId,
+          generation: active.generation,
+          streamId: active.streamId,
+          unitId: utteranceId,
+          lane: "source" as const,
           language: session.selected.stt.language,
           provider: session.selected.stt.provider,
+          model: session.selected.stt.model,
+          unitStartedAtMs: timestampMs,
           timestampMs,
         };
 
         emit(RUNTIME_EVENTS.utteranceStarted, {
           id: eventId("utterance-start"),
+          generation: active.generation,
+          streamId: active.streamId,
           utteranceId,
           timestampMs,
         });
-        emit(RUNTIME_EVENTS.transcriptPartial, {
-          ...base,
-          id: eventId("transcript"),
-          kind: "partial",
-          text: "Testing live caption preview...",
-          revision: 1,
+        publishCaptionSession({
+          active,
+          activeUnits: [{ unitId: utteranceId, startedAtMs: timestampMs }],
+          captions: captionSession.captions.filter(
+            (caption) => caption.state === "completed",
+          ),
         });
-        emit(RUNTIME_EVENTS.transcriptFinal, {
+        const ongoing: CaptionSnapshotV1 = {
           ...base,
-          id: eventId("transcript"),
-          kind: "final",
-          text: expectedFinalText,
+          revision: 1,
+          text: "Testing live caption preview...",
+          state: "ongoing",
+        };
+        publishCaptionSession({
+          active,
+          activeUnits: [{ unitId: utteranceId, startedAtMs: timestampMs }],
+          captions: [ongoing, ...captionSession.captions],
+        });
+        const completed: CaptionSnapshotV1 = {
+          ...base,
           revision: 2,
+          text: expectedFinalText,
+          state: "completed",
+        };
+        publishCaptionSession({
+          active,
+          activeUnits: [],
+          captions: [
+            completed,
+            ...captionSession.captions.filter(
+              (caption) => caption.state === "completed",
+            ),
+          ].slice(0, 5),
         });
         emitDiagnostic(
           "stt",
@@ -223,6 +300,8 @@ function createFakeTauriBridge(): TauriBackendBridge {
         emitDiagnostic("osc", "osc.test_simulated", "OSC test simulated");
       } else if (command === "get_runtime_control_snapshot") {
         result = controlSnapshot();
+      } else if (command === "get_caption_session_snapshot") {
+        result = structuredClone(captionSession);
       } else if (command === "save_app_config") {
         config = structuredClone(args?.["config"] as AppConfig);
         configRevision += 1;
@@ -241,12 +320,23 @@ function projectEvents(events: readonly RuntimeEvent[]) {
     message: "Synthetic initial state",
     timestampMs: 0,
   });
+  let captionState = createCaptionSessionState();
 
   for (const event of events) {
-    state = reduceRuntimeState(state, { type: "backendEvent", event });
+    if (event.type === "captionSessionChanged") {
+      captionState = reduceCaptionSessionState(captionState, {
+        type: "snapshotReceived",
+        snapshot: event.payload,
+      });
+    } else {
+      state = reduceRuntimeState(state, { type: "backendEvent", event });
+    }
   }
 
-  return selectRuntimeView(state, { showPartial: true });
+  return {
+    runtime: selectRuntimeView(state),
+    caption: selectCaptionSessionView(captionState, true),
+  };
 }
 
 const backendCases: readonly Readonly<{
@@ -311,44 +401,57 @@ describe.each(backendCases)("$name contract", ({ create }) => {
     }
 
     expect(events.map((event) => event.type)).toEqual([
+      "captionSessionChanged",
       "status",
       "status",
       "utteranceStarted",
-      "transcriptPartial",
-      "transcriptFinal",
+      "captionSessionChanged",
+      "captionSessionChanged",
+      "captionSessionChanged",
       "diagnostic",
       "status",
+      "captionSessionChanged",
       "status",
       "diagnostic",
     ]);
 
-    const partial = events.find((event) => event.type === "transcriptPartial");
-    const final = events.find((event) => event.type === "transcriptFinal");
+    const captionAggregates = events.filter(
+      (event) => event.type === "captionSessionChanged",
+    );
+    const ongoing = captionAggregates.find((event) =>
+      event.payload.captions.some((caption) => caption.state === "ongoing"),
+    );
+    const completed = captionAggregates.find((event) =>
+      event.payload.captions.some(
+        (caption) => caption.text === expectedFinalText,
+      ),
+    );
 
-    expect(partial?.payload).toMatchObject({
-      kind: "partial",
+    expect(ongoing?.payload.captions[0]).toMatchObject({
+      state: "ongoing",
       language: "en",
       provider: "mock",
       revision: 1,
       text: "Testing live caption preview...",
     });
-    expect(final?.payload).toMatchObject({
-      kind: "final",
+    expect(completed?.payload.captions[0]).toMatchObject({
+      state: "completed",
       language: "en",
       provider: "mock",
       revision: 2,
       text: expectedFinalText,
     });
-    expect(final?.payload.utteranceId).toBe(partial?.payload.utteranceId);
 
     const view = projectEvents(events);
 
-    expect(view.runtimeStatus.status).toBe("stopped");
-    expect(view.captionMode).toBe("final");
-    expect(view.visibleTranscript?.text).toBe(expectedFinalText);
-    expect(view.finalTranscripts).toHaveLength(1);
-    expect(view.diagnostics.at(0)?.code).toBe("runtime.stopped");
-    expect(view.diagnostics.at(1)?.code).toBe("stt.mock_transcript_emitted");
+    expect(view.runtime.runtimeStatus.status).toBe("stopped");
+    expect(view.caption.captionMode).toBe("final");
+    expect(view.caption.visibleCaption?.text).toBe(expectedFinalText);
+    expect(view.caption.completedCaptions).toHaveLength(1);
+    expect(view.runtime.diagnostics.at(0)?.code).toBe("runtime.stopped");
+    expect(view.runtime.diagnostics.at(1)?.code).toBe(
+      "stt.mock_transcript_emitted",
+    );
   });
 
   test("rejects duplicate Start while preserving the active runtime", async () => {
@@ -434,7 +537,7 @@ test("TauriBackend cleans up successful channel registrations when one fails", a
     listen(eventName) {
       registeredChannels.push(eventName);
 
-      if (eventName === RUNTIME_EVENTS.transcriptFinal) {
+      if (eventName === RUNTIME_EVENTS.captionSessionChanged) {
         return Promise.reject(new Error("listener registration failed"));
       }
 

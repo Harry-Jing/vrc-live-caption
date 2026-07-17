@@ -1,4 +1,5 @@
 mod audio;
+mod caption_session;
 mod chatbox_layout;
 mod chatbox_pacer;
 mod chatbox_publisher;
@@ -6,6 +7,7 @@ mod commands;
 mod config;
 mod error;
 mod events;
+mod openai_bounded;
 mod osc;
 mod runtime;
 mod runtime_control;
@@ -37,6 +39,7 @@ pub fn run() {
             commands::start_runtime,
             commands::stop_runtime,
             commands::get_runtime_control_snapshot,
+            commands::get_caption_session_snapshot,
             commands::emit_mock_transcript,
             commands::send_osc_test_message,
             commands::save_provider_secret,

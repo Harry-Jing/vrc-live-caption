@@ -8,8 +8,8 @@ names, database schema, or provider-specific wire protocols.
 
 ## Status Convention
 
-The explicitly named current flow and current wire contract describe code that
-exists today. The remaining seams and policies are the accepted target
+The explicitly named current flow and current UI-facing contracts describe code
+that exists today. The remaining seams and policies are the accepted target
 architecture unless a section is marked provisional or research-only. Their
 implementation order and status live in [roadmap.md](./roadmap.md).
 
@@ -29,22 +29,23 @@ A provider path may produce a source lane, a translated lane, or both. A
 translation path may consume normalized source text or audio directly. The
 architecture does not require every translation to wait behind STT.
 
-The currently implemented Phase 1 path is deliberately smaller:
+The currently implemented Phase 3 tracer bullet keeps the original user
+behavior while inserting the normalized session seam:
 
 ```text
 Microphone
   -> application-bounded speech segment
-  -> OpenAI /v1/audio/transcriptions
-  -> transcript-final event
-  -> App preview
-  -> completed Chatbox publication
-  -> OSC
+  -> bounded OpenAI recognition-session adapter
+  -> normalized completed source caption
+  -> backend-owned CaptionSessionSnapshotV1
+     |-> full aggregate event / pull -> App preview
+     `-> accepted completed caption -> existing Completed policy -> OSC
 ```
 
-That event is semantically a completed source result, but the current wire does
-not yet use the target generation/lane/full-snapshot state shape. The path is a
-working baseline, not the capability ceiling for future cloud or local
-providers.
+The same accepted completed caption continues into the existing Completed
+publisher; this slice does not add Live publication or change OpenAI request,
+preview, paging, pacing, or Stop behavior. It establishes a contract seam, not
+the capability ceiling for future cloud or local providers.
 
 ## Core Boundaries
 
@@ -60,9 +61,9 @@ providers.
 - Runtime failures are categorized, visible, and never silently change provider,
   model, backend, publication mode, or content selection.
 
-## Target Recognition Session Seam
+## Recognition Session Seam
 
-The target main runtime faces one conceptual session:
+The main runtime faces one conceptual session:
 
 ```text
 provider-independent audio in
@@ -72,8 +73,9 @@ provider-independent audio in
 
 Concrete adapters hide their very different mechanics:
 
-- a bounded adapter may use local VAD, recognize one completed span, and emit
-  only a completed snapshot;
+- the implemented bounded OpenAI adapter accepts one application-bounded audio
+  unit, recognizes it through `/v1/audio/transcriptions`, and emits either no
+  speech or one revision-1 completed source snapshot for that real unit;
 - a streaming adapter may accept frames continuously, emit revisable snapshots,
   detect an endpoint, emit a completed snapshot, and reset its internal stream;
 - a continuous path without per-unit completion may emit ongoing snapshots but
@@ -105,7 +107,7 @@ a `supports_two_pass` model flag.
 The OpenAI mappings and documentation uncertainties are recorded in
 [research/openai-speech-streaming-options.md](./research/openai-speech-streaming-options.md).
 
-## Current Wire Contract And Migration
+## Current UI-Facing Contracts
 
 The implemented UI-facing event concepts map to concrete Tauri event names as
 follows:
@@ -113,9 +115,8 @@ follows:
 | Semantic concept | Current Tauri event | Current meaning |
 |---|---|---|
 | `runtime.status` | `runtime-status` | `idle`, `starting`, `running`, `stopping`, `stopped`, or `error` |
-| `utterance.started` | `utterance-started` | confirmed speech activity before transcript text exists |
-| `transcript.partial` | `transcript-partial` | revisable text supported by the wire and mock path; the real bounded OpenAI adapter does not emit it |
-| `transcript.final` | `transcript-final` | completed result from the current bounded OpenAI adapter |
+| `utterance.started` | `utterance-started` | generation- and stream-correlated speech activity before caption text exists |
+| `caption.session.changed` | `caption-session-changed` | the newest full `CaptionSessionSnapshotV1` aggregate |
 | `utterance.ended` | `utterance-ended` | a unit ended without a final result: no speech, STT failure, or discard |
 | `diagnostic` | `diagnostic-event` | categorized report with a stable code and English fallback text |
 
@@ -124,24 +125,34 @@ discussion uses dotted semantic names. Diagnostic codes follow
 `<category>.<detail>`; the code is the localization and test contract, while
 message and detail are fallback/debug prose.
 
-The current transcript payload already carries an utterance id, revision, and
-partial/final kind, but not generation, lane, or the target named state field.
-There is no emitted `transcript-stable` event. The Rust enum reservation for
-`Stable` is unused and should be removed during the versioned migration rather
-than given a new application meaning.
+Rust owns one versioned caption-session aggregate. `CaptionSessionSnapshotV1`
+carries a monotonic aggregate `snapshotRevision`, an optional active
+`generation` and `streamId`, active caption units, and the current caption
+snapshots. Each caption carries its backend-authoritative generation and stream,
+optional unit, source or translation lane, lane-scope revision, full text,
+ongoing or completed state, and available provider/model/language/timing
+metadata. `stable` is not a caption state and no partial/stable/final wire
+ladder remains.
+
+The current bounded OpenAI adapter produces unitful source captions at revision
+1 in the completed state. `ongoing`, a unitless stream, and the translation lane
+are contract shapes for later concrete paths; their presence in V1 does not
+claim that the current provider or publisher implements them.
 
 Runtime lifecycle events are not replaced by caption snapshots. In particular,
 `utterance.ended` remains necessary for no-result and failed units, while
-`runtime.status` remains a lifecycle signal consumed by the caption reducer.
-The revisioned runtime-control snapshot is the pull/push resynchronization
+`runtime.status` remains a separate lifecycle signal consumed by runtime state.
+The revisioned runtime-control snapshot remains the pull/push resynchronization
 boundary for lifecycle status, saved settings, and the effective session.
+Caption state has its own full-aggregate push/pull boundary.
 
-The current frontend normalizes Preview and Tauri delivery into one event
-stream and reduces it in a framework-free state module. That module owns strict
-revision ordering, terminal caption units, bounded recent-unit tombstones,
-Stop/Start admission, and pull-versus-push status reconciliation. Vue consumes
-only its projection: listening is a small activity state, while the latest
-completed caption remains visible until newer text is accepted.
+Preview and Tauri expose the same full caption-session shape. The Tauri gateway
+decodes untrusted event and command payloads before delivery, and a shared JSON
+fixture pins the Rust serialization and TypeScript decoder to the same V1 wire
+format. A framework-free caption-session reducer accepts only newer aggregate
+revisions, enforces Start/Stop admission and generation ordering, and projects
+normalized captions for Vue. The latest completed caption remains visible until
+newer admitted state replaces it.
 
 A local Stop intent closes caption admission immediately. Stop IPC bypasses an
 in-flight Start so the backend can advance the hard-stop epoch without waiting
@@ -152,13 +163,13 @@ Because the Rust Start command may return before its worker publishes status,
 the frontend also reconciles the pull snapshot while the transition remains
 `starting`; the loop stops as soon as Running, Error, or Stop is observed.
 
-On webview load, the frontend opens a bounded event buffer, starts all current
-Tauri channel registrations, and then pulls the full runtime-control snapshot.
-This prevents an older pull result from overwriting a newer pushed control
-revision or lifecycle event. The control snapshot does not contain caption
-history, so it still cannot replay a caption emitted before its individual
-listener attached; eliminating that narrow reload window belongs with the
-versioned caption-session contract rather than an ad hoc Live implementation.
+On webview load, the frontend opens a bounded event buffer, registers the
+runtime, control, and caption-session listeners, and then pulls both the full
+runtime-control snapshot and the full caption-session snapshot. The reducers
+ignore older revisions, so a delayed pull cannot overwrite newer pushed state,
+while the pull repairs an event missed before listener registration or during a
+webview reload. Event delivery remains best-effort; correctness does not depend
+on replaying individual caption events.
 
 ### Runtime Control Snapshot
 
@@ -202,21 +213,20 @@ the deliberate exception: plaintext is never retained for equality checks, so
 any credential mutation advances its revision and remains pending until Stop or
 the next Start captures that revision.
 
-This current-wire defense is deliberately narrower than the target generation
-contract. A local Start timestamp rejects events created before the new run,
-and recently tracked unit ids reject known prior-run events. Without generation
-on the payload, the frontend cannot distinguish a never-before-seen prior-run
-event timestamped after that local fence from a real current-run event. The
-Rust runtime generation boundary remains authoritative until the versioned wire
-adds explicit generation in Phase 3.
+Caption admission no longer infers session identity from frontend timestamps.
+Rust assigns generation and stream identity when a runtime generation starts,
+advances the aggregate revision for accepted state transitions, and rejects
+stale generations or terminal units before publishing a new aggregate. The
+frontend uses those explicit identities and revisions to reject delayed pushes
+and pulls across Stop, Start, and reload races.
 
-## Target Caption Snapshot Contract
+## Caption Session Snapshot Contract
 
 Provider adapters absorb raw delta, append, replacement, item, and ordering
 rules. Downstream consumers receive the full current text for a lane, not an
 operation they must reconstruct independently.
 
-A normalized snapshot conceptually carries:
+A V1 normalized caption carries:
 
 - session generation;
 - session/stream correlation identity;
@@ -224,7 +234,6 @@ A normalized snapshot conceptually carries:
 - source or translation lane;
 - full current text and monotonic revision;
 - state: ongoing or completed;
-- source unit and revision identity for transcript-driven translation;
 - provider/model metadata and timing only when they are actually known.
 
 An ongoing snapshot may replace earlier text in the same correlation scope: a
@@ -232,21 +241,25 @@ caption unit when one exists, otherwise the ongoing stream/lane. A completed
 snapshot closes that adapter's real caption unit. Session termination is a
 separate lifecycle event and never stands in for unit completion.
 
-Before the first new streaming adapter ships, version the wire contract with
-explicit generation, stream correlation, lane, revision, optional unit, and
-ongoing/completed fields and pin the Rust/frontend mapping with wire-format
-tests.
+The backend publishes a full aggregate rather than a patch. Its top-level
+revision orders event and pull copies of the aggregate; each caption revision
+orders replacements within its generation/stream/unit/lane scope. Rust
+round-trips the shared V1 JSON fixture and TypeScript decodes that same fixture
+at runtime-facing boundaries. Translation source-link fields, if needed by the
+first translator, require an explicit compatible extension rather than an
+informal payload addition.
 
 Future two-pass work may add a separate authority dimension. It must not
 overload ongoing/completed or reintroduce a partial/stable/final ladder.
 
-Transcript text never contains presentation placeholders. The UI derives
+Caption text never contains presentation placeholders. The UI derives
 listening, translating, degraded, and failure state from lifecycle and health
 events.
 
 UI event delivery remains best-effort and at-most-once. The UI derives its view
-from the newest status and snapshots; runtime lifecycle never depends on a
-successful webview emit.
+from the newest status and caption-session aggregate, and can pull the same
+aggregate to resynchronize; runtime lifecycle never depends on a successful
+webview emit.
 
 ## Runtime Lifecycle
 
@@ -321,14 +334,15 @@ to remain current and readable.
 
 ## Independent Chatbox Publisher
 
-The Phase 1 Completed publisher is implemented as an independent worker.
+The Phase 1 Completed publisher remains an independent worker.
 Runtime producers submit whole caption-unit lifecycle events without waiting
 for a pacing opportunity or OSC; Completed text is paginated before queue
 admission. The worker owns typing transitions, ordered Completed publication,
 overload handling, and diagnostics, and uses the shared process-wide pacer for
 actual text-send attempts. Capture and provider ingestion never wait for
-Chatbox pacing. Live policy remains a Phase 3 extension of this publisher rather
-than current behavior. Publisher instances are Runtime-generation scoped; only
+Chatbox pacing. The first Phase 3 tracer bullet leaves that policy unchanged;
+Live remains a later Phase 3 extension rather than current behavior. Publisher
+instances are Runtime-generation scoped; only
 the process-wide pacer survives Stop/Start, so an old Publisher handle can never
 submit into a new generation while the new generation still respects the old
 generation's most recent actual send attempt.

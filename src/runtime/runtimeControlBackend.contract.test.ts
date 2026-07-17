@@ -7,6 +7,7 @@ import {
   RUNTIME_EVENTS,
   RUNTIME_CONTROL_EVENT,
   type AppConfig,
+  type CaptionSessionSnapshotV1,
   type RuntimeControlSnapshot,
   type RuntimeEvent,
 } from "./types";
@@ -42,6 +43,13 @@ function createControlBridge(): TauriBackendBridge {
   };
   let secretRevision = 0;
   let sessionSecretRevision: number | null = null;
+  let captionSession: CaptionSessionSnapshotV1 = {
+    contractVersion: 1,
+    snapshotRevision: 0,
+    active: null,
+    activeUnits: [],
+    captions: [],
+  };
 
   function emit(eventName: string, payload: unknown) {
     for (const listener of listeners.get(eventName) ?? []) {
@@ -51,6 +59,20 @@ function createControlBridge(): TauriBackendBridge {
 
   function emitControl() {
     emit(RUNTIME_CONTROL_EVENT, structuredClone(snapshot));
+  }
+
+  function publishCaptionSession(
+    next: Omit<
+      CaptionSessionSnapshotV1,
+      "contractVersion" | "snapshotRevision"
+    >,
+  ) {
+    captionSession = {
+      contractVersion: 1,
+      snapshotRevision: captionSession.snapshotRevision + 1,
+      ...next,
+    };
+    emit(RUNTIME_EVENTS.captionSessionChanged, structuredClone(captionSession));
   }
 
   function pendingChanges(
@@ -130,6 +152,11 @@ function createControlBridge(): TauriBackendBridge {
             uploadsMicrophoneAudio: selected.stt.provider === "openai",
           },
         };
+        publishCaptionSession({
+          active: { generation: 1, streamId: "recognition-1-1" },
+          activeUnits: [],
+          captions: captionSession.captions,
+        });
         emitControl();
       } else if (command === "stop_runtime") {
         sessionSecretRevision = null;
@@ -144,6 +171,13 @@ function createControlBridge(): TauriBackendBridge {
           session: null,
           pendingChanges: [],
         };
+        publishCaptionSession({
+          active: null,
+          activeUnits: [],
+          captions: captionSession.captions.filter(
+            (caption) => caption.state === "completed",
+          ),
+        });
         emitControl();
       } else if (command === "save_app_config") {
         const config = structuredClone(args?.["config"] as AppConfig);
@@ -196,31 +230,64 @@ function createControlBridge(): TauriBackendBridge {
         }
 
         const utteranceId = "fake-control-utterance";
+        const active = captionSession.active;
+
+        if (active === null) {
+          return Promise.reject(new Error("Recognition stream is missing."));
+        }
         const base = {
-          utteranceId,
+          generation: active.generation,
+          streamId: active.streamId,
+          unitId: utteranceId,
+          lane: "source" as const,
           language: activeSession.selected.stt.language,
           provider: activeSession.selected.stt.provider,
+          model: activeSession.selected.stt.model,
+          unitStartedAtMs: 4,
           timestampMs: 4,
         };
         emit(RUNTIME_EVENTS.utteranceStarted, {
           id: "fake-control-start",
+          generation: active.generation,
+          streamId: active.streamId,
           utteranceId,
           timestampMs: 4,
         });
-        emit(RUNTIME_EVENTS.transcriptPartial, {
-          ...base,
-          id: "fake-control-partial",
-          kind: "partial",
-          text: "Testing live caption preview...",
-          revision: 1,
+        publishCaptionSession({
+          active,
+          activeUnits: [{ unitId: utteranceId, startedAtMs: 4 }],
+          captions: captionSession.captions,
         });
-        emit(RUNTIME_EVENTS.transcriptFinal, {
-          ...base,
-          id: "fake-control-final",
-          kind: "final",
-          text: "Testing live caption preview from the mock runtime.",
-          revision: 2,
+        publishCaptionSession({
+          active,
+          activeUnits: [{ unitId: utteranceId, startedAtMs: 4 }],
+          captions: [
+            {
+              ...base,
+              text: "Testing live caption preview...",
+              revision: 1,
+              state: "ongoing" as const,
+            },
+            ...captionSession.captions,
+          ],
         });
+        publishCaptionSession({
+          active,
+          activeUnits: [],
+          captions: [
+            {
+              ...base,
+              text: "Testing live caption preview from the mock runtime.",
+              revision: 2,
+              state: "completed" as const,
+            },
+            ...captionSession.captions.filter(
+              (caption) => caption.state === "completed",
+            ),
+          ].slice(0, 5),
+        });
+      } else if (command === "get_caption_session_snapshot") {
+        return Promise.resolve(structuredClone(captionSession) as Result);
       }
 
       return Promise.resolve(structuredClone(snapshot) as Result);
@@ -355,8 +422,11 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
       unsubscribe();
     }
 
-    const final = events.find((event) => event.type === "transcriptFinal");
-    expect(final?.payload).toMatchObject({
+    const completed = events
+      .filter((event) => event.type === "captionSessionChanged")
+      .flatMap((event) => event.payload.captions)
+      .find((caption) => caption.state === "completed");
+    expect(completed).toMatchObject({
       provider: "mock",
       language: "ja",
     });

@@ -15,7 +15,13 @@ new architecture.
 - Frontend: Vue 3, TypeScript, and Vite.
 - Runtime: Rust.
 - Implemented baseline: microphone input to application-bounded OpenAI cloud
-  STT, App preview, and completed-only VRChat Chatbox output.
+  STT behind a concrete bounded recognition-session adapter, backend-owned
+  `CaptionSessionSnapshotV1` state, App preview, and completed-only VRChat
+  Chatbox output.
+- Implemented Phase 3 contract slice: full caption-session aggregates use
+  backend-authoritative generation and stream identity, push plus pull
+  resynchronization, and one runtime-decoded Rust/TypeScript V1 wire shape.
+  The current OpenAI path still emits completed source captions only.
 - Target publication choices: Completed and Live, resolved from the selected
   provider path and content lanes rather than one global final-only rule.
 - First translation implementation: completed normalized source text into one

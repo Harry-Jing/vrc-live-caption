@@ -90,16 +90,16 @@ Exit criteria:
 
 ## Phase 2: Frontend And Contract Test Foundation
 
-Status: in progress. Vitest now runs in the normal frontend gate; a framework-
-free current-wire reducer and one shared Preview/Tauri behavior suite cover
-revision ordering, terminal units, Stop/Start fences, reload races, bounded
-history, subscription cleanup, and settings round trips. A revisioned runtime
-control snapshot now distinguishes saved desired settings from the immutable
-active-session selection and derives next-Start changes across reloads.
-Component-level state tests and the later versioned caption contract remain.
+Status: in progress. Vitest now runs in the normal frontend gate; framework-free
+lifecycle and caption-session reducers plus shared Preview/Tauri behavior suites
+cover revision ordering, terminal units, Stop/Start fences, reload races,
+bounded history, subscription cleanup, and settings round trips. A revisioned
+runtime-control snapshot distinguishes saved desired settings from the
+immutable active-session selection and derives next-Start changes across
+reloads. Component-level state tests remain; the versioned caption contract and
+reload-safe caption resynchronization have landed as the first Phase 3 slice.
 
-Goal: build the regression net before replacing the current transcript wire
-contract.
+Goal: maintain the regression net around runtime contract changes.
 
 - add Vitest to the frontend quality gates;
 - extract caption/lifecycle state into framework-free modules;
@@ -107,7 +107,7 @@ contract.
   so they cannot drift;
 - test webview reload resynchronization through the revisioned runtime-control
   snapshot;
-- test duplicate, out-of-order, and late-after-Stop current-wire events;
+- test duplicate, out-of-order, and late-after-Stop lifecycle and caption state;
 - test settings round trips and the Phase 1 legacy-config compatibility path.
 - keep saved configuration, redacted secret status, active-session selection,
   and derived next-Start changes in one revisioned control contract shared by
@@ -122,22 +122,32 @@ Exit criteria:
 
 ## Phase 3: Normalized Recognition Sessions And Live-Capable Publisher
 
-Status: not started.
+Status: in progress. The first behavior-preserving tracer bullet is implemented;
+Live publication and additional provider paths have not started.
 
 Goal: establish the deep runtime seams shared by bounded cloud, Realtime cloud,
 and later local providers, without adding translation or a second recognizer.
 
-- version the UI-facing caption contract with generation, session/stream
-  correlation, optional caption-unit identity, source/translation lane,
-  monotonic revision, full text, and ongoing/completed state;
-- preserve separate runtime lifecycle and diagnostic events, including
-  `runtime.status`, utterance start, and utterance end without a completed
-  transcript;
-- remove the unused `stable` reservation instead of assigning it new meaning;
-- expose one recognition-session seam: provider-independent audio in and
-  normalized full snapshots out;
-- move the existing bounded OpenAI transcription path behind its own concrete
-  adapter;
+The implemented tracer bullet:
+
+- routes the existing application-bounded OpenAI path through its own concrete
+  recognition-session adapter and maps each non-empty result to one revision-1,
+  completed source caption;
+- adds backend-owned `CaptionSessionSnapshotV1` state with authoritative
+  generation and stream correlation, optional unit identity, source/translation
+  lane, monotonic per-scope revision, full text, and ongoing/completed state;
+- removes the unused `stable` reservation rather than assigning it new meaning;
+- publishes the full aggregate on `caption-session-changed` and exposes the same
+  shape through a pull command so reloads and missed best-effort events can
+  resynchronize by aggregate revision;
+- validates event and pull payloads at the TypeScript runtime boundary and pins
+  Rust/TypeScript compatibility with one shared JSON fixture;
+- preserves separate lifecycle and diagnostic events, backend-authoritative
+  Stop/generation rejection, App preview behavior, and the existing Completed
+  Chatbox publication policy.
+
+Remaining Phase 3 work:
+
 - describe capability for the complete provider path, including input shape,
   boundary owner, per-lane update/completion behavior, and revision behavior;
 - extend the Phase 1 publisher with Completed and Live policies rather than
@@ -162,8 +172,8 @@ and later local providers, without adding translation or a second recognizer.
 - extend the Phase 1 fake-time/OSC harness to pin the observation window, Live
   coalescing, correction, and interactions with inherited pacing and Stop
   behavior;
-- test stale generations, capability resolution, persisted mode migration, and
-  both explicit incompatibility choices.
+- extend the existing stale-generation coverage with capability resolution,
+  persisted mode migration, and both explicit incompatibility choices.
 
 Exit criteria:
 

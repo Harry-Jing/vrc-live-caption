@@ -5,6 +5,7 @@ const APP_COMMANDS: &[&str] = &[
     "start_runtime",
     "stop_runtime",
     "get_runtime_control_snapshot",
+    "get_caption_session_snapshot",
     "emit_mock_transcript",
     "send_osc_test_message",
     "save_provider_secret",

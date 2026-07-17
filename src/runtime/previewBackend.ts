@@ -7,6 +7,8 @@ import type { RuntimeBackend, RuntimeEventListener } from "./backend";
 import {
   APP_CONFIG_SCHEMA_VERSION,
   type AppConfig,
+  type CaptionSessionSnapshotV1,
+  type CaptionSnapshotV1,
   type DiagnosticCategory,
   type ProviderSecretStatus,
   type RuntimeCommand,
@@ -51,6 +53,13 @@ export function createPreviewBackend(): RuntimeBackend {
   let session: RuntimeSession | null = null;
   let sessionSecretRevision: number | null = null;
   let nextEventNumber = 1;
+  let captionSession: CaptionSessionSnapshotV1 = {
+    contractVersion: 1,
+    snapshotRevision: 0,
+    active: null,
+    activeUnits: [],
+    captions: [],
+  };
   let latestStatus: RuntimeStatusEvent = {
     status: "idle",
     message: "Runtime is idle",
@@ -94,6 +103,23 @@ export function createPreviewBackend(): RuntimeBackend {
     });
   }
 
+  function publishCaptionSession(
+    next: Omit<
+      CaptionSessionSnapshotV1,
+      "contractVersion" | "snapshotRevision"
+    >,
+  ) {
+    captionSession = {
+      contractVersion: 1,
+      snapshotRevision: captionSession.snapshotRevision + 1,
+      ...next,
+    };
+    emit({
+      type: "captionSessionChanged",
+      payload: structuredClone(captionSession),
+    });
+  }
+
   function emitMockTranscript(): Error | null {
     if (
       latestStatus.status !== "running" ||
@@ -104,12 +130,23 @@ export function createPreviewBackend(): RuntimeBackend {
       );
     }
 
+    const active = captionSession.active;
+
+    if (active === null) {
+      return new Error("Mock runtime has no active recognition stream.");
+    }
+
     const utteranceId = eventId("utterance");
     const timestampMs = Date.now();
-    const transcriptBase = {
-      utteranceId,
+    const captionBase = {
+      generation: active.generation,
+      streamId: active.streamId,
+      unitId: utteranceId,
+      lane: "source" as const,
       language: session.selected.stt.language,
       provider: session.selected.stt.provider,
+      model: session.selected.stt.model,
+      unitStartedAtMs: timestampMs,
       timestampMs,
     };
 
@@ -117,35 +154,51 @@ export function createPreviewBackend(): RuntimeBackend {
       type: "utteranceStarted",
       payload: {
         id: eventId("utterance-start"),
+        generation: active.generation,
+        streamId: active.streamId,
         utteranceId,
         timestampMs,
       },
     });
-    emit({
-      type: "transcriptPartial",
-      payload: {
-        ...transcriptBase,
-        id: eventId("transcript"),
-        kind: "partial",
-        text: "Testing live caption preview...",
-        revision: 1,
-      },
+    publishCaptionSession({
+      active,
+      activeUnits: [{ unitId: utteranceId, startedAtMs: timestampMs }],
+      captions: captionSession.captions.filter(
+        (caption) => caption.state === "completed",
+      ),
     });
-    emit({
-      type: "transcriptFinal",
-      payload: {
-        ...transcriptBase,
-        id: eventId("transcript"),
-        kind: "final",
-        text: "Testing live caption preview from the mock runtime.",
-        revision: 2,
-      },
+    const ongoing: CaptionSnapshotV1 = {
+      ...captionBase,
+      revision: 1,
+      text: "Testing live caption preview...",
+      state: "ongoing",
+    };
+    publishCaptionSession({
+      active,
+      activeUnits: [{ unitId: utteranceId, startedAtMs: timestampMs }],
+      captions: [ongoing, ...captionSession.captions],
+    });
+    const completed: CaptionSnapshotV1 = {
+      ...captionBase,
+      revision: 2,
+      text: "Testing live caption preview from the mock runtime.",
+      state: "completed",
+    };
+    publishCaptionSession({
+      active,
+      activeUnits: [],
+      captions: [
+        completed,
+        ...captionSession.captions.filter(
+          (caption) => caption.state === "completed",
+        ),
+      ].slice(0, 5),
     });
     emitDiagnostic(
       "stt",
       "stt.mock_transcript_emitted",
       "Mock transcript emitted",
-      "The UI received normalized partial and final transcript events.",
+      "The UI received ongoing and completed caption-session snapshots.",
     );
 
     return null;
@@ -264,6 +317,16 @@ export function createPreviewBackend(): RuntimeBackend {
     sessionSecretRevision =
       config.stt.provider === "openai" ? secretRevision : null;
     session = createSession("starting");
+    publishCaptionSession({
+      active: {
+        generation: nextGeneration,
+        streamId: `recognition-${String(nextGeneration)}-1`,
+      },
+      activeUnits: [],
+      captions: captionSession.captions.filter(
+        (caption) => caption.state === "completed",
+      ),
+    });
     emitStatus("starting", "Starting browser preview runtime");
     session = { ...session, phase: "running" };
     emitStatus("running", "Browser preview runtime is running");
@@ -283,6 +346,13 @@ export function createPreviewBackend(): RuntimeBackend {
       session = { ...session, phase: "stopping" };
     }
     emitStatus("stopping", "Stopping browser preview runtime");
+    publishCaptionSession({
+      active: null,
+      activeUnits: [],
+      captions: captionSession.captions.filter(
+        (caption) => caption.state === "completed",
+      ),
+    });
     session = null;
     sessionSecretRevision = null;
     emitStatus("stopped", "Browser preview runtime stopped");
@@ -346,6 +416,10 @@ export function createPreviewBackend(): RuntimeBackend {
 
     getControlSnapshot() {
       return Promise.resolve(controlSnapshot());
+    },
+
+    getCaptionSessionSnapshot() {
+      return Promise.resolve(structuredClone(captionSession));
     },
 
     saveConfig(nextConfig: AppConfig) {

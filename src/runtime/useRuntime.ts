@@ -1,6 +1,12 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { uiText } from "../i18n/uiText";
 import { createRuntimeBackend, type Unsubscribe } from "./backend";
+import {
+  createCaptionSessionState,
+  reduceCaptionSessionState,
+  selectCaptionSessionView,
+  type CaptionSessionStateInput,
+} from "./captionSession";
 import { createLifecycleCommandQueue } from "./lifecycleCommandQueue";
 import {
   projectRuntimeControlSnapshot,
@@ -20,6 +26,7 @@ import {
 import type {
   AppConfig,
   AudioInputDevice,
+  CaptionDisplay,
   RuntimeCommand,
   RuntimeControlSnapshot,
   RuntimeStatusEvent,
@@ -87,6 +94,7 @@ export function useRuntime() {
     timestampMs: Date.now(),
   };
   const runtimeState = shallowRef(createRuntimeState(initialRuntimeStatus));
+  const captionSessionState = shallowRef(createCaptionSessionState());
   const pendingRuntimeCommand = ref<RuntimeCommand | null>(null);
   const runtimeAction = createActionState();
   const settingsAction = createActionState();
@@ -140,20 +148,32 @@ export function useRuntime() {
     () => secretsAction.error.value || runtimeReadiness.value.error,
   );
 
-  const runtimeView = computed(() =>
-    selectRuntimeView(runtimeState.value, {
-      showPartial: config.value?.ui.showPartial ?? true,
-    }),
+  const runtimeView = computed(() => selectRuntimeView(runtimeState.value));
+  const captionView = computed(() =>
+    selectCaptionSessionView(
+      captionSessionState.value,
+      config.value?.ui.showPartial ?? true,
+    ),
   );
   const runtimeStatus = computed(() => runtimeView.value.runtimeStatus);
-  const finalTranscripts = computed(() => runtimeView.value.finalTranscripts);
+  const finalTranscripts = computed<readonly CaptionDisplay[]>(() =>
+    captionView.value.completedCaptions.map((caption) => ({
+      ...caption,
+      id: [
+        caption.generation,
+        caption.streamId,
+        caption.unitId ?? "unitless",
+        caption.lane,
+        caption.revision,
+      ].join(":"),
+    })),
+  );
   const diagnostics = computed(() => runtimeView.value.diagnostics);
-  const captionMode = computed(() => runtimeView.value.captionMode);
+  const captionMode = computed(() => captionView.value.captionMode);
 
   const activeCaptionText = computed(() => {
     return (
-      runtimeView.value.visibleTranscript?.text ??
-      uiText("caption.state.waiting")
+      captionView.value.visibleCaption?.text ?? uiText("caption.state.waiting")
     );
   });
 
@@ -162,6 +182,14 @@ export function useRuntime() {
     const nextState = reduceRuntimeState(previousState, input);
     runtimeState.value = nextState;
     updateRuntimeControlReconciliation();
+
+    return nextState !== previousState;
+  }
+
+  function dispatchCaptionSessionState(input: CaptionSessionStateInput) {
+    const previousState = captionSessionState.value;
+    const nextState = reduceCaptionSessionState(previousState, input);
+    captionSessionState.value = nextState;
 
     return nextState !== previousState;
   }
@@ -282,6 +310,10 @@ export function useRuntime() {
         pendingRuntimeCommand.value = null;
         return;
       }
+
+      if (command === "stop_runtime") {
+        dispatchCaptionSessionState({ type: "stopRequested" });
+      }
     }
 
     try {
@@ -297,7 +329,7 @@ export function useRuntime() {
         lifecycleCommandAttemptId !== null &&
         (command === "start_runtime" || command === "stop_runtime")
       ) {
-        dispatchRuntimeState(
+        const lifecycleResultAccepted = dispatchRuntimeState(
           commandSucceeded
             ? {
                 type: "runtimeCommandSucceeded",
@@ -311,6 +343,31 @@ export function useRuntime() {
                 command,
               },
         );
+
+        if (
+          lifecycleResultAccepted &&
+          commandSucceeded &&
+          command === "start_runtime"
+        ) {
+          dispatchCaptionSessionState({ type: "startSucceeded" });
+        }
+        if (
+          lifecycleResultAccepted &&
+          !commandSucceeded &&
+          command === "stop_runtime"
+        ) {
+          dispatchCaptionSessionState({ type: "stopFailed" });
+        }
+
+        try {
+          dispatchCaptionSessionState({
+            type: "snapshotReceived",
+            snapshot: await backend.getCaptionSessionSnapshot(),
+          });
+        } catch {
+          // The best-effort push channel or a later control reconciliation can
+          // still converge after this command-level caption pull fails.
+        }
 
         if (!commandSucceeded) {
           try {
@@ -366,6 +423,14 @@ export function useRuntime() {
 
     try {
       unsubscribe = await backend.listen((event) => {
+        if (event.type === "captionSessionChanged") {
+          dispatchCaptionSessionState({
+            type: "snapshotReceived",
+            snapshot: event.payload,
+          });
+          return;
+        }
+
         const eventAccepted = dispatchRuntimeState({
           type: "backendEvent",
           event,
@@ -412,8 +477,15 @@ export function useRuntime() {
     runtimeControlPullsInFlight += 1;
 
     try {
-      const incoming = await backend.getControlSnapshot();
+      const [incoming, captions] = await Promise.all([
+        backend.getControlSnapshot(),
+        backend.getCaptionSessionSnapshot(),
+      ]);
       storeControlSnapshot(incoming);
+      dispatchCaptionSessionState({
+        type: "snapshotReceived",
+        snapshot: captions,
+      });
       const snapshot = controlSnapshot.value?.runtime ?? incoming.runtime;
       dispatchRuntimeState({
         type: "runtimeStatusSyncCompleted",

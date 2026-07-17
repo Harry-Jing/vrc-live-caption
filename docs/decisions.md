@@ -150,12 +150,14 @@ blocking request.
 Reason: it validates the cloud-first MVP path with simple credential handling
 and no streaming protocol work.
 
-Consequence: the default provider emits final transcripts only; the App
-preview shows listening state and final text. Provider neutrality lives in the
-normalized event contract, not in avoiding a default. This adapter's
-completed-only behavior is not a constraint on other provider paths. Cloud
-stays the MVP default; the long-term default direction is local STT (see "Make
-Local STT The Long-Term Default").
+Consequence: the default provider emits completed source captions only; the App
+preview shows listening state and completed text. Its bounded request now sits
+behind a concrete recognition-session adapter and enters the backend-owned V1
+caption-session aggregate, while its existing Completed Chatbox behavior stays
+unchanged. Provider neutrality lives in the normalized contract, not in
+avoiding a default. This adapter's completed-only behavior is not a constraint
+on other provider paths. Cloud stays the MVP default; the long-term default
+direction is local STT (see "Make Local STT The Long-Term Default").
 
 Revisit if: per-segment latency or cost fails real usage, or a streaming
 provider is added.
@@ -199,11 +201,14 @@ Reason: downstream consumers need the current text, its identity, and whether a
 real unit closed. A general `stable` state is ambiguous, and forcing every
 consumer to replay provider deltas duplicates fragile protocol logic.
 
-Consequence: the currently reserved but unused `transcript.stable` name must not
-gain new meaning. Before a streaming or translation adapter ships, version the
-wire contract with explicit lane, stream correlation, optional unit, revision,
-and ongoing/completed fields. Future two-pass work may add authority as a
-separate dimension; it must not overload completion.
+Consequence: the V1 wire contract now carries explicit generation, stream
+correlation, optional unit, lane, revision, full text, and ongoing/completed
+fields in a backend-owned aggregate. The unused `stable` reservation and the
+partial/stable/final wire ladder were removed. The bounded OpenAI adapter maps
+its results to completed source captions, while one shared fixture and the
+TypeScript runtime decoder pin the Rust/frontend wire shape. Future two-pass
+work may add authority as a separate dimension; it must not overload
+completion.
 
 Revisit if: an implemented provider exposes information that cannot remain
 inside its adapter and materially improves publication behavior.
@@ -239,7 +244,9 @@ can act on the failure. The capture-to-Chatbox pipeline must not die because
 the view is gone.
 
 Consequence: the UI must tolerate missed events and derive state from the
-newest status and lifecycle events.
+newest status and lifecycle events. Caption changes use a monotonic full
+aggregate for both best-effort push and authoritative pull, so the frontend can
+resynchronize after reload or a suspected gap and ignore an older copy.
 
 Revisit if: an event appears whose loss corrupts UI state irrecoverably.
 

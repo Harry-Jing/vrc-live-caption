@@ -6,11 +6,11 @@ import {
   diagnosticSeverityColor,
   diagnosticSeverityMessageKey,
 } from "../runtime/presentation";
-import type { DiagnosticEvent, TranscriptEvent } from "../runtime/types";
+import type { CaptionDisplay, DiagnosticEvent } from "../runtime/types";
 
 defineProps<{
   diagnostics: readonly DiagnosticEvent[];
-  finalTranscripts: readonly TranscriptEvent[];
+  finalTranscripts: readonly CaptionDisplay[];
 }>();
 </script>
 
