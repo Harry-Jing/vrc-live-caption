@@ -9,12 +9,18 @@ use crate::config::AudioConfig;
 use crate::error::{AppError, AppResult};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
-    DeviceId, FromSample, I24, Sample, SampleFormat, SizedSample, Stream, StreamConfig, U24,
+    DeviceId, Error as CpalError, ErrorKind, FromSample, I24, Sample, SampleFormat, SizedSample,
+    Stream, StreamConfig, U24,
 };
 use serde::Serialize;
 use std::str::FromStr;
-use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 use std::time::Duration;
+
+// CPAL treats `None` as an unbounded backend initialization wait. A finite
+// request keeps Start/Stop from deliberately opting into an infinite wait;
+// some platform backends may still be unable to honor it.
+const STREAM_INIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,13 +31,25 @@ pub(crate) struct AudioInputDevice {
 }
 
 pub(crate) struct AudioCapture {
-    pub(crate) receiver: Receiver<Vec<f32>>,
+    pub(crate) receiver: AudioCaptureReceiver,
     pub(crate) sample_rate: u32,
     pub(crate) stream: Stream,
 }
 
-type InputStreamBuilder =
-    fn(&cpal::Device, StreamConfig, usize, SyncSender<Vec<f32>>) -> AppResult<Stream>;
+pub(crate) struct AudioCaptureReceiver {
+    samples: Receiver<Vec<f32>>,
+    fatal_errors: Receiver<CpalError>,
+    notifications: Receiver<CpalError>,
+}
+
+type InputStreamBuilder = fn(
+    &cpal::Device,
+    StreamConfig,
+    usize,
+    SyncSender<Vec<f32>>,
+    SyncSender<CpalError>,
+    SyncSender<CpalError>,
+) -> AppResult<Stream>;
 
 pub(crate) fn list_input_devices() -> AppResult<Vec<AudioInputDevice>> {
     let host = cpal::default_host();
@@ -90,9 +108,23 @@ pub(crate) fn open_input_capture(config: &AudioConfig) -> AppResult<AudioCapture
     let channels = usize::from(supported_config.channels());
     let sample_format = supported_config.sample_format();
     let stream_config: StreamConfig = supported_config.into();
-    let (sender, receiver) = sync_channel(16);
+    let (sample_sender, sample_receiver) = sync_channel(16);
+    // Fatal stream errors use an independent one-slot latch. Sharing the
+    // bounded sample queue would allow a full audio backlog to drop the only
+    // signal that tells the runtime to leave Running.
+    let (fatal_error_sender, fatal_error_receiver) = sync_channel(1);
+    // Recoverable CPAL notifications are best-effort and cannot occupy the
+    // fatal latch. They are logged by the runtime thread, never this callback.
+    let (notification_sender, notification_receiver) = sync_channel(1);
     let stream_builder = input_stream_builder(sample_format)?;
-    let stream = stream_builder(&device, stream_config, channels, sender)?;
+    let stream = stream_builder(
+        &device,
+        stream_config,
+        channels,
+        sample_sender,
+        fatal_error_sender,
+        notification_sender,
+    )?;
 
     stream.play().map_err(|error| {
         AppError::audio(format!(
@@ -101,7 +133,11 @@ pub(crate) fn open_input_capture(config: &AudioConfig) -> AppResult<AudioCapture
     })?;
 
     Ok(AudioCapture {
-        receiver,
+        receiver: AudioCaptureReceiver {
+            samples: sample_receiver,
+            fatal_errors: fatal_error_receiver,
+            notifications: notification_receiver,
+        },
         sample_rate,
         stream,
     })
@@ -133,15 +169,49 @@ fn input_stream_builder(sample_format: SampleFormat) -> AppResult<InputStreamBui
 }
 
 pub(crate) fn receive_audio(
-    receiver: &Receiver<Vec<f32>>,
+    receiver: &AudioCaptureReceiver,
     timeout: Duration,
 ) -> AppResult<Option<Vec<f32>>> {
-    match receiver.recv_timeout(timeout) {
+    check_stream_failure(&receiver.fatal_errors)?;
+    log_stream_notifications(&receiver.notifications);
+
+    let result = match receiver.samples.recv_timeout(timeout) {
         Ok(samples) => Ok(Some(samples)),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(AppError::audio(
             "Microphone capture stopped unexpectedly because the input stream disconnected.",
         )),
+    };
+
+    // An error may arrive while recv_timeout is waiting. Check again before
+    // returning even a buffered sample so a permanent failure cannot be
+    // starved by queued audio.
+    check_stream_failure(&receiver.fatal_errors)?;
+    log_stream_notifications(&receiver.notifications);
+
+    result
+}
+
+fn check_stream_failure(receiver: &Receiver<CpalError>) -> AppResult<()> {
+    match receiver.try_recv() {
+        Ok(error) => Err(AppError::audio(format!(
+            "Microphone input stream stopped unexpectedly: {error}"
+        ))),
+        Err(TryRecvError::Empty) => Ok(()),
+        Err(TryRecvError::Disconnected) => Err(AppError::audio(
+            "Microphone input stream stopped unexpectedly because its error monitor disconnected.",
+        )),
+    }
+}
+
+fn log_stream_notifications(receiver: &Receiver<CpalError>) {
+    while let Ok(error) = receiver.try_recv() {
+        tracing::warn!(
+            error_kind = ?error.kind(),
+            error_message = %error,
+            terminal = false,
+            "microphone input stream notification"
+        );
     }
 }
 
@@ -171,7 +241,9 @@ fn build_input_stream<T>(
     device: &cpal::Device,
     config: StreamConfig,
     channels: usize,
-    sender: SyncSender<Vec<f32>>,
+    sample_sender: SyncSender<Vec<f32>>,
+    fatal_error_sender: SyncSender<CpalError>,
+    notification_sender: SyncSender<CpalError>,
 ) -> AppResult<Stream>
 where
     T: Sample + SizedSample + Send + 'static,
@@ -180,15 +252,35 @@ where
     device
         .build_input_stream(
             config,
-            move |data: &[T], _| write_mono_samples(data, channels, &sender),
+            move |data: &[T], _| write_mono_samples(data, channels, &sample_sender),
             move |error| {
-                tracing::warn!(error_message = %error, "microphone input stream error");
+                route_stream_error(error, &fatal_error_sender, &notification_sender);
             },
-            None,
+            Some(STREAM_INIT_TIMEOUT),
         )
         .map_err(|error| {
             AppError::audio(format!("Failed to build microphone input stream: {error}"))
         })
+}
+
+fn route_stream_error(
+    error: CpalError,
+    fatal_error_sender: &SyncSender<CpalError>,
+    notification_sender: &SyncSender<CpalError>,
+) {
+    let recoverable = matches!(
+        error.kind(),
+        ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied | ErrorKind::Xrun
+    );
+    if recoverable {
+        // Repeated warnings may be coalesced; they must never block the audio
+        // backend or consume the fatal-error slot.
+        let _ = notification_sender.try_send(error);
+    } else {
+        // The first fatal error is enough to end this generation. Full means a
+        // fatal signal is already latched; Disconnected means cleanup won.
+        let _ = fatal_error_sender.try_send(error);
+    }
 }
 
 fn write_mono_samples<T>(input: &[T], channels: usize, sender: &SyncSender<Vec<f32>>)
@@ -220,6 +312,67 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_failure_wins_over_buffered_audio_instead_of_hanging() -> AppResult<()> {
+        let (sample_sender, sample_receiver) = sync_channel(1);
+        let (fatal_error_sender, fatal_error_receiver) = sync_channel(1);
+        let (notification_sender, notification_receiver) = sync_channel(1);
+        sample_sender
+            .send(vec![0.25])
+            .map_err(|_| AppError::audio("Failed to buffer the test audio frame."))?;
+        route_stream_error(
+            CpalError::with_message(
+                ErrorKind::DeviceNotAvailable,
+                "The microphone was disconnected.",
+            ),
+            &fatal_error_sender,
+            &notification_sender,
+        );
+        let receiver = AudioCaptureReceiver {
+            samples: sample_receiver,
+            fatal_errors: fatal_error_receiver,
+            notifications: notification_receiver,
+        };
+
+        let error = receive_audio(&receiver, Duration::ZERO)
+            .err()
+            .ok_or_else(|| AppError::audio("Stream failure was hidden by buffered audio."))?;
+
+        assert_eq!(error.code(), "audio.failed");
+        assert!(error.to_string().contains("microphone was disconnected"));
+        Ok(())
+    }
+
+    #[test]
+    fn recoverable_stream_notifications_do_not_stop_audio_capture() -> AppResult<()> {
+        for error_kind in [
+            ErrorKind::DeviceChanged,
+            ErrorKind::RealtimeDenied,
+            ErrorKind::Xrun,
+        ] {
+            let (sample_sender, sample_receiver) = sync_channel(1);
+            let (fatal_error_sender, fatal_error_receiver) = sync_channel(1);
+            let (notification_sender, notification_receiver) = sync_channel(1);
+            sample_sender
+                .send(vec![0.5])
+                .map_err(|_| AppError::audio("Failed to buffer the test audio frame."))?;
+            route_stream_error(
+                CpalError::new(error_kind),
+                &fatal_error_sender,
+                &notification_sender,
+            );
+            let receiver = AudioCaptureReceiver {
+                samples: sample_receiver,
+                fatal_errors: fatal_error_receiver,
+                notifications: notification_receiver,
+            };
+
+            assert_eq!(receive_audio(&receiver, Duration::ZERO)?, Some(vec![0.5]));
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn every_pcm_sample_format_has_an_input_stream_builder() {

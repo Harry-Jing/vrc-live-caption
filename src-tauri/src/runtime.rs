@@ -795,8 +795,9 @@ fn run_openai_runtime(
             );
         }
     }
-    // Stop path: release the microphone before joining either worker, and
-    // discard buffered tail speech instead of sending it to STT after stop.
+    // Shutdown path: release the microphone before joining either worker, and
+    // discard buffered tail speech instead of sending it to STT after capture
+    // has ended.
     drop(stream);
     if let Some(publisher) = &publisher
         && let Err(error) = publisher.join()
@@ -830,7 +831,7 @@ fn run_openai_runtime(
                 DiagnosticCategory::Stt,
                 "stt.tail_speech_discarded",
                 "Unsent speech discarded",
-                "Speech captured just before stop was discarded without transcription.",
+                "Speech buffered when microphone capture ended was discarded without transcription.",
             ),
         );
     }
