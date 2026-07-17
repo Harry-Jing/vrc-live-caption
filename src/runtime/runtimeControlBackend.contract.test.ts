@@ -133,6 +133,13 @@ function createControlBridge(): TauriBackendBridge {
     },
     invoke<Result>(command: string, args?: Record<string, unknown>) {
       if (command === "start_runtime") {
+        if (snapshot.desired.runtimePlan.publication.state === "incompatible") {
+          return Promise.reject(
+            new Error(
+              "The selected recognition path and publication mode are incompatible.",
+            ),
+          );
+        }
         sessionSecretRevision = secretRevision;
         const selected = snapshot.desired.config;
         snapshot = {
@@ -344,6 +351,86 @@ test("PreviewBackend OSC Test uses the session target until Stop", async () => {
   expect(details[1]).toContain("192.0.2.30:9012");
 });
 
+test("TauriBackend rejects an invalid runtime-control pull", async () => {
+  const backend = createTauriBackend({
+    listen() {
+      return Promise.resolve(() => undefined);
+    },
+    invoke<Result>() {
+      return Promise.resolve({ contractVersion: 1 } as Result);
+    },
+  });
+
+  await expect(backend.getControlSnapshot()).rejects.toThrow(
+    "Invalid runtime control payload at $.contractVersion: expected 2.",
+  );
+});
+
+test.each([
+  ["Start", (backend: RuntimeBackend) => backend.startRuntime()],
+  ["Stop", (backend: RuntimeBackend) => backend.stopRuntime()],
+  [
+    "legacy Start command",
+    (backend: RuntimeBackend) => backend.runCommand("start_runtime"),
+  ],
+  [
+    "legacy Stop command",
+    (backend: RuntimeBackend) => backend.runCommand("stop_runtime"),
+  ],
+  [
+    "config save",
+    (backend: RuntimeBackend) => backend.saveConfig(initialConfig),
+  ],
+  [
+    "secret save",
+    (backend: RuntimeBackend) =>
+      backend.saveProviderSecret("openai", "sk-test-abcd"),
+  ],
+  [
+    "secret delete",
+    (backend: RuntimeBackend) => backend.deleteProviderSecret("openai"),
+  ],
+])("TauriBackend decodes the %s control result", async (_name, invoke) => {
+  const backend = createTauriBackend({
+    listen() {
+      return Promise.resolve(() => undefined);
+    },
+    invoke<Result>() {
+      return Promise.resolve({ contractVersion: 1 } as Result);
+    },
+  });
+
+  await expect(invoke(backend)).rejects.toThrow(
+    "Invalid runtime control payload at $.contractVersion: expected 2.",
+  );
+});
+
+test("TauriBackend decodes runtime-control pushes before delivery", async () => {
+  let deliver: ((event: Readonly<{ payload: unknown }>) => void) | undefined;
+  const backend = createTauriBackend({
+    listen(eventName, listener) {
+      if (eventName === RUNTIME_CONTROL_EVENT) {
+        deliver = listener;
+      }
+
+      return Promise.resolve(() => undefined);
+    },
+    invoke<Result>() {
+      return Promise.resolve(undefined as Result);
+    },
+  });
+  const received: RuntimeControlSnapshot[] = [];
+  const unsubscribe = await backend.listenControl((snapshot) => {
+    received.push(snapshot);
+  });
+
+  expect(() => deliver?.({ payload: { contractVersion: 1 } })).toThrow(
+    "Invalid runtime control payload at $.contractVersion: expected 2.",
+  );
+  expect(received).toEqual([]);
+  unsubscribe();
+});
+
 describe.each(cases)("$name runtime control contract", ({ create }) => {
   test("returns and publishes an authoritative session snapshot on Start", async () => {
     const backend = create();
@@ -426,6 +513,25 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
       requestedMode: "live",
       supportedModes: ["completed"],
     });
+  });
+
+  test("rejects an incompatible Start without rewriting the desired mode", async () => {
+    const backend = create();
+    await backend.saveConfig({
+      ...initialConfig,
+      publication: { mode: "live" },
+    });
+
+    await expect(backend.startRuntime()).rejects.toThrow(/incompatible/u);
+
+    const retained = await backend.getControlSnapshot();
+    expect(retained.desired.config.publication.mode).toBe("live");
+    expect(retained.desired.runtimePlan.publication).toMatchObject({
+      state: "incompatible",
+      requestedMode: "live",
+      supportedModes: ["completed"],
+    });
+    expect(retained.session).toBeNull();
   });
 
   test("uses the immutable Mock session metadata after desired settings change", async () => {

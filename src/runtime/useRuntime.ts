@@ -124,6 +124,10 @@ export function useRuntime() {
     projectRuntimeControlSnapshot(controlSnapshot.value),
   );
   const config = computed(() => controlView.value.config);
+  const desiredRuntimePlan = computed(
+    () => controlView.value.desiredRuntimePlan,
+  );
+  const activeRuntimePlan = computed(() => controlView.value.activeRuntimePlan);
   const currentSession = computed(() => controlView.value.currentSession);
   const currentSetupConfig = computed(
     () => controlView.value.currentSetupConfig,
@@ -551,6 +555,7 @@ export function useRuntime() {
 
   return {
     activeCaptionText,
+    activeRuntimePlan,
     audioInputDevices,
     captionMode,
     config,
@@ -558,6 +563,7 @@ export function useRuntime() {
     currentSetupConfig,
     deleteProviderSecret,
     diagnostics,
+    desiredRuntimePlan,
     finalTranscripts,
     isRuntimeBusy,
     isSecretsBusy: secretsAction.isBusy,

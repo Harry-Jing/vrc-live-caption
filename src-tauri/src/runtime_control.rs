@@ -189,3 +189,7 @@ mod tests {
         assert!(value.get("requestedPort").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_control_contract_tests.rs"]
+mod contract_tests;

@@ -95,7 +95,11 @@ pub(crate) enum PublicationIncompatibility {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "policy", rename_all = "camelCase")]
+#[serde(
+    tag = "policy",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub(crate) enum ResolvedPublicationPolicy {
     Completed,
     LiveUnit { observation_window_ms: u64 },
@@ -103,7 +107,11 @@ pub(crate) enum ResolvedPublicationPolicy {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "state", rename_all = "camelCase")]
+#[serde(
+    tag = "state",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub(crate) enum PublicationPlan {
     Ready {
         mode: PublicationMode,

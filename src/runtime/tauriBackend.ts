@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { decodeCaptionSessionSnapshotV1 } from "./captionSession";
+import { decodeRuntimeControlSnapshotV2 } from "./runtimeControlContract";
 import type {
   RuntimeBackend,
   RuntimeEventListener,
@@ -13,7 +14,6 @@ import {
   type AudioInputDevice,
   type DiagnosticEvent,
   type RuntimeCommand,
-  type RuntimeControlSnapshot,
   type RuntimeStatusEvent,
   type SttProvider,
   type UtteranceEndedEvent,
@@ -41,6 +41,15 @@ const defaultBridge: TauriBackendBridge = {
 export function createTauriBackend(
   bridge: TauriBackendBridge = defaultBridge,
 ): RuntimeBackend {
+  async function invokeControlSnapshot(
+    command: string,
+    args?: Record<string, unknown>,
+  ) {
+    const payload = await bridge.invoke<unknown>(command, args);
+
+    return decodeRuntimeControlSnapshotV2(payload);
+  }
+
   return {
     async listen(listener: RuntimeEventListener): Promise<Unsubscribe> {
       const unlisteners: UnlistenFn[] = [];
@@ -123,7 +132,7 @@ export function createTauriBackend(
 
     async listenControl(listener) {
       const unlisten = await bridge.listen(RUNTIME_CONTROL_EVENT, (event) => {
-        listener(event.payload as RuntimeControlSnapshot);
+        listener(decodeRuntimeControlSnapshotV2(event.payload));
       });
 
       return () => {
@@ -132,21 +141,24 @@ export function createTauriBackend(
     },
 
     async runCommand(command: RuntimeCommand) {
+      if (command === "start_runtime" || command === "stop_runtime") {
+        await invokeControlSnapshot(command);
+        return;
+      }
+
       await bridge.invoke(command);
     },
 
     startRuntime() {
-      return bridge.invoke<RuntimeControlSnapshot>("start_runtime");
+      return invokeControlSnapshot("start_runtime");
     },
 
     stopRuntime() {
-      return bridge.invoke<RuntimeControlSnapshot>("stop_runtime");
+      return invokeControlSnapshot("stop_runtime");
     },
 
     getControlSnapshot() {
-      return bridge.invoke<RuntimeControlSnapshot>(
-        "get_runtime_control_snapshot",
-      );
+      return invokeControlSnapshot("get_runtime_control_snapshot");
     },
 
     async getCaptionSessionSnapshot() {
@@ -158,7 +170,7 @@ export function createTauriBackend(
     },
 
     saveConfig(config: AppConfig) {
-      return bridge.invoke<RuntimeControlSnapshot>("save_app_config", {
+      return invokeControlSnapshot("save_app_config", {
         config,
       });
     },
@@ -168,14 +180,14 @@ export function createTauriBackend(
     },
 
     saveProviderSecret(provider: SttProvider, secret: string) {
-      return bridge.invoke<RuntimeControlSnapshot>("save_provider_secret", {
+      return invokeControlSnapshot("save_provider_secret", {
         provider,
         secret,
       });
     },
 
     deleteProviderSecret(provider: SttProvider) {
-      return bridge.invoke<RuntimeControlSnapshot>("delete_provider_secret", {
+      return invokeControlSnapshot("delete_provider_secret", {
         provider,
       });
     },

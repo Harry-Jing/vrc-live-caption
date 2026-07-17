@@ -104,6 +104,8 @@ test("projects desired settings separately from the immutable active session", (
     publication: { mode: "completed" },
   });
   expect(projection.currentSession).toBe(snapshot.session);
+  expect(projection.desiredRuntimePlan).toBe(snapshot.desired.runtimePlan);
+  expect(projection.activeRuntimePlan).toBe(snapshot.session?.runtimePlan);
   expect(projection.pendingSessionChanges).toEqual([
     "microphone",
     "recognition",
@@ -163,6 +165,8 @@ test("accepts a newer snapshot and uses desired settings when no session exists"
 
   expect(accepted).toBe(newer);
   expect(projection.currentSession).toBeNull();
+  expect(projection.desiredRuntimePlan).toBe(newer.desired.runtimePlan);
+  expect(projection.activeRuntimePlan).toBeNull();
   expect(projection.currentSetupConfig).toBe(desiredConfig);
   expect(projection.sessionUploadsMicrophoneAudio).toBe(false);
 });

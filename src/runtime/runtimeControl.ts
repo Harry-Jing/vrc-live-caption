@@ -3,6 +3,7 @@ import type {
   ProviderSecretStatus,
   RuntimeControlSnapshot,
   RuntimePendingChange,
+  RuntimePlan,
   RuntimeSession,
   RuntimeStatusEvent,
   SttProvider,
@@ -10,6 +11,8 @@ import type {
 
 export type RuntimeControlProjection = Readonly<{
   config: AppConfig | null;
+  desiredRuntimePlan: RuntimePlan | null;
+  activeRuntimePlan: RuntimePlan | null;
   currentSession: RuntimeSession | null;
   currentSetupConfig: AppConfig | null;
   pendingSessionChanges: readonly RuntimePendingChange[];
@@ -55,6 +58,8 @@ export function projectRuntimeControlSnapshot(
   if (snapshot === null) {
     return {
       config: null,
+      desiredRuntimePlan: null,
+      activeRuntimePlan: null,
       currentSession: null,
       currentSetupConfig: null,
       pendingSessionChanges: [],
@@ -75,6 +80,8 @@ export function projectRuntimeControlSnapshot(
 
   return {
     config: snapshot.desired.config,
+    desiredRuntimePlan: snapshot.desired.runtimePlan,
+    activeRuntimePlan: snapshot.session?.runtimePlan ?? null,
     currentSession: snapshot.session,
     currentSetupConfig,
     pendingSessionChanges: snapshot.pendingChanges,

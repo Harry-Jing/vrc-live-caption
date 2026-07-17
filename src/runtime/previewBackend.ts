@@ -232,6 +232,57 @@ export function createPreviewBackend(): RuntimeBackend {
       return new Error("Mock runtime has no active recognition stream.");
     }
 
+    if (session.selected.stt.model === "mock-ongoing-only") {
+      const selectedStt = session.selected.stt;
+      const latestRevision =
+        captionSession.captions.find(
+          (caption) =>
+            caption.generation === active.generation &&
+            caption.streamId === active.streamId &&
+            caption.unitId === null &&
+            caption.lane === "source",
+        )?.revision ?? 0;
+      const scriptedTexts = [
+        "Testing live caption preview...",
+        "Testing live caption preview from the ongoing-only mock runtime.",
+      ];
+
+      scriptedTexts.forEach((text, index) => {
+        const caption: CaptionSnapshotV1 = {
+          generation: active.generation,
+          streamId: active.streamId,
+          unitId: null,
+          lane: "source",
+          revision: latestRevision + index + 1,
+          text,
+          state: "ongoing",
+          language: selectedStt.language,
+          provider: selectedStt.provider,
+          model: selectedStt.model,
+          unitStartedAtMs: null,
+          timestampMs: Date.now(),
+        };
+        publishCaptionSession({
+          active,
+          activeUnits: [],
+          captions: [
+            caption,
+            ...captionSession.captions.filter(
+              (candidate) => candidate.state === "completed",
+            ),
+          ],
+        });
+      });
+      emitDiagnostic(
+        "stt",
+        "stt.mock_transcript_emitted",
+        "Mock transcript emitted",
+        "The UI received full ongoing unitless caption snapshots without a completion.",
+      );
+
+      return null;
+    }
+
     const utteranceId = eventId("utterance");
     const timestampMs = Date.now();
     const captionBase = {
@@ -263,6 +314,32 @@ export function createPreviewBackend(): RuntimeBackend {
         (caption) => caption.state === "completed",
       ),
     });
+    if (session.selected.stt.model === "mock-bounded") {
+      const completed: CaptionSnapshotV1 = {
+        ...captionBase,
+        revision: 1,
+        text: "Testing bounded caption preview from the mock runtime.",
+        state: "completed",
+      };
+      publishCaptionSession({
+        active,
+        activeUnits: [],
+        captions: [
+          completed,
+          ...captionSession.captions.filter(
+            (caption) => caption.state === "completed",
+          ),
+        ].slice(0, 5),
+      });
+      emitDiagnostic(
+        "stt",
+        "stt.mock_transcript_emitted",
+        "Mock transcript emitted",
+        "The UI received one completed bounded caption snapshot.",
+      );
+
+      return null;
+    }
     const ongoing: CaptionSnapshotV1 = {
       ...captionBase,
       revision: 1,
@@ -423,14 +500,6 @@ export function createPreviewBackend(): RuntimeBackend {
         ),
       );
     }
-    if (runtimePlan.publication.policy.policy !== "completed") {
-      return Promise.reject(
-        new Error(
-          "Live publication is not installed in this Phase 3 preview step yet.",
-        ),
-      );
-    }
-
     nextGeneration += 1;
     sessionSecretRevision =
       config.stt.provider === "openai" ? secretRevision : null;
