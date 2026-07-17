@@ -22,6 +22,11 @@ new architecture.
   backend-authoritative generation and stream identity, push plus pull
   resynchronization, and one runtime-decoded Rust/TypeScript V1 wire shape.
   The current OpenAI path still emits completed source captions only.
+- Implemented Phase 3 publication foundation: one backend capability planner
+  resolves persisted Completed or Live intent, deterministic Mock adapters
+  exercise bounded, unitful ongoing/completed, and unitless ongoing-only
+  source shapes, and a latest-wins Live worker shares pacing and Stop boundaries
+  with the unchanged Completed path.
 - Target publication choices: Completed and Live, resolved from the selected
   provider path and content lanes rather than one global final-only rule.
 - First translation implementation: completed normalized source text into one

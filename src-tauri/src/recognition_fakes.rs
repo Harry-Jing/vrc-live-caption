@@ -120,6 +120,7 @@ impl FakeOngoingOnlyRecognitionAdapter {
         Self { context }
     }
 
+    #[cfg(test)]
     pub(crate) fn script_stream(&self, snapshots: &[ScriptedText]) -> Vec<RecognitionEvent> {
         self.script_stream_from(1, snapshots)
     }

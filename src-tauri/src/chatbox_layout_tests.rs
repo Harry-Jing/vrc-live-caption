@@ -1,6 +1,6 @@
 use super::{
     CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, fits_chatbox_width, grapheme_advance_units,
-    is_break_space_grapheme, paginate_completed,
+    is_break_space_grapheme, paginate_completed, render_live_viewport,
 };
 use std::collections::HashSet;
 use unicode_segmentation::UnicodeSegmentation;
@@ -433,6 +433,125 @@ fn completed_layout_rejects_one_grapheme_larger_than_vrchat_input() {
     assert_eq!(oversized.graphemes(true).count(), 1);
     assert_eq!(
         paginate_completed(&oversized),
+        Err(ChatboxLayoutError::GraphemeExceedsInputBudget {
+            utf16_units: CHATBOX_MAX_UTF16_UNITS + 1,
+        })
+    );
+}
+
+#[test]
+fn live_viewport_keeps_a_full_recent_ascii_suffix_instead_of_the_last_completed_page()
+-> Result<(), String> {
+    let input = format!("{X_144}x");
+    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(viewport, X_144);
+    assert_ne!(
+        viewport,
+        paginate_completed(&input).map_err(|error| format!("{error:?}"))?[1]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn live_viewport_prefers_a_recent_word_and_punctuation_boundary() -> Result<(), String> {
+    let input = format!("{X_144} previous context. latest, newest.");
+    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(viewport, "previous context. latest, newest.");
+    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+
+    Ok(())
+}
+
+#[test]
+fn live_viewport_keeps_the_newest_nine_lines_without_a_leading_blank_line() -> Result<(), String> {
+    let input = (1..=10)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let expected = (2..=10)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(viewport, expected);
+    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+
+    Ok(())
+}
+
+#[test]
+fn live_viewport_keeps_the_newest_chinese_content_within_nine_lines() -> Result<(), String> {
+    let input = format!("{CJK_135}新");
+    let expected = format!("{CJK_134}新");
+    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(viewport, expected);
+    assert!(viewport.ends_with('新'));
+    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+
+    Ok(())
+}
+
+#[test]
+fn live_viewport_never_splits_an_emoji_grapheme() -> Result<(), String> {
+    let input = format!("👍🏽{TONED_EMOJI_9}");
+    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(viewport, TONED_EMOJI_9);
+    assert_eq!(viewport.graphemes(true).count(), 9);
+    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+
+    Ok(())
+}
+
+#[test]
+fn live_viewport_falls_back_to_a_grapheme_boundary_for_one_long_token() -> Result<(), String> {
+    let input = format!("x{X_144}");
+    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(viewport, X_144);
+    assert!(input.ends_with(&viewport));
+    assert_eq!(viewport.encode_utf16().count(), CHATBOX_MAX_UTF16_UNITS);
+
+    Ok(())
+}
+
+#[test]
+fn live_viewport_preserves_tmp_punctuation_seams_at_its_start() -> Result<(), String> {
+    let input = format!("{CJK_135}。");
+    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+
+    assert!(viewport.ends_with("中。"));
+    assert!(!viewport.starts_with('。'));
+    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+
+    Ok(())
+}
+
+#[test]
+fn live_viewport_discards_an_unrepresentable_old_grapheme_and_keeps_new_content()
+-> Result<(), String> {
+    let oversized = format!("e{}", "\u{301}".repeat(CHATBOX_MAX_UTF16_UNITS));
+    let input = format!("{oversized} newest");
+
+    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(viewport, "newest");
+    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+    Ok(())
+}
+
+#[test]
+fn live_viewport_rejects_an_unrepresentable_newest_grapheme() {
+    let oversized = format!("e{}", "\u{301}".repeat(CHATBOX_MAX_UTF16_UNITS));
+
+    assert_eq!(
+        render_live_viewport(&format!("older {oversized}")),
         Err(ChatboxLayoutError::GraphemeExceedsInputBudget {
             utf16_units: CHATBOX_MAX_UTF16_UNITS + 1,
         })

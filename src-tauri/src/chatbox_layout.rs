@@ -80,6 +80,76 @@ pub(crate) fn paginate_completed(text: &str) -> Result<Vec<String>, ChatboxLayou
     Ok(pages)
 }
 
+/// Returns one safe Live viewport that always retains the newest source text.
+///
+/// Unlike Completed pagination, Live output is a replacement view rather than
+/// history. The viewport therefore finds the earliest suffix that is safe when
+/// rendered on its own, then advances to the nearest natural line, word, or
+/// punctuation boundary when one exists. A single uninterrupted token falls
+/// back to the first safe grapheme boundary instead of discarding almost the
+/// whole useful view.
+pub(crate) fn render_live_viewport(text: &str) -> Result<String, ChatboxLayoutError> {
+    if text.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Completed pagination must reject an unrepresentable grapheme because it
+    // promises to preserve the whole input. Live is allowed to discard old
+    // context, so begin after the newest oversized grapheme when newer content
+    // exists. If the newest content itself is unrepresentable there is no safe
+    // suffix to publish and the normal error remains useful to diagnostics.
+    let mut newest_oversized = None;
+    for (start, grapheme) in text.grapheme_indices(true) {
+        let utf16_units = grapheme.encode_utf16().count();
+        if utf16_units > CHATBOX_MAX_UTF16_UNITS {
+            newest_oversized = Some((start + grapheme.len(), utf16_units));
+        }
+    }
+    let text = match newest_oversized {
+        Some((end, utf16_units)) if end < text.len() => {
+            let Some(suffix) = text.get(end..).map(str::trim_start) else {
+                return Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units });
+            };
+            if suffix.is_empty() {
+                return Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units });
+            }
+            suffix
+        }
+        Some((_, utf16_units)) => {
+            return Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units });
+        }
+        None => text,
+    };
+
+    let prepared = PreparedText::new(text)?;
+    let end = prepared.graphemes.len();
+    let mut earliest_safe_start = 0;
+
+    // No legal Chatbox message can exceed the UTF-16 input budget. Discarding
+    // this definitely-unusable prefix first also bounds the standalone layout
+    // checks below to at most one Chatbox-sized candidate.
+    while prepared.utf16_units(earliest_safe_start, end) > CHATBOX_MAX_UTF16_UNITS {
+        earliest_safe_start += 1;
+    }
+
+    while earliest_safe_start < end && !prepared.suffix_is_standalone_safe(earliest_safe_start)? {
+        earliest_safe_start += 1;
+    }
+
+    // Keep words and punctuation runs intact when advancing the start costs
+    // only older context. If one long token has no such boundary, retain the
+    // maximal safe grapheme suffix found above.
+    let mut preferred_start = earliest_safe_start;
+    for start in earliest_safe_start..end {
+        if prepared.is_natural_viewport_start(start) && prepared.suffix_is_standalone_safe(start)? {
+            preferred_start = start;
+            break;
+        }
+    }
+
+    Ok(prepared.text_between(preferred_start, end))
+}
+
 struct PreparedText<'text> {
     graphemes: Vec<LayoutGrapheme<'text>>,
     utf16_prefix: Vec<usize>,
@@ -287,6 +357,24 @@ impl<'text> PreparedText<'text> {
 
     fn utf16_units(&self, start: usize, end: usize) -> usize {
         self.utf16_prefix[end] - self.utf16_prefix[start]
+    }
+
+    fn suffix_is_standalone_safe(&self, start: usize) -> Result<bool, ChatboxLayoutError> {
+        let candidate = self.text_between(start, self.graphemes.len());
+        let standalone = PreparedText::new(&candidate)?;
+
+        Ok(standalone.next_page_end(0) == standalone.graphemes.len())
+    }
+
+    fn is_natural_viewport_start(&self, start: usize) -> bool {
+        start == 0 || self.graphemes[start - 1].can_break_after
+    }
+
+    fn text_between(&self, start: usize, end: usize) -> String {
+        self.graphemes[start..end]
+            .iter()
+            .map(|grapheme| grapheme.text)
+            .collect()
     }
 }
 

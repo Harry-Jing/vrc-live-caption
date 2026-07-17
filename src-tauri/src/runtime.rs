@@ -18,14 +18,18 @@
 //! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
 
 use crate::audio::{open_input_capture, receive_audio};
-use crate::capability_planner::{MOCK_BOUNDED_MODEL, MOCK_ONGOING_ONLY_MODEL, RuntimePlanSnapshot};
+use crate::capability_planner::{
+    MOCK_BOUNDED_MODEL, MOCK_ONGOING_ONLY_MODEL, ResolvedPublicationPolicy, RuntimePlanSnapshot,
+    plan_runtime,
+};
 use crate::caption_session::{
     CaptionLane, CaptionSessionSnapshotV1, CaptionSessionStore, CaptionSnapshotV1,
 };
 use crate::chatbox_pacer::ChatboxPacer;
+use crate::chatbox_publication::{ChatboxPublisherBoundary, RuntimeChatboxPublisher};
 use crate::chatbox_publisher::{
-    CompletedChatboxPublisher, CompletedPublisherEvent, PublisherCloseReason, PublisherDiagnostic,
-    PublisherReporter, PublisherSubmitOutcome,
+    ChatboxTransport, CompletedChatboxPublisher, CompletedPublisherEvent, PublisherCloseReason,
+    PublisherDiagnostic, PublisherReporter, PublisherSubmitOutcome,
 };
 use crate::config::{AppConfig, OscConfig, SttProvider};
 use crate::error::{AppError, AppResult};
@@ -33,6 +37,9 @@ use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, UtteranceEndReason,
     emit_caption_session_changed, emit_diagnostic, emit_status, emit_utterance_ended,
     emit_utterance_started, next_utterance_id, now_ms,
+};
+use crate::live_chatbox_publisher::{
+    LiveChatboxPublisher, LivePublisherDiagnostic, LivePublisherReporter,
 };
 use crate::openai_bounded::{CompletedAudioUnit, OpenAiBoundedOutcome, OpenAiBoundedSession};
 use crate::osc::ChatboxOscSender;
@@ -106,7 +113,7 @@ pub(crate) enum RuntimeStartOutcome {
 
 struct RuntimeHandle {
     generation: RuntimeGeneration,
-    publisher: Option<CompletedChatboxPublisher>,
+    publisher: Option<RuntimeChatboxPublisher>,
     join_handle: JoinHandle<()>,
 }
 
@@ -133,8 +140,46 @@ struct NoFinalUtteranceResolution {
 
 enum RuntimePublisherInit {
     Disabled,
-    Ready(CompletedChatboxPublisher),
+    Ready(RuntimeChatboxPublisher),
     Unavailable(AppError),
+}
+
+fn publisher_boundary(
+    publisher: Option<&RuntimeChatboxPublisher>,
+) -> Option<&dyn ChatboxPublisherBoundary> {
+    publisher.map(|publisher| publisher as &dyn ChatboxPublisherBoundary)
+}
+
+fn publisher_failure_message<'a>(
+    publisher: Option<&RuntimeChatboxPublisher>,
+    completed: &'a str,
+    live: &'a str,
+) -> &'a str {
+    match publisher {
+        Some(RuntimeChatboxPublisher::Live(_)) => live,
+        Some(RuntimeChatboxPublisher::Completed(_)) | None => completed,
+    }
+}
+
+fn resolve_runtime_publication_policy(
+    config: &AppConfig,
+    runtime_plan: &RuntimePlanSnapshot,
+) -> AppResult<ResolvedPublicationPolicy> {
+    if runtime_plan != &plan_runtime(config) {
+        return Err(AppError::config(
+            "Runtime plan did not match the selected backend configuration.",
+        ));
+    }
+
+    runtime_plan.publication.resolved_policy().ok_or_else(|| {
+        AppError::config(format!(
+            "The selected recognition path and publication mode are incompatible ({}).",
+            runtime_plan
+                .publication
+                .incompatibility_code()
+                .unwrap_or("publication.incompatible")
+        ))
+    })
 }
 
 type CaptionSessionReporter = Arc<dyn Fn(CaptionSessionSnapshotV1) + Send + Sync>;
@@ -193,7 +238,7 @@ impl RuntimeGeneration {
 
     pub(crate) fn request_stop(
         &self,
-        publisher: Option<&CompletedChatboxPublisher>,
+        publisher: Option<&dyn ChatboxPublisherBoundary>,
     ) -> AppResult<()> {
         // Cancel capture and provider work before waiting for either sink.
         // The explicit marker also prevents a new commit from overtaking Stop
@@ -220,7 +265,7 @@ impl RuntimeGeneration {
 
     fn close_publisher_at_boundary(
         &self,
-        publisher: Option<&CompletedChatboxPublisher>,
+        publisher: Option<&dyn ChatboxPublisherBoundary>,
         reason: PublisherCloseReason,
     ) -> AppResult<()> {
         // Close admission before waiting on an older App/Chatbox commit. This
@@ -270,6 +315,7 @@ impl RuntimeGeneration {
     fn start_caption_unit<R: Runtime>(
         &self,
         app: &AppHandle<R>,
+        publisher: Option<&RuntimeChatboxPublisher>,
         unit_id: String,
         started_at_ms: u64,
     ) -> AppResult<bool> {
@@ -290,7 +336,7 @@ impl RuntimeGeneration {
         else {
             return Ok(false);
         };
-        (self.caption_reporter)(snapshot);
+        self.report_accepted_snapshot(app, publisher, snapshot);
         emit_utterance_started(
             app,
             self.generation_id,
@@ -302,7 +348,12 @@ impl RuntimeGeneration {
         Ok(true)
     }
 
-    fn accept_caption(&self, caption: CaptionSnapshotV1) -> AppResult<bool> {
+    fn accept_caption<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        publisher: Option<&RuntimeChatboxPublisher>,
+        caption: CaptionSnapshotV1,
+    ) -> AppResult<bool> {
         let _output_gate = self
             .output_gate
             .lock()
@@ -314,7 +365,7 @@ impl RuntimeGeneration {
         let Some(snapshot) = self.caption_session.accept_caption(caption)? else {
             return Ok(false);
         };
-        (self.caption_reporter)(snapshot);
+        self.report_accepted_snapshot(app, publisher, snapshot);
 
         Ok(true)
     }
@@ -322,7 +373,7 @@ impl RuntimeGeneration {
     pub(crate) fn submit_recognition_event<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&CompletedChatboxPublisher>,
+        publisher: Option<&RuntimeChatboxPublisher>,
         event: RecognitionEvent,
     ) -> AppResult<bool> {
         let _output_gate = self
@@ -349,12 +400,12 @@ impl RuntimeGeneration {
                 else {
                     return Ok(false);
                 };
-                (self.caption_reporter)(snapshot);
+                self.report_accepted_snapshot(app, publisher, snapshot);
                 emit_utterance_started(app, generation, stream_id, unit_id.clone(), started_at_ms);
 
                 if let Some(publisher) = publisher
-                    && let Err(error) =
-                        publisher.try_submit(CompletedPublisherEvent::Started { unit_id })
+                    && let Err(error) = publisher
+                        .try_submit_completed_event(CompletedPublisherEvent::Started { unit_id })
                 {
                     emit_diagnostic(
                         app,
@@ -369,7 +420,7 @@ impl RuntimeGeneration {
                 let Some(snapshot) = self.caption_session.accept_caption(caption)? else {
                     return Ok(false);
                 };
-                (self.caption_reporter)(snapshot);
+                self.report_accepted_snapshot(app, publisher, snapshot);
 
                 if is_completed && let (Some(publisher), Some(unit_id)) = (publisher, unit_id) {
                     submit_completed_chatbox_candidate(app, publisher, self, unit_id, text);
@@ -383,6 +434,7 @@ impl RuntimeGeneration {
     fn end_caption_unit<R: Runtime>(
         &self,
         app: &AppHandle<R>,
+        publisher: Option<&RuntimeChatboxPublisher>,
         unit_id: String,
         reason: UtteranceEndReason,
     ) -> AppResult<bool> {
@@ -402,7 +454,7 @@ impl RuntimeGeneration {
         else {
             return Ok(false);
         };
-        (self.caption_reporter)(snapshot);
+        self.report_accepted_snapshot(app, publisher, snapshot);
         emit_utterance_ended(
             app,
             self.generation_id,
@@ -413,6 +465,42 @@ impl RuntimeGeneration {
         );
 
         Ok(true)
+    }
+
+    fn report_accepted_snapshot<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        publisher: Option<&RuntimeChatboxPublisher>,
+        snapshot: CaptionSessionSnapshotV1,
+    ) {
+        // The App and Live publication observe the exact same store-accepted
+        // aggregate. Completed publication deliberately ignores this input and
+        // keeps its existing lossless lifecycle event path.
+        (self.caption_reporter)(snapshot.clone());
+        let Some(publisher) = publisher else {
+            return;
+        };
+
+        match publisher.observe_snapshot(&snapshot) {
+            Ok(PublisherSubmitOutcome::Handled) => {}
+            Ok(PublisherSubmitOutcome::Closed) => {
+                if !self.is_hard_stopped() {
+                    emit_diagnostic(
+                        app,
+                        DiagnosticUpdate::info(
+                            DiagnosticCategory::Osc,
+                            "osc.live_snapshot_discarded_after_close",
+                            "Live Chatbox snapshot discarded",
+                            "The Live publisher closed before this accepted App caption snapshot could be observed.",
+                        ),
+                    );
+                }
+            }
+            Err(error) => emit_diagnostic(
+                app,
+                DiagnosticUpdate::from_error(&error, "Live Chatbox snapshot could not be observed"),
+            ),
+        }
     }
 
     fn close_caption_session_at_boundary(&self) -> AppResult<()> {
@@ -438,7 +526,7 @@ impl RuntimeGeneration {
         close_result.map(|_| ())
     }
 
-    fn generation_id(&self) -> u64 {
+    pub(crate) fn generation_id(&self) -> u64 {
         self.generation_id
     }
 
@@ -615,6 +703,7 @@ impl RuntimeManager {
             expected_stop_epoch,
         } = request;
         config.validate()?;
+        let publication_policy = resolve_runtime_publication_policy(&config, &runtime_plan)?;
 
         let mut guard = self
             .handle
@@ -635,8 +724,13 @@ impl RuntimeManager {
         }
 
         let generation = RuntimeGeneration::activate(&app, generation_id, caption_session)?;
-        let publisher_init =
-            initialize_runtime_publisher(&app, &config.osc, chatbox_pacer, generation.clone());
+        let publisher_init = initialize_runtime_publisher(
+            &app,
+            &config.osc,
+            publication_policy,
+            chatbox_pacer,
+            generation.clone(),
+        );
         let requested_host = config.osc.host.clone();
         let requested_port = config.osc.port;
         let (publisher, chatbox) = match publisher_init {
@@ -681,7 +775,7 @@ impl RuntimeManager {
             uploads_microphone_audio: matches!(config.stt.provider, SttProvider::OpenAi),
         };
         if let Err(error) = install_session(session) {
-            let _ = generation.request_stop(publisher.as_ref());
+            let _ = generation.request_stop(publisher_boundary(publisher.as_ref()));
             if let Some(publisher) = &publisher {
                 let _ = publisher.join();
             }
@@ -705,7 +799,7 @@ impl RuntimeManager {
         let join_handle = match join_handle {
             Ok(join_handle) => join_handle,
             Err(error) => {
-                let _ = generation.request_stop(publisher.as_ref());
+                let _ = generation.request_stop(publisher_boundary(publisher.as_ref()));
                 if let Some(publisher) = &publisher {
                     let _ = publisher.join();
                 }
@@ -744,11 +838,21 @@ impl RuntimeManager {
             return Ok(());
         };
 
-        if let Err(error) = handle.generation.request_stop(handle.publisher.as_ref()) {
+        if let Err(error) = handle
+            .generation
+            .request_stop(publisher_boundary(handle.publisher.as_ref()))
+        {
             handle.generation.cancel_work();
             emit_diagnostic(
                 app,
-                DiagnosticUpdate::from_error(&error, "Completed publisher could not close"),
+                DiagnosticUpdate::from_error(
+                    &error,
+                    publisher_failure_message(
+                        handle.publisher.as_ref(),
+                        "Completed publisher could not close",
+                        "Live publisher could not close",
+                    ),
+                ),
             );
         }
         emit_status(
@@ -766,7 +870,14 @@ impl RuntimeManager {
         if let Err(error) = publisher_result {
             emit_diagnostic(
                 app,
-                DiagnosticUpdate::from_error(&error, "Completed publisher failed while stopping"),
+                DiagnosticUpdate::from_error(
+                    &error,
+                    publisher_failure_message(
+                        handle.publisher.as_ref(),
+                        "Completed publisher failed while stopping",
+                        "Live publisher failed while stopping",
+                    ),
+                ),
             );
         }
 
@@ -819,13 +930,27 @@ fn clear_finished_runtime<R: Runtime>(
         {
             emit_diagnostic(
                 app,
-                DiagnosticUpdate::from_error(&error, "Completed publisher could not close"),
+                DiagnosticUpdate::from_error(
+                    &error,
+                    publisher_failure_message(
+                        Some(publisher),
+                        "Completed publisher could not close",
+                        "Live publisher could not close",
+                    ),
+                ),
             );
         }
         if let Err(error) = publisher.join() {
             emit_diagnostic(
                 app,
-                DiagnosticUpdate::from_error(&error, "Completed publisher failed while closing"),
+                DiagnosticUpdate::from_error(
+                    &error,
+                    publisher_failure_message(
+                        Some(publisher),
+                        "Completed publisher failed while closing",
+                        "Live publisher failed while closing",
+                    ),
+                ),
             );
         }
     }
@@ -839,6 +964,7 @@ fn clear_finished_runtime<R: Runtime>(
 fn initialize_runtime_publisher(
     app: &AppHandle,
     config: &OscConfig,
+    policy: ResolvedPublicationPolicy,
     chatbox_pacer: ChatboxPacer,
     generation: RuntimeGeneration,
 ) -> RuntimePublisherInit {
@@ -850,12 +976,36 @@ fn initialize_runtime_publisher(
         Ok(sender) => sender,
         Err(error) => return RuntimePublisherInit::Unavailable(error),
     };
-    let reporter_app = app.clone();
-    let reporter: PublisherReporter = Arc::new(move |diagnostic| {
-        emit_publisher_diagnostic(&reporter_app, diagnostic);
-    });
+    let transport: Arc<dyn ChatboxTransport> = Arc::new(sender);
+    let publisher = match policy {
+        ResolvedPublicationPolicy::Completed => {
+            let reporter_app = app.clone();
+            let reporter: PublisherReporter = Arc::new(move |diagnostic| {
+                emit_publisher_diagnostic(&reporter_app, diagnostic);
+            });
+            CompletedChatboxPublisher::start(transport, chatbox_pacer, generation, reporter)
+                .map(RuntimeChatboxPublisher::Completed)
+        }
+        ResolvedPublicationPolicy::LiveUnit { .. }
+        | ResolvedPublicationPolicy::LiveUnitless { .. } => {
+            let generation_id = generation.generation_id();
+            let reporter_app = app.clone();
+            let reporter: LivePublisherReporter = Arc::new(move |diagnostic| {
+                emit_live_publisher_diagnostic(&reporter_app, diagnostic);
+            });
+            LiveChatboxPublisher::start(
+                transport,
+                chatbox_pacer,
+                generation_id,
+                generation,
+                policy,
+                reporter,
+            )
+            .map(RuntimeChatboxPublisher::Live)
+        }
+    };
 
-    match CompletedChatboxPublisher::start(Arc::new(sender), chatbox_pacer, generation, reporter) {
+    match publisher {
         Ok(publisher) => RuntimePublisherInit::Ready(publisher),
         Err(error) => RuntimePublisherInit::Unavailable(error),
     }
@@ -865,7 +1015,7 @@ fn run_runtime_thread(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: Option<SecretString>,
-    publisher: Option<CompletedChatboxPublisher>,
+    publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
 ) {
     let error_generation = generation.clone();
@@ -883,7 +1033,7 @@ fn run_runtime_thread(
 fn supervise_runtime_thread<R: Runtime>(
     app: &AppHandle<R>,
     generation: &RuntimeGeneration,
-    publisher: Option<&CompletedChatboxPublisher>,
+    publisher: Option<&RuntimeChatboxPublisher>,
     run: impl FnOnce() -> AppResult<()>,
 ) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
@@ -939,11 +1089,11 @@ fn supervise_runtime_thread<R: Runtime>(
 fn finish_runtime_output<R: Runtime>(
     app: &AppHandle<R>,
     generation: &RuntimeGeneration,
-    publisher: Option<&CompletedChatboxPublisher>,
+    publisher: Option<&RuntimeChatboxPublisher>,
     reason: PublisherCloseReason,
 ) {
     let close_result = match reason {
-        PublisherCloseReason::Stop => generation.request_stop(publisher),
+        PublisherCloseReason::Stop => generation.request_stop(publisher_boundary(publisher)),
         PublisherCloseReason::RuntimeError => match publisher {
             Some(publisher) => generation
                 .close_publisher_at_boundary(Some(publisher), PublisherCloseReason::RuntimeError),
@@ -953,7 +1103,14 @@ fn finish_runtime_output<R: Runtime>(
     if let Err(error) = close_result {
         emit_diagnostic(
             app,
-            DiagnosticUpdate::from_error(&error, "Completed publisher could not close"),
+            DiagnosticUpdate::from_error(
+                &error,
+                publisher_failure_message(
+                    publisher,
+                    "Completed publisher could not close",
+                    "Live publisher could not close",
+                ),
+            ),
         );
     }
 
@@ -962,7 +1119,14 @@ fn finish_runtime_output<R: Runtime>(
     {
         emit_diagnostic(
             app,
-            DiagnosticUpdate::from_error(&error, "Completed publisher failed while closing"),
+            DiagnosticUpdate::from_error(
+                &error,
+                publisher_failure_message(
+                    Some(publisher),
+                    "Completed publisher failed while closing",
+                    "Live publisher failed while closing",
+                ),
+            ),
         );
     }
 
@@ -978,7 +1142,7 @@ fn run_runtime(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: Option<SecretString>,
-    publisher: Option<CompletedChatboxPublisher>,
+    publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
 ) -> AppResult<()> {
     let started = generation.commit_if_active(|| {
@@ -1036,7 +1200,7 @@ fn run_openai_runtime(
     app: AppHandle,
     config: AppConfig,
     openai_api_key: SecretString,
-    publisher: Option<CompletedChatboxPublisher>,
+    publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
 ) -> AppResult<()> {
     if !generation.try_begin_work() {
@@ -1111,7 +1275,12 @@ fn run_openai_runtime(
             if update.speech_started {
                 let next_utterance = next_utterance_id("speech");
                 let started_at_ms = now_ms();
-                if !generation.start_caption_unit(&app, next_utterance.clone(), started_at_ms)? {
+                if !generation.start_caption_unit(
+                    &app,
+                    publisher.as_ref(),
+                    next_utterance.clone(),
+                    started_at_ms,
+                )? {
                     return Ok(());
                 }
                 start_chatbox_activity(&app, publisher.as_ref(), &next_utterance);
@@ -1232,7 +1401,7 @@ fn queue_speech_segment(
     samples: Vec<f32>,
     active_unit: &mut Option<ActiveSpeechUnit>,
     segment_sender: &SyncSender<CompletedAudioUnit>,
-    publisher: Option<&CompletedChatboxPublisher>,
+    publisher: Option<&RuntimeChatboxPublisher>,
     generation: &RuntimeGeneration,
 ) -> AppResult<()> {
     // The segmenter only yields segments that reached the voiced minimum, and
@@ -1295,7 +1464,7 @@ fn spawn_stt_worker(
     config: AppConfig,
     openai_api_key: SecretString,
     http_client: Client,
-    publisher: Option<CompletedChatboxPublisher>,
+    publisher: Option<RuntimeChatboxPublisher>,
     segment_receiver: Receiver<CompletedAudioUnit>,
     generation: RuntimeGeneration,
 ) -> AppResult<JoinHandle<()>> {
@@ -1324,7 +1493,7 @@ fn spawn_stt_worker(
 fn run_stt_worker<R: Runtime>(
     app: AppHandle<R>,
     config: AppConfig,
-    publisher: Option<CompletedChatboxPublisher>,
+    publisher: Option<RuntimeChatboxPublisher>,
     segment_receiver: Receiver<CompletedAudioUnit>,
     generation: RuntimeGeneration,
     recognize: impl Fn(&CompletedAudioUnit) -> AppResult<OpenAiBoundedOutcome>,
@@ -1385,7 +1554,7 @@ fn transcribe_and_emit_final<R: Runtime>(
     app: &AppHandle<R>,
     config: &AppConfig,
     segment: CompletedAudioUnit,
-    publisher: Option<&CompletedChatboxPublisher>,
+    publisher: Option<&RuntimeChatboxPublisher>,
     generation: &RuntimeGeneration,
     recognize: &impl Fn(&CompletedAudioUnit) -> AppResult<OpenAiBoundedOutcome>,
 ) -> AppResult<()> {
@@ -1429,6 +1598,7 @@ fn transcribe_and_emit_final<R: Runtime>(
         Err(error) => {
             let committed = generation.end_caption_unit(
                 app,
+                publisher,
                 utterance_id.clone(),
                 UtteranceEndReason::SttFailed,
             )?;
@@ -1446,6 +1616,7 @@ fn transcribe_and_emit_final<R: Runtime>(
         OpenAiBoundedOutcome::NoSpeech => {
             let committed = generation.end_caption_unit(
                 app,
+                publisher,
                 utterance_id.clone(),
                 UtteranceEndReason::NoSpeech,
             )?;
@@ -1468,7 +1639,7 @@ fn transcribe_and_emit_final<R: Runtime>(
         OpenAiBoundedOutcome::Completed(caption) => caption,
     };
     let text = caption.text.clone();
-    let committed = generation.accept_caption(caption)?;
+    let committed = generation.accept_caption(app, publisher, caption)?;
 
     if !committed {
         discard_late_transcription_result(app, publisher, generation, utterance_id);
@@ -1514,7 +1685,7 @@ fn transcribe_and_emit_final<R: Runtime>(
 
 fn discard_late_transcription_result<R: Runtime>(
     app: &AppHandle<R>,
-    publisher: Option<&CompletedChatboxPublisher>,
+    publisher: Option<&RuntimeChatboxPublisher>,
     generation: &RuntimeGeneration,
     utterance_id: String,
 ) {
@@ -1550,12 +1721,13 @@ fn emit_chatbox_send_skipped_on_stop<R: Runtime>(app: &AppHandle<R>) {
 
 fn submit_completed_chatbox_candidate<R: Runtime>(
     app: &AppHandle<R>,
-    publisher: &CompletedChatboxPublisher,
+    publisher: &RuntimeChatboxPublisher,
     generation: &RuntimeGeneration,
     unit_id: String,
     text: String,
 ) {
-    match publisher.try_submit(CompletedPublisherEvent::Completed { unit_id, text }) {
+    match publisher.try_submit_completed_event(CompletedPublisherEvent::Completed { unit_id, text })
+    {
         Ok(PublisherSubmitOutcome::Handled) => {}
         Ok(PublisherSubmitOutcome::Closed) => {
             if generation.is_hard_stopped() {
@@ -1688,16 +1860,99 @@ fn emit_publisher_diagnostic<R: Runtime>(app: &AppHandle<R>, diagnostic: Publish
     emit_diagnostic(app, update);
 }
 
+fn emit_live_publisher_diagnostic<R: Runtime>(
+    app: &AppHandle<R>,
+    diagnostic: LivePublisherDiagnostic,
+) {
+    let update = match diagnostic {
+        LivePublisherDiagnostic::ViewPublished {
+            stream_id,
+            unit_id,
+            revision,
+            byte_count,
+            target,
+        } => DiagnosticUpdate::info(
+            DiagnosticCategory::Osc,
+            "osc.live_view_sent",
+            "Live caption view published",
+            format!(
+                "Published revision {revision} for {} in {stream_id} to {target} using {byte_count} encoded byte(s).",
+                unit_id.as_deref().unwrap_or("the unitless stream")
+            ),
+        ),
+        LivePublisherDiagnostic::ViewSendFailed {
+            stream_id,
+            unit_id,
+            revision,
+            error,
+        } => DiagnosticUpdate::error(
+            DiagnosticCategory::Osc,
+            "osc.live_view_send_failed",
+            "Live caption view could not be published",
+            format!(
+                "Revision {revision} for {} in {stream_id} failed and was not retried: {error}",
+                unit_id.as_deref().unwrap_or("the unitless stream")
+            ),
+        ),
+        LivePublisherDiagnostic::LayoutFailed {
+            stream_id,
+            unit_id,
+            revision,
+            reason,
+        } => DiagnosticUpdate::warning(
+            DiagnosticCategory::Osc,
+            "osc.live_layout_failed",
+            "Live caption view could not be laid out for Chatbox",
+            format!(
+                "Revision {revision} for {} in {stream_id} was not published: {reason}",
+                unit_id.as_deref().unwrap_or("the unitless stream")
+            ),
+        ),
+        LivePublisherDiagnostic::DraftDiscardedOnClose { reason } => {
+            let (code, message) = match reason {
+                PublisherCloseReason::Stop => (
+                    "osc.live_draft_discarded_on_stop",
+                    "Pending Live caption discarded on Stop",
+                ),
+                PublisherCloseReason::RuntimeError => (
+                    "osc.live_draft_discarded_on_error",
+                    "Pending Live caption discarded after Runtime failure",
+                ),
+            };
+            DiagnosticUpdate::info(
+                DiagnosticCategory::Osc,
+                code,
+                message,
+                "The newest unsent Live revision was discarded; the App caption remains available.",
+            )
+        }
+        LivePublisherDiagnostic::TypingFailed { error } => DiagnosticUpdate::error(
+            DiagnosticCategory::Osc,
+            "osc.live_typing_failed",
+            "Live Chatbox typing indicator could not update",
+            error.to_string(),
+        ),
+        LivePublisherDiagnostic::WorkerFailed { reason } => DiagnosticUpdate::error(
+            DiagnosticCategory::Osc,
+            "osc.live_publisher_failed",
+            "Live Chatbox publisher stopped unexpectedly",
+            reason,
+        ),
+    };
+
+    emit_diagnostic(app, update);
+}
+
 fn start_chatbox_activity(
     app: &AppHandle,
-    publisher: Option<&CompletedChatboxPublisher>,
+    publisher: Option<&RuntimeChatboxPublisher>,
     utterance_id: &str,
 ) {
     let Some(publisher) = publisher else {
         return;
     };
 
-    if let Err(error) = publisher.try_submit(CompletedPublisherEvent::Started {
+    if let Err(error) = publisher.try_submit_completed_event(CompletedPublisherEvent::Started {
         unit_id: utterance_id.to_string(),
     }) {
         emit_diagnostic(
@@ -1709,21 +1964,22 @@ fn start_chatbox_activity(
 
 fn end_utterance_without_final<R: Runtime>(
     app: &AppHandle<R>,
-    publisher: Option<&CompletedChatboxPublisher>,
+    publisher: Option<&RuntimeChatboxPublisher>,
     generation: &RuntimeGeneration,
     utterance_id: String,
     reason: UtteranceEndReason,
 ) {
-    let aggregate_resolved = match generation.end_caption_unit(app, utterance_id.clone(), reason) {
-        Ok(resolved) => resolved,
-        Err(error) => {
-            emit_diagnostic(
-                app,
-                DiagnosticUpdate::from_error(&error, "Caption unit could not resolve"),
-            );
-            false
-        }
-    };
+    let aggregate_resolved =
+        match generation.end_caption_unit(app, publisher, utterance_id.clone(), reason) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                emit_diagnostic(
+                    app,
+                    DiagnosticUpdate::from_error(&error, "Caption unit could not resolve"),
+                );
+                false
+            }
+        };
     let resolution = NoFinalUtteranceResolution {
         utterance_id,
         reason,
@@ -1751,7 +2007,7 @@ fn end_utterance_without_final<R: Runtime>(
 }
 
 fn complete_no_final_utterance(
-    publisher: Option<&CompletedChatboxPublisher>,
+    publisher: Option<&RuntimeChatboxPublisher>,
     resolution: NoFinalUtteranceResolution,
     emit_ended: impl FnOnce(String, UtteranceEndReason),
 ) -> AppResult<()> {
@@ -1763,7 +2019,7 @@ fn complete_no_final_utterance(
     };
 
     publisher
-        .try_submit(CompletedPublisherEvent::Aborted {
+        .try_submit_completed_event(CompletedPublisherEvent::Aborted {
             unit_id: utterance_id,
         })
         .map(|_| ())
@@ -1771,14 +2027,14 @@ fn complete_no_final_utterance(
 
 fn abort_chatbox_activity<R: Runtime>(
     app: &AppHandle<R>,
-    publisher: Option<&CompletedChatboxPublisher>,
+    publisher: Option<&RuntimeChatboxPublisher>,
     utterance_id: &str,
 ) {
     let Some(publisher) = publisher else {
         return;
     };
 
-    if let Err(error) = publisher.try_submit(CompletedPublisherEvent::Aborted {
+    if let Err(error) = publisher.try_submit_completed_event(CompletedPublisherEvent::Aborted {
         unit_id: utterance_id.to_string(),
     }) {
         emit_diagnostic(

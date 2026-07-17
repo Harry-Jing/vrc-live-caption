@@ -122,8 +122,10 @@ Exit criteria:
 
 ## Phase 3: Normalized Recognition Sessions And Live-Capable Publisher
 
-Status: in progress. The first behavior-preserving tracer bullet is implemented;
-Live publication and additional provider paths have not started.
+Status: in progress. The behavior-preserving tracer bullet, capability planner,
+config migration, deterministic provider shapes, and backend Live publisher are
+implemented. A real Live provider path, the user-facing controls, and measured
+Windows/VRChat validation remain.
 
 Goal: establish the deep runtime seams shared by bounded cloud, Realtime cloud,
 and later local providers, without adding translation or a second recognizer.
@@ -153,16 +155,19 @@ The implemented tracer bullet:
   every older config to Completed, exposes desired and active runtime plans in
   runtime-control contract version 2, and rejects incompatible Start requests
   before credential or audio setup without rewriting the saved selection.
+- runs deterministic bounded, unitful ongoing-plus-completed, and unitless
+  ongoing-only Mock adapters through the same generation-fenced normalized
+  aggregate fan-out used by the App;
+- keeps the existing Completed worker on its lossless ordered event path while
+  a closed publication facade sends store-accepted full aggregates to a
+  separate latest-wins Live worker;
+- implements planner-owned unit and unitless observation delays, recent-content
+  viewport rendering, completion correction, four-second typing reassertion,
+  shared actual-attempt pacing, and Stop/worker-failure cleanup without changing
+  bounded OpenAI Completed behavior.
 
 Remaining Phase 3 work:
 
-- extend the Phase 1 publisher with Completed and Live policies rather than
-  letting providers publish directly;
-- implement the per-unit one-second Live observation window and, for a
-  unitless ongoing-only stream, a one-second first-non-empty stream-start delay
-  that never fabricates completion;
-- implement the latest-wins rolling viewport, final correction where completion
-  exists, and no queue of obsolete ongoing revisions;
 - for recognition paths that own real caption units, implement natural-
   boundary-first segmentation plus a hard maximum for long uninterrupted
   speech; choose timings from recorded tests rather than an ordinary user
@@ -174,12 +179,8 @@ Remaining Phase 3 work:
 - when a selection is incompatible, offer two explicit directions: keep the
   model/provider and choose a supported publication mode, or keep the desired
   experience and choose a compatible model/provider;
-- add fake bounded, ongoing-plus-completed, and ongoing-only adapters;
-- extend the Phase 1 fake-time/OSC harness to pin the observation window, Live
-  coalescing, correction, and interactions with inherited pacing and Stop
-  behavior;
-- extend the existing stale-generation coverage with capability resolution,
-  persisted mode migration, and both explicit incompatibility choices.
+- add a concrete non-Mock ongoing recognition path and validate its reconnect,
+  backpressure, session lifetime, and measured user value before advertising it.
 
 Exit criteria:
 

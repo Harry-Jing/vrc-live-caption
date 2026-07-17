@@ -29,8 +29,8 @@ A provider path may produce a source lane, a translated lane, or both. A
 translation path may consume normalized source text or audio directly. The
 architecture does not require every translation to wait behind STT.
 
-The currently implemented Phase 3 tracer bullet keeps the original user
-behavior while inserting the normalized session seam:
+The implemented Phase 3 runtime keeps the bounded OpenAI behavior unchanged
+while adding capability-planned publication behind the normalized session seam:
 
 ```text
 Microphone
@@ -39,13 +39,22 @@ Microphone
   -> normalized completed source caption
   -> backend-owned CaptionSessionSnapshotV1
      |-> full aggregate event / pull -> App preview
-     `-> accepted completed caption -> existing Completed policy -> OSC
+     `-> publication facade
+          `-> existing Completed policy -> OSC
+
+Deterministic Mock recognition adapters
+  -> bounded, unitful ongoing/completed, or unitless ongoing snapshots
+  -> the same backend-owned CaptionSessionSnapshotV1
+     |-> full aggregate event / pull -> App preview
+     `-> publication facade -> latest-wins Live policy -> OSC
 ```
 
-The same accepted completed caption continues into the existing Completed
-publisher; this slice does not add Live publication or change OpenAI request,
-preview, paging, pacing, or Stop behavior. It establishes a contract seam, not
-the capability ceiling for future cloud or local providers.
+The same accepted OpenAI completion continues into the existing Completed
+publisher with its original queue, paging, pacing, typing, and Stop behavior.
+Live consumes only store-accepted full aggregates, keeps one recomputed recent
+viewport, and shares the process-wide actual-attempt pacer. Mock paths make the
+different unit/update contracts deterministic and testable; they are not a
+claim that a production Live provider has passed real-client validation.
 
 ## Core Boundaries
 
@@ -144,9 +153,11 @@ metadata. `stable` is not a caption state and no partial/stable/final wire
 ladder remains.
 
 The current bounded OpenAI adapter produces unitful source captions at revision
-1 in the completed state. `ongoing`, a unitless stream, and the translation lane
-are contract shapes for later concrete paths; their presence in V1 does not
-claim that the current provider or publisher implements them.
+1 in the completed state. Deterministic Mock adapters exercise revisable
+unitful ongoing/completed and unitless ongoing-only source shapes through the
+backend Live publisher. The translation lane remains a contract shape for a
+later concrete path; Mock coverage does not advertise a production Live
+provider.
 
 Runtime lifecycle events are not replaced by caption snapshots. In particular,
 `utterance.ended` remains necessary for no-result and failed units, while
@@ -350,20 +361,26 @@ Live is a deliberately lossy current view rather than transcript history. The
 App retains normalized state; Chatbox may skip or replace intermediate revisions
 to remain current and readable.
 
-## Independent Chatbox Publisher
+## Independent Chatbox Publishers
 
-The Phase 1 Completed publisher remains an independent worker.
-Runtime producers submit whole caption-unit lifecycle events without waiting
-for a pacing opportunity or OSC; Completed text is paginated before queue
-admission. The worker owns typing transitions, ordered Completed publication,
-overload handling, and diagnostics, and uses the shared process-wide pacer for
-actual text-send attempts. Capture and provider ingestion never wait for
-Chatbox pacing. The first Phase 3 tracer bullet leaves that policy unchanged;
-Live remains a later Phase 3 extension rather than current behavior. Publisher
-instances are Runtime-generation scoped; only
-the process-wide pacer survives Stop/Start, so an old Publisher handle can never
-submit into a new generation while the new generation still respects the old
-generation's most recent actual send attempt.
+Runtime selects one branch of a closed publication facade from the
+backend-authoritative capability plan. The Completed branch is the unchanged
+Phase 1 worker: producers submit whole caption-unit lifecycle events without
+waiting for OSC, and completed text is paginated before bounded queue admission.
+It continues to own ordered publication, overload handling, typing transitions,
+and diagnostics.
+
+The source-only Live branch is a separate latest-wins worker. It observes whole
+`CaptionSessionSnapshotV1` aggregates after store acceptance, recomputes one
+recent-content viewport, and never queues historical screens. Observation
+timing comes from the resolved unit or unitless planner policy. Capture and
+provider ingestion only replace in-memory state and never wait for Chatbox
+pacing.
+
+Both branches use the shared process-wide pacer for actual text-send attempts.
+Publisher instances remain Runtime-generation scoped; only the pacer survives
+Stop/Start, so an old Publisher handle cannot submit into a new generation while
+the new generation still respects the old generation's most recent attempt.
 
 Project publication rules:
 
@@ -373,8 +390,7 @@ Project publication rules:
   storm;
 - provider deltas are never forwarded one-for-one to OSC.
 
-The following eligibility rules remain target Live behavior and are not part of
-the current Completed implementation:
+The current source Live branch applies these eligibility rules:
 
 - for a path with real caption units, App preview may update during a unit's
   first second but Chatbox waits; if the unit completes in that interval, only
@@ -389,12 +405,22 @@ the current Completed implementation:
 - a completed correction replaces an unsent draft and need not be resent when
   it is identical to the last published view.
 
-### Target Live rendering
+### Current source Live rendering
 
 Live uses one recomputed rolling viewport, not a queue of historical screens:
 
 - preserve as much recent context as fits, but always keep the newest content;
 - advance at word, punctuation, line-break, or grapheme boundaries;
+- compose eligible source captions in chronological order before selecting the
+  newest safe suffix;
+- keep output within the 144 UTF-16-unit and nine-visible-line budgets without
+  splitting a grapheme.
+
+### Future translation and bilingual Live rendering
+
+Translation and bilingual Live still require a concrete ongoing translation
+adapter and provider-specific validation. Their target rendering rules are:
+
 - source and translation keep independent progress watermarks;
 - bilingual output renders source above translation and combines the latest
   available view of each lane in one Chatbox message;

@@ -244,6 +244,16 @@ fn incompatible_publication_fails_before_openai_credentials_are_resolved() -> Ap
 }
 
 #[test]
+fn compatible_mock_live_publication_passes_runtime_preflight() -> AppResult<()> {
+    let mut config = AppConfig::default();
+    config.stt.provider = SttProvider::Mock;
+    config.stt.model = crate::capability_planner::MOCK_ONGOING_COMPLETED_MODEL.to_string();
+    config.publication.mode = crate::config::PublicationMode::Live;
+
+    ensure_runtime_plan_is_startable(&plan_runtime(&config))
+}
+
+#[test]
 fn thread_spawn_failure_preserves_the_session_it_already_installed() -> AppResult<()> {
     let state = AppState::default();
     let mut selected = AppConfig::default();

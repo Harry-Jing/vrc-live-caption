@@ -108,7 +108,7 @@ pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -
                 DiagnosticCategory::Stt,
                 "stt.mock_transcript_emitted",
                 "Mock transcript emitted",
-                "The UI received ongoing and completed caption-session snapshots.",
+                "The UI received normalized caption-session updates from the selected Mock adapter.",
             ),
         );
 

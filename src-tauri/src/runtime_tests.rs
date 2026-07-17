@@ -63,6 +63,40 @@ fn scripted_unitful_events_fan_out_to_the_aggregate_and_completed_publisher() ->
 }
 
 #[test]
+fn accepted_recognition_aggregate_fans_out_to_the_live_publisher() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
+    let (publisher, text_receiver) = runtime_test_live_publisher(generation.clone())?;
+    let events = FakeOngoingCompletedRecognitionAdapter::new(scripted_context(
+        &generation,
+        "fake-ongoing-completed",
+    ))
+    .script_unit(
+        "short-live-unit",
+        100,
+        &[],
+        ScriptedText::new("short completed live text", 150),
+    );
+
+    for event in events {
+        assert!(generation.submit_recognition_event(app.handle(), Some(&publisher), event)?);
+    }
+
+    assert_eq!(
+        text_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Accepted aggregate did not reach Live output."))?,
+        "short completed live text"
+    );
+    assert_eq!(caption_session.snapshot()?.captions[0].revision, 1);
+
+    publisher.request_close(PublisherCloseReason::RuntimeError)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
 fn scripted_fan_out_rejects_out_of_order_duplicate_stopped_and_old_generation_events()
 -> AppResult<()> {
     let app = tauri::test::mock_app();
@@ -375,6 +409,22 @@ fn stop_invalidates_an_uncommitted_start_epoch() -> AppResult<()> {
 }
 
 #[test]
+fn runtime_rejects_a_plan_that_does_not_match_the_selected_backend_path() -> AppResult<()> {
+    let mut config = AppConfig::default();
+    config.stt.provider = SttProvider::Mock;
+    config.stt.model = crate::capability_planner::MOCK_ONGOING_COMPLETED_MODEL.to_string();
+    let stale_plan = plan_runtime(&config);
+    config.stt.model = crate::capability_planner::MOCK_BOUNDED_MODEL.to_string();
+
+    let error = resolve_runtime_publication_policy(&config, &stale_plan)
+        .err()
+        .ok_or_else(|| AppError::state("Mismatched runtime plan unexpectedly started."))?;
+    assert_eq!(error.code(), "config.invalid");
+    assert!(error.to_string().contains("did not match"));
+    Ok(())
+}
+
+#[test]
 fn stop_cancels_work_before_waiting_for_an_app_commit() -> AppResult<()> {
     let generation = RuntimeGeneration::active();
     let commit_generation = generation.clone();
@@ -435,7 +485,7 @@ fn poisoned_generation_gate_still_closes_and_joins_the_publisher() -> AppResult<
     assert!(generation.request_stop(Some(&publisher)).is_err());
     publisher.join()?;
     assert_eq!(
-        publisher.try_submit(CompletedPublisherEvent::Completed {
+        publisher.try_submit_completed_event(CompletedPublisherEvent::Completed {
             unit_id: "late".to_string(),
             text: "late".to_string(),
         })?,
@@ -478,7 +528,7 @@ fn runtime_thread_panic_invalidates_generation_and_closes_publisher() -> AppResu
     assert!(!generation.commit_if_active(|| {})?);
     publisher.join()?;
     assert_eq!(
-        publisher.try_submit(CompletedPublisherEvent::Completed {
+        publisher.try_submit_completed_event(CompletedPublisherEvent::Completed {
             unit_id: "late-after-panic".to_string(),
             text: "late".to_string(),
         })?,
@@ -639,7 +689,7 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
     let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
     let (stopped_publisher, stopped_text_receiver) = runtime_test_publisher(generation.clone())?;
     assert_eq!(
-        stopped_publisher.try_submit(CompletedPublisherEvent::Started {
+        stopped_publisher.try_submit_completed_event(CompletedPublisherEvent::Started {
             unit_id: "stopped-in-flight".to_string(),
         })?,
         PublisherSubmitOutcome::Handled
@@ -686,7 +736,7 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
         test_announced_speech_segment(app.handle(), &current_generation, "current")?;
 
     assert_eq!(
-        current_publisher.try_submit(CompletedPublisherEvent::Started {
+        current_publisher.try_submit_completed_event(CompletedPublisherEvent::Started {
             unit_id: "current".to_string(),
         })?,
         PublisherSubmitOutcome::Handled
@@ -765,7 +815,7 @@ fn runtime_error_close_preserves_an_in_flight_app_final_but_rejects_chatbox() ->
     let generation = RuntimeGeneration::activate(app.handle(), 1, CaptionSessionStore::default())?;
     let (publisher, text_receiver) = runtime_test_publisher(generation.clone())?;
     assert_eq!(
-        publisher.try_submit(CompletedPublisherEvent::Started {
+        publisher.try_submit_completed_event(CompletedPublisherEvent::Started {
             unit_id: "in-flight-error".to_string(),
         })?,
         PublisherSubmitOutcome::Handled
@@ -1051,6 +1101,86 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
 }
 
 #[test]
+fn live_publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let (diagnostic_sender, diagnostic_receiver) = std::sync::mpsc::channel();
+    app.listen("diagnostic-event", move |event| {
+        let _ = diagnostic_sender.send(event.payload().to_string());
+    });
+    let diagnostics = vec![
+        (
+            LivePublisherDiagnostic::ViewPublished {
+                stream_id: "recognition-1-1".to_string(),
+                unit_id: Some("unit-1".to_string()),
+                revision: 2,
+                byte_count: 12,
+                target: "127.0.0.1:9000".to_string(),
+            },
+            "osc.live_view_sent",
+            "info",
+        ),
+        (
+            LivePublisherDiagnostic::ViewSendFailed {
+                stream_id: "recognition-1-1".to_string(),
+                unit_id: None,
+                revision: 3,
+                error: AppError::osc_send("test", "send failure".to_string()),
+            },
+            "osc.live_view_send_failed",
+            "error",
+        ),
+        (
+            LivePublisherDiagnostic::LayoutFailed {
+                stream_id: "recognition-1-1".to_string(),
+                unit_id: Some("unit-2".to_string()),
+                revision: 4,
+                reason: "layout failure".to_string(),
+            },
+            "osc.live_layout_failed",
+            "warning",
+        ),
+        (
+            LivePublisherDiagnostic::DraftDiscardedOnClose {
+                reason: PublisherCloseReason::Stop,
+            },
+            "osc.live_draft_discarded_on_stop",
+            "info",
+        ),
+        (
+            LivePublisherDiagnostic::DraftDiscardedOnClose {
+                reason: PublisherCloseReason::RuntimeError,
+            },
+            "osc.live_draft_discarded_on_error",
+            "info",
+        ),
+        (
+            LivePublisherDiagnostic::TypingFailed {
+                error: AppError::osc_send("test", "typing failure".to_string()),
+            },
+            "osc.live_typing_failed",
+            "error",
+        ),
+        (
+            LivePublisherDiagnostic::WorkerFailed {
+                reason: "worker failure".to_string(),
+            },
+            "osc.live_publisher_failed",
+            "error",
+        ),
+    ];
+
+    for (diagnostic, expected_code, expected_severity) in diagnostics {
+        emit_live_publisher_diagnostic(app.handle(), diagnostic);
+        let event = receive_json_event(&diagnostic_receiver, "Live publisher diagnostic")?;
+        assert_eq!(event["category"], "osc");
+        assert_eq!(event["code"], expected_code);
+        assert_eq!(event["severity"], expected_severity);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn every_no_final_resolution_emits_app_lifecycle_and_turns_typing_off() -> AppResult<()> {
     let reasons = [
         UtteranceEndReason::NoSpeech,
@@ -1071,8 +1201,9 @@ fn every_no_final_resolution_emits_app_lifecycle_and_turns_typing_off() -> AppRe
             RuntimeGeneration::active(),
             Arc::new(|_| {}),
         )?;
+        let publisher = RuntimeChatboxPublisher::Completed(publisher);
         assert_eq!(
-            publisher.try_submit(CompletedPublisherEvent::Started {
+            publisher.try_submit_completed_event(CompletedPublisherEvent::Started {
                 unit_id: utterance_id.clone(),
             })?,
             PublisherSubmitOutcome::Handled
@@ -1160,7 +1291,7 @@ impl ChatboxTransport for RecordingChatboxTransport {
 
 fn runtime_test_publisher(
     generation: RuntimeGeneration,
-) -> AppResult<(CompletedChatboxPublisher, std::sync::mpsc::Receiver<String>)> {
+) -> AppResult<(RuntimeChatboxPublisher, std::sync::mpsc::Receiver<String>)> {
     let (text_sender, text_receiver) = std::sync::mpsc::channel();
     let reporter: PublisherReporter = Arc::new(|_| {});
     let publisher = CompletedChatboxPublisher::start(
@@ -1173,7 +1304,29 @@ fn runtime_test_publisher(
         reporter,
     )?;
 
-    Ok((publisher, text_receiver))
+    Ok((RuntimeChatboxPublisher::Completed(publisher), text_receiver))
+}
+
+fn runtime_test_live_publisher(
+    generation: RuntimeGeneration,
+) -> AppResult<(RuntimeChatboxPublisher, std::sync::mpsc::Receiver<String>)> {
+    let (text_sender, text_receiver) = std::sync::mpsc::channel();
+    let reporter: LivePublisherReporter = Arc::new(|_| {});
+    let publisher = LiveChatboxPublisher::start(
+        Arc::new(RecordingChatboxTransport {
+            text_sender,
+            typing_sender: None,
+        }),
+        ChatboxPacer::default(),
+        generation.generation_id(),
+        generation,
+        ResolvedPublicationPolicy::LiveUnit {
+            observation_window_ms: 1_000,
+        },
+        reporter,
+    )?;
+
+    Ok((RuntimeChatboxPublisher::Live(publisher), text_receiver))
 }
 
 fn test_speech_segment(
@@ -1203,7 +1356,7 @@ fn test_announced_speech_segment<R: Runtime>(
     utterance_id: &str,
 ) -> AppResult<CompletedAudioUnit> {
     let started_at_ms = 42;
-    if !generation.start_caption_unit(app, utterance_id.to_string(), started_at_ms)? {
+    if !generation.start_caption_unit(app, None, utterance_id.to_string(), started_at_ms)? {
         return Err(AppError::state("Test caption unit could not be announced."));
     }
 

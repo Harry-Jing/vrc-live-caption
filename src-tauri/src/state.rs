@@ -555,13 +555,11 @@ impl AppState {
 
 fn ensure_runtime_plan_is_startable(plan: &RuntimePlanSnapshot) -> AppResult<()> {
     match plan.publication.resolved_policy() {
-        Some(ResolvedPublicationPolicy::Completed) => Ok(()),
         Some(
-            ResolvedPublicationPolicy::LiveUnit { .. }
+            ResolvedPublicationPolicy::Completed
+            | ResolvedPublicationPolicy::LiveUnit { .. }
             | ResolvedPublicationPolicy::LiveUnitless { .. },
-        ) => Err(AppError::config(
-            "Live Chatbox publication is not available until its Phase 3 publisher is installed.",
-        )),
+        ) => Ok(()),
         None => Err(AppError::config(format!(
             "The selected recognition path and publication mode are incompatible ({}).",
             plan.publication
