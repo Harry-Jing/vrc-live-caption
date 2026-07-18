@@ -9,8 +9,6 @@ of the automated format checks.
 - [architecture.md](./architecture.md): runtime boundaries and data flow
 - [roadmap.md](./roadmap.md): implementation phases and status
 - [adr/](./adr/): accepted decisions, one per file, with their reasons
-- [agents/](./agents/): configuration for the engineering skills (issue
-  tracker, triage labels, domain docs)
 - [research/](./research/): factual notes and measured behavior —
   [VRChat Chatbox reference](./research/vrchat-chatbox-reference.md),
   [OpenAI speech streaming options](./research/openai-speech-streaming-options.md),

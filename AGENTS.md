@@ -2,20 +2,12 @@
 
 ## Agent skills
 
-### Issue tracker
-
-Issues live in this repo's GitHub Issues, driven by the `gh` CLI. See
-`docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-The five default triage labels are used as-is. See
-`docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: the glossary is `CONTEXT.md` at the repo root and decisions
-live in `docs/adr/`. See `docs/agents/domain.md`.
+- Issue tracker: this repo's GitHub Issues, driven by the `gh` CLI. External
+  PRs are not a request surface for triage.
+- Triage labels: the five canonical defaults, used as-is (`needs-triage`,
+  `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`).
+- Domain docs: single-context — the glossary is `CONTEXT.md` at the repo
+  root and decisions live in `docs/adr/`.
 
 ## Purpose
 - Keep this file practical and project-specific. Prefer instructions that prevent
