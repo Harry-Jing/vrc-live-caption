@@ -8,7 +8,7 @@ made, and [architecture.md](./architecture.md) records the runtime seams.
 The strategy: prove the whole experience on cloud first — recognition, Live,
 then translation — because cloud paths are the fastest way to complete the
 product shape. Then replicate the validated experience locally, because local
-is the long-term default ([ADR 0011](./adr/0011-local-stt-is-the-long-term-default.md)).
+is the long-term default ([ADR 0004](./adr/0004-local-stt-is-the-long-term-default.md)).
 Release comes last, once the outgoing chain is basically complete; incoming
 captions never gate the release
 ([ADR 0002](./adr/0002-build-outgoing-captions-first.md)).
@@ -31,8 +31,8 @@ baseline: process-wide 1000 ms pacing
 layout engine
 ([research](./research/vrchat-chatbox-reference.md)), ordered bounded
 pagination, the typing-indicator lifecycle
-([ADR 0013](./adr/0013-signal-speech-activity-with-the-typing-indicator.md)),
-and hard Stop ([ADR 0008](./adr/0008-stop-is-a-hard-cutoff.md)).
+([ADR 0016](./adr/0016-signal-speech-activity-with-the-typing-indicator.md)),
+and hard Stop ([ADR 0011](./adr/0011-stop-is-a-hard-cutoff.md)).
 
 The provisional publisher limits (32 resident pages, 30-second unstarted-unit
 age) still need adjustment from real backlog measurements; that lands in the
@@ -52,8 +52,8 @@ late-after-Stop delivery.
 Status: generic foundation complete. The first real Live provider is Phase 4.
 
 Backend-owned `CaptionSessionSnapshotV1` state, the capability planner
-([ADR 0014](./adr/0014-publication-timing-is-completed-or-live.md),
-[ADR 0018](./adr/0018-adapters-emit-full-snapshots-not-deltas.md)), config
+([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md),
+[ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)), config
 schema v2 migration, deterministic Mock provider shapes, a latest-wins Live
 worker sharing pacing and Stop with the unchanged Completed path, and
 Settings that keeps both modes visible with explicit alternatives instead of
@@ -95,12 +95,12 @@ reason this project exists.
 - link every target result to its source generation, unit, and revision;
 - add source-only, translation-only, and bilingual content settings; bilingual
   Completed output follows
-  [ADR 0016](./adr/0016-bilingual-output-is-one-asynchronous-view.md);
+  [ADR 0007](./adr/0007-bilingual-output-is-one-asynchronous-view.md);
 - bound translation work with timeout, cancellation, and explicit
   pending/degraded/failed/recovered diagnostics; failure never relabels a
   stale target as the translation of newer source text;
 - add the custom OpenAI-compatible base URL setting (relay API,
-  [ADR 0022](./adr/0022-follow-system-proxy-plan-relay-api.md)).
+  [ADR 0019](./adr/0019-follow-system-proxy-plan-relay-api.md)).
 
 Exit: translation never blocks capture, recognition, or Chatbox pacing; late
 or retried targets cannot overwrite the wrong revision; bilingual pages obey
@@ -112,7 +112,7 @@ choice.
 Status: not started; conditional on measured results.
 
 Goal: decide which translation update shapes are honest to present as Live —
-the [ADR 0014](./adr/0014-publication-timing-is-completed-or-live.md) honesty
+the [ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md) honesty
 rule applied to translation.
 
 - benchmark provider-native simultaneous revisions, token streaming after a
@@ -120,7 +120,7 @@ rule applied to translation.
 - run a protocol spike for `/v1/realtime/translations`; promote direct-audio
   translation only if its continuous, ongoing-only semantics fit the product,
   and extend the cloud-audio disclosure
-  ([ADR 0023](./adr/0023-cloud-audio-disclosure-lives-in-settings.md)) first;
+  ([ADR 0009](./adr/0009-cloud-audio-disclosure-lives-in-settings.md)) first;
 - never simulate Live by repeatedly translating unstable source partials;
 - test lag, failure, recovery, Stop, and stale-target suppression with both
   local-sender and remote-observer users.
@@ -137,8 +137,8 @@ Goal: make the app operable by English- and Chinese-speaking players.
 
 - add a locale setting and a complete `zh-CN` catalog; render diagnostics
   from stable codes
-  ([ADR 0006](./adr/0006-diagnostic-codes-are-category-detail.md),
-  [ADR 0012](./adr/0012-localize-the-ui-in-the-frontend.md));
+  ([ADR 0014](./adr/0014-diagnostic-codes-are-category-detail.md),
+  [ADR 0008](./adr/0008-localize-the-ui-in-the-frontend.md));
 - add a copyable, redacted diagnostic report;
 - compare global hotkeys, auto-start with VRChat, and a later overlay, then
   implement the smallest headset-friendly start/stop/error surface.
@@ -153,8 +153,8 @@ Status: not started; model and runtime research may continue earlier.
 
 Goal: one reliable single-model local Completed path with no Python and no
 silent cloud fallback
-([ADR 0003](./adr/0003-keep-local-inference-out-of-process.md),
-[ADR 0011](./adr/0011-local-stt-is-the-long-term-default.md)).
+([ADR 0020](./adr/0020-keep-local-inference-out-of-process.md),
+[ADR 0004](./adr/0004-local-stt-is-the-long-term-default.md)).
 
 - decide the distribution shape before building: installer-bundled, first-run
   download, or a managed component catalog;
@@ -176,7 +176,7 @@ repaired, and removed per the recorded distribution decision.
 Status: not started.
 
 Goal: complete the local backend choice and add real local Live candidates
-([ADR 0020](./adr/0020-users-choose-the-local-backend.md)).
+([ADR 0021](./adr/0021-users-choose-the-local-backend.md)).
 
 - package and validate the CUDA runtime path; preserve the preference when a
   model lacks CUDA support;
@@ -188,7 +188,7 @@ Goal: complete the local backend choice and add real local Live candidates
   frame time per combination; publish recommendations only from recorded
   data;
 - switch the long-term default to local only after a candidate meets the
-  recorded thresholds ([ADR 0011](./adr/0011-local-stt-is-the-long-term-default.md)).
+  recorded thresholds ([ADR 0004](./adr/0004-local-stt-is-the-long-term-default.md)).
 
 Exit: at least one local Completed path and one local Live path pass real
 Windows/VRChat testing, and the local-default decision is recorded with
@@ -201,14 +201,14 @@ chain is basically complete.
 
 Goal: ship an installable, supportable Windows Tier 1 release containing only
 the paths that passed their gates
-([ADR 0021](./adr/0021-windows-is-tier-1.md)).
+([ADR 0003](./adr/0003-windows-is-tier-1.md)).
 
 - configure code signing and updater key handling without committing private
   material;
 - finish versioning and the release-note flow;
 - validate system-proxy behavior and the relay API path with real
   Chinese-network users
-  ([ADR 0022](./adr/0022-follow-system-proxy-plan-relay-api.md));
+  ([ADR 0019](./adr/0019-follow-system-proxy-plan-relay-api.md));
 - audit the Tauri permission allowlist against the APIs actually used;
 - adjust the provisional Phase 1 publisher limits from measured backlog and
   readability;
@@ -228,9 +228,9 @@ Promote these only when a concrete need justifies the cost:
 - incoming captions from system or VRChat audio
   ([ADR 0002](./adr/0002-build-outgoing-captions-first.md));
 - persistent history and export
-  ([ADR 0010](./adr/0010-keep-session-history-in-memory-only.md));
+  ([ADR 0023](./adr/0023-keep-session-history-in-memory-only.md));
 - two-pass recognition
-  ([ADR 0014](./adr/0014-publication-timing-is-completed-or-live.md));
+  ([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md));
 - DirectML or other non-CUDA Windows GPU paths;
 - interpretation, TTS, virtual microphone output, speaker diarization, and
   plugins.

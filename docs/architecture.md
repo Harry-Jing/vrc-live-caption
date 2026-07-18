@@ -37,13 +37,13 @@ architecture does not require every translation to wait behind STT.
   chunk sizes, VAD rules, commits, and endpointing do not leak into the
   frontend.
 - Provider raw events never reach UI-facing consumers or output sinks
-  ([ADR 0018](./adr/0018-adapters-emit-full-snapshots-not-deltas.md)).
+  ([ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)).
 - A provider adapter never publishes directly to Chatbox. Chatbox is an
   output sink, not the center of the runtime.
 - Publication eligibility and sink pacing are separate decisions.
 - Translation never blocks capture or recognition.
 - Local inference runs out of process behind a Rust worker seam
-  ([ADR 0003](./adr/0003-keep-local-inference-out-of-process.md)).
+  ([ADR 0020](./adr/0020-keep-local-inference-out-of-process.md)).
 - Runtime failures are categorized, visible, and never silently change
   provider, model, backend, publication mode, or content selection.
 
@@ -80,7 +80,7 @@ A backend-owned planner resolves each publication request against these
 facts. Currently the bounded OpenAI path is completed-only and deterministic
 Mock profiles cover the other shapes. An incompatible plan preserves the
 request and reports the supported alternatives
-([ADR 0014](./adr/0014-publication-timing-is-completed-or-live.md)).
+([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)).
 
 The OpenAI endpoint facts and open questions are in
 [research/openai-speech-streaming-options.md](./research/openai-speech-streaming-options.md).
@@ -93,17 +93,17 @@ The OpenAI endpoint facts and open questions are in
 | `utterance.started` | `utterance-started` | speech activity before caption text exists |
 | `caption.session.changed` | `caption-session-changed` | the newest full `CaptionSessionSnapshotV1` aggregate |
 | `utterance.ended` | `utterance-ended` | a unit ended without a final result |
-| `diagnostic` | `diagnostic-event` | categorized report with a stable code ([ADR 0006](./adr/0006-diagnostic-codes-are-category-detail.md)) |
+| `diagnostic` | `diagnostic-event` | categorized report with a stable code ([ADR 0014](./adr/0014-diagnostic-codes-are-category-detail.md)) |
 
 Rust owns one versioned caption-session aggregate,
 `CaptionSessionSnapshotV1`: a monotonic aggregate revision, backend-assigned
 generation and stream identity, active units, and full-text caption snapshots
 with lane, per-scope revision, and ongoing/completed state
-([ADR 0018](./adr/0018-adapters-emit-full-snapshots-not-deltas.md)).
+([ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)).
 
 Event delivery is best-effort and at-most-once; the frontend can always pull
 the same aggregate to resynchronize, and reducers ignore older revisions
-([ADR 0007](./adr/0007-event-delivery-is-best-effort.md)). A shared JSON
+([ADR 0013](./adr/0013-event-delivery-is-best-effort.md)). A shared JSON
 fixture pins the Rust serialization and the TypeScript runtime decoder to the
 same V1 wire shape. Admission, ordering, and reload-race handling live in the
 reducers and their tests.
@@ -115,7 +115,7 @@ health events.
 ## Runtime control snapshot
 
 Saved settings and the running session are separate state
-([ADR 0019](./adr/0019-saved-settings-are-not-the-running-session.md)). Rust
+([ADR 0012](./adr/0012-saved-settings-are-not-the-running-session.md)). Rust
 owns one revisioned, redacted control snapshot: the desired configuration,
 the backend-derived publication plan, secret status, lifecycle status, and
 the immutable selection captured by the current generation. Control
@@ -133,20 +133,20 @@ running; a session-level failure moves the runtime to an explicit error
 state.
 
 Stop is a hard generation boundary
-([ADR 0008](./adr/0008-stop-is-a-hard-cutoff.md)): release the microphone,
+([ADR 0011](./adr/0011-stop-is-a-hard-cutoff.md)): release the microphone,
 discard buffered and queued work, reject every late snapshot from the stopped
 generation for both App and Chatbox, and allow only one typing-off cleanup
 message. Publishers discard their queues; they do not drain them.
 
 Typing indication follows speech and publication activity, reasserted every
 four seconds while activity continues
-([ADR 0013](./adr/0013-signal-speech-activity-with-the-typing-indicator.md)),
+([ADR 0016](./adr/0016-signal-speech-activity-with-the-typing-indicator.md)),
 and stays outside the text pacer.
 
 ## Chatbox publication modes
 
 Provider path, publication mode, and content selection are independent
-([ADR 0014](./adr/0014-publication-timing-is-completed-or-live.md)):
+([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)):
 
 | Selected-lane behavior | Completed | Live |
 |---|---|---|
@@ -183,7 +183,7 @@ real glyph-width wrapping, and grapheme-safe boundaries, per the layout model
 in [research/vrchat-chatbox-reference.md](./research/vrchat-chatbox-reference.md).
 
 Bilingual and translation-aware rendering follow
-[ADR 0016](./adr/0016-bilingual-output-is-one-asynchronous-view.md) and are
+[ADR 0007](./adr/0007-bilingual-output-is-one-asynchronous-view.md) and are
 built together with the first concrete translator.
 
 ## Target translation boundary
@@ -201,10 +201,10 @@ newer source revision or another caption unit.
 
 Local inference is a Rust application and Rust worker using packaged native
 libraries, with no Python, PyTorch, or Conda
-([ADR 0003](./adr/0003-keep-local-inference-out-of-process.md)). One STT
+([ADR 0020](./adr/0020-keep-local-inference-out-of-process.md)). One STT
 model and one effective backend are loaded per recognition session; the
 backend preference and effective-backend rules are
-[ADR 0020](./adr/0020-users-choose-the-local-backend.md). A worker crash
+[ADR 0021](./adr/0021-users-choose-the-local-backend.md). A worker crash
 stops the session and waits for an explicit user decision. Candidate models
 and backend facts are in
 [research/local-inference-notes.md](./research/local-inference-notes.md).

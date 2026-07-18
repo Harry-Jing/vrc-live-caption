@@ -13,7 +13,7 @@ The product is designed for long always-on sessions: start it once and keep
 playing. English and Chinese are the first language priorities. Cloud STT is
 the current baseline; the long-term default is a validated local path that
 needs no account or per-minute payment
-([ADR 0011](./adr/0011-local-stt-is-the-long-term-default.md)).
+([ADR 0004](./adr/0004-local-stt-is-the-long-term-default.md)).
 
 ## Current scope
 
@@ -45,7 +45,7 @@ Users answer three independent questions.
 If the selected model cannot deliver the chosen mode, the app explains why
 and offers two directions: keep the model and pick a supported mode, or keep
 the mode and pick a compatible model. It never switches anything silently
-([ADR 0014](./adr/0014-publication-timing-is-completed-or-live.md)).
+([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)).
 
 Live describes publication timing, not a promise that every provider begins
 text at the same moment. Provider-specific timing must be described honestly
@@ -56,14 +56,14 @@ in the UI.
 Source only, translation only, or bilingual. Bilingual renders source above
 translation in one message and shares the space flexibly, leaning toward the
 translation
-([ADR 0016](./adr/0016-bilingual-output-is-one-asynchronous-view.md)).
+([ADR 0007](./adr/0007-bilingual-output-is-one-asynchronous-view.md)).
 
 ### Where local inference runs
 
 One global preference: CPU or prefer NVIDIA GPU (CUDA), defaulting to CPU.
 The app shows the effective backend whenever it differs from the preference,
 with the reason, and never switches silently
-([ADR 0020](./adr/0020-users-choose-the-local-backend.md)).
+([ADR 0021](./adr/0021-users-choose-the-local-backend.md)).
 
 ## User scenarios
 
@@ -106,12 +106,12 @@ parameters, not user settings.
 
 Stop is a hard trust action: capture stops, queued work is discarded, and no
 text from the stopped session reaches the App or the Chatbox afterward
-([ADR 0008](./adr/0008-stop-is-a-hard-cutoff.md)).
+([ADR 0011](./adr/0011-stop-is-a-hard-cutoff.md)).
 
 ## Requirements
 
 - Provider output is normalized before the UI or Chatbox sees it
-  ([ADR 0018](./adr/0018-adapters-emit-full-snapshots-not-deltas.md)).
+  ([ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)).
 - Chatbox output is paced, coalesced, length-limited, and layout-aware
   ([ADR 0015](./adr/0015-pace-chatbox-sends-at-one-second.md),
   [research](./research/vrchat-chatbox-reference.md)).
@@ -119,14 +119,14 @@ text from the stopped session reaches the App or the Chatbox afterward
 - The app never silently changes provider, model, backend, mode, or content
   selection, and never falls back to cloud when a local path fails.
 - Secrets never enter ordinary config or logs
-  ([ADR 0004](./adr/0004-keep-secrets-out-of-config-and-logs.md)).
+  ([ADR 0005](./adr/0005-keep-secrets-out-of-config-and-logs.md)).
 - The app discloses when microphone audio is uploaded to a cloud provider
-  ([ADR 0023](./adr/0023-cloud-audio-disclosure-lives-in-settings.md)).
+  ([ADR 0009](./adr/0009-cloud-audio-disclosure-lives-in-settings.md)).
 - Diagnostics separate audio, provider, translation, worker, backend, OSC,
   config, and network failures, and should be exportable as a redacted
   report.
 - The UI is localizable; English and Chinese come first
-  ([ADR 0012](./adr/0012-localize-the-ui-in-the-frontend.md)).
+  ([ADR 0008](./adr/0008-localize-the-ui-in-the-frontend.md)).
 
 ## Non-goals in the current scope
 
