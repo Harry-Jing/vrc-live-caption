@@ -40,7 +40,7 @@ live in `docs/adr/`. See `docs/agents/domain.md`.
 ## Read First
 - Start with `docs/README.md`.
 - For substantial work, read `CONTEXT.md`, `docs/product.md`,
-  `docs/architecture.md`, `docs/decisions.md`, and `docs/roadmap.md`.
+  `docs/architecture.md`, the ADRs in `docs/adr/`, and `docs/roadmap.md`.
 - For Chatbox layout, wrapping, clipping, or OSC behavior, read
   `docs/research/vrchat-chatbox-reference.md`.
 - For local inference work, read `docs/research/local-inference-notes.md`.

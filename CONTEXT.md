@@ -50,7 +50,7 @@ Each document has a different authority:
 - Current and target runtime boundaries, event semantics, and data flow:
   [architecture.md](./docs/architecture.md)
 - Accepted decisions, including defaults, security, and platform choices:
-  [decisions.md](./docs/decisions.md)
+  [docs/adr/](./docs/adr/)
 - Ordered implementation phases and exit criteria:
   [roadmap.md](./docs/roadmap.md)
 - Factual research and measured behavior:
@@ -130,6 +130,6 @@ _Avoid_: Two-pass model, stable mode
 ## Documentation Rules
 
 Authoritative project docs are in English. Chinese notes use the `.zh-CN.md`
-suffix. Accepted choices belong in `decisions.md`; unsettled product behavior
+suffix. Accepted choices belong in `docs/adr/`; unsettled product behavior
 stays in `product.md` or a research note instead of being written as an
 implemented contract.

@@ -11,7 +11,7 @@ the automated format checks unless that policy is changed explicitly.
 - [product.md](./product.md): product scope, requirements, and open questions
 - [architecture.md](./architecture.md): runtime boundaries and data flow
 - [roadmap.md](./roadmap.md): ordered implementation phases and exit criteria
-- [decisions.md](./decisions.md): accepted project decisions
+- [adr/](./adr/): accepted project decisions, one ADR per file
 - [research/](./research/): factual notes, research material, and experiments,
   including [OpenAI speech streaming options](./research/openai-speech-streaming-options.md),
   [VRChat Chatbox behavior](./research/vrchat-chatbox-reference.md), and

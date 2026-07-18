@@ -276,7 +276,7 @@ ideas. Two-pass remains Later even after local single-pass STT lands.
 
 ## Open Questions And Measured Parameters
 
-Resolved product choices belong in [decisions.md](./decisions.md). The remaining
+Resolved product choices belong in [docs/adr/](./adr/). The remaining
 items require implementation evidence rather than more abstract modes:
 
 - benchmark the natural-boundary search point and hard maximum for long speech;
