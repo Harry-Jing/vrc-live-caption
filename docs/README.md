@@ -7,7 +7,7 @@ Markdown documents are maintained as prose, not as generated artifacts. Keep
 them concise, readable, and project-specific. They are intentionally not part of
 the automated format checks unless that policy is changed explicitly.
 
-- [CONTEXT.md](./CONTEXT.md): project domain language
+- [CONTEXT.md](../CONTEXT.md): project domain language
 - [product.md](./product.md): product scope, requirements, and open questions
 - [architecture.md](./architecture.md): runtime boundaries and data flow
 - [roadmap.md](./roadmap.md): ordered implementation phases and exit criteria

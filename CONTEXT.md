@@ -46,15 +46,15 @@ new architecture.
 Each document has a different authority:
 
 - Product scope, requirements, user scenarios, and open questions:
-  [product.md](./product.md)
+  [product.md](./docs/product.md)
 - Current and target runtime boundaries, event semantics, and data flow:
-  [architecture.md](./architecture.md)
+  [architecture.md](./docs/architecture.md)
 - Accepted decisions, including defaults, security, and platform choices:
-  [decisions.md](./decisions.md)
+  [decisions.md](./docs/decisions.md)
 - Ordered implementation phases and exit criteria:
-  [roadmap.md](./roadmap.md)
+  [roadmap.md](./docs/roadmap.md)
 - Factual research and measured behavior:
-  [research/](./research/)
+  [research/](./docs/research/)
 
 ## Language
 

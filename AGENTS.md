@@ -1,5 +1,22 @@
 # Agent Instructions
 
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues, driven by the `gh` CLI. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default triage labels are used as-is. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: the glossary is `CONTEXT.md` at the repo root and decisions
+live in `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Purpose
 - Keep this file practical and project-specific. Prefer instructions that prevent
   real mistakes in this Tauri/Vue/Rust app over broad style preferences.
@@ -22,7 +39,7 @@
 
 ## Read First
 - Start with `docs/README.md`.
-- For substantial work, read `docs/CONTEXT.md`, `docs/product.md`,
+- For substantial work, read `CONTEXT.md`, `docs/product.md`,
   `docs/architecture.md`, `docs/decisions.md`, and `docs/roadmap.md`.
 - For Chatbox layout, wrapping, clipping, or OSC behavior, read
   `docs/research/vrchat-chatbox-reference.md`.
