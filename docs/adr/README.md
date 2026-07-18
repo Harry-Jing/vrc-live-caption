@@ -13,8 +13,8 @@ right group below; do not renumber existing ADRs.
   the user speaks, others read; incoming is late-stage
 - [0003 — Windows is Tier 1](./0003-windows-is-tier-1.md): the only fully
   validated platform; macOS/Linux stay green in CI
-- [0004 — Local STT is the long-term default](./0004-local-stt-is-the-long-term-default.md):
-  cloud now, local once validated
+- [0004 — Local inference is the long-term default](./0004-local-stt-is-the-long-term-default.md):
+  cloud now; local STT, and eventually local translation, once validated
 - [0005 — Keep secrets out of config and logs](./0005-keep-secrets-out-of-config-and-logs.md):
   keys live in the OS credential store
 
