@@ -47,37 +47,14 @@ live in `docs/adr/`. See `docs/agents/domain.md`.
 - For Tauri 2 behavior or configuration questions, verify against the Tauri 2
   docs rather than relying on memory.
 
-## Project Invariants
-- The implemented Phase 1 baseline is microphone -> bounded cloud STT -> App
-  preview -> completed-only VRChat Chatbox output. This is current adapter
-  behavior, not a global provider contract.
-- Frontend should not process raw audio.
-- Provider raw events should be normalized before reaching UI-facing consumers.
-- Chatbox is an output sink, not the runtime center.
-- Chatbox publication is resolved from the selected provider path's per-lane
-  capabilities, selected content lanes, and the user's publication mode; do not
-  impose one global rolling or completed-only policy.
-- The public publication modes are Completed and Live. Do not reintroduce a
-  public Automatic mode or treat a timer/checkpoint as provider completion.
-- Normalize provider output into full source/translation snapshots with
-  monotonic revisions and ongoing/completed state. Do not give the unused
-  `stable` value new semantics.
-- Rolling Chatbox revisions are coalesced latest-wins per active publication;
-  Chatbox pacing must not block audio, provider, or translation processing.
-- Keep text-send attempts at least 1000 ms apart from the previous actual
-  attempt. Do not exploit initial burst capacity or immediately retry a failed
-  OSC attempt.
-- Completed Chatbox pages remain ordered in a bounded queue; Live output is one
-  recomputed recent-content viewport, not a queue of historical screens.
-- Runtime Stop is a hard generation boundary: no late caption or translation
-  result reaches either App or Chatbox after Stop.
-- Translation should not block audio capture or STT.
-- Never silently change provider, model, backend, publication mode, content
-  selection, or local/cloud path. Expose both local backend preference and the
-  effective backend when they differ.
-- Two-pass recognition is a low-priority future topology, not a current model
-  capability, normal setting, or implementation requirement.
-- API keys and secrets must not be written to normal config files or logs.
+## Where The Rules Live
+- Runtime boundaries and data flow: `docs/architecture.md`.
+- Accepted decisions and their reasons: the ADRs in `docs/adr/`. Read the
+  ones touching the area you are changing.
+- Chatbox layout, pacing, and OSC facts:
+  `docs/research/vrchat-chatbox-reference.md`.
+- Do not change publication, pacing, Stop, secret-handling, or
+  backend-selection behavior without reading the matching ADR first.
 
 ## Rust Rules
 - Prefer safe Rust in app/runtime code. Do not introduce `unsafe` without a
@@ -135,18 +112,12 @@ live in `docs/adr/`. See `docs/agents/domain.md`.
   no longer used.
 
 ## Runtime Contracts
-- Keep UI-facing runtime events normalized; provider raw events should not leak
-  into Vue components or output sinks.
-- Tauri event names must be valid Tauri event identifiers. If architecture docs
-  use semantic names such as `transcript.partial`, keep the mapping to concrete
-  Tauri event names explicit in code or docs.
-- The current wire contract can represent partial/final transcript semantics.
-  The current OpenAI bounded-request adapter emits only final transcripts and
-  publishes completed text. Extend the normalized contract before adding a
-  provider path with different revision, completion, or source/target-lane
-  semantics.
-- Never forward every provider delta directly to VRChat or queue stale rolling
-  revisions. Publication eligibility and OSC pacing are separate decisions.
+- Tauri event names must be valid Tauri event identifiers. Architecture docs
+  may use dotted semantic names; the mapping to concrete event names stays
+  explicit in `docs/architecture.md`.
+- Extend the normalized caption contract before adding a provider path whose
+  revision, completion, or lane semantics the current wire shape cannot
+  represent.
 
 ## Build And Test
 - Use the package scripts as the normal quality gates:

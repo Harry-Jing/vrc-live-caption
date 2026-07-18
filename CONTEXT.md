@@ -1,60 +1,8 @@
 # VRC Live Caption Context
 
-VRC Live Caption is a local desktop tool for real-time speech understanding,
-caption preview, translation, and output routing for VRChat and desktop voice
-communication. These terms are the shared language for discussing provider
-behavior without tying the product to one model or endpoint.
-
-The rewrite is not a direct port of the Python prototype. The old prototype is
-useful for behavior, testing, and product lessons, but it does not define the
-new architecture.
-
-## Current Direction
-
-- App shell: Tauri 2.
-- Frontend: Vue 3, TypeScript, and Vite.
-- Runtime: Rust.
-- Implemented baseline: microphone input to application-bounded OpenAI cloud
-  STT behind a concrete bounded recognition-session adapter, backend-owned
-  `CaptionSessionSnapshotV1` state, App preview, and completed-only VRChat
-  Chatbox output.
-- Implemented Phase 3 contract slice: full caption-session aggregates use
-  backend-authoritative generation and stream identity, push plus pull
-  resynchronization, and one runtime-decoded Rust/TypeScript V1 wire shape.
-  The current OpenAI path still emits completed source captions only.
-- Implemented Phase 3 publication foundation: one backend capability planner
-  resolves persisted Completed or Live intent, deterministic Mock adapters
-  exercise bounded, unitful ongoing/completed, and unitless ongoing-only
-  source shapes, and a latest-wins Live worker shares pacing and Stop boundaries
-  with the unchanged Completed path.
-- Implemented Phase 3 publication controls: Settings keeps Completed and Live
-  visible, treats unsaved edits as unverified, and presents backend-derived
-  compatibility plus explicit alternatives without changing the saved choice.
-  Live displays the active plan ahead of next-Start intent, so later saves never
-  rewrite or block Stop for the running session.
-- Target publication choices: Completed and Live, resolved from the selected
-  provider path and content lanes rather than one global final-only rule.
-- First translation implementation: completed normalized source text into one
-  translator; direct-audio and translation-only Live remain separate measured
-  candidates.
-- Long-term default speech path: validated single-pass local STT behind an
-  isolated Rust worker. Two-pass remains a low-priority later experiment.
-- First public release and complete real-machine validation: Windows x86_64.
-
-## Where The Rules Live
-
-Each document has a different authority:
-
-- Product scope, requirements, user scenarios, and open questions:
-  [product.md](./docs/product.md)
-- Current and target runtime boundaries, event semantics, and data flow:
-  [architecture.md](./docs/architecture.md)
-- Accepted decisions, including defaults, security, and platform choices:
-  [docs/adr/](./docs/adr/)
-- Ordered implementation phases and exit criteria:
-  [roadmap.md](./docs/roadmap.md)
-- Factual research and measured behavior:
-  [research/](./docs/research/)
+VRC Live Caption turns speech into VRChat Chatbox captions and translations.
+These terms are the shared language for discussing provider behavior without
+tying the product to one model or endpoint.
 
 ## Language
 
@@ -126,10 +74,3 @@ Optional future orchestration that runs a low-latency recognizer and a separate
 correction recognizer over correlated audio. It is not a speech-model mode and
 is not part of the first local implementation.
 _Avoid_: Two-pass model, stable mode
-
-## Documentation Rules
-
-Authoritative project docs are in English. Chinese notes use the `.zh-CN.md`
-suffix. Accepted choices belong in `docs/adr/`; unsettled product behavior
-stays in `product.md` or a research note instead of being written as an
-implemented contract.
