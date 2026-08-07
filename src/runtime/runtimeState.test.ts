@@ -120,7 +120,37 @@ describe("runtime lifecycle state", () => {
     expect(state.pendingLifecycleCommand?.command).toBe("start_runtime");
   });
 
-  test("keeps the Start attempt pending while control still reports starting", () => {
+  test.each(["starting", "running"] as const)(
+    "keeps the Start attempt pending while control reports %s",
+    (controlStatus) => {
+      let state = createRuntimeState(idle);
+      state = reduceRuntimeState(state, {
+        type: "runtimeCommandRequested",
+        attemptId: 1,
+        command: "start_runtime",
+        timestampMs: 1_000,
+      });
+      state = reduceRuntimeState(state, {
+        type: "runtimeControlStatusReceived",
+        revision: 1,
+        snapshot: status(controlStatus, 900),
+      });
+
+      expect(state.runtimeStatus).toEqual(status(controlStatus, 900));
+      expect(state.pendingLifecycleCommand?.attemptId).toBe(1);
+
+      state = reduceRuntimeState(state, {
+        type: "runtimeCommandSucceeded",
+        attemptId: 1,
+        command: "start_runtime",
+        timestampMs: 1_010,
+      });
+
+      expect(state.pendingLifecycleCommand).toBeNull();
+    },
+  );
+
+  test("keeps an authoritative Error when the pending Start command fails", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
       type: "runtimeCommandRequested",
@@ -131,7 +161,7 @@ describe("runtime lifecycle state", () => {
     state = reduceRuntimeState(state, {
       type: "runtimeControlStatusReceived",
       revision: 1,
-      snapshot: status("starting", 900),
+      snapshot: status("error", 900),
     });
     state = reduceRuntimeState(state, {
       type: "runtimeCommandFailed",
@@ -139,7 +169,8 @@ describe("runtime lifecycle state", () => {
       command: "start_runtime",
     });
 
-    expect(state.runtimeStatus).toBe(idle);
+    expect(state.runtimeStatus).toEqual(status("error", 900));
+    expect(state.pendingLifecycleCommand).toBeNull();
   });
 
   test("keeps a successful Start ahead of an older control revision", () => {

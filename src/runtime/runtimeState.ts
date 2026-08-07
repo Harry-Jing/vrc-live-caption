@@ -163,9 +163,7 @@ function applyRuntimeStatus(
     pending === null
       ? null
       : pending.command === "start_runtime"
-        ? runtimeStatus.status === "starting"
-          ? pending
-          : null
+        ? pending
         : isInactiveStatus(runtimeStatus.status) &&
             runtimeStatus.status !== "stopping"
           ? null
@@ -248,11 +246,11 @@ export function reduceRuntimeState(
       return state;
     }
 
-    if (input.command === "stop_runtime") {
-      const receivedStatusEvidence =
-        state.statusObservationVersion !==
-        pending.statusObservationVersionAtRequest;
+    const receivedStatusEvidence =
+      state.statusObservationVersion !==
+      pending.statusObservationVersionAtRequest;
 
+    if (input.command === "stop_runtime") {
       return {
         ...state,
         runtimeStatus: receivedStatusEvidence
@@ -260,6 +258,10 @@ export function reduceRuntimeState(
           : pending.previousRuntimeStatus,
         pendingLifecycleCommand: null,
       };
+    }
+
+    if (receivedStatusEvidence) {
+      return { ...state, pendingLifecycleCommand: null };
     }
 
     return {
