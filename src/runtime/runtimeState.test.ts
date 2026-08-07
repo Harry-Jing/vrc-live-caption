@@ -30,22 +30,203 @@ describe("runtime lifecycle state", () => {
   test("does not let an older reload pull overwrite a newer status push", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 2,
+      snapshot: status("running", 20),
+    });
+    state = reduceRuntimeState(state, {
       type: "runtimeStatusSyncStarted",
       requestId: 1,
     });
     state = reduceRuntimeState(state, {
       type: "backendEvent",
-      event: { type: "status", payload: status("running", 20) },
+      event: { type: "status", payload: status("running", 30) },
     });
     state = reduceRuntimeState(state, {
       type: "runtimeStatusSyncCompleted",
       requestId: 1,
-      snapshot: status("stopped", 10),
+      controlRevision: 2,
+      snapshot: status("running", 20),
     });
 
     expect(selectRuntimeView(state).runtimeStatus).toEqual(
-      status("running", 20),
+      status("running", 30),
     );
+  });
+
+  test("accepts an authoritative control status after the wall clock moves backwards", () => {
+    let state = createRuntimeState(idle);
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 4,
+      snapshot: status("running", 1_000),
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 5,
+      snapshot: status("error", 900),
+    });
+
+    expect(state.runtimeStatus).toEqual(status("error", 900));
+
+    state = reduceRuntimeState(state, {
+      type: "backendEvent",
+      event: { type: "status", payload: status("running", 950) },
+    });
+
+    expect(state.runtimeStatus).toEqual(status("error", 900));
+  });
+
+  test("accepts a newer control pull when a legacy status arrives during the pull", () => {
+    let state = createRuntimeState(idle);
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 4,
+      snapshot: status("running", 1_000),
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeStatusSyncStarted",
+      requestId: 1,
+    });
+    state = reduceRuntimeState(state, {
+      type: "backendEvent",
+      event: { type: "status", payload: status("running", 1_100) },
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeStatusSyncCompleted",
+      requestId: 1,
+      controlRevision: 5,
+      snapshot: status("error", 900),
+    });
+
+    expect(state.runtimeStatus).toEqual(status("error", 900));
+  });
+
+  test("keeps a pending Start ahead of an inactive control snapshot", () => {
+    let state = createRuntimeState(idle);
+    state = reduceRuntimeState(state, {
+      type: "runtimeCommandRequested",
+      attemptId: 1,
+      command: "start_runtime",
+      timestampMs: 1_000,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 1,
+      snapshot: status("stopped", 900),
+    });
+
+    expect(state.runtimeStatus).toEqual(status("starting", 1_000));
+    expect(state.pendingLifecycleCommand?.command).toBe("start_runtime");
+  });
+
+  test("keeps the Start attempt pending while control still reports starting", () => {
+    let state = createRuntimeState(idle);
+    state = reduceRuntimeState(state, {
+      type: "runtimeCommandRequested",
+      attemptId: 1,
+      command: "start_runtime",
+      timestampMs: 1_000,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 1,
+      snapshot: status("starting", 900),
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeCommandFailed",
+      attemptId: 1,
+      command: "start_runtime",
+    });
+
+    expect(state.runtimeStatus).toBe(idle);
+  });
+
+  test("keeps a successful Start ahead of an older control revision", () => {
+    let state = createRuntimeState(idle);
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 1,
+      snapshot: idle,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeCommandRequested",
+      attemptId: 1,
+      command: "start_runtime",
+      timestampMs: 1_000,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeCommandSucceeded",
+      attemptId: 1,
+      command: "start_runtime",
+      timestampMs: 1_010,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 1,
+      snapshot: status("idle", 900),
+    });
+
+    expect(state.runtimeStatus).toEqual(status("starting", 1_000));
+  });
+
+  test("keeps a pending Stop ahead of an active control snapshot", () => {
+    let state = createRuntimeState(idle);
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 1,
+      snapshot: status("running", 800),
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeCommandRequested",
+      attemptId: 1,
+      command: "stop_runtime",
+      timestampMs: 1_000,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 2,
+      snapshot: status("running", 900),
+    });
+
+    expect(state.runtimeStatus).toEqual(status("stopping", 1_000));
+    expect(state.pendingLifecycleCommand?.command).toBe("stop_runtime");
+  });
+
+  test("lets a newer control revision supersede an acknowledged Stop", () => {
+    let state = createRuntimeState(idle);
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 4,
+      snapshot: status("running", 800),
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeCommandRequested",
+      attemptId: 1,
+      command: "stop_runtime",
+      timestampMs: 1_000,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeCommandSucceeded",
+      attemptId: 1,
+      command: "stop_runtime",
+      timestampMs: 1_010,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 4,
+      snapshot: status("running", 850),
+    });
+
+    expect(state.runtimeStatus).toEqual(status("stopped", 1_010));
+
+    state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 5,
+      snapshot: status("running", 900),
+    });
+
+    expect(state.runtimeStatus).toEqual(status("running", 900));
   });
 
   test("restores the previous status when Start fails without newer evidence", () => {
@@ -162,6 +343,7 @@ describe("runtime lifecycle state", () => {
     state = reduceRuntimeState(state, {
       type: "runtimeStatusSyncCompleted",
       requestId: 1,
+      controlRevision: 1,
       snapshot: status("running", 90),
     });
 
@@ -236,6 +418,7 @@ describe("runtime lifecycle state", () => {
     state = reduceRuntimeState(state, {
       type: "runtimeStatusSyncCompleted",
       requestId: 1,
+      controlRevision: 1,
       snapshot: status("error", 300),
     });
 
@@ -295,6 +478,11 @@ describe("runtime lifecycle state", () => {
   test("converges when a later Start reconciliation observes running", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
+      type: "runtimeControlStatusReceived",
+      revision: 1,
+      snapshot: idle,
+    });
+    state = reduceRuntimeState(state, {
       type: "runtimeCommandRequested",
       attemptId: 1,
       command: "start_runtime",
@@ -313,6 +501,7 @@ describe("runtime lifecycle state", () => {
     state = reduceRuntimeState(state, {
       type: "runtimeStatusSyncCompleted",
       requestId: 1,
+      controlRevision: 1,
       snapshot: status("idle", 0),
     });
     expect(state.runtimeStatus.status).toBe("starting");
@@ -324,6 +513,7 @@ describe("runtime lifecycle state", () => {
     state = reduceRuntimeState(state, {
       type: "runtimeStatusSyncCompleted",
       requestId: 2,
+      controlRevision: 2,
       snapshot: status("running", 120),
     });
 

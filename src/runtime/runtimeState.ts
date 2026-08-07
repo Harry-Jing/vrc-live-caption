@@ -26,6 +26,11 @@ type PendingLifecycleCommand = Readonly<{
 export type RuntimeStateInput =
   | { type: "backendEvent"; event: RuntimeEvent }
   | {
+      type: "runtimeControlStatusReceived";
+      revision: number;
+      snapshot: RuntimeStatusEvent;
+    }
+  | {
       type: "runtimeCommandRequested";
       attemptId: number;
       command: RuntimeLifecycleCommand;
@@ -47,6 +52,7 @@ export type RuntimeStateInput =
   | {
       type: "runtimeStatusSyncCompleted";
       requestId: number;
+      controlRevision: number;
       snapshot: RuntimeStatusEvent;
     };
 
@@ -57,12 +63,11 @@ export type RuntimeState = Readonly<{
   stopAcknowledgedAtMs: number;
   diagnostics: readonly DiagnosticEvent[];
   pendingLifecycleCommand: PendingLifecycleCommand | null;
+  runtimeControlRevision: number;
   statusTimestampWatermarkMs: number;
-  statusEventVersion: number;
   statusObservationVersion: number;
   pendingStatusSync: Readonly<{
     requestId: number;
-    statusEventVersion: number;
   }> | null;
 }>;
 
@@ -103,18 +108,68 @@ function statusPredatesStopAcknowledgement(
   return runtimeStatus.timestampMs <= state.stopAcknowledgedAtMs;
 }
 
+function controlStatusConflictsWithLifecycleTransition(
+  state: RuntimeState,
+  runtimeStatus: RuntimeStatusEvent,
+) {
+  const pendingCommand = state.pendingLifecycleCommand?.command;
+
+  if (
+    pendingCommand === "start_runtime" &&
+    isInactiveStatus(runtimeStatus.status) &&
+    runtimeStatus.status !== "error"
+  ) {
+    return true;
+  }
+
+  return (
+    pendingCommand === "stop_runtime" &&
+    (runtimeStatus.status === "starting" || runtimeStatus.status === "running")
+  );
+}
+
+function applyRuntimeControlStatus(
+  state: RuntimeState,
+  revision: number,
+  runtimeStatus: RuntimeStatusEvent,
+) {
+  if (
+    revision <= state.runtimeControlRevision ||
+    controlStatusConflictsWithLifecycleTransition(state, runtimeStatus)
+  ) {
+    return state;
+  }
+
+  return applyRuntimeStatus(
+    {
+      ...state,
+      runtimeControlRevision: revision,
+      statusObservationVersion: state.statusObservationVersion + 1,
+      statusTimestampWatermarkMs: Math.max(
+        state.statusTimestampWatermarkMs,
+        runtimeStatus.timestampMs,
+      ),
+    },
+    runtimeStatus,
+  );
+}
+
 function applyRuntimeStatus(
   state: RuntimeState,
   runtimeStatus: RuntimeStatusEvent,
 ): RuntimeState {
   const pending = state.pendingLifecycleCommand;
   const pendingLifecycleCommand =
-    pending === null || pending.command === "start_runtime"
+    pending === null
       ? null
-      : isInactiveStatus(runtimeStatus.status) &&
-          runtimeStatus.status !== "stopping"
-        ? null
-        : pending;
+      : pending.command === "start_runtime"
+        ? runtimeStatus.status === "starting"
+          ? pending
+          : null
+        : isInactiveStatus(runtimeStatus.status) &&
+            runtimeStatus.status !== "stopping"
+          ? null
+          : pending;
 
   return { ...state, runtimeStatus, pendingLifecycleCommand };
 }
@@ -129,8 +184,8 @@ export function createRuntimeState(
     stopAcknowledgedAtMs: Number.NEGATIVE_INFINITY,
     diagnostics: [],
     pendingLifecycleCommand: null,
+    runtimeControlRevision: Number.NEGATIVE_INFINITY,
     statusTimestampWatermarkMs: Number.NEGATIVE_INFINITY,
-    statusEventVersion: 0,
     statusObservationVersion: 0,
     pendingStatusSync: null,
   };
@@ -252,7 +307,6 @@ export function reduceRuntimeState(
       ...state,
       pendingStatusSync: {
         requestId: input.requestId,
-        statusEventVersion: state.statusEventVersion,
       },
     };
   }
@@ -271,27 +325,15 @@ export function reduceRuntimeState(
     }
 
     const withoutPending = { ...state, pendingStatusSync: null };
-    const statusEventArrived =
-      state.statusEventVersion !== pending.statusEventVersion;
-
-    if (
-      statusPredatesLifecycleIntent(state, input.snapshot) ||
-      statusPredatesStopAcknowledgement(state, input.snapshot) ||
-      input.snapshot.timestampMs < state.statusTimestampWatermarkMs ||
-      (statusEventArrived &&
-        input.snapshot.timestampMs <= state.statusTimestampWatermarkMs)
-    ) {
-      return withoutPending;
-    }
-
-    return applyRuntimeStatus(
-      {
-        ...withoutPending,
-        statusTimestampWatermarkMs: input.snapshot.timestampMs,
-        statusObservationVersion: state.statusObservationVersion + 1,
-      },
+    return applyRuntimeControlStatus(
+      withoutPending,
+      input.controlRevision,
       input.snapshot,
     );
+  }
+
+  if (input.type === "runtimeControlStatusReceived") {
+    return applyRuntimeControlStatus(state, input.revision, input.snapshot);
   }
 
   if (input.event.type === "status") {
@@ -308,7 +350,6 @@ export function reduceRuntimeState(
     return applyRuntimeStatus(
       {
         ...state,
-        statusEventVersion: state.statusEventVersion + 1,
         statusObservationVersion: state.statusObservationVersion + 1,
         statusTimestampWatermarkMs: status.timestampMs,
       },

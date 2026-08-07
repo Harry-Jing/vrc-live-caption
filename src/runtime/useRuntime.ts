@@ -215,9 +215,12 @@ export function useRuntime() {
       return false;
     }
 
+    // The control revision admitted this snapshot. Its wall-clock timestamp is
+    // display metadata and must not reorder authoritative runtime state.
     dispatchRuntimeState({
-      type: "backendEvent",
-      event: { type: "status", payload: snapshot.runtime },
+      type: "runtimeControlStatusReceived",
+      revision: snapshot.revision,
+      snapshot: snapshot.runtime,
     });
     return true;
   }
@@ -490,11 +493,12 @@ export function useRuntime() {
         type: "snapshotReceived",
         snapshot: captions,
       });
-      const snapshot = controlSnapshot.value?.runtime ?? incoming.runtime;
+      const snapshot = controlSnapshot.value ?? incoming;
       dispatchRuntimeState({
         type: "runtimeStatusSyncCompleted",
         requestId,
-        snapshot,
+        controlRevision: snapshot.revision,
+        snapshot: snapshot.runtime,
       });
 
       if (unsubscribeListeners !== null) {

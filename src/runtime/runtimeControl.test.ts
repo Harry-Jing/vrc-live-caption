@@ -144,7 +144,7 @@ test("ignores duplicate and older authoritative control snapshots", () => {
   expect(reconcileRuntimeControlSnapshot(current, stale)).toBe(current);
 });
 
-test("accepts a newer snapshot and uses desired settings when no session exists", () => {
+test("accepts a newer snapshot even when its display timestamp is lower", () => {
   const current = {
     contractVersion: 3,
     revision: 3,
@@ -161,13 +161,14 @@ test("accepts a newer snapshot and uses desired settings when no session exists"
   const newer = {
     ...current,
     revision: 4,
-    runtime: { status: "stopped", timestampMs: 40 },
+    runtime: { status: "error", timestampMs: 20 },
   } satisfies RuntimeControlSnapshot;
 
   const accepted = reconcileRuntimeControlSnapshot(current, newer);
   const projection = projectRuntimeControlSnapshot(accepted);
 
   expect(accepted).toBe(newer);
+  expect(accepted.runtime).toEqual({ status: "error", timestampMs: 20 });
   expect(projection.currentSession).toBeNull();
   expect(projection.desiredRuntimePlan).toBe(newer.desired.runtimePlan);
   expect(projection.activeRuntimePlan).toBeNull();
