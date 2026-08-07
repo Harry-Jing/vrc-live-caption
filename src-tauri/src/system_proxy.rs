@@ -105,6 +105,14 @@ fn normalized_no_proxy(value: &str) -> String {
         .join(",")
 }
 
+#[cfg(any(target_os = "macos", test))]
+#[path = "system_proxy/macos.rs"]
+mod macos;
+
+#[cfg(any(target_os = "windows", test))]
+#[path = "system_proxy/windows.rs"]
+mod windows;
+
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn system_proxy_matcher_without_explicit_https(no_proxy: Option<String>) -> AppResult<Matcher> {
     // Linux has no additional system source, so reaching this branch means
@@ -114,164 +122,12 @@ fn system_proxy_matcher_without_explicit_https(no_proxy: Option<String>) -> AppR
 
 #[cfg(target_os = "macos")]
 fn system_proxy_matcher_without_explicit_https(no_proxy: Option<String>) -> AppResult<Matcher> {
-    use system_configuration::core_foundation::base::CFType;
-    use system_configuration::core_foundation::dictionary::CFDictionary;
-    use system_configuration::core_foundation::number::CFNumber;
-    use system_configuration::core_foundation::string::CFString;
-    use system_configuration::dynamic_store::SCDynamicStoreBuilder;
-
-    fn number(proxies: &CFDictionary<CFString, CFType>, key: &str) -> AppResult<Option<i32>> {
-        let key_value = CFString::new(key);
-        let Some(value) = proxies.find(&key_value) else {
-            return Ok(None);
-        };
-        value
-            .downcast::<CFNumber>()
-            .and_then(|number| number.to_i32())
-            .map(Some)
-            .ok_or_else(|| {
-                AppError::stt_network(format!(
-                    "macOS system proxy field {key} has an invalid type or value; refusing a direct OpenAI connection."
-                ))
-            })
-    }
-
-    fn string(proxies: &CFDictionary<CFString, CFType>, key: &str) -> AppResult<Option<String>> {
-        let key_value = CFString::new(key);
-        let Some(value) = proxies.find(&key_value) else {
-            return Ok(None);
-        };
-        value
-            .downcast::<CFString>()
-            .map(|value| Some(value.to_string()))
-            .ok_or_else(|| {
-                AppError::stt_network(format!(
-                    "macOS system proxy field {key} has an invalid type; refusing a direct OpenAI connection."
-                ))
-            })
-    }
-
-    let store = SCDynamicStoreBuilder::new("vrc-live-caption")
-        .build()
-        .ok_or_else(|| {
-            AppError::stt_network(
-                "macOS system proxy settings could not be opened; refusing a direct OpenAI connection.",
-            )
-        })?;
-    let proxies = store.get_proxies().ok_or_else(|| {
-        AppError::stt_network(
-            "macOS system proxy settings could not be read; refusing a direct OpenAI connection.",
-        )
-    })?;
-    let settings = MacProxySettings {
-        https_enabled: number(&proxies, "HTTPSEnable")?.unwrap_or(0),
-        https_host: string(&proxies, "HTTPSProxy")?,
-        https_port: number(&proxies, "HTTPSPort")?,
-        socks_enabled: number(&proxies, "SOCKSEnable")?.unwrap_or(0),
-        pac_enabled: number(&proxies, "ProxyAutoConfigEnable")?.unwrap_or(0),
-        auto_discovery_enabled: number(&proxies, "ProxyAutoDiscoveryEnable")?.unwrap_or(0),
-    };
-    matcher_for_macos_proxy_settings(&settings, no_proxy.as_deref())
-}
-
-#[cfg(any(target_os = "macos", test))]
-struct MacProxySettings {
-    https_enabled: i32,
-    https_host: Option<String>,
-    https_port: Option<i32>,
-    socks_enabled: i32,
-    pac_enabled: i32,
-    auto_discovery_enabled: i32,
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn matcher_for_macos_proxy_settings(
-    settings: &MacProxySettings,
-    no_proxy: Option<&str>,
-) -> AppResult<Matcher> {
-    for (name, value) in [
-        ("HTTPSEnable", settings.https_enabled),
-        ("SOCKSEnable", settings.socks_enabled),
-        ("ProxyAutoConfigEnable", settings.pac_enabled),
-        ("ProxyAutoDiscoveryEnable", settings.auto_discovery_enabled),
-    ] {
-        if !matches!(value, 0 | 1) {
-            return Err(AppError::stt_network(format!(
-                "macOS system proxy field {name} has invalid value {value}; refusing a direct OpenAI connection."
-            )));
-        }
-    }
-    if settings.pac_enabled == 1 || settings.auto_discovery_enabled == 1 {
-        return Err(AppError::stt_network(
-            "macOS selected PAC or automatic proxy discovery, which is not supported for OpenAI Realtime; configure a manual HTTP CONNECT proxy.",
-        ));
-    }
-    if settings.https_enabled == 0 {
-        if settings.socks_enabled == 1 {
-            return Err(AppError::stt_network(
-                "macOS selected a SOCKS system proxy, which is not supported for OpenAI Realtime; configure a manual HTTP CONNECT proxy.",
-            ));
-        }
-        return Ok(direct_matcher(no_proxy));
-    }
-
-    let host = settings
-        .https_host
-        .as_deref()
-        .map(str::trim)
-        .filter(|host| !host.is_empty())
-        .ok_or_else(|| {
-            AppError::stt_network(
-                "macOS has an HTTPS proxy enabled but its host is missing; refusing a direct OpenAI connection.",
-            )
-        })?;
-    let port = settings.https_port.ok_or_else(|| {
-        AppError::stt_network(
-            "macOS has an HTTPS proxy enabled but its port is missing; refusing a direct OpenAI connection.",
-        )
-    })?;
-    let port = u16::try_from(port).ok().filter(|port| *port != 0).ok_or_else(|| {
-        AppError::stt_network(
-            "macOS has an HTTPS proxy enabled but its port is invalid; refusing a direct OpenAI connection.",
-        )
-    })?;
-    matcher_for_configured_https_proxy(&authority_with_port(host, port), no_proxy)
+    macos::system_proxy_matcher(no_proxy)
 }
 
 #[cfg(target_os = "windows")]
 fn system_proxy_matcher_without_explicit_https(no_proxy: Option<String>) -> AppResult<Matcher> {
-    let settings = windows_registry::CURRENT_USER
-        .open("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")
-        .map_err(|error| {
-            AppError::stt_network(format!(
-                "Windows system proxy settings could not be read; refusing a direct OpenAI connection: {error}"
-            ))
-        })?;
-    let enabled = settings.get_u32("ProxyEnable").map_err(|error| {
-        AppError::stt_network(format!(
-            "Windows ProxyEnable could not be read; refusing a direct OpenAI connection: {error}"
-        ))
-    })?;
-    if enabled == 0 {
-        return Ok(direct_matcher(no_proxy.as_deref()));
-    }
-    if enabled != 1 {
-        return Err(AppError::stt_network(format!(
-            "Windows reported an invalid ProxyEnable value ({enabled}); refusing a direct OpenAI connection."
-        )));
-    }
-    let proxy_server = settings.get_string("ProxyServer").map_err(|error| {
-        AppError::stt_network(format!(
-            "Windows has a system proxy enabled but ProxyServer could not be read: {error}"
-        ))
-    })?;
-    let no_proxy = no_proxy.or_else(|| {
-        settings
-            .get_string("ProxyOverride")
-            .ok()
-            .map(|value| normalized_no_proxy(&value))
-    });
-    matcher_for_windows_proxy_server(&proxy_server, no_proxy.as_deref())
+    windows::system_proxy_matcher(no_proxy)
 }
 
 fn direct_matcher(no_proxy: Option<&str>) -> Matcher {
@@ -280,75 +136,6 @@ fn direct_matcher(no_proxy: Option<&str>) -> Matcher {
         builder = builder.no(normalized_no_proxy(no_proxy));
     }
     builder.build()
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn matcher_for_windows_proxy_server(
-    proxy_server: &str,
-    no_proxy: Option<&str>,
-) -> AppResult<Matcher> {
-    let Some(proxy) = windows_https_proxy(proxy_server)? else {
-        return Ok(direct_matcher(no_proxy));
-    };
-    matcher_for_configured_https_proxy(&proxy, no_proxy)
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn windows_https_proxy(proxy_server: &str) -> AppResult<Option<String>> {
-    let proxy_server = proxy_server.trim();
-    if proxy_server.is_empty() {
-        return Err(AppError::stt_network(
-            "Windows has a system proxy enabled but ProxyServer is empty.",
-        ));
-    }
-    let is_protocol_map = proxy_server.split(';').any(|entry| {
-        entry
-            .split_once('=')
-            .is_some_and(|(protocol, _)| !protocol.contains("://"))
-    });
-    if !is_protocol_map {
-        return Ok(Some(proxy_server.to_string()));
-    }
-
-    let mut https_proxy = None;
-    let mut socks_proxy = None;
-    for entry in proxy_server
-        .split(';')
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        let (protocol, proxy) = entry.split_once('=').ok_or_else(|| {
-            AppError::stt_network(format!(
-                "Windows ProxyServer contains an invalid protocol entry: {entry}."
-            ))
-        })?;
-        let proxy = proxy.trim();
-        if proxy.is_empty() {
-            return Err(AppError::stt_network(format!(
-                "Windows ProxyServer has an empty {protocol} proxy address."
-            )));
-        }
-        match protocol.trim().to_ascii_lowercase().as_str() {
-            "https" => {
-                if https_proxy.replace(proxy.to_string()).is_some() {
-                    return Err(AppError::stt_network(
-                        "Windows ProxyServer contains more than one HTTPS proxy.",
-                    ));
-                }
-            }
-            "socks" => socks_proxy = Some(proxy.to_string()),
-            _ => {}
-        }
-    }
-    if let Some(proxy) = https_proxy {
-        return Ok(Some(proxy));
-    }
-    if socks_proxy.is_some() {
-        return Err(AppError::stt_network(
-            "Windows selected a SOCKS system proxy, which is not supported for OpenAI Realtime; use an HTTP CONNECT proxy.",
-        ));
-    }
-    Ok(None)
 }
 
 fn connect_with_matcher(request: &Request, matcher: &Matcher) -> AppResult<TcpStream> {

@@ -44,7 +44,7 @@ system-configuration = "0.7.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = "1.0.0"
-windows-registry = "0.6.1"
+winhttp = { version = "0.1.3", default-features = false }
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
