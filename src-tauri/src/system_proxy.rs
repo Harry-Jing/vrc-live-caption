@@ -104,7 +104,7 @@ fn normalized_http_proxy_uri(value: &str) -> AppResult<String> {
 
 fn normalized_no_proxy(value: &str) -> String {
     value
-        .split([';', ','])
+        .split(|character: char| matches!(character, ';' | ',') || character.is_ascii_whitespace())
         .map(str::trim)
         .filter(|entry| !entry.is_empty() && !entry.eq_ignore_ascii_case("<local>"))
         .map(|entry| entry.strip_prefix("*.").unwrap_or(entry))

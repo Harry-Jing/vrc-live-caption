@@ -181,6 +181,16 @@ fn malformed_configured_proxy_is_invalid_instead_of_direct() -> AppResult<()> {
 }
 
 #[test]
+fn proxy_bypass_accepts_windows_whitespace_and_environment_commas() {
+    assert_eq!(
+        normalized_no_proxy(
+            "*.internal.example localhost\tservice.example,environment.example;last.example"
+        ),
+        "internal.example,localhost,service.example,environment.example,last.example"
+    );
+}
+
+#[test]
 fn direct_hostname_resolution_obeys_the_connection_deadline() -> AppResult<()> {
     let resolver = HostResolver::with_lookup(|_, _| {
         thread::sleep(Duration::from_millis(100));

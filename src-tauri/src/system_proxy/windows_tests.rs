@@ -21,6 +21,25 @@ fn protocol_map_selects_https_without_silent_direct_fallback() -> AppResult<()> 
 }
 
 #[test]
+fn whitespace_separated_protocol_map_selects_https() -> AppResult<()> {
+    let matcher = matcher_for_proxy_server(
+        "http=plain-proxy.example:8080\thttps=secure-proxy.example:8443",
+        None,
+    )?;
+    let target = "https://api.openai.com/"
+        .parse::<Uri>()
+        .map_err(|error| AppError::state(format!("Failed to parse test URI: {error}")))?;
+    let selected = matcher.intercept(&target).ok_or_else(|| {
+        AppError::state("A whitespace-separated Windows HTTPS proxy map was treated as direct.")
+    })?;
+
+    assert_eq!(selected.uri().scheme_str(), Some("http"));
+    assert_eq!(selected.uri().host(), Some("secure-proxy.example"));
+    assert_eq!(selected.uri().port_u16(), Some(8443));
+    Ok(())
+}
+
+#[test]
 fn invalid_https_proxy_map_is_rejected() -> AppResult<()> {
     let error = matcher_for_proxy_server("http=proxy.example:8080;https=%%%", None)
         .err()

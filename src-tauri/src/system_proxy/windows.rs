@@ -64,7 +64,7 @@ fn https_proxy(proxy_server: &str) -> AppResult<Option<String>> {
             "Windows has a system proxy enabled but ProxyServer is empty.",
         ));
     }
-    let is_protocol_map = proxy_server.split(';').any(|entry| {
+    let is_protocol_map = proxy_list_entries(proxy_server).any(|entry| {
         entry
             .split_once('=')
             .is_some_and(|(protocol, _)| !protocol.contains("://"))
@@ -75,11 +75,7 @@ fn https_proxy(proxy_server: &str) -> AppResult<Option<String>> {
 
     let mut https_proxy = None;
     let mut socks_proxy = None;
-    for entry in proxy_server
-        .split(';')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    for entry in proxy_list_entries(proxy_server) {
         let (protocol, proxy) = entry.split_once('=').ok_or_else(|| {
             AppError::stt_network(format!(
                 "Windows ProxyServer contains an invalid protocol entry: {entry}."
@@ -112,6 +108,12 @@ fn https_proxy(proxy_server: &str) -> AppResult<Option<String>> {
         ));
     }
     Ok(None)
+}
+
+fn proxy_list_entries(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split(|character: char| character == ';' || character.is_ascii_whitespace())
+        .filter(|entry| !entry.is_empty())
 }
 
 #[cfg(test)]
