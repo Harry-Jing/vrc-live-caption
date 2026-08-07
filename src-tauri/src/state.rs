@@ -15,6 +15,7 @@ use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, RuntimeStatusEvent, emit_diagnostic,
     emit_recorded_status,
 };
+use crate::host_resolver::HostResolver;
 use crate::runtime::{RuntimeManager, RuntimeStartOutcome, RuntimeStartRequest};
 use crate::runtime_control::{
     RUNTIME_CONTROL_CONTRACT_VERSION, RuntimeControlSnapshot, RuntimeDesiredSnapshot,
@@ -43,6 +44,7 @@ pub(crate) struct AppState {
     desired_state_gate: Mutex<()>,
     chatbox_pacer: ChatboxPacer,
     caption_session: CaptionSessionStore,
+    host_resolver: HostResolver,
     pub(crate) runtime: RuntimeManager,
 }
 
@@ -81,6 +83,7 @@ impl Default for AppState {
             desired_state_gate: Mutex::new(()),
             chatbox_pacer: ChatboxPacer::default(),
             caption_session: CaptionSessionStore::default(),
+            host_resolver: HostResolver::default(),
             runtime: RuntimeManager::default(),
         }
     }
@@ -160,6 +163,7 @@ impl AppState {
                 runtime_plan,
                 chatbox_pacer: self.chatbox_pacer(),
                 caption_session: self.caption_session_store(),
+                host_resolver: self.host_resolver(),
                 generation_id: generation,
                 config_revision,
                 openai_api_key: resolved.secret,
@@ -361,6 +365,10 @@ impl AppState {
 
     pub(crate) fn chatbox_pacer(&self) -> ChatboxPacer {
         self.chatbox_pacer.clone()
+    }
+
+    pub(crate) fn host_resolver(&self) -> HostResolver {
+        self.host_resolver.clone()
     }
 
     pub(crate) fn osc_config_for_test(&self) -> AppResult<crate::config::OscConfig> {

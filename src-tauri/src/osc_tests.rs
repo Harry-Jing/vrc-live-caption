@@ -1,8 +1,10 @@
 use super::*;
 use crate::chatbox_pacer::{ChatboxPacer, Clock};
+use crate::host_resolver::HostResolver;
 use rosc::decoder;
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration, Instant};
 
 struct AdvancingClock {
@@ -180,11 +182,15 @@ fn udp_transport_sends_exact_text_and_typing_packets() -> AppResult<()> {
         .local_addr()
         .map_err(|error| AppError::osc_bind(error.to_string()))?
         .port();
-    let sender = ChatboxOscSender::new(&OscConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        enabled: true,
-    })?;
+    let sender = ChatboxOscSender::new(
+        &OscConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            enabled: true,
+        },
+        &HostResolver::default(),
+        &|| false,
+    )?;
 
     sender.send_text("exact\n  page")?;
     sender.send_typing(false)?;
@@ -194,6 +200,91 @@ fn udp_transport_sends_exact_text_and_typing_packets() -> AppResult<()> {
         chatbox_input_packet("exact\n  page")
     );
     assert_eq!(receive_packet(&receiver)?, typing_indicator_packet(false));
+    Ok(())
+}
+
+#[test]
+fn hostname_resolution_uses_the_injected_resolver() -> AppResult<()> {
+    let receiver =
+        UdpSocket::bind("127.0.0.1:0").map_err(|error| AppError::osc_bind(error.to_string()))?;
+    receiver
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|error| AppError::osc_bind(error.to_string()))?;
+    let port = receiver
+        .local_addr()
+        .map_err(|error| AppError::osc_bind(error.to_string()))?
+        .port();
+    let resolver = HostResolver::with_lookup(move |host, requested_port| {
+        if host != "vrchat.test" || requested_port != port {
+            return Err(std::io::Error::other("Unexpected OSC lookup target."));
+        }
+        Ok(vec![SocketAddr::from(([127, 0, 0, 1], port))])
+    });
+    let sender = ChatboxOscSender::new_until(
+        &OscConfig {
+            host: "vrchat.test".to_string(),
+            port,
+            enabled: true,
+        },
+        &resolver,
+        Instant::now() + Duration::from_secs(1),
+        &|| false,
+    )?;
+
+    sender.send_text("resolved target")?;
+
+    assert_eq!(
+        receive_packet(&receiver)?,
+        chatbox_input_packet("resolved target")
+    );
+    Ok(())
+}
+
+#[test]
+fn hostname_resolution_deadline_maps_to_an_osc_error() -> AppResult<()> {
+    let resolver = HostResolver::with_lookup(|_, _| {
+        thread::sleep(Duration::from_millis(100));
+        Ok(vec![SocketAddr::from(([127, 0, 0, 1], 9000))])
+    });
+    let target = OscConfig {
+        host: "blocked.test".to_string(),
+        port: 9000,
+        enabled: true,
+    };
+
+    let error = ChatboxOscSender::new_until(
+        &target,
+        &resolver,
+        Instant::now() + Duration::from_millis(20),
+        &|| false,
+    )
+    .err()
+    .ok_or_else(|| AppError::state("A timed-out OSC hostname unexpectedly resolved."))?;
+
+    assert_eq!(error.code(), "osc.send_failed");
+    assert!(error.to_string().contains("timed out"));
+    Ok(())
+}
+
+#[test]
+fn hostname_resolution_cancellation_maps_to_an_osc_error() -> AppResult<()> {
+    let target = OscConfig {
+        host: "cancelled.test".to_string(),
+        port: 9000,
+        enabled: true,
+    };
+
+    let error = ChatboxOscSender::new_until(
+        &target,
+        &HostResolver::default(),
+        Instant::now() + Duration::from_secs(1),
+        &|| true,
+    )
+    .err()
+    .ok_or_else(|| AppError::state("A cancelled OSC hostname unexpectedly resolved."))?;
+
+    assert_eq!(error.code(), "osc.send_failed");
+    assert!(error.to_string().contains("cancelled"));
     Ok(())
 }
 

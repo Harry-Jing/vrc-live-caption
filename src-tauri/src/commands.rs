@@ -96,8 +96,9 @@ pub(crate) fn get_caption_session_snapshot(
 pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let osc_config = state.osc_config_for_test()?;
     let chatbox_pacer = state.chatbox_pacer();
+    let host_resolver = state.host_resolver();
 
-    match ChatboxOscSender::new(&osc_config).and_then(|sender| {
+    match ChatboxOscSender::new(&osc_config, &host_resolver, &|| false).and_then(|sender| {
         chatbox_pacer
             .wait_for_turn(None)?
             .ok_or_else(|| crate::error::AppError::state("OSC Test pacing was cancelled."))?

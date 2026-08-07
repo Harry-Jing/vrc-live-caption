@@ -32,6 +32,7 @@ use crate::events::{
     emit_caption_session_changed, emit_diagnostic, emit_status, emit_utterance_ended,
     emit_utterance_started, next_utterance_id, now_ms,
 };
+use crate::host_resolver::HostResolver;
 use crate::live_chatbox_publisher::{
     LiveChatboxPublisher, LivePublisherDiagnostic, LivePublisherReporter,
 };
@@ -91,6 +92,7 @@ pub(crate) struct RuntimeStartRequest {
     pub(crate) runtime_plan: RuntimePlanSnapshot,
     pub(crate) chatbox_pacer: ChatboxPacer,
     pub(crate) caption_session: CaptionSessionStore,
+    pub(crate) host_resolver: HostResolver,
     pub(crate) generation_id: u64,
     pub(crate) config_revision: u64,
     pub(crate) openai_api_key: SecretString,
@@ -537,9 +539,9 @@ impl RuntimeManager {
         Ok(())
     }
 
-    pub(crate) fn start<F>(
+    pub(crate) fn start<R: Runtime, F>(
         &self,
-        app: AppHandle,
+        app: AppHandle<R>,
         request: RuntimeStartRequest,
         install_session: F,
     ) -> AppResult<RuntimeStartOutcome>
@@ -551,6 +553,7 @@ impl RuntimeManager {
             runtime_plan,
             chatbox_pacer,
             caption_session,
+            host_resolver,
             generation_id,
             config_revision,
             openai_api_key,
@@ -579,13 +582,28 @@ impl RuntimeManager {
         }
 
         let generation = RuntimeGeneration::activate(&app, generation_id, caption_session)?;
+        let start_cancelled = || !self.start_epoch_is_current(expected_stop_epoch);
         let publisher_init = initialize_runtime_publisher(
             &app,
             &config.osc,
             publication_policy,
             chatbox_pacer,
             generation.clone(),
+            &host_resolver,
+            &start_cancelled,
         );
+        if start_cancelled() {
+            match &publisher_init {
+                RuntimePublisherInit::Ready(publisher) => {
+                    let _ = generation.request_stop(Some(publisher));
+                    let _ = publisher.join();
+                }
+                RuntimePublisherInit::Disabled | RuntimePublisherInit::Unavailable(_) => {
+                    let _ = generation.request_stop(None);
+                }
+            }
+            return Ok(RuntimeStartOutcome::SupersededByStop);
+        }
         let requested_host = config.osc.host.clone();
         let requested_port = config.osc.port;
         let (publisher, chatbox) = match publisher_init {
@@ -648,6 +666,7 @@ impl RuntimeManager {
                     openai_api_key,
                     thread_publisher,
                     thread_generation,
+                    host_resolver,
                 )
             })
             .map_err(|error| AppError::runtime(format!("Failed to start runtime thread: {error}")));
@@ -816,18 +835,20 @@ fn clear_finished_runtime<R: Runtime>(
         .map_err(|_| AppError::runtime("Runtime thread panicked after stopping."))
 }
 
-fn initialize_runtime_publisher(
-    app: &AppHandle,
+fn initialize_runtime_publisher<R: Runtime>(
+    app: &AppHandle<R>,
     config: &OscConfig,
     policy: ResolvedPublicationPolicy,
     chatbox_pacer: ChatboxPacer,
     generation: RuntimeGeneration,
+    host_resolver: &HostResolver,
+    is_cancelled: &dyn Fn() -> bool,
 ) -> RuntimePublisherInit {
     if !config.enabled {
         return RuntimePublisherInit::Disabled;
     }
 
-    let sender = match ChatboxOscSender::new(config) {
+    let sender = match ChatboxOscSender::new(config, host_resolver, is_cancelled) {
         Ok(sender) => sender,
         Err(error) => return RuntimePublisherInit::Unavailable(error),
     };
@@ -865,12 +886,13 @@ fn initialize_runtime_publisher(
     }
 }
 
-fn run_runtime_thread(
-    app: AppHandle,
+fn run_runtime_thread<R: Runtime>(
+    app: AppHandle<R>,
     config: AppConfig,
     openai_api_key: SecretString,
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
+    host_resolver: HostResolver,
 ) {
     let error_generation = generation.clone();
     let cleanup_publisher = publisher.clone();
@@ -880,7 +902,16 @@ fn run_runtime_thread(
         &app,
         &error_generation,
         cleanup_publisher.as_ref(),
-        move || run_runtime(runtime_app, config, openai_api_key, publisher, generation),
+        move || {
+            run_runtime(
+                runtime_app,
+                config,
+                openai_api_key,
+                publisher,
+                generation,
+                host_resolver,
+            )
+        },
     );
 }
 
@@ -992,12 +1023,13 @@ fn finish_runtime_output<R: Runtime>(
     }
 }
 
-fn run_runtime(
-    app: AppHandle,
+fn run_runtime<R: Runtime>(
+    app: AppHandle<R>,
     config: AppConfig,
     openai_api_key: SecretString,
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
+    host_resolver: HostResolver,
 ) -> AppResult<()> {
     let started = generation.commit_if_active(|| {
         emit_status(
@@ -1010,15 +1042,23 @@ fn run_runtime(
         return Ok(());
     }
 
-    run_openai_runtime(app, config, openai_api_key, publisher, generation)
+    run_openai_runtime(
+        app,
+        config,
+        openai_api_key,
+        publisher,
+        generation,
+        host_resolver,
+    )
 }
 
-fn run_openai_runtime(
-    app: AppHandle,
+fn run_openai_runtime<R: Runtime>(
+    app: AppHandle<R>,
     config: AppConfig,
     openai_api_key: SecretString,
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
+    host_resolver: HostResolver,
 ) -> AppResult<()> {
     if !generation.try_begin_work() {
         return Ok(());
@@ -1033,6 +1073,8 @@ fn run_openai_runtime(
         config.stt.model,
         config.stt.languages.clone(),
         &openai_api_key,
+        &host_resolver,
+        &|| generation.is_work_cancelled(),
     )?;
     if generation.is_hard_stopped() {
         recognition.stop()?;
@@ -1197,8 +1239,8 @@ fn send_recognition_command(
     }
 }
 
-fn spawn_recognition_worker<S: RecognitionSession + 'static>(
-    app: AppHandle,
+fn spawn_recognition_worker<R: Runtime, S: RecognitionSession + 'static>(
+    app: AppHandle<R>,
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
     recognition: S,

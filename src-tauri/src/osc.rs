@@ -8,13 +8,16 @@
 use crate::chatbox_publisher::{ChatboxSendReceipt, ChatboxTransport};
 use crate::config::OscConfig;
 use crate::error::{AppError, AppResult};
+use crate::host_resolver::{HostResolutionError, HostResolver};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub(crate) const OSC_CHATBOX_INPUT_ADDRESS: &str = "/chatbox/input";
 pub(crate) const OSC_CHATBOX_TYPING_ADDRESS: &str = "/chatbox/typing";
 pub(crate) const OSC_TEST_MESSAGE: &str = "VRC Live Caption OSC test.";
+const OSC_RESOLUTION_BUDGET: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub(crate) struct ChatboxOscSender {
@@ -33,20 +36,39 @@ struct UdpOscTransport {
 }
 
 impl ChatboxOscSender {
-    pub(crate) fn new(config: &OscConfig) -> AppResult<Self> {
+    pub(crate) fn new(
+        config: &OscConfig,
+        resolver: &HostResolver,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> AppResult<Self> {
+        Self::new_until(
+            config,
+            resolver,
+            Instant::now() + OSC_RESOLUTION_BUDGET,
+            is_cancelled,
+        )
+    }
+
+    fn new_until(
+        config: &OscConfig,
+        resolver: &HostResolver,
+        deadline: Instant,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> AppResult<Self> {
+        let target = format!("{}:{}", config.host, config.port);
+        let target_address = resolver
+            .resolve_until(&config.host, config.port, deadline, is_cancelled)
+            .map_err(|error| map_resolution_error(&target, error))?
+            .into_iter()
+            .find(|address| address.is_ipv4())
+            .ok_or_else(|| {
+                AppError::osc_send(&target, "No IPv4 target address resolved.".to_string())
+            })?;
         let socket =
             UdpSocket::bind("0.0.0.0:0").map_err(|error| AppError::osc_bind(error.to_string()))?;
         socket
             .set_nonblocking(true)
             .map_err(|error| AppError::osc_bind(error.to_string()))?;
-        let target = format!("{}:{}", config.host, config.port);
-        let target_address = target
-            .to_socket_addrs()
-            .map_err(|error| AppError::osc_send(&target, error.to_string()))?
-            .find(|address| address.is_ipv4())
-            .ok_or_else(|| {
-                AppError::osc_send(&target, "No IPv4 target address resolved.".to_string())
-            })?;
 
         Ok(Self {
             transport: Arc::new(UdpOscTransport {
@@ -76,6 +98,24 @@ impl ChatboxOscSender {
             .send_packet(&typing_indicator_packet(is_typing))?;
         Ok(())
     }
+}
+
+fn map_resolution_error(target: &str, error: HostResolutionError) -> AppError {
+    let message = match error {
+        HostResolutionError::Cancelled => "Hostname resolution was cancelled.".to_string(),
+        HostResolutionError::DeadlineExceeded => format!(
+            "Hostname resolution timed out after {} seconds.",
+            OSC_RESOLUTION_BUDGET.as_secs()
+        ),
+        HostResolutionError::LookupFailed(detail) => {
+            format!("Hostname resolution failed: {detail}")
+        }
+        HostResolutionError::WorkerUnavailable(detail) => {
+            format!("Hostname resolver is unavailable: {detail}")
+        }
+        HostResolutionError::QueueFull => "Hostname resolver queue is full; try again.".to_string(),
+    };
+    AppError::osc_send(target, message)
 }
 
 impl ChatboxTransport for ChatboxOscSender {

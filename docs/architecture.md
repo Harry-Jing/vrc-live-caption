@@ -146,6 +146,13 @@ a selected proxy fails. Unsupported SOCKS and PAC/WPAD selections fail
 visibly. The relay/base-URL option remains later work under
 [ADR 0019](./adr/0019-follow-system-proxy-plan-relay-api.md).
 
+Hostname resolution is a shared application boundary for OpenAI target/proxy
+hosts and OSC targets. It has a monotonic deadline and observes the relevant
+Stop cancellation signal, so Start and Stop do not wait indefinitely on name
+resolution. TCP connect, proxy CONNECT, and TLS/WebSocket handshakes retain
+their separate existing timeouts. OpenAI name resolution completes before the
+microphone is opened.
+
 ## Current UI-facing contracts
 
 | Semantic concept | Tauri event | Meaning |

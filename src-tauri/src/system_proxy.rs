@@ -5,10 +5,11 @@
 //! own `Proxy-Authorization` header.
 
 use crate::error::{AppError, AppResult};
+use crate::host_resolver::{HostResolutionError, HostResolver};
 use hyper_util::client::proxy::matcher::{Intercept, Matcher};
 use std::env::VarError;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use tungstenite::handshake::client::Request;
 use tungstenite::http::{HeaderValue, Uri};
@@ -17,11 +18,17 @@ const PROXY_CONNECT_BUDGET: Duration = Duration::from_secs(10);
 const MAX_CONNECT_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const MAX_CONNECT_RESPONSE_HEADERS: usize = 128;
 
-pub(super) fn connect_with_system_proxy(request: &Request) -> AppResult<TcpStream> {
+pub(super) fn connect_with_system_proxy(
+    request: &Request,
+    resolver: &HostResolver,
+    is_cancelled: &dyn Fn() -> bool,
+) -> AppResult<TcpStream> {
+    let deadline = Instant::now() + PROXY_CONNECT_BUDGET;
+    ensure_connection_not_cancelled(is_cancelled)?;
     // Read the environment and OS settings for every session so changing the
     // system proxy does not require restarting the application.
     let matcher = system_proxy_matcher()?;
-    connect_with_matcher(request, &matcher)
+    connect_with_matcher_until(request, &matcher, resolver, deadline, is_cancelled)
 }
 
 fn system_proxy_matcher() -> AppResult<Matcher> {
@@ -138,16 +145,39 @@ fn direct_matcher(no_proxy: Option<&str>) -> Matcher {
     builder.build()
 }
 
+#[cfg(test)]
 fn connect_with_matcher(request: &Request, matcher: &Matcher) -> AppResult<TcpStream> {
+    connect_with_matcher_until(
+        request,
+        matcher,
+        &HostResolver::default(),
+        Instant::now() + PROXY_CONNECT_BUDGET,
+        &|| false,
+    )
+}
+
+fn connect_with_matcher_until(
+    request: &Request,
+    matcher: &Matcher,
+    resolver: &HostResolver,
+    deadline: Instant,
+    is_cancelled: &dyn Fn() -> bool,
+) -> AppResult<TcpStream> {
     let target = Target::from_request(request)?;
     let match_uri = https_proxy_match_uri(request.uri())?;
-    let deadline = Instant::now() + PROXY_CONNECT_BUDGET;
 
     let Some(proxy) = matcher.intercept(&match_uri) else {
-        return connect_tcp(&target.host, target.port, deadline, "OpenAI Realtime");
+        return connect_tcp(
+            resolver,
+            &target.host,
+            target.port,
+            deadline,
+            "OpenAI Realtime",
+            is_cancelled,
+        );
     };
 
-    connect_http_proxy(&target, &proxy, deadline)
+    connect_http_proxy(&target, &proxy, resolver, deadline, is_cancelled)
 }
 
 struct Target {
@@ -202,7 +232,9 @@ fn authority_with_port(host: &str, port: u16) -> String {
 fn connect_http_proxy(
     target: &Target,
     proxy: &Intercept,
+    resolver: &HostResolver,
     deadline: Instant,
+    is_cancelled: &dyn Fn() -> bool,
 ) -> AppResult<TcpStream> {
     let scheme = proxy.uri().scheme_str().unwrap_or("http");
     if scheme != "http" {
@@ -216,10 +248,12 @@ fn connect_http_proxy(
     let proxy_host = proxy_host.trim_matches(['[', ']']);
     let proxy_port = proxy.uri().port_u16().unwrap_or(80);
     let mut stream = connect_tcp(
+        resolver,
         proxy_host,
         proxy_port,
         deadline,
         "the selected system proxy",
+        is_cancelled,
     )?;
 
     write_connect_request(&mut stream, &target.authority, proxy.basic_auth(), deadline)?;
@@ -236,16 +270,19 @@ fn connect_http_proxy(
 }
 
 fn connect_tcp(
+    resolver: &HostResolver,
     host: &str,
     port: u16,
     deadline: Instant,
     destination: &str,
+    is_cancelled: &dyn Fn() -> bool,
 ) -> AppResult<TcpStream> {
-    let addresses = (host, port).to_socket_addrs().map_err(|error| {
-        AppError::stt_network(format!("Failed to resolve {destination}: {error}"))
-    })?;
+    let addresses = resolver
+        .resolve_until(host, port, deadline, is_cancelled)
+        .map_err(|error| map_resolution_error(destination, error))?;
     let mut last_error = None;
     for address in addresses {
+        ensure_connection_not_cancelled(is_cancelled)?;
         let remaining = remaining_budget(deadline, destination)?;
         match TcpStream::connect_timeout(&address, remaining) {
             Ok(stream) => {
@@ -267,6 +304,39 @@ fn connect_tcp(
         "Could not connect to {destination} within {} seconds: {detail}",
         PROXY_CONNECT_BUDGET.as_secs()
     )))
+}
+
+fn ensure_connection_not_cancelled(is_cancelled: &dyn Fn() -> bool) -> AppResult<()> {
+    if is_cancelled() {
+        Err(AppError::stt_network(
+            "OpenAI Realtime connection was cancelled during startup.",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn map_resolution_error(destination: &str, error: HostResolutionError) -> AppError {
+    let detail = match error {
+        HostResolutionError::Cancelled => {
+            format!("Hostname resolution for {destination} was cancelled.")
+        }
+        HostResolutionError::DeadlineExceeded => {
+            format!(
+                "Hostname resolution for {destination} timed out before the connection deadline."
+            )
+        }
+        HostResolutionError::LookupFailed(error) => {
+            format!("Failed to resolve {destination}: {error}")
+        }
+        HostResolutionError::WorkerUnavailable(error) => {
+            format!("The hostname resolver was unavailable for {destination}: {error}")
+        }
+        HostResolutionError::QueueFull => {
+            format!("The hostname resolver queue was full while resolving {destination}.")
+        }
+    };
+    AppError::stt_network(detail)
 }
 
 fn write_connect_request(

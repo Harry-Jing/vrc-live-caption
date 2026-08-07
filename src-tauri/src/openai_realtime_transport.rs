@@ -6,6 +6,7 @@
 
 use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppError, AppResult};
+use crate::host_resolver::HostResolver;
 use crate::openai_realtime::{
     OpenAiRealtimeSession, OpenAiRealtimeSessionContext, RealtimeTransport, realtime_websocket_url,
 };
@@ -49,9 +50,15 @@ impl OpenAiWebSocketTransport {
     pub(crate) fn connect(
         model: OpenAiTranscriptionModel,
         api_key: &SecretString,
+        resolver: &HostResolver,
+        is_cancelled: &dyn Fn() -> bool,
     ) -> AppResult<Self> {
         let request = openai_websocket_request(model, api_key)?;
-        let tcp = system_proxy::connect_with_system_proxy(&request)?;
+        let tcp = system_proxy::connect_with_system_proxy(&request, resolver, is_cancelled)?;
+        if is_cancelled() {
+            let _ = tcp.shutdown(Shutdown::Both);
+            return Err(startup_cancelled_error());
+        }
         configure_handshake_timeout(&tcp)?;
         let websocket_config = WebSocketConfig::default()
             .write_buffer_size(64 * 1024)
@@ -61,6 +68,10 @@ impl OpenAiWebSocketTransport {
         let (mut socket, _response) =
             client_tls_with_config(request, tcp, Some(websocket_config), None)
                 .map_err(map_handshake_error)?;
+        if is_cancelled() {
+            let _ = shutdown_socket(socket.get_mut());
+            return Err(startup_cancelled_error());
+        }
         configure_read_poll_timeout(socket.get_mut())?;
         Ok(Self {
             socket,
@@ -86,11 +97,17 @@ pub(crate) fn connect_openai_realtime_session(
     model: OpenAiTranscriptionModel,
     languages: Vec<String>,
     api_key: &SecretString,
+    resolver: &HostResolver,
+    is_cancelled: &dyn Fn() -> bool,
 ) -> AppResult<OpenAiRealtimeSession<OpenAiWebSocketTransport>> {
-    let transport = OpenAiWebSocketTransport::connect(model, api_key)?;
+    let transport = OpenAiWebSocketTransport::connect(model, api_key, resolver, is_cancelled)?;
     let mut session = OpenAiRealtimeSession::connect(context, model, languages, transport)?;
     let deadline = Instant::now() + SESSION_READY_TIMEOUT;
     while !session.is_ready() {
+        if is_cancelled() {
+            let _ = session.stop();
+            return Err(startup_cancelled_error());
+        }
         if Instant::now() >= deadline {
             let _ = session.stop();
             return Err(AppError::stt_network(
@@ -104,6 +121,10 @@ pub(crate) fn connect_openai_realtime_session(
         std::thread::sleep(SESSION_READY_POLL_INTERVAL);
     }
     Ok(session)
+}
+
+fn startup_cancelled_error() -> AppError {
+    AppError::stt_network("OpenAI Realtime connection was cancelled during startup.")
 }
 
 impl RealtimeTransport for OpenAiWebSocketTransport {

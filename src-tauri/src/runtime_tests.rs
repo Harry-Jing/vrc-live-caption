@@ -1,9 +1,14 @@
 use super::*;
 use crate::chatbox_publisher::{ChatboxSendReceipt, ChatboxTransport};
-use crate::config::OpenAiTranscriptionModel;
+use crate::config::{OpenAiTranscriptionModel, SttProvider};
+use crate::host_resolver::{HostResolutionError, HostResolver};
 use crate::recognition_fakes::{
     ScriptedRecognitionAdapter, ScriptedRecognitionContext, ScriptedText,
 };
+use crate::secrets::ProviderSecretStorage;
+use secrecy::SecretString;
+use std::io;
+use std::sync::mpsc;
 use tauri::Listener;
 
 fn scripted_context(
@@ -327,6 +332,162 @@ fn stop_invalidates_an_uncommitted_start_epoch() -> AppResult<()> {
     assert!(manager.start_epoch_is_current(expected_stop_epoch));
     manager.stop(app.handle())?;
     assert!(!manager.start_epoch_is_current(expected_stop_epoch));
+    Ok(())
+}
+
+#[test]
+fn stop_supersedes_a_start_blocked_in_osc_hostname_resolution() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let (diagnostic_sender, diagnostic_receiver) = mpsc::channel();
+    app.listen("diagnostic-event", move |event| {
+        let _ = diagnostic_sender.send(event.payload().to_string());
+    });
+    let manager = Arc::new(RuntimeManager::default());
+    let (lookup_started_sender, lookup_started_receiver) = mpsc::sync_channel(1);
+    let (lookup_release_sender, lookup_release_receiver) = mpsc::sync_channel(1);
+    let lookup_release_receiver = Arc::new(Mutex::new(lookup_release_receiver));
+    let worker_release = Arc::clone(&lookup_release_receiver);
+    let resolver = HostResolver::with_lookup(move |_, port| {
+        let _ = lookup_started_sender.send(());
+        worker_release
+            .lock()
+            .map_err(|_| io::Error::other("Test resolver release lock was poisoned."))?
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| io::Error::other("Test resolver was not released before its timeout."))?;
+        Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))])
+    });
+    let mut config = AppConfig::default();
+    config.osc.host = "blocked.test".to_string();
+    let expected_stop_epoch = manager.stop_epoch();
+    let request = RuntimeStartRequest {
+        runtime_plan: plan_runtime(&config),
+        config,
+        chatbox_pacer: ChatboxPacer::default(),
+        caption_session: CaptionSessionStore::default(),
+        host_resolver: resolver,
+        generation_id: 1,
+        config_revision: 1,
+        openai_api_key: SecretString::from("test-key".to_string()),
+        credential: RuntimeCredentialSnapshot {
+            provider: SttProvider::OpenAi,
+            storage: ProviderSecretStorage::Environment,
+            display_suffix: None,
+            revision: 1,
+        },
+        expected_stop_epoch,
+    };
+    let start_manager = Arc::clone(&manager);
+    let start_app = app.handle().clone();
+    let start = thread::spawn(move || start_manager.start(start_app, request, |_| Ok(())));
+    lookup_started_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| AppError::state("OSC hostname resolution did not start."))?;
+
+    let stop_manager = Arc::clone(&manager);
+    let stop_app = app.handle().clone();
+    let (stop_result_sender, stop_result_receiver) = mpsc::sync_channel(1);
+    let stop = thread::spawn(move || {
+        let _ = stop_result_sender.send(stop_manager.stop(&stop_app));
+    });
+    let stop_result = stop_result_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| AppError::state("Stop waited for the blocked OS hostname lookup."))?;
+    stop_result?;
+    let start_outcome = start
+        .join()
+        .map_err(|_| AppError::state("Blocked runtime Start thread panicked."))??;
+
+    assert_eq!(start_outcome, RuntimeStartOutcome::SupersededByStop);
+    assert!(
+        manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?
+            .is_none()
+    );
+    for payload in diagnostic_receiver.try_iter() {
+        let diagnostic = serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
+            AppError::state(format!("Runtime diagnostic was not valid JSON: {error}"))
+        })?;
+        assert_ne!(diagnostic["code"], "osc.send_failed");
+    }
+
+    lookup_release_sender
+        .send(())
+        .map_err(|_| AppError::state("Could not release the blocked hostname lookup."))?;
+    stop.join()
+        .map_err(|_| AppError::state("Runtime Stop thread panicked."))?;
+    Ok(())
+}
+
+#[test]
+fn stop_cancels_an_installed_runtime_hostname_wait_before_joining() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let manager = Arc::new(RuntimeManager::default());
+    let generation = RuntimeGeneration::active();
+    let worker_generation = generation.clone();
+    let (lookup_started_sender, lookup_started_receiver) = mpsc::sync_channel(1);
+    let (lookup_release_sender, lookup_release_receiver) = mpsc::sync_channel(1);
+    let lookup_release_receiver = Arc::new(Mutex::new(lookup_release_receiver));
+    let worker_release = Arc::clone(&lookup_release_receiver);
+    let resolver = HostResolver::with_lookup(move |_, port| {
+        let _ = lookup_started_sender.send(());
+        worker_release
+            .lock()
+            .map_err(|_| io::Error::other("Test resolver release lock was poisoned."))?
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| io::Error::other("Test resolver was not released before its timeout."))?;
+        Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))])
+    });
+    let (resolution_sender, resolution_receiver) = mpsc::sync_channel(1);
+    let join_handle = thread::spawn(move || {
+        let result = resolver.resolve_until(
+            "blocked-openai.test",
+            443,
+            Instant::now() + Duration::from_secs(5),
+            &|| worker_generation.is_work_cancelled(),
+        );
+        let _ = resolution_sender.send(result);
+    });
+    {
+        let mut handle = manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
+        *handle = Some(RuntimeHandle {
+            generation,
+            publisher: None,
+            join_handle,
+        });
+    }
+    lookup_started_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| AppError::state("Installed runtime hostname lookup did not start."))?;
+
+    let stop_manager = Arc::clone(&manager);
+    let stop_app = app.handle().clone();
+    let (stop_result_sender, stop_result_receiver) = mpsc::sync_channel(1);
+    let stop = thread::spawn(move || {
+        let _ = stop_result_sender.send(stop_manager.stop(&stop_app));
+    });
+    let stop_result = stop_result_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| {
+            AppError::state("Stop waited for the installed runtime's OS hostname lookup.")
+        })?;
+    stop_result?;
+    let resolution = resolution_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| {
+            AppError::state("Runtime hostname wait did not observe generation cancellation.")
+        })?;
+
+    assert_eq!(resolution.err(), Some(HostResolutionError::Cancelled));
+    lookup_release_sender
+        .send(())
+        .map_err(|_| AppError::state("Could not release the installed runtime hostname lookup."))?;
+    stop.join()
+        .map_err(|_| AppError::state("Installed runtime Stop thread panicked."))?;
     Ok(())
 }
 

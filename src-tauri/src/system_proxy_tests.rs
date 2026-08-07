@@ -1,7 +1,9 @@
 use super::*;
+use crate::host_resolver::HostResolver;
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpListener;
 use std::thread;
+use std::time::{Duration, Instant};
 use tungstenite::http::Request;
 
 const TEST_API_KEY: &str = "test-openai-api-key-must-not-reach-proxy";
@@ -175,6 +177,50 @@ fn malformed_configured_proxy_is_invalid_instead_of_direct() -> AppResult<()> {
         .err()
         .ok_or_else(|| AppError::state("Malformed proxy configuration connected directly."))?;
     assert_eq!(accept_error.kind(), ErrorKind::WouldBlock);
+    Ok(())
+}
+
+#[test]
+fn direct_hostname_resolution_obeys_the_connection_deadline() -> AppResult<()> {
+    let resolver = HostResolver::with_lookup(|_, _| {
+        thread::sleep(Duration::from_millis(100));
+        Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], 9))])
+    });
+    let request = test_request("wss://blocked.test/realtime")?;
+    let started_at = Instant::now();
+
+    let error = connect_with_matcher_until(
+        &request,
+        &Matcher::builder().build(),
+        &resolver,
+        started_at + Duration::from_millis(20),
+        &|| false,
+    )
+    .err()
+    .ok_or_else(|| AppError::state("A DNS lookup exceeded the OpenAI connection deadline."))?;
+
+    assert_eq!(error.code(), "stt.network_unreachable");
+    assert!(error.to_string().contains("timed out"));
+    Ok(())
+}
+
+#[test]
+fn selected_proxy_hostname_resolution_observes_cancellation() -> AppResult<()> {
+    let matcher = Matcher::builder().https("http://proxy.test:8080").build();
+    let request = test_request("wss://api.openai.com/realtime")?;
+
+    let error = connect_with_matcher_until(
+        &request,
+        &matcher,
+        &HostResolver::default(),
+        Instant::now() + Duration::from_secs(1),
+        &|| true,
+    )
+    .err()
+    .ok_or_else(|| AppError::state("A cancelled proxy hostname unexpectedly connected."))?;
+
+    assert_eq!(error.code(), "stt.network_unreachable");
+    assert!(error.to_string().contains("cancelled"));
     Ok(())
 }
 
