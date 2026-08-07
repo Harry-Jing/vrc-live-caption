@@ -54,9 +54,11 @@ right group below; do not renumber existing ADRs.
 ## Cloud path
 
 - [0018 — Default to OpenAI for cloud STT](./0018-default-to-openai-for-cloud-stt.md):
-  bounded `gpt-4o-mini-transcribe` requests
+  bounded `gpt-4o-mini-transcribe` requests; superseded by ADR 0024
 - [0019 — Follow the system proxy; plan a relay API option](./0019-follow-system-proxy-plan-relay-api.md):
   China-friendly network access, honestly scoped
+- [0024 — Use OpenAI Realtime transcription](./0024-use-openai-realtime-transcription.md):
+  two exact model paths behind the recognition-session seam
 
 ## Local path
 

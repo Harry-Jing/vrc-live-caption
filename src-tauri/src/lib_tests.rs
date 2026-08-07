@@ -4,12 +4,16 @@ use crate::error::{AppError, AppResult};
 use std::fs;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+fn production_lib_source() -> &'static str {
+    include_str!("lib.rs")
+        .split("#[path = \"lib_tests.rs\"]")
+        .next()
+        .unwrap_or_default()
+}
+
 #[test]
 fn runtime_control_snapshot_is_the_only_control_read_command_exposed() {
-    let production_lib = include_str!("lib.rs")
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or_default();
+    let production_lib = production_lib_source();
     let build_manifest = include_str!("../build.rs");
     let desktop_capability = include_str!("../capabilities/default.json");
 
@@ -33,10 +37,7 @@ fn runtime_control_snapshot_is_the_only_control_read_command_exposed() {
 
 #[test]
 fn caption_session_snapshot_command_has_a_narrow_generated_permission() {
-    let production_lib = include_str!("lib.rs")
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or_default();
+    let production_lib = production_lib_source();
     let build_manifest = include_str!("../build.rs");
     let desktop_capability = include_str!("../capabilities/default.json");
     let generated_permission =
@@ -82,12 +83,8 @@ fn builder_setup_loads_saved_config_before_commands_run() -> AppResult<()> {
     fs::create_dir_all(&config_directory).map_err(|error| {
         AppError::config_io(format!("Failed to create test config directory: {error}"))
     })?;
-    let mut contents = serde_json::to_value(&saved_config).map_err(|error| {
+    let contents = serde_json::to_string(&saved_config).map_err(|error| {
         AppError::config_io(format!("Failed to serialize test config: {error}"))
-    })?;
-    contents["osc"]["minIntervalMs"] = serde_json::json!(750);
-    let contents = serde_json::to_string(&contents).map_err(|error| {
-        AppError::config_io(format!("Failed to serialize legacy test config: {error}"))
     })?;
     fs::write(config_directory.join("config.json"), contents)
         .map_err(|error| AppError::config_io(format!("Failed to write test config: {error}")))?;
@@ -103,14 +100,10 @@ fn builder_setup_loads_saved_config_before_commands_run() -> AppResult<()> {
         .runtime_control_snapshot()?
         .desired
         .config;
-    let persisted_contents =
-        fs::read_to_string(config_directory.join("config.json")).map_err(|error| {
-            AppError::config_io(format!("Failed to read legacy test config: {error}"))
-        })?;
-    let persisted_config =
-        serde_json::from_str::<serde_json::Value>(&persisted_contents).map_err(|error| {
-            AppError::config_io(format!("Failed to parse legacy test config: {error}"))
-        })?;
+    let persisted_contents = fs::read_to_string(config_directory.join("config.json"))
+        .map_err(|error| AppError::config_io(format!("Failed to read test config: {error}")))?;
+    let persisted_config = serde_json::from_str::<serde_json::Value>(&persisted_contents)
+        .map_err(|error| AppError::config_io(format!("Failed to parse test config: {error}")))?;
     drop(app);
 
     fs::remove_dir_all(&config_directory).map_err(|error| {
@@ -123,8 +116,8 @@ fn builder_setup_loads_saved_config_before_commands_run() -> AppResult<()> {
     );
     assert!(!loaded_config.osc.enabled);
     assert_eq!(
-        persisted_config.pointer("/osc/minIntervalMs"),
-        Some(&serde_json::json!(750))
+        persisted_config.pointer("/schemaVersion"),
+        Some(&serde_json::json!(crate::config::APP_CONFIG_SCHEMA_VERSION))
     );
 
     Ok(())

@@ -1,11 +1,13 @@
 import {
   APP_CONFIG_SCHEMA_VERSION,
+  OPENAI_TRANSCRIPTION_MODELS,
   STT_PROVIDERS,
   type AppConfig,
   type BoundaryOwner,
   type CaptionLane,
   type CaptionUnitBehavior,
   type LaneUpdateBehavior,
+  type OpenAiTranscriptionModel,
   type ProviderSecretStatus,
   type ProviderSecretStorage,
   type PublicationMode,
@@ -30,22 +32,13 @@ import {
 const PUBLICATION_MODES = ["completed", "live"] as const;
 const CAPTION_LANES = ["source", "translation"] as const;
 const RECOGNITION_PATHS = [
-  "openAiBounded",
-  "mockBounded",
-  "mockOngoingCompleted",
-  "mockOngoingOnly",
+  "openAiGptTranscribe",
+  "openAiGptLiveTranscribe",
 ] as const;
-const RECOGNITION_INPUT_SHAPES = [
-  "completedAudioUnits",
-  "continuousAudioFrames",
-] as const;
-const BOUNDARY_OWNERS = ["application", "provider", "none"] as const;
-const CAPTION_UNIT_BEHAVIORS = ["unitBased", "unitless"] as const;
-const LANE_UPDATE_BEHAVIORS = [
-  "completedOnly",
-  "ongoingAndCompleted",
-  "ongoingOnly",
-] as const;
+const RECOGNITION_INPUT_SHAPES = ["continuousAudioFrames"] as const;
+const BOUNDARY_OWNERS = ["application"] as const;
+const CAPTION_UNIT_BEHAVIORS = ["unitBased"] as const;
+const LANE_UPDATE_BEHAVIORS = ["completedOnly", "ongoingAndCompleted"] as const;
 const REVISION_BEHAVIORS = ["appendOnly", "revisableFullSnapshot"] as const;
 const RUNTIME_STATUSES = [
   "idle",
@@ -173,6 +166,38 @@ function nullableString(value: unknown, path: string): string | null {
   return value === null ? null : string(value, path);
 }
 
+function languageHints(value: unknown, path: string): string[] {
+  const hints = array(value, path).map((hint, index) => {
+    const decoded = string(hint, `${path}[${String(index)}]`);
+
+    if (decoded.trim().length === 0) {
+      throw new RuntimeControlContractError(
+        `${path}[${String(index)}]`,
+        "expected a non-empty language hint",
+      );
+    }
+
+    return decoded;
+  });
+
+  if (hints.length === 0) {
+    throw new RuntimeControlContractError(
+      path,
+      "expected at least one language hint",
+    );
+  }
+
+  const normalized = hints.map((hint) => hint.trim().toLocaleLowerCase("en"));
+  if (new Set(normalized).size !== normalized.length) {
+    throw new RuntimeControlContractError(
+      path,
+      "expected unique language hints",
+    );
+  }
+
+  return hints;
+}
+
 function decodeAudioConfig(value: unknown, path: string): AppConfig["audio"] {
   const input = exactRecord(value, path, ["inputDeviceId"]);
 
@@ -185,7 +210,7 @@ function decodeAudioConfig(value: unknown, path: string): AppConfig["audio"] {
 }
 
 function decodeSttConfig(value: unknown, path: string): AppConfig["stt"] {
-  const input = exactRecord(value, path, ["provider", "language", "model"]);
+  const input = exactRecord(value, path, ["provider", "languages", "model"]);
 
   return {
     provider: literal<SttProvider>(
@@ -193,8 +218,12 @@ function decodeSttConfig(value: unknown, path: string): AppConfig["stt"] {
       `${path}.provider`,
       STT_PROVIDERS,
     ),
-    language: string(input["language"], `${path}.language`),
-    model: string(input["model"], `${path}.model`),
+    languages: languageHints(input["languages"], `${path}.languages`),
+    model: literal<OpenAiTranscriptionModel>(
+      input["model"],
+      `${path}.model`,
+      OPENAI_TRANSCRIPTION_MODELS,
+    ),
   };
 }
 
@@ -346,24 +375,10 @@ function decodeResolvedPolicy(
         ),
       };
     }
-    case "liveUnitless": {
-      const input = exactRecord(value, path, [
-        "policy",
-        "firstNonEmptyDelayMs",
-      ]);
-      return {
-        policy,
-        firstNonEmptyDelayMs: safeInteger(
-          input["firstNonEmptyDelayMs"],
-          `${path}.firstNonEmptyDelayMs`,
-          1,
-        ),
-      };
-    }
     default:
       throw new RuntimeControlContractError(
         `${path}.policy`,
-        "expected one of completed, liveUnit, liveUnitless",
+        "expected one of completed, liveUnit",
       );
   }
 }
@@ -696,7 +711,7 @@ function decodeRuntimeSession(value: unknown, path: string): RuntimeSession {
   };
 }
 
-export function decodeRuntimeControlSnapshotV2(
+export function decodeRuntimeControlSnapshotV3(
   value: unknown,
 ): RuntimeControlSnapshot {
   const input = exactRecord(value, "$", [
@@ -707,8 +722,8 @@ export function decodeRuntimeControlSnapshotV2(
     "session",
     "pendingChanges",
   ]);
-  if (input["contractVersion"] !== 2) {
-    throw new RuntimeControlContractError("$.contractVersion", "expected 2");
+  if (input["contractVersion"] !== 3) {
+    throw new RuntimeControlContractError("$.contractVersion", "expected 3");
   }
   const desiredInput = exactRecord(input["desired"], "$.desired", [
     "revision",
@@ -719,7 +734,7 @@ export function decodeRuntimeControlSnapshotV2(
   const config = decodeAppConfig(desiredInput["config"], "$.desired.config");
 
   return {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: safeInteger(input["revision"], "$.revision", 0),
     runtime: decodeRuntimeStatus(input["runtime"], "$.runtime"),
     desired: {

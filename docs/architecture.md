@@ -19,16 +19,16 @@ accepted target architecture. Implementation status lives in
 ```text
 Audio Sources
   -> capture / provider-independent audio
-  -> Provider Path Adapter
+  -> RecognitionSession Adapter
   -> Normalized Caption Snapshots
   -> Optional Translation
   -> Publication Policy
   -> Output Sink Publishers
 ```
 
-A provider path may produce a source lane, a translated lane, or both. A
-translation path may consume normalized source text or audio directly; the
-architecture does not require every translation to wait behind STT.
+A recognition Adapter produces the source lane. A translation path may consume
+normalized source text or audio directly; the architecture does not require
+every translation to wait behind STT.
 
 ## Core boundaries
 
@@ -49,21 +49,69 @@ architecture does not require every translation to wait behind STT.
 
 ## Recognition session seam
 
-The runtime faces one conceptual session:
+**Current implementation.** The recognition Module presents one deep
+`RecognitionSession` Interface to the runtime:
 
 ```text
-provider-independent audio in
-  -> zero or more ongoing caption snapshots
-  -> one completed snapshot per completed caption unit, when supported
+capture
+  -> RecognitionSession: provider-independent audio and lifecycle controls
+       -> OpenAI Adapter: Realtime WebSocket protocol
+       -> future Local Adapter: out-of-process worker protocol
+  -> normalized lifecycle, caption snapshots, and categorized errors
 ```
 
-Concrete adapters hide very different mechanics: the current bounded OpenAI
-adapter uploads one application-bounded audio unit and emits at most one
-completed snapshot; a streaming adapter emits revisable snapshots and
-completes units at endpoints; a continuous path may emit only ongoing
-snapshots and cannot claim Completed support. Each behaviorally distinct
-provider family gets its own concrete adapter — there is no universal model
-adapter full of name branches.
+The Interface accepts an immutable, already-planned session selection,
+provider-independent mono audio frames with their source format, input-end, and
+Stop. It emits unit-started and unit-ended lifecycle events, zero or more
+ongoing full-text snapshots, at most one completed full-text snapshot per
+caption unit, and categorized recoverable or terminal errors. It does not
+expose a URL, JSON event, audio-buffer commit, provider item identifier, or
+worker message.
+
+These invariants hold on both sides of the seam:
+
+- one session owns exactly one provider, Adapter, and model; saved changes take
+  effect only on a later Start;
+- each unit has one stable normalized identity, revisions increase within its
+  lane, and completion is terminal for that unit;
+- raw deltas are accumulated inside the Adapter and leave it only as full
+  snapshots ([ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md));
+- provider events that complete out of order are correlated to their original
+  units before admission; unit sequence follows input/commit order, and a
+  missing or failed bound unit ends explicitly so later terminal results can
+  advance without attaching to or overtaking the wrong unit; an unacknowledged
+  commit fails the whole session because its later provider identity cannot be
+  attached safely;
+- recoverable item failure may end that item and keep the session running;
+  connection, authentication, protocol, or worker failure ends the session
+  visibly; neither kind changes provider, model, or publication timing; and
+- the runtime generation gate rejects all output after Stop, including a
+  provider's drained tail or a local worker's late response.
+
+Concrete Adapters hide behaviorally different mechanisms. The OpenAI Module
+owns two release paths behind the same Interface:
+
+| Catalog entry | Hidden input/event behavior | Declared publication timing |
+|---|---|---|
+| `openai/gpt-transcribe` | append 24 kHz PCM, commit one item, then await its completed transcript; preserve provider-detected language separately from input hints | Completed |
+| `openai/gpt-live-transcribe` | append 24 kHz PCM continuously; normalize transcript deltas and completion | Completed or Live |
+
+Both use an OpenAI Realtime transcription WebSocket, and both reconcile raw
+events by `item_id` and receive expected-language hints through `languages[]`.
+Hints never masquerade as detected language. An `item_id` never becomes a
+UI-facing or output-sink identity. `gpt-transcribe` does not produce a
+fabricated ongoing snapshot while the committed item is being recognized.
+These protocol facts are recorded in
+[research/openai-speech-streaming-options.md](./research/openai-speech-streaming-options.md)
+and the decision is [ADR 0024](./adr/0024-use-openai-realtime-transcription.md).
+
+There is deliberately no generic WebSocket abstraction. Connection setup,
+authentication, system-proxy tunneling, JSON encoding, 24 kHz PCM conversion,
+append/commit sequencing, `item_id` bookkeeping, session-failure policy, and
+OpenAI error decoding are hidden implementation of the OpenAI Module. The
+recognition Module depends only on the semantic Interface. A future local
+Adapter instead hides worker startup, model loading, frame transport, and
+crash mapping.
 
 Capabilities belong to the complete provider path — provider, endpoint or
 session mode, model, runtime, backend, and relevant configuration:
@@ -77,13 +125,26 @@ session mode, model, runtime, backend, and relevant configuration:
 | Produced lanes | source, translation, both |
 
 A backend-owned planner resolves each publication request against these
-facts. Currently the bounded OpenAI path is completed-only and deterministic
-Mock profiles cover the other shapes. An incompatible plan preserves the
-request and reports the supported alternatives
+facts. The release catalog uses exact path identifiers and capability records,
+not arbitrary model strings or model-name heuristics. An incompatible or
+removed selection preserves the request and reports the supported alternatives
 ([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)).
 
-The OpenAI endpoint facts and open questions are in
-[research/openai-speech-streaming-options.md](./research/openai-speech-streaming-options.md).
+The implementation has no REST/WAV recognition fallback, legacy OpenAI model
+compatibility, or production Mock provider. Scripted RecognitionSession
+Adapters remain test-only and are selected by dependency injection rather than
+configuration.
+
+Transport libraries are replaceable OpenAI-Module dependencies, not
+architecture Interfaces. The concrete WebSocket, TLS, Base64, and system-proxy
+libraries are private OpenAI-Module dependencies. The removed direct HTTP
+client and WAV encoder are not retained for hypothetical future translation.
+The current transport honors a selected manual system HTTP proxy, rejects
+malformed explicit, Windows protocol-mapped, and macOS manual proxy settings
+instead of silently connecting directly, and never falls back to direct after
+a selected proxy fails. Unsupported SOCKS and PAC/WPAD selections fail
+visibly. The relay/base-URL option remains later work under
+[ADR 0019](./adr/0019-follow-system-proxy-plan-relay-api.md).
 
 ## Current UI-facing contracts
 
@@ -205,8 +266,10 @@ libraries, with no Python, PyTorch, or Conda
 model and one effective backend are loaded per recognition session; the
 backend preference and effective-backend rules are
 [ADR 0021](./adr/0021-users-choose-the-local-backend.md). A worker crash
-stops the session and waits for an explicit user decision. Candidate models
-and backend facts are in
+stops the session and waits for an explicit user decision. The local worker
+Adapter implements the same `RecognitionSession` Interface as OpenAI while
+keeping worker messages, native-runtime types, and model-specific streaming
+state behind that seam. Candidate models and backend facts are in
 [research/local-inference-notes.md](./research/local-inference-notes.md).
 
 ## Incoming caption boundary

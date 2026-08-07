@@ -1,5 +1,5 @@
 {
-  "contractVersion": 2,
+  "contractVersion": 3,
   "revision": 9,
   "runtime": {
     "status": "running",
@@ -9,12 +9,12 @@
   "desired": {
     "revision": 4,
     "config": {
-      "schemaVersion": 2,
+      "schemaVersion": 3,
       "audio": { "inputDeviceId": null },
       "stt": {
-        "provider": "mock",
-        "language": "en",
-        "model": "mock-ongoing-completed"
+        "provider": "openai",
+        "languages": ["zh", "en"],
+        "model": "gpt-live-transcribe"
       },
       "osc": { "host": "127.0.0.1", "port": 9000, "enabled": true },
       "publication": { "mode": "live" },
@@ -22,9 +22,9 @@
     },
     "runtimePlan": {
       "recognition": {
-        "path": "mockOngoingCompleted",
+        "path": "openAiGptLiveTranscribe",
         "inputShape": "continuousAudioFrames",
-        "boundaryOwner": "provider",
+        "boundaryOwner": "application",
         "unitBehavior": "unitBased",
         "lanes": [
           {
@@ -58,18 +58,18 @@
     "selected": {
       "audio": { "inputDeviceId": null },
       "stt": {
-        "provider": "mock",
-        "language": "en",
-        "model": "mock-ongoing-completed"
+        "provider": "openai",
+        "languages": ["zh", "en"],
+        "model": "gpt-live-transcribe"
       },
       "osc": { "host": "127.0.0.1", "port": 9000, "enabled": true },
       "publication": { "mode": "live" }
     },
     "runtimePlan": {
       "recognition": {
-        "path": "mockOngoingCompleted",
+        "path": "openAiGptLiveTranscribe",
         "inputShape": "continuousAudioFrames",
-        "boundaryOwner": "provider",
+        "boundaryOwner": "application",
         "unitBehavior": "unitBased",
         "lanes": [
           {
@@ -86,13 +86,18 @@
         "selectedLanes": ["source"]
       }
     },
-    "credential": null,
+    "credential": {
+      "provider": "openai",
+      "storage": "systemCredentialStore",
+      "displaySuffix": "abcd",
+      "revision": 2
+    },
     "chatbox": {
       "state": "ready",
       "host": "127.0.0.1",
       "port": 9000
     },
-    "uploadsMicrophoneAudio": false
+    "uploadsMicrophoneAudio": true
   },
   "pendingChanges": []
 }

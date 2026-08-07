@@ -100,8 +100,6 @@ pub(crate) enum UtteranceEndReason {
     NoSpeech,
     /// The STT request failed; details arrive as a diagnostic event.
     SttFailed,
-    /// The captured segment was dropped before reaching STT.
-    Discarded,
 }
 
 #[derive(Clone, Serialize)]
@@ -207,7 +205,7 @@ impl DiagnosticCategory {
             | AppError::OscSend { .. }
             | AppError::OscSendIncomplete { .. } => Self::Osc,
             AppError::Runtime { .. } | AppError::State { .. } => Self::Runtime,
-            AppError::Stt { .. } | AppError::SttNetwork { .. } | AppError::Wav { .. } => Self::Stt,
+            AppError::Stt { .. } | AppError::SttNetwork { .. } => Self::Stt,
         }
     }
 }

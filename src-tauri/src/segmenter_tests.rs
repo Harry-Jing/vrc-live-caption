@@ -18,116 +18,89 @@ fn segmenter(
 }
 
 #[test]
-fn starts_speech_when_voiced_minimum_is_reached() {
-    let mut segmenter = segmenter(0.2, 1.0, NO_PREROLL);
-    let update = segmenter.push_samples(vec![0.2, 0.2], Instant::now());
+fn accepts_a_candidate_and_releases_its_audio_immediately() {
+    let mut segmenter = segmenter(0.3, 2.0, NO_PREROLL);
+    let now = Instant::now();
+
+    assert_eq!(
+        segmenter.push_samples(vec![0.2, 0.2], now),
+        SegmenterUpdate::default()
+    );
+    let update = segmenter.push_samples(vec![0.2, 0.2], now + Duration::from_millis(10));
 
     assert!(update.speech_started);
-    assert!(update.ready_segment.is_none());
+    assert_eq!(update.audio, vec![0.2, 0.2, 0.2, 0.2]);
+    assert!(!update.speech_ended);
 }
 
 #[test]
-fn speech_start_waits_for_voiced_minimum() {
-    let mut segmenter = segmenter(0.3, 1.0, NO_PREROLL);
+fn streams_later_frames_without_waiting_for_the_boundary() {
+    let mut segmenter = segmenter(0.2, 2.0, NO_PREROLL);
     let now = Instant::now();
-
-    let first = segmenter.push_samples(vec![0.2, 0.2], now);
-    assert!(!first.speech_started);
-
-    let second = segmenter.push_samples(vec![0.2, 0.2], now + Duration::from_millis(10));
-    assert!(second.speech_started);
-}
-
-#[test]
-fn flushes_ready_segment_after_silence() {
-    let mut segmenter = segmenter(0.2, 1.0, NO_PREROLL);
-    let now = Instant::now();
-
     segmenter.push_samples(vec![0.2, 0.2], now);
-    let segment = segmenter.tick(now + Duration::from_millis(120));
 
-    assert_eq!(segment, Some(vec![0.2, 0.2]));
+    let update = segmenter.push_samples(vec![0.3, 0.3], now + Duration::from_millis(10));
+
+    assert!(!update.speech_started);
+    assert_eq!(update.audio, vec![0.3, 0.3]);
+    assert!(!update.speech_ended);
 }
 
 #[test]
-fn discards_noise_blip_after_silence_timeout() {
-    let mut segmenter = segmenter(0.3, 1.0, NO_PREROLL);
+fn ends_an_announced_unit_after_silence() {
+    let mut segmenter = segmenter(0.2, 2.0, NO_PREROLL);
     let now = Instant::now();
+    segmenter.push_samples(vec![0.2, 0.2], now);
 
-    let blip = segmenter.push_samples(vec![0.2, 0.2], now);
-    assert!(!blip.speech_started);
-    assert_eq!(segmenter.tick(now + Duration::from_millis(120)), None);
+    let update = segmenter.tick(now + Duration::from_millis(120));
 
-    // The discarded blip must not leak into the next utterance.
-    let later = now + Duration::from_millis(500);
-    let update = segmenter.push_samples(vec![0.3, 0.3, 0.3], later);
-    assert!(update.speech_started);
-
-    let segment = segmenter.tick(later + Duration::from_millis(120));
-    assert_eq!(segment, Some(vec![0.3, 0.3, 0.3]));
+    assert!(update.speech_ended);
+    assert!(update.audio.is_empty());
 }
 
 #[test]
-fn prepends_capped_preroll_to_segment() {
-    let mut segmenter = segmenter(0.2, 1.0, 0.2);
+fn discards_a_noise_blip_without_announcing_or_ending_a_unit() {
+    let mut segmenter = segmenter(0.3, 2.0, NO_PREROLL);
     let now = Instant::now();
+    segmenter.push_samples(vec![0.2, 0.2], now);
 
+    assert_eq!(
+        segmenter.tick(now + Duration::from_millis(120)),
+        SegmenterUpdate::default()
+    );
+}
+
+#[test]
+fn prepends_only_the_capped_preroll_when_speech_is_accepted() {
+    let mut segmenter = segmenter(0.2, 2.0, 0.2);
+    let now = Instant::now();
     segmenter.push_samples(vec![0.01, 0.02], now);
     segmenter.push_samples(vec![0.03, 0.04], now + Duration::from_millis(10));
 
     let update = segmenter.push_samples(vec![0.2, 0.2], now + Duration::from_millis(20));
+
     assert!(update.speech_started);
-
-    let segment = segmenter.tick(now + Duration::from_millis(200));
-    assert_eq!(segment, Some(vec![0.03, 0.04, 0.2, 0.2]));
+    assert_eq!(update.audio, vec![0.03, 0.04, 0.2, 0.2]);
 }
 
 #[test]
-fn drops_segment_below_voiced_minimum_on_finish() {
-    let mut segmenter = segmenter(0.3, 1.0, NO_PREROLL);
-
-    segmenter.push_samples(vec![0.2, 0.2], Instant::now());
-
-    assert_eq!(segmenter.finish(), None);
-}
-
-#[test]
-fn finish_returns_tail_with_enough_voiced_audio() {
-    let mut segmenter = segmenter(0.2, 1.0, NO_PREROLL);
-
-    segmenter.push_samples(vec![0.2, 0.2], Instant::now());
-
-    assert_eq!(segmenter.finish(), Some(vec![0.2, 0.2]));
-}
-
-#[test]
-fn forces_segment_at_max_duration() {
+fn max_duration_commits_an_announced_unit_without_losing_its_audio() {
     let mut segmenter = segmenter(0.2, 0.3, NO_PREROLL);
+
     let update = segmenter.push_samples(vec![0.2, 0.2, 0.2], Instant::now());
 
-    assert_eq!(update.ready_segment, Some(vec![0.2, 0.2, 0.2]));
+    assert!(update.speech_started);
+    assert_eq!(update.audio, vec![0.2, 0.2, 0.2]);
+    assert!(update.speech_ended);
 }
 
 #[test]
-fn discards_max_duration_buffer_below_voiced_minimum() {
-    let mut segmenter = segmenter(0.3, 0.5, NO_PREROLL);
-    let now = Instant::now();
+fn finish_marks_only_an_announced_tail_as_discarded() {
+    let mut accepted = segmenter(0.2, 2.0, NO_PREROLL);
+    accepted.push_samples(vec![0.2, 0.2], Instant::now());
+    assert!(accepted.finish().speech_ended);
 
-    // Sparse clicks keep the buffer active without ever reaching the
-    // voiced minimum, so the buffer fills to the max segment duration.
-    segmenter.push_samples(vec![0.2, 0.2], now);
-    segmenter.push_samples(vec![0.0, 0.0], now + Duration::from_millis(10));
-    let update = segmenter.push_samples(vec![0.0], now + Duration::from_millis(20));
-
-    assert!(!update.speech_started);
-    assert_eq!(update.ready_segment, None);
-
-    // The discarded noise must not leak into the next utterance.
-    let later = now + Duration::from_millis(500);
-    let update = segmenter.push_samples(vec![0.3, 0.3, 0.3], later);
-    assert!(update.speech_started);
-    assert_eq!(
-        segmenter.tick(later + Duration::from_millis(120)),
-        Some(vec![0.3, 0.3, 0.3])
-    );
+    let mut candidate = segmenter(0.3, 2.0, NO_PREROLL);
+    candidate.push_samples(vec![0.2, 0.2], Instant::now());
+    assert_eq!(candidate.finish(), SegmenterUpdate::default());
 }

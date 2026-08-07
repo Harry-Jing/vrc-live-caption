@@ -14,7 +14,7 @@ use cpal::{
 };
 use serde::Serialize;
 use std::str::FromStr;
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::time::Duration;
 
 // CPAL treats `None` as an unbounded backend initialization wait. A finite
@@ -38,6 +38,7 @@ pub(crate) struct AudioCapture {
 
 pub(crate) struct AudioCaptureReceiver {
     samples: Receiver<Vec<f32>>,
+    dropped_frames: Receiver<()>,
     fatal_errors: Receiver<CpalError>,
     notifications: Receiver<CpalError>,
 }
@@ -47,6 +48,7 @@ type InputStreamBuilder = fn(
     StreamConfig,
     usize,
     SyncSender<Vec<f32>>,
+    SyncSender<()>,
     SyncSender<CpalError>,
     SyncSender<CpalError>,
 ) -> AppResult<Stream>;
@@ -109,6 +111,10 @@ pub(crate) fn open_input_capture(config: &AudioConfig) -> AppResult<AudioCapture
     let sample_format = supported_config.sample_format();
     let stream_config: StreamConfig = supported_config.into();
     let (sample_sender, sample_receiver) = sync_channel(16);
+    // A full sample queue must never turn into a silently corrupted
+    // transcript. The callback latches one gap notification without blocking;
+    // runtime treats it as terminal and asks the user to retry.
+    let (dropped_frame_sender, dropped_frame_receiver) = sync_channel(1);
     // Fatal stream errors use an independent one-slot latch. Sharing the
     // bounded sample queue would allow a full audio backlog to drop the only
     // signal that tells the runtime to leave Running.
@@ -122,6 +128,7 @@ pub(crate) fn open_input_capture(config: &AudioConfig) -> AppResult<AudioCapture
         stream_config,
         channels,
         sample_sender,
+        dropped_frame_sender,
         fatal_error_sender,
         notification_sender,
     )?;
@@ -135,6 +142,7 @@ pub(crate) fn open_input_capture(config: &AudioConfig) -> AppResult<AudioCapture
     Ok(AudioCapture {
         receiver: AudioCaptureReceiver {
             samples: sample_receiver,
+            dropped_frames: dropped_frame_receiver,
             fatal_errors: fatal_error_receiver,
             notifications: notification_receiver,
         },
@@ -173,6 +181,7 @@ pub(crate) fn receive_audio(
     timeout: Duration,
 ) -> AppResult<Option<Vec<f32>>> {
     check_stream_failure(&receiver.fatal_errors)?;
+    check_capture_gap(&receiver.dropped_frames)?;
     log_stream_notifications(&receiver.notifications);
 
     let result = match receiver.samples.recv_timeout(timeout) {
@@ -187,9 +196,22 @@ pub(crate) fn receive_audio(
     // returning even a buffered sample so a permanent failure cannot be
     // starved by queued audio.
     check_stream_failure(&receiver.fatal_errors)?;
+    check_capture_gap(&receiver.dropped_frames)?;
     log_stream_notifications(&receiver.notifications);
 
     result
+}
+
+fn check_capture_gap(receiver: &Receiver<()>) -> AppResult<()> {
+    match receiver.try_recv() {
+        Ok(()) => Err(AppError::audio(
+            "Microphone audio frames were dropped because recognition could not keep up. The runtime stopped instead of transcribing incomplete audio.",
+        )),
+        Err(TryRecvError::Empty) => Ok(()),
+        Err(TryRecvError::Disconnected) => Err(AppError::audio(
+            "Microphone capture stopped unexpectedly because its backpressure monitor disconnected.",
+        )),
+    }
 }
 
 fn check_stream_failure(receiver: &Receiver<CpalError>) -> AppResult<()> {
@@ -242,6 +264,7 @@ fn build_input_stream<T>(
     config: StreamConfig,
     channels: usize,
     sample_sender: SyncSender<Vec<f32>>,
+    dropped_frame_sender: SyncSender<()>,
     fatal_error_sender: SyncSender<CpalError>,
     notification_sender: SyncSender<CpalError>,
 ) -> AppResult<Stream>
@@ -252,7 +275,9 @@ where
     device
         .build_input_stream(
             config,
-            move |data: &[T], _| write_mono_samples(data, channels, &sample_sender),
+            move |data: &[T], _| {
+                write_mono_samples(data, channels, &sample_sender, &dropped_frame_sender);
+            },
             move |error| {
                 route_stream_error(error, &fatal_error_sender, &notification_sender);
             },
@@ -283,8 +308,12 @@ fn route_stream_error(
     }
 }
 
-fn write_mono_samples<T>(input: &[T], channels: usize, sender: &SyncSender<Vec<f32>>)
-where
+fn write_mono_samples<T>(
+    input: &[T],
+    channels: usize,
+    sender: &SyncSender<Vec<f32>>,
+    dropped_frame_sender: &SyncSender<()>,
+) where
     T: Sample,
     f32: FromSample<T>,
 {
@@ -304,8 +333,8 @@ where
         samples.push(sum / channels as f32);
     }
 
-    if !samples.is_empty() {
-        let _ = sender.try_send(samples);
+    if !samples.is_empty() && matches!(sender.try_send(samples), Err(TrySendError::Full(_))) {
+        let _ = dropped_frame_sender.try_send(());
     }
 }
 
@@ -316,6 +345,7 @@ mod tests {
     #[test]
     fn stream_failure_wins_over_buffered_audio_instead_of_hanging() -> AppResult<()> {
         let (sample_sender, sample_receiver) = sync_channel(1);
+        let (_dropped_frame_sender, dropped_frame_receiver) = sync_channel(1);
         let (fatal_error_sender, fatal_error_receiver) = sync_channel(1);
         let (notification_sender, notification_receiver) = sync_channel(1);
         sample_sender
@@ -331,6 +361,7 @@ mod tests {
         );
         let receiver = AudioCaptureReceiver {
             samples: sample_receiver,
+            dropped_frames: dropped_frame_receiver,
             fatal_errors: fatal_error_receiver,
             notifications: notification_receiver,
         };
@@ -352,6 +383,7 @@ mod tests {
             ErrorKind::Xrun,
         ] {
             let (sample_sender, sample_receiver) = sync_channel(1);
+            let (_dropped_frame_sender, dropped_frame_receiver) = sync_channel(1);
             let (fatal_error_sender, fatal_error_receiver) = sync_channel(1);
             let (notification_sender, notification_receiver) = sync_channel(1);
             sample_sender
@@ -364,6 +396,7 @@ mod tests {
             );
             let receiver = AudioCaptureReceiver {
                 samples: sample_receiver,
+                dropped_frames: dropped_frame_receiver,
                 fatal_errors: fatal_error_receiver,
                 notifications: notification_receiver,
             };
@@ -371,6 +404,29 @@ mod tests {
             assert_eq!(receive_audio(&receiver, Duration::ZERO)?, Some(vec![0.5]));
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn full_sample_queue_latches_a_visible_capture_gap() -> AppResult<()> {
+        let (sample_sender, sample_receiver) = sync_channel(1);
+        let (dropped_frame_sender, dropped_frame_receiver) = sync_channel(1);
+        let (_fatal_error_sender, fatal_error_receiver) = sync_channel(1);
+        let (_notification_sender, notification_receiver) = sync_channel(1);
+        write_mono_samples(&[0.25_f32], 1, &sample_sender, &dropped_frame_sender);
+        write_mono_samples(&[0.5_f32], 1, &sample_sender, &dropped_frame_sender);
+        let receiver = AudioCaptureReceiver {
+            samples: sample_receiver,
+            dropped_frames: dropped_frame_receiver,
+            fatal_errors: fatal_error_receiver,
+            notifications: notification_receiver,
+        };
+
+        let error = receive_audio(&receiver, Duration::ZERO)
+            .err()
+            .ok_or_else(|| AppError::audio("Dropped audio was not reported."))?;
+
+        assert!(error.to_string().contains("frames were dropped"));
         Ok(())
     }
 

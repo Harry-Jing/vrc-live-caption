@@ -15,10 +15,11 @@ import {
   publicationModeMessageKey,
   publicationPlanDescription,
   publicationSettingsView,
-  sttProviderMessageKey,
+  openAiTranscriptionModelDescriptionMessageKey,
+  openAiTranscriptionModelMessageKey,
 } from "../runtime/presentation";
 import {
-  STT_PROVIDERS,
+  OPENAI_TRANSCRIPTION_MODELS,
   type AppConfig,
   type AudioInputDevice,
   type PublicationMode,
@@ -82,11 +83,7 @@ const areConfigControlsDisabled = computed(
   () => isConfigSaveSubmitting.value || props.isSettingsBusy,
 );
 
-const canSaveOpenAiApiKey = computed(
-  () =>
-    form.value?.stt.provider === "openai" &&
-    apiKeyInput.value.trim().length > 0,
-);
+const canSaveOpenAiApiKey = computed(() => apiKeyInput.value.trim().length > 0);
 
 const openAiSecretLabel = computed(() => {
   const status = openAiSecretStatus.value;
@@ -188,12 +185,35 @@ const inputDeviceItems = computed(() => {
   return items;
 });
 
-const providerItems = computed(() =>
-  STT_PROVIDERS.map((value) => ({
-    label: uiText(sttProviderMessageKey[value]),
-    value,
-  })),
+const modelItems = OPENAI_TRANSCRIPTION_MODELS.map((value) => ({
+  label: uiText(openAiTranscriptionModelMessageKey[value]),
+  value,
+}));
+
+const selectedModelDescription = computed(() => {
+  const model = form.value?.stt.model;
+
+  return model
+    ? uiText(openAiTranscriptionModelDescriptionMessageKey[model])
+    : "";
+});
+
+const normalizedLanguageHints = computed(() =>
+  (form.value?.stt.languages ?? []).map((language) => language.trim()),
 );
+
+const hasValidLanguageHints = computed(() => {
+  const languages = normalizedLanguageHints.value;
+  const normalized = languages.map((language) =>
+    language.toLocaleLowerCase("en"),
+  );
+
+  return (
+    languages.length > 0 &&
+    languages.every((language) => language.length > 0) &&
+    new Set(normalized).size === languages.length
+  );
+});
 
 const PUBLICATION_MODES = [
   "completed",
@@ -272,8 +292,11 @@ function save() {
   }
 
   const next = structuredClone(toRaw(form.value));
-  next.stt.language = next.stt.language.trim();
-  next.stt.model = next.stt.model.trim();
+  if (!hasValidLanguageHints.value) {
+    return;
+  }
+
+  next.stt.languages = normalizedLanguageHints.value;
   next.osc.host = next.osc.host.trim();
   next.osc.port = finiteOr(next.osc.port, saved.osc.port);
 
@@ -365,20 +388,6 @@ async function focusRecognitionPath() {
       variant="subtle"
     />
 
-    <UAlert
-      v-if="
-        form && sessionUploadsMicrophoneAudio && form.stt.provider !== 'openai'
-      "
-      class="mb-4"
-      color="warning"
-      icon="i-lucide-cloud-upload"
-      :title="uiText('settings.credentials.openai.activeCloudSession.title')"
-      :description="
-        uiText('settings.credentials.openai.activeCloudSession.description')
-      "
-      variant="subtle"
-    />
-
     <form v-if="form" class="grid gap-5" @submit.prevent="save">
       <section class="grid gap-4">
         <h3 class="text-sm font-semibold text-highlighted">
@@ -403,34 +412,37 @@ async function focusRecognitionPath() {
         </h3>
 
         <div class="grid gap-3 sm:grid-cols-2">
-          <UFormField :label="uiText('settings.fields.provider')">
+          <UFormField
+            :label="uiText('settings.fields.sttModel')"
+            :description="selectedModelDescription"
+          >
             <USelect
-              v-model="form.stt.provider"
+              v-model="form.stt.model"
               class="w-full"
               :disabled="areConfigControlsDisabled"
-              :items="providerItems"
+              :items="modelItems"
             />
           </UFormField>
 
-          <UFormField :label="uiText('settings.fields.language')">
-            <UInput
-              v-model="form.stt.language"
+          <UFormField
+            :label="uiText('settings.fields.language')"
+            :description="uiText('settings.fields.language.description')"
+            :error="
+              hasValidLanguageHints
+                ? false
+                : uiText('settings.fields.language.required')
+            "
+          >
+            <UInputTags
+              v-model="form.stt.languages"
+              add-on-blur
               class="w-full"
               :disabled="areConfigControlsDisabled"
             />
           </UFormField>
         </div>
 
-        <UFormField :label="uiText('settings.fields.sttModel')">
-          <UInput
-            v-model="form.stt.model"
-            class="w-full"
-            :disabled="areConfigControlsDisabled"
-          />
-        </UFormField>
-
         <div
-          v-if="form.stt.provider === 'openai'"
           class="grid gap-3 rounded-md border border-default bg-muted/30 p-3"
         >
           <div class="flex items-center justify-between gap-3">
@@ -628,7 +640,7 @@ async function focusRecognitionPath() {
       </section>
 
       <UButton
-        :disabled="areConfigControlsDisabled"
+        :disabled="areConfigControlsDisabled || !hasValidLanguageHints"
         icon="i-lucide-save"
         :label="uiText('settings.actions.save')"
         type="submit"

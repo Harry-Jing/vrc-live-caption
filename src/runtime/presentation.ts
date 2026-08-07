@@ -8,6 +8,7 @@ import type {
   CaptionMode,
   DiagnosticCategory,
   DiagnosticSeverity,
+  OpenAiTranscriptionModel,
   PublicationMode,
   RuntimePlan,
   RuntimeStatus,
@@ -82,8 +83,17 @@ export const diagnosticCategoryMessageKey = {
 
 export const sttProviderMessageKey = {
   openai: "stt.providers.openai",
-  mock: "stt.providers.mock",
 } satisfies Record<SttProvider, UiStaticMessageKey>;
+
+export const openAiTranscriptionModelMessageKey = {
+  "gpt-transcribe": "stt.models.gptTranscribe",
+  "gpt-live-transcribe": "stt.models.gptLiveTranscribe",
+} satisfies Record<OpenAiTranscriptionModel, UiStaticMessageKey>;
+
+export const openAiTranscriptionModelDescriptionMessageKey = {
+  "gpt-transcribe": "stt.models.gptTranscribe.description",
+  "gpt-live-transcribe": "stt.models.gptLiveTranscribe.description",
+} satisfies Record<OpenAiTranscriptionModel, UiStaticMessageKey>;
 
 export const publicationModeMessageKey = {
   completed: "publication.mode.completed",
@@ -106,7 +116,7 @@ export type PublicationPlanView =
   | Readonly<{
       state: "ready";
       mode: PublicationMode;
-      policy: "liveUnit" | "liveUnitless";
+      policy: "liveUnit";
       delayMs: number;
     }>
   | Readonly<{
@@ -152,11 +162,8 @@ export function publicationPlanView(
   return {
     state: "ready",
     mode: publication.mode,
-    policy: publication.policy.policy,
-    delayMs:
-      publication.policy.policy === "liveUnit"
-        ? publication.policy.observationWindowMs
-        : publication.policy.firstNonEmptyDelayMs,
+    policy: "liveUnit",
+    delayMs: publication.policy.observationWindowMs,
   };
 }
 
@@ -184,10 +191,6 @@ export function publicationPlanDescription(plan: PublicationReadyView): string {
       return uiText("publication.policy.completed");
     case "liveUnit":
       return uiText("publication.policy.liveUnit", {
-        delayMs: plan.delayMs,
-      });
-    case "liveUnitless":
-      return uiText("publication.policy.liveUnitless", {
         delayMs: plan.delayMs,
       });
   }

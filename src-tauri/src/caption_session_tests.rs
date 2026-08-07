@@ -39,7 +39,7 @@ fn bounded_completion_produces_the_shared_v1_session_snapshot() -> crate::error:
                 state: CaptionState::Completed,
                 language: Some("en".to_string()),
                 provider: "openai".to_string(),
-                model: "gpt-4o-mini-transcribe".to_string(),
+                model: "gpt-transcribe".to_string(),
                 unit_started_at_ms: Some(1_000),
                 timestamp_ms: 1_200,
             })?
@@ -77,7 +77,7 @@ fn stop_and_new_generation_fence_old_writers_without_losing_completed_history()
         state: CaptionState::Completed,
         language: Some("en".to_string()),
         provider: "openai".to_string(),
-        model: "gpt-4o-mini-transcribe".to_string(),
+        model: "gpt-transcribe".to_string(),
         unit_started_at_ms: Some(10),
         timestamp_ms: 20,
     };
@@ -261,7 +261,7 @@ fn completed_history_keeps_the_five_newest_units_in_newest_first_order()
                     state: CaptionState::Completed,
                     language: Some("en".to_string()),
                     provider: "openai".to_string(),
-                    model: "gpt-4o-mini-transcribe".to_string(),
+                    model: "gpt-transcribe".to_string(),
                     unit_started_at_ms: Some(index * 10),
                     timestamp_ms: index * 10 + 1,
                 })?
@@ -306,7 +306,7 @@ fn terminal_unit_replay_guard_stays_bounded_during_a_long_generation() -> crate:
                 state: CaptionState::Completed,
                 language: Some("en".to_string()),
                 provider: "openai".to_string(),
-                model: "gpt-4o-mini-transcribe".to_string(),
+                model: "gpt-transcribe".to_string(),
                 unit_started_at_ms: Some(0),
                 timestamp_ms: 1,
             })?

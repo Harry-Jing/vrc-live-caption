@@ -50,6 +50,7 @@ impl ProviderSecretStatus {
         }
     }
 
+    #[cfg(not(test))]
     fn configured(
         provider: SttProvider,
         storage: ProviderSecretStorage,
@@ -65,19 +66,16 @@ impl ProviderSecretStatus {
     }
 }
 
+#[cfg(not(test))]
 pub(crate) fn provider_secret_status(provider: SttProvider) -> ProviderSecretStatus {
     match provider {
-        SttProvider::Mock => ProviderSecretStatus::unconfigured(provider),
         SttProvider::OpenAi => openai_secret_status(),
     }
 }
 
 #[cfg(not(test))]
 pub(crate) fn provider_secret_statuses() -> Vec<ProviderSecretStatus> {
-    [SttProvider::Mock, SttProvider::OpenAi]
-        .into_iter()
-        .map(provider_secret_status)
-        .collect()
+    vec![provider_secret_status(SttProvider::OpenAi)]
 }
 
 #[cfg(test)]
@@ -85,10 +83,7 @@ pub(crate) fn provider_secret_statuses() -> Vec<ProviderSecretStatus> {
     // Unit tests must not open an operator's real credential store or trigger
     // an OS authorization prompt. Production builds use the implementation
     // above; credential-store behavior is isolated behind the secrets module.
-    vec![
-        ProviderSecretStatus::unconfigured(SttProvider::Mock),
-        ProviderSecretStatus::unconfigured(SttProvider::OpenAi),
-    ]
+    vec![ProviderSecretStatus::unconfigured(SttProvider::OpenAi)]
 }
 
 pub(crate) fn save_provider_secret(provider: SttProvider, secret: String) -> AppResult<()> {
@@ -96,14 +91,12 @@ pub(crate) fn save_provider_secret(provider: SttProvider, secret: String) -> App
     let secret = normalize_secret(secret.as_str())?;
 
     match provider {
-        SttProvider::Mock => Err(AppError::secret("Mock STT does not use an API key.")),
         SttProvider::OpenAi => save_system_secret(OPENAI_ACCOUNT, &secret),
     }
 }
 
 pub(crate) fn delete_provider_secret(provider: SttProvider) -> AppResult<()> {
     match provider {
-        SttProvider::Mock => Ok(()),
         SttProvider::OpenAi => delete_system_secret(OPENAI_ACCOUNT),
     }
 }
@@ -133,6 +126,7 @@ fn resolved_secret(secret: SecretString, storage: ProviderSecretStorage) -> Reso
     }
 }
 
+#[cfg(not(test))]
 fn openai_secret_status() -> ProviderSecretStatus {
     match read_system_secret(OPENAI_ACCOUNT) {
         Ok(Some(secret)) => ProviderSecretStatus::configured(
@@ -317,9 +311,11 @@ mod tests {
     }
 
     #[test]
-    fn mock_provider_is_always_unconfigured() {
-        let status = provider_secret_status(SttProvider::Mock);
-        assert_eq!(status.provider, "mock");
+    fn test_secret_statuses_expose_only_openai_without_opening_the_real_store() {
+        let statuses = provider_secret_statuses();
+        assert_eq!(statuses.len(), 1);
+        let status = &statuses[0];
+        assert_eq!(status.provider, "openai");
         assert!(!status.configured);
         assert!(status.storage.is_none());
         assert!(status.error.is_none());

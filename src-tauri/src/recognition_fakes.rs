@@ -1,25 +1,13 @@
-//! Deterministic normalized recognition adapters for runtime contract tests
-//! and the developer-facing Mock provider.
+//! Deterministic normalized recognition events for runtime contract tests.
 
 use crate::caption_session::{CaptionLane, CaptionSnapshotV1, CaptionState};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RecognitionEvent {
-    UnitStarted {
-        generation: u64,
-        stream_id: String,
-        unit_id: String,
-        started_at_ms: u64,
-    },
-    Caption(CaptionSnapshotV1),
-}
+use crate::recognition::{RecognitionEndReason, RecognitionEvent};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ScriptedRecognitionContext {
     pub(crate) generation: u64,
     pub(crate) stream_id: String,
     pub(crate) language: Option<String>,
-    pub(crate) provider: String,
     pub(crate) model: String,
 }
 
@@ -38,41 +26,11 @@ impl ScriptedText {
     }
 }
 
-pub(crate) struct FakeBoundedRecognitionAdapter {
+pub(crate) struct ScriptedRecognitionAdapter {
     context: ScriptedRecognitionContext,
 }
 
-impl FakeBoundedRecognitionAdapter {
-    pub(crate) fn new(context: ScriptedRecognitionContext) -> Self {
-        Self { context }
-    }
-
-    pub(crate) fn script_completed(
-        &self,
-        unit_id: impl Into<String>,
-        started_at_ms: u64,
-        completed: ScriptedText,
-    ) -> Vec<RecognitionEvent> {
-        let unit_id = unit_id.into();
-        vec![
-            unit_started(&self.context, unit_id.clone(), started_at_ms),
-            RecognitionEvent::Caption(caption_from_script(
-                &self.context,
-                Some(unit_id),
-                Some(started_at_ms),
-                1,
-                completed,
-                CaptionState::Completed,
-            )),
-        ]
-    }
-}
-
-pub(crate) struct FakeOngoingCompletedRecognitionAdapter {
-    context: ScriptedRecognitionContext,
-}
-
-impl FakeOngoingCompletedRecognitionAdapter {
+impl ScriptedRecognitionAdapter {
     pub(crate) fn new(context: ScriptedRecognitionContext) -> Self {
         Self { context }
     }
@@ -86,22 +44,20 @@ impl FakeOngoingCompletedRecognitionAdapter {
     ) -> Vec<RecognitionEvent> {
         let unit_id = unit_id.into();
         let mut events = Vec::with_capacity(ongoing.len().saturating_add(2));
-        events.push(unit_started(&self.context, unit_id.clone(), started_at_ms));
+        events.push(self.unit_started(unit_id.clone(), started_at_ms));
 
         for (index, scripted) in ongoing.iter().cloned().enumerate() {
-            events.push(RecognitionEvent::Caption(caption_from_script(
-                &self.context,
-                Some(unit_id.clone()),
-                Some(started_at_ms),
+            events.push(RecognitionEvent::Caption(self.caption(
+                unit_id.clone(),
+                started_at_ms,
                 revision_for_index(index),
                 scripted,
                 CaptionState::Ongoing,
             )));
         }
-        events.push(RecognitionEvent::Caption(caption_from_script(
-            &self.context,
-            Some(unit_id),
-            Some(started_at_ms),
+        events.push(RecognitionEvent::Caption(self.caption(
+            unit_id,
+            started_at_ms,
             revision_for_index(ongoing.len()),
             completed,
             CaptionState::Completed,
@@ -109,88 +65,61 @@ impl FakeOngoingCompletedRecognitionAdapter {
 
         events
     }
-}
 
-pub(crate) struct FakeOngoingOnlyRecognitionAdapter {
-    context: ScriptedRecognitionContext,
-}
-
-impl FakeOngoingOnlyRecognitionAdapter {
-    pub(crate) fn new(context: ScriptedRecognitionContext) -> Self {
-        Self { context }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn script_stream(&self, snapshots: &[ScriptedText]) -> Vec<RecognitionEvent> {
-        self.script_stream_from(1, snapshots)
-    }
-
-    pub(crate) fn script_stream_from(
+    pub(crate) fn script_ended(
         &self,
-        first_revision: u64,
-        snapshots: &[ScriptedText],
+        unit_id: impl Into<String>,
+        started_at_ms: u64,
+        reason: RecognitionEndReason,
     ) -> Vec<RecognitionEvent> {
-        snapshots
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(index, scripted)| {
-                RecognitionEvent::Caption(caption_from_script(
-                    &self.context,
-                    None,
-                    None,
-                    first_revision.saturating_add(index_as_u64(index)),
-                    scripted,
-                    CaptionState::Ongoing,
-                ))
-            })
-            .collect()
+        let unit_id = unit_id.into();
+        vec![
+            self.unit_started(unit_id.clone(), started_at_ms),
+            RecognitionEvent::UnitEnded {
+                generation: self.context.generation,
+                stream_id: self.context.stream_id.clone(),
+                unit_id,
+                reason,
+            },
+        ]
     }
-}
 
-fn unit_started(
-    context: &ScriptedRecognitionContext,
-    unit_id: String,
-    started_at_ms: u64,
-) -> RecognitionEvent {
-    RecognitionEvent::UnitStarted {
-        generation: context.generation,
-        stream_id: context.stream_id.clone(),
-        unit_id,
-        started_at_ms,
+    fn unit_started(&self, unit_id: String, started_at_ms: u64) -> RecognitionEvent {
+        RecognitionEvent::UnitStarted {
+            generation: self.context.generation,
+            stream_id: self.context.stream_id.clone(),
+            unit_id,
+            started_at_ms,
+        }
     }
-}
 
-fn caption_from_script(
-    context: &ScriptedRecognitionContext,
-    unit_id: Option<String>,
-    unit_started_at_ms: Option<u64>,
-    revision: u64,
-    scripted: ScriptedText,
-    state: CaptionState,
-) -> CaptionSnapshotV1 {
-    CaptionSnapshotV1 {
-        generation: context.generation,
-        stream_id: context.stream_id.clone(),
-        unit_id,
-        lane: CaptionLane::Source,
-        revision,
-        text: scripted.text,
-        state,
-        language: context.language.clone(),
-        provider: context.provider.clone(),
-        model: context.model.clone(),
-        unit_started_at_ms,
-        timestamp_ms: scripted.timestamp_ms,
+    fn caption(
+        &self,
+        unit_id: String,
+        started_at_ms: u64,
+        revision: u64,
+        scripted: ScriptedText,
+        state: CaptionState,
+    ) -> CaptionSnapshotV1 {
+        CaptionSnapshotV1 {
+            generation: self.context.generation,
+            stream_id: self.context.stream_id.clone(),
+            unit_id: Some(unit_id),
+            lane: CaptionLane::Source,
+            revision,
+            text: scripted.text,
+            state,
+            language: self.context.language.clone(),
+            provider: "openai".to_string(),
+            model: self.context.model.clone(),
+            unit_started_at_ms: Some(started_at_ms),
+            timestamp_ms: scripted.timestamp_ms,
+        }
     }
 }
 
 fn revision_for_index(index: usize) -> u64 {
-    index_as_u64(index).saturating_add(1)
-}
-
-fn index_as_u64(index: usize) -> u64 {
-    u64::try_from(index).unwrap_or(u64::MAX)
+    u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1)
 }
 
 #[cfg(test)]

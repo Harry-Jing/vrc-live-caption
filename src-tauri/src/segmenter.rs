@@ -1,16 +1,8 @@
-//! Speech segmentation for mono microphone samples.
+//! Streaming application-owned speech boundaries for mono microphone audio.
 //!
-//! `SpeechSegmenter` owns the VAD threshold, silence timeout, voiced-duration
-//! minimum, max segment duration, and pre-roll rules. It is deliberately
-//! independent of Tauri, CPAL, STT providers, and OSC so the capture framing
-//! behavior can be tested without live devices or network calls.
-//!
-//! Only *voiced* audio counts toward the minimum segment duration; trailing
-//! silence does not. Every segment exit path (silence timeout, max segment
-//! duration, and finish) enforces the voiced minimum: buffers that never
-//! reach it are discarded as noise instead of being uploaded to STT. A short
-//! pre-roll captured just before voice onset is prepended to each segment so
-//! quiet first syllables survive the RMS gate.
+//! A short candidate is buffered until it reaches the voiced minimum. Once it
+//! is accepted, the buffered pre-roll and every later frame are released
+//! immediately so a streaming recognizer can emit text before the unit ends.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -22,19 +14,26 @@ pub(crate) struct SpeechSegmenter {
     min_voiced_samples: usize,
     max_samples: usize,
     max_preroll_samples: usize,
-    samples: Vec<f32>,
+    candidate_audio: Vec<f32>,
     preroll: VecDeque<f32>,
     voiced_samples: usize,
-    active: bool,
+    active_samples: usize,
+    candidate_active: bool,
+    speech_announced: bool,
     last_voice_at: Option<Instant>,
 }
 
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct SegmenterUpdate {
-    /// True when buffered voiced audio first reaches the voiced minimum, not
-    /// on the first loud chunk. Noise blips below the minimum are never
-    /// announced, so every announced utterance later yields a segment.
+    /// The buffered candidate has crossed the voiced minimum and now owns a
+    /// recognition unit. `audio` contains its pre-roll and candidate frames.
     pub(crate) speech_started: bool,
-    pub(crate) ready_segment: Option<Vec<f32>>,
+    /// Audio that belongs to the announced unit. Empty before a candidate is
+    /// accepted and after it has ended.
+    pub(crate) audio: Vec<f32>,
+    /// The announced unit reached silence or the maximum duration and must be
+    /// committed after `audio` is appended.
+    pub(crate) speech_ended: bool,
 }
 
 impl SpeechSegmenter {
@@ -47,7 +46,7 @@ impl SpeechSegmenter {
         preroll_seconds: f32,
     ) -> Self {
         let min_voiced_samples = ((sample_rate as f32 * min_voiced_seconds) as usize).max(1);
-        let max_samples = (sample_rate as f32 * max_segment_seconds) as usize;
+        let max_samples = ((sample_rate as f32 * max_segment_seconds) as usize).max(1);
         let max_preroll_samples = (sample_rate as f32 * preroll_seconds) as usize;
 
         Self {
@@ -57,122 +56,117 @@ impl SpeechSegmenter {
             min_voiced_samples,
             max_samples,
             max_preroll_samples,
-            samples: Vec::with_capacity(max_samples),
+            candidate_audio: Vec::with_capacity(min_voiced_samples),
             preroll: VecDeque::with_capacity(max_preroll_samples),
             voiced_samples: 0,
-            active: false,
+            active_samples: 0,
+            candidate_active: false,
+            speech_announced: false,
             last_voice_at: None,
         }
     }
 
     pub(crate) fn push_samples(&mut self, samples: Vec<f32>, now: Instant) -> SegmenterUpdate {
+        if samples.is_empty() {
+            return self.tick(now);
+        }
+
         let has_voice = rms(&samples) >= self.rms_threshold;
-        let voiced_before = self.voiced_samples;
+        if has_voice && !self.candidate_active {
+            self.candidate_active = true;
+            self.candidate_audio.extend(self.preroll.drain(..));
+            self.active_samples = self.candidate_audio.len();
+        }
+
+        if !self.candidate_active {
+            self.push_preroll(samples);
+            return SegmenterUpdate::default();
+        }
 
         if has_voice {
-            if !self.active {
-                self.active = true;
-                self.samples.extend(self.preroll.drain(..));
-            }
-
             self.last_voice_at = Some(now);
-            self.voiced_samples += samples.len();
+            self.voiced_samples = self.voiced_samples.saturating_add(samples.len());
         }
+        self.active_samples = self.active_samples.saturating_add(samples.len());
 
-        if self.active {
-            self.samples.extend(samples);
+        let mut update = if self.speech_announced {
+            SegmenterUpdate {
+                audio: samples,
+                ..SegmenterUpdate::default()
+            }
         } else {
-            self.push_preroll(samples);
-        }
-
-        let speech_started = voiced_before < self.min_voiced_samples
-            && self.voiced_samples >= self.min_voiced_samples;
-        let ready_segment = if self.samples.len() >= self.max_samples {
-            self.take_voiced_segment()
-        } else {
-            self.ready_after_silence(now)
+            self.candidate_audio.extend(samples);
+            if self.voiced_samples >= self.min_voiced_samples {
+                self.speech_announced = true;
+                SegmenterUpdate {
+                    speech_started: true,
+                    audio: std::mem::take(&mut self.candidate_audio),
+                    speech_ended: false,
+                }
+            } else {
+                SegmenterUpdate::default()
+            }
         };
 
-        SegmenterUpdate {
-            speech_started,
-            ready_segment,
+        if self.active_samples >= self.max_samples || self.silence_elapsed(now) {
+            update.speech_ended = self.speech_announced;
+            self.reset_candidate();
         }
+
+        update
     }
 
-    pub(crate) fn tick(&mut self, now: Instant) -> Option<Vec<f32>> {
-        self.ready_after_silence(now)
+    pub(crate) fn tick(&mut self, now: Instant) -> SegmenterUpdate {
+        if !self.candidate_active || !self.silence_elapsed(now) {
+            return SegmenterUpdate::default();
+        }
+
+        let update = SegmenterUpdate {
+            speech_ended: self.speech_announced,
+            ..SegmenterUpdate::default()
+        };
+        self.reset_candidate();
+        update
     }
 
-    pub(crate) fn finish(&mut self) -> Option<Vec<f32>> {
-        self.take_voiced_segment()
+    /// Discards an open tail instead of committing it during Stop or failure.
+    pub(crate) fn finish(&mut self) -> SegmenterUpdate {
+        let update = SegmenterUpdate {
+            speech_ended: self.speech_announced,
+            ..SegmenterUpdate::default()
+        };
+        self.reset_candidate();
+        update
     }
 
     pub(crate) fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
+    fn silence_elapsed(&self, now: Instant) -> bool {
+        self.last_voice_at
+            .is_some_and(|last_voice_at| now.duration_since(last_voice_at) >= self.silence_timeout)
+    }
+
     fn push_preroll(&mut self, samples: Vec<f32>) {
         if self.max_preroll_samples == 0 {
             return;
         }
-
         self.preroll.extend(samples);
-
         let excess = self.preroll.len().saturating_sub(self.max_preroll_samples);
-
         if excess > 0 {
             self.preroll.drain(..excess);
         }
     }
 
-    fn ready_after_silence(&mut self, now: Instant) -> Option<Vec<f32>> {
-        let silence_elapsed = self
-            .last_voice_at
-            .map(|last_voice_at| now.duration_since(last_voice_at) >= self.silence_timeout)
-            .unwrap_or(false);
-
-        if !silence_elapsed {
-            return None;
-        }
-
-        self.take_voiced_segment()
-    }
-
-    /// Single gate for every segment exit path (silence timeout, max segment
-    /// duration, and finish): a buffer below the voiced minimum was noise, not
-    /// speech, so it is discarded and must not reach STT.
-    fn take_voiced_segment(&mut self) -> Option<Vec<f32>> {
-        if self.voiced_samples >= self.min_voiced_samples {
-            return self.take_ready_segment();
-        }
-
-        self.discard_buffer();
-
-        None
-    }
-
-    fn take_ready_segment(&mut self) -> Option<Vec<f32>> {
-        if self.samples.is_empty() {
-            self.reset();
-            return None;
-        }
-
-        let samples = std::mem::take(&mut self.samples);
-        self.reset();
-
-        Some(samples)
-    }
-
-    fn discard_buffer(&mut self) {
-        self.samples.clear();
-        self.reset();
-    }
-
-    fn reset(&mut self) {
-        self.active = false;
-        self.last_voice_at = None;
-        self.voiced_samples = 0;
+    fn reset_candidate(&mut self) {
+        self.candidate_audio.clear();
         self.preroll.clear();
+        self.voiced_samples = 0;
+        self.active_samples = 0;
+        self.candidate_active = false;
+        self.speech_announced = false;
+        self.last_voice_at = None;
     }
 }
 
@@ -180,9 +174,7 @@ fn rms(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
-
     let sum_of_squares = samples.iter().map(|sample| sample * sample).sum::<f32>();
-
     (sum_of_squares / samples.len() as f32).sqrt()
 }
 

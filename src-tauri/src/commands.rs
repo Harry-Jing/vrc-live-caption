@@ -93,30 +93,6 @@ pub(crate) fn get_caption_session_snapshot(
 }
 
 #[tauri::command(async)]
-pub(crate) fn emit_mock_transcript(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    state.with_running_mock_session(|session| {
-        tracing::info!(generation = session.generation, "emitting mock transcript");
-        state.runtime.emit_mock_transcript(
-            &app,
-            &session.selected.stt.language,
-            &session.selected.stt.model,
-        )?;
-
-        emit_diagnostic(
-            &app,
-            DiagnosticUpdate::info(
-                DiagnosticCategory::Stt,
-                "stt.mock_transcript_emitted",
-                "Mock transcript emitted",
-                "The UI received normalized caption-session updates from the selected Mock adapter.",
-            ),
-        );
-
-        Ok(())
-    })
-}
-
-#[tauri::command(async)]
 pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let osc_config = state.osc_config_for_test()?;
     let chatbox_pacer = state.chatbox_pacer();

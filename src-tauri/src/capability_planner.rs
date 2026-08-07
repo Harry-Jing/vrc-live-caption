@@ -1,27 +1,21 @@
 //! Provider-path capabilities and publication compatibility planning.
 
 use crate::caption_session::CaptionLane;
-use crate::config::{AppConfig, PublicationMode, SttConfig, SttProvider};
+use crate::config::{AppConfig, OpenAiTranscriptionModel, PublicationMode, SttConfig};
 use serde::Serialize;
 
-pub(crate) const MOCK_BOUNDED_MODEL: &str = "mock-bounded";
-pub(crate) const MOCK_ONGOING_COMPLETED_MODEL: &str = "mock-ongoing-completed";
-pub(crate) const MOCK_ONGOING_ONLY_MODEL: &str = "mock-ongoing-only";
 pub(crate) const LIVE_OBSERVATION_MILLIS: u64 = 1_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum RecognitionPath {
-    OpenAiBounded,
-    MockBounded,
-    MockOngoingCompleted,
-    MockOngoingOnly,
+    OpenAiGptTranscribe,
+    OpenAiGptLiveTranscribe,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum RecognitionInputShape {
-    CompletedAudioUnits,
     ContinuousAudioFrames,
 }
 
@@ -29,15 +23,12 @@ pub(crate) enum RecognitionInputShape {
 #[serde(rename_all = "camelCase")]
 pub(crate) enum BoundaryOwner {
     Application,
-    Provider,
-    None,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum CaptionUnitBehavior {
     UnitBased,
-    Unitless,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -52,7 +43,6 @@ pub(crate) enum RevisionBehavior {
 pub(crate) enum LaneUpdateBehavior {
     CompletedOnly,
     OngoingAndCompleted,
-    OngoingOnly,
 }
 
 impl LaneUpdateBehavior {
@@ -61,9 +51,7 @@ impl LaneUpdateBehavior {
             PublicationMode::Completed => {
                 matches!(self, Self::CompletedOnly | Self::OngoingAndCompleted)
             }
-            PublicationMode::Live => {
-                matches!(self, Self::OngoingAndCompleted | Self::OngoingOnly)
-            }
+            PublicationMode::Live => matches!(self, Self::OngoingAndCompleted),
         }
     }
 }
@@ -103,7 +91,6 @@ pub(crate) enum PublicationIncompatibility {
 pub(crate) enum ResolvedPublicationPolicy {
     Completed,
     LiveUnit { observation_window_ms: u64 },
-    LiveUnitless { first_non_empty_delay_ms: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -171,47 +158,24 @@ pub(crate) fn plan_runtime(config: &AppConfig) -> RuntimePlanSnapshot {
 }
 
 pub(crate) fn recognition_capabilities(stt: &SttConfig) -> RecognitionCapabilityProfile {
-    match stt.provider {
-        SttProvider::OpenAi => profile(
-            RecognitionPath::OpenAiBounded,
-            RecognitionInputShape::CompletedAudioUnits,
+    match stt.model {
+        OpenAiTranscriptionModel::GptTranscribe => profile(
+            RecognitionPath::OpenAiGptTranscribe,
+            RecognitionInputShape::ContinuousAudioFrames,
             BoundaryOwner::Application,
             CaptionUnitBehavior::UnitBased,
             RevisionBehavior::AppendOnly,
             LaneUpdateBehavior::CompletedOnly,
         ),
-        SttProvider::Mock => match stt.model.as_str() {
-            MOCK_BOUNDED_MODEL => profile(
-                RecognitionPath::MockBounded,
-                RecognitionInputShape::CompletedAudioUnits,
-                BoundaryOwner::Application,
-                CaptionUnitBehavior::UnitBased,
-                RevisionBehavior::AppendOnly,
-                LaneUpdateBehavior::CompletedOnly,
-            ),
-            MOCK_ONGOING_ONLY_MODEL => profile(
-                RecognitionPath::MockOngoingOnly,
-                RecognitionInputShape::ContinuousAudioFrames,
-                BoundaryOwner::None,
-                CaptionUnitBehavior::Unitless,
-                RevisionBehavior::RevisableFullSnapshot,
-                LaneUpdateBehavior::OngoingOnly,
-            ),
-            MOCK_ONGOING_COMPLETED_MODEL => mock_ongoing_completed_profile(),
-            _ => mock_ongoing_completed_profile(),
-        },
+        OpenAiTranscriptionModel::GptLiveTranscribe => profile(
+            RecognitionPath::OpenAiGptLiveTranscribe,
+            RecognitionInputShape::ContinuousAudioFrames,
+            BoundaryOwner::Application,
+            CaptionUnitBehavior::UnitBased,
+            RevisionBehavior::RevisableFullSnapshot,
+            LaneUpdateBehavior::OngoingAndCompleted,
+        ),
     }
-}
-
-fn mock_ongoing_completed_profile() -> RecognitionCapabilityProfile {
-    profile(
-        RecognitionPath::MockOngoingCompleted,
-        RecognitionInputShape::ContinuousAudioFrames,
-        BoundaryOwner::Provider,
-        CaptionUnitBehavior::UnitBased,
-        RevisionBehavior::RevisableFullSnapshot,
-        LaneUpdateBehavior::OngoingAndCompleted,
-    )
 }
 
 pub(crate) fn plan_publication(
@@ -249,7 +213,7 @@ pub(crate) fn plan_publication(
     if unsupported_for_request.is_empty() {
         return PublicationPlan::Ready {
             mode: requested_mode,
-            policy: resolved_policy(capabilities, requested_mode),
+            policy: resolved_policy(requested_mode),
             selected_lanes,
         };
     }
@@ -268,22 +232,12 @@ pub(crate) fn plan_publication(
     )
 }
 
-fn resolved_policy(
-    capabilities: &RecognitionCapabilityProfile,
-    mode: PublicationMode,
-) -> ResolvedPublicationPolicy {
-    match (mode, capabilities.unit_behavior) {
-        (PublicationMode::Completed, _) => ResolvedPublicationPolicy::Completed,
-        (PublicationMode::Live, CaptionUnitBehavior::UnitBased) => {
-            ResolvedPublicationPolicy::LiveUnit {
-                observation_window_ms: LIVE_OBSERVATION_MILLIS,
-            }
-        }
-        (PublicationMode::Live, CaptionUnitBehavior::Unitless) => {
-            ResolvedPublicationPolicy::LiveUnitless {
-                first_non_empty_delay_ms: LIVE_OBSERVATION_MILLIS,
-            }
-        }
+fn resolved_policy(mode: PublicationMode) -> ResolvedPublicationPolicy {
+    match mode {
+        PublicationMode::Completed => ResolvedPublicationPolicy::Completed,
+        PublicationMode::Live => ResolvedPublicationPolicy::LiveUnit {
+            observation_window_ms: LIVE_OBSERVATION_MILLIS,
+        },
     }
 }
 

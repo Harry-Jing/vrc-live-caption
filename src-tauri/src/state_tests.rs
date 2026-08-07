@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::Listener;
 
-fn mock_session(config: &AppConfig, generation: u64) -> RuntimeSessionSnapshot {
+fn session_snapshot(config: &AppConfig, generation: u64) -> RuntimeSessionSnapshot {
     RuntimeSessionSnapshot {
         generation,
         phase: RuntimeSessionPhase::Starting,
@@ -29,18 +29,30 @@ fn default_config_passes_validation() -> AppResult<()> {
 }
 
 #[test]
+fn removed_config_requires_an_explicit_review_before_start() -> AppResult<()> {
+    let error = ensure_config_was_reviewed(true)
+        .err()
+        .ok_or_else(|| AppError::state("An unreviewed migrated config unexpectedly started."))?;
+
+    assert_eq!(error.code(), "config.invalid");
+    assert!(error.to_string().contains("Review and save"));
+    ensure_config_was_reviewed(false)?;
+    Ok(())
+}
+
+#[test]
 fn runtime_control_snapshot_has_a_versioned_authoritative_shape() -> AppResult<()> {
     let state = AppState::default();
     let snapshot = state.runtime_control_snapshot()?;
     let value = serde_json::to_value(snapshot)
         .map_err(|error| AppError::state(format!("Failed to serialize snapshot: {error}")))?;
 
-    assert_eq!(value["contractVersion"], serde_json::json!(2));
+    assert_eq!(value["contractVersion"], serde_json::json!(3));
     assert_eq!(value["revision"], serde_json::json!(0));
     assert_eq!(value["desired"]["revision"], serde_json::json!(0));
     assert_eq!(
         value["desired"]["config"]["schemaVersion"],
-        serde_json::json!(2)
+        serde_json::json!(3)
     );
     assert_eq!(
         value["desired"]["runtimePlan"]["publication"]["state"],
@@ -88,7 +100,7 @@ fn snapshot_reads_cannot_mix_a_revision_with_another_config() -> AppResult<()> {
             let mut control = writer_state.lock_control()?;
             control.revision = revision;
             control.config_revision = revision;
-            control.config.stt.language = format!("revision-{revision}");
+            control.config.stt.languages = vec![format!("revision-{revision}")];
         }
         Ok(())
     });
@@ -99,8 +111,8 @@ fn snapshot_reads_cannot_mix_a_revision_with_another_config() -> AppResult<()> {
         if snapshot.revision > 0 {
             assert_eq!(snapshot.desired.revision, snapshot.revision);
             assert_eq!(
-                snapshot.desired.config.stt.language,
-                format!("revision-{}", snapshot.revision)
+                snapshot.desired.config.stt.languages,
+                vec![format!("revision-{}", snapshot.revision)]
             );
         }
     }
@@ -114,9 +126,8 @@ fn snapshot_reads_cannot_mix_a_revision_with_another_config() -> AppResult<()> {
 #[test]
 fn runtime_error_preserves_the_effective_session_but_stopped_clears_it() -> AppResult<()> {
     let state = AppState::default();
-    let mut selected = AppConfig::default();
-    selected.stt.provider = SttProvider::Mock;
-    state.install_starting_session(mock_session(&selected, 7))?;
+    let selected = AppConfig::default();
+    state.install_starting_session(session_snapshot(&selected, 7))?;
 
     let error_snapshot = state.record_runtime_status(RuntimeStatusEvent::new(
         RuntimeStatus::Error,
@@ -138,9 +149,8 @@ fn runtime_error_preserves_the_effective_session_but_stopped_clears_it() -> AppR
 #[test]
 fn failed_new_start_clears_an_old_error_session() -> AppResult<()> {
     let state = AppState::default();
-    let mut selected = AppConfig::default();
-    selected.stt.provider = SttProvider::Mock;
-    let mut old_session = mock_session(&selected, 11);
+    let selected = AppConfig::default();
+    let mut old_session = session_snapshot(&selected, 11);
     old_session.phase = RuntimeSessionPhase::Error;
     state.install_starting_session(old_session)?;
 
@@ -244,10 +254,9 @@ fn incompatible_publication_fails_before_openai_credentials_are_resolved() -> Ap
 }
 
 #[test]
-fn compatible_mock_live_publication_passes_runtime_preflight() -> AppResult<()> {
+fn gpt_live_transcribe_live_publication_passes_runtime_preflight() -> AppResult<()> {
     let mut config = AppConfig::default();
-    config.stt.provider = SttProvider::Mock;
-    config.stt.model = crate::capability_planner::MOCK_ONGOING_COMPLETED_MODEL.to_string();
+    config.stt.model = crate::config::OpenAiTranscriptionModel::GptLiveTranscribe;
     config.publication.mode = crate::config::PublicationMode::Live;
 
     ensure_runtime_plan_is_startable(&plan_runtime(&config))
@@ -256,9 +265,8 @@ fn compatible_mock_live_publication_passes_runtime_preflight() -> AppResult<()> 
 #[test]
 fn thread_spawn_failure_preserves_the_session_it_already_installed() -> AppResult<()> {
     let state = AppState::default();
-    let mut selected = AppConfig::default();
-    selected.stt.provider = SttProvider::Mock;
-    state.install_starting_session(mock_session(&selected, 12))?;
+    let selected = AppConfig::default();
+    state.install_starting_session(session_snapshot(&selected, 12))?;
 
     let snapshot = state.record_start_error(
         &AppError::runtime("Runtime thread could not start."),
@@ -273,35 +281,12 @@ fn thread_spawn_failure_preserves_the_session_it_already_installed() -> AppResul
 }
 
 #[test]
-fn mock_operation_uses_running_session_metadata_not_new_desired_settings() -> AppResult<()> {
-    let state = AppState::default();
-    let mut selected = AppConfig::default();
-    selected.stt.provider = SttProvider::Mock;
-    selected.stt.language = "ja".to_string();
-    state.install_starting_session(mock_session(&selected, 3))?;
-    state.record_runtime_status(RuntimeStatusEvent::new(
-        RuntimeStatus::Running,
-        Some("running".to_string()),
-    ))?;
-    {
-        let mut control = state.lock_control()?;
-        control.config.stt.language = "zh".to_string();
-    }
-
-    let effective_language =
-        state.with_running_mock_session(|session| Ok(session.selected.stt.language.clone()))?;
-    assert_eq!(effective_language, "ja");
-    Ok(())
-}
-
-#[test]
 fn osc_test_keeps_using_an_error_sessions_selected_target() -> AppResult<()> {
     let state = AppState::default();
     let mut selected = AppConfig::default();
-    selected.stt.provider = SttProvider::Mock;
     selected.osc.host = "192.0.2.10".to_string();
     selected.osc.port = 9010;
-    let mut session = mock_session(&selected, 4);
+    let mut session = session_snapshot(&selected, 4);
     session.phase = RuntimeSessionPhase::Error;
     state.install_starting_session(session)?;
     {
@@ -323,9 +308,8 @@ fn stop_does_not_hold_the_control_lock_while_status_events_clear_session() -> Ap
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
     let state = app.state::<AppState>();
-    let mut selected = AppConfig::default();
-    selected.stt.provider = SttProvider::Mock;
-    state.install_starting_session(mock_session(&selected, 5))?;
+    let selected = AppConfig::default();
+    state.install_starting_session(session_snapshot(&selected, 5))?;
     state.record_runtime_status(RuntimeStatusEvent::new(
         RuntimeStatus::Running,
         Some("running".to_string()),
@@ -395,7 +379,7 @@ fn stop_is_not_blocked_by_a_desired_state_operation() -> AppResult<()> {
 fn default_config_serializes_schema_version() -> Result<(), serde_json::Error> {
     let value = serde_json::to_value(AppConfig::default())?;
 
-    assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(2)));
+    assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(3)));
     assert_eq!(
         value.pointer("/publication/mode"),
         Some(&serde_json::json!("completed"))
@@ -406,101 +390,27 @@ fn default_config_serializes_schema_version() -> Result<(), serde_json::Error> {
 }
 
 #[test]
-fn parse_valid_config_fills_missing_fields_with_defaults() -> AppResult<()> {
-    let config = parse_valid_config(r#"{"stt":{"language":"ja"}}"#)?;
+fn current_config_round_trips_without_compatibility_defaults() -> AppResult<()> {
+    let mut config = AppConfig::default();
+    config.audio.input_device_id = Some("saved-device".to_string());
+    config.stt.languages = vec!["zh".to_string(), "en".to_string()];
+    config.stt.model = crate::config::OpenAiTranscriptionModel::GptLiveTranscribe;
+    config.osc.enabled = false;
+    config.publication.mode = crate::config::PublicationMode::Live;
+    let serialized = serde_json::to_string(&config).map_err(|error| {
+        AppError::config_io(format!("Failed to serialize test config: {error}"))
+    })?;
+    let reparsed = parse_valid_config(&serialized)?;
 
-    assert_eq!(config.schema_version, 2);
-    assert_eq!(config.stt.language, "ja");
-    assert!(!config.stt.model.is_empty());
-    assert_eq!(
-        config.publication.mode,
-        crate::config::PublicationMode::Completed
-    );
-
+    assert_eq!(reparsed, config);
     Ok(())
 }
 
 #[test]
-fn parse_valid_config_preserves_runtime_settings() -> AppResult<()> {
-    let config = parse_valid_config(
-        r#"{"audio":{"inputDeviceId":"saved-device"},"osc":{"enabled":false}}"#,
-    )?;
-
-    assert_eq!(
-        config.audio.input_device_id.as_deref(),
-        Some("saved-device")
-    );
-    assert!(!config.osc.enabled);
-
-    Ok(())
-}
-
-#[test]
-fn parse_valid_config_ignores_removed_chatbox_interval_and_preserves_other_settings()
--> AppResult<()> {
-    let config = parse_valid_config(
-        r#"{
-                "schemaVersion": 1,
-                "audio": {"inputDeviceId": "saved-device"},
-                "stt": {"provider": "mock", "language": "zh", "model": "saved-model"},
-                "osc": {
-                    "host": "192.0.2.10",
-                    "port": 9012,
-                    "enabled": false,
-                    "minIntervalMs": 750
-                },
-                "ui": {"showPartial": false}
-            }"#,
-    )?;
-
-    assert_eq!(config.schema_version, 2);
-    assert_eq!(
-        config.audio.input_device_id.as_deref(),
-        Some("saved-device")
-    );
-    assert!(matches!(
-        config.stt.provider,
-        crate::config::SttProvider::Mock
-    ));
-    assert_eq!(config.stt.language, "zh");
-    assert_eq!(config.stt.model, "saved-model");
-    assert_eq!(config.osc.host, "192.0.2.10");
-    assert_eq!(config.osc.port, 9012);
-    assert!(!config.osc.enabled);
-    assert!(!config.ui.show_partial);
-
-    Ok(())
-}
-
-#[test]
-fn version_one_migration_forces_completed_even_if_an_unknown_field_used_live() -> AppResult<()> {
-    let config = parse_valid_config(
-        r#"{
-            "schemaVersion": 1,
-            "publication": {"mode": "live"},
-            "stt": {"language": "ja", "model": "saved-model"}
-        }"#,
-    )?;
-
-    assert_eq!(config.schema_version, 2);
-    assert_eq!(
-        config.publication.mode,
-        crate::config::PublicationMode::Completed
-    );
-    assert_eq!(config.stt.language, "ja");
-    assert_eq!(config.stt.model, "saved-model");
-
-    Ok(())
-}
-
-#[test]
-fn version_two_live_publication_round_trips() -> AppResult<()> {
-    let config = parse_valid_config(
-        r#"{
-            "schemaVersion": 2,
-            "publication": {"mode": "live"}
-        }"#,
-    )?;
+fn current_live_publication_round_trips() -> AppResult<()> {
+    let mut config = AppConfig::default();
+    config.stt.model = crate::config::OpenAiTranscriptionModel::GptLiveTranscribe;
+    config.publication.mode = crate::config::PublicationMode::Live;
     let serialized = serde_json::to_string(&config).map_err(|error| {
         AppError::config_io(format!("Failed to serialize test config: {error}"))
     })?;
@@ -521,11 +431,65 @@ fn parse_valid_config_rejects_malformed_json() {
 }
 
 #[test]
-fn parse_valid_config_rejects_invalid_settings() {
-    assert!(parse_valid_config(r#"{"stt":{"language":"  "}}"#).is_err());
+fn parse_valid_config_rejects_removed_singular_language() -> AppResult<()> {
+    let mut value = serde_json::to_value(AppConfig::default())
+        .map_err(|error| AppError::config(format!("Failed to build test JSON: {error}")))?;
+    let stt = value
+        .get_mut("stt")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| AppError::state("Test config is missing stt."))?;
+    stt.remove("languages");
+    stt.insert("language".to_string(), serde_json::json!("en"));
+
+    assert!(parse_valid_config(&value.to_string()).is_err());
+    Ok(())
 }
 
 #[test]
-fn parse_valid_config_rejects_unknown_schema_version() {
-    assert!(parse_valid_config(r#"{"schemaVersion":3}"#).is_err());
+fn parse_valid_config_rejects_removed_mock_provider_and_arbitrary_model() -> AppResult<()> {
+    let mut value = serde_json::to_value(AppConfig::default())
+        .map_err(|error| AppError::config(format!("Failed to build test JSON: {error}")))?;
+    value["stt"]["provider"] = serde_json::json!("mock");
+    value["stt"]["model"] = serde_json::json!("saved-model");
+
+    assert!(parse_valid_config(&value.to_string()).is_err());
+    Ok(())
+}
+
+#[test]
+fn parse_valid_config_ignores_only_the_removed_osc_interval() -> AppResult<()> {
+    let mut value = serde_json::to_value(AppConfig::default())
+        .map_err(|error| AppError::config(format!("Failed to build test JSON: {error}")))?;
+    value["osc"]["host"] = serde_json::json!("192.0.2.25");
+    value["osc"]["minIntervalMs"] = serde_json::json!(750);
+
+    let config = parse_valid_config(&value.to_string())?;
+    assert_eq!(config.osc.host, "192.0.2.25");
+    assert!(
+        serde_json::to_value(config)
+            .map_err(|error| AppError::config(format!("Failed to serialize config: {error}")))?
+            .pointer("/osc/minIntervalMs")
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn parse_valid_config_still_rejects_other_unknown_fields() -> AppResult<()> {
+    let mut value = serde_json::to_value(AppConfig::default())
+        .map_err(|error| AppError::config(format!("Failed to build test JSON: {error}")))?;
+    value["osc"]["unknownSetting"] = serde_json::json!(true);
+
+    assert!(parse_valid_config(&value.to_string()).is_err());
+    Ok(())
+}
+
+#[test]
+fn parse_valid_config_rejects_old_schema_version() -> AppResult<()> {
+    let mut value = serde_json::to_value(AppConfig::default())
+        .map_err(|error| AppError::config(format!("Failed to build test JSON: {error}")))?;
+    value["schemaVersion"] = serde_json::json!(2);
+
+    assert!(parse_valid_config(&value.to_string()).is_err());
+    Ok(())
 }

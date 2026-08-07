@@ -2,28 +2,21 @@
 //!
 //! This module intentionally stores only ordinary settings and non-sensitive
 //! metadata. Provider API keys must come from the environment or the system
-//! credential store, never this config file. Serde defaults keep older config
-//! files loadable as Phase 1 fields evolve.
+//! credential store, never this config file.
 
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const APP_CONFIG_SCHEMA_VERSION: u32 = 2;
+pub(crate) const APP_CONFIG_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AppConfig {
-    #[serde(default = "default_app_config_schema_version")]
     pub(crate) schema_version: u32,
-    #[serde(default)]
     pub(crate) audio: AudioConfig,
-    #[serde(default)]
     pub(crate) stt: SttConfig,
-    #[serde(default)]
     pub(crate) osc: OscConfig,
-    #[serde(default)]
     pub(crate) publication: PublicationConfig,
-    #[serde(default)]
     pub(crate) ui: UiConfig,
 }
 
@@ -49,12 +42,25 @@ impl AppConfig {
             )));
         }
 
-        if self.stt.language.trim().is_empty() {
-            return Err(AppError::config("STT language cannot be empty."));
+        if self.stt.languages.is_empty() {
+            return Err(AppError::config(
+                "At least one expected STT language is required.",
+            ));
         }
 
-        if self.stt.model.trim().is_empty() {
-            return Err(AppError::config("STT model cannot be empty."));
+        let mut normalized_languages = std::collections::HashSet::new();
+        for language in &self.stt.languages {
+            let normalized = language.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                return Err(AppError::config(
+                    "Expected STT languages cannot contain an empty value.",
+                ));
+            }
+            if !normalized_languages.insert(normalized) {
+                return Err(AppError::config(
+                    "Expected STT languages cannot contain duplicates.",
+                ));
+            }
         }
 
         if self.osc.host.trim().is_empty() {
@@ -66,28 +72,25 @@ impl AppConfig {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AudioConfig {
     pub(crate) input_device_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SttConfig {
-    #[serde(default)]
     pub(crate) provider: SttProvider,
-    #[serde(default = "default_language")]
-    pub(crate) language: String,
-    #[serde(default = "default_stt_model")]
-    pub(crate) model: String,
+    pub(crate) languages: Vec<String>,
+    pub(crate) model: OpenAiTranscriptionModel,
 }
 
 impl Default for SttConfig {
     fn default() -> Self {
         Self {
             provider: SttProvider::OpenAi,
-            language: default_language(),
-            model: default_stt_model(),
+            languages: default_languages(),
+            model: OpenAiTranscriptionModel::GptTranscribe,
         }
     }
 }
@@ -95,10 +98,27 @@ impl Default for SttConfig {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum SttProvider {
-    Mock,
     #[default]
-    #[serde(rename = "openai", alias = "cloud")]
+    #[serde(rename = "openai")]
     OpenAi,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum OpenAiTranscriptionModel {
+    #[default]
+    #[serde(rename = "gpt-transcribe")]
+    GptTranscribe,
+    #[serde(rename = "gpt-live-transcribe")]
+    GptLiveTranscribe,
+}
+
+impl OpenAiTranscriptionModel {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::GptTranscribe => "gpt-transcribe",
+            Self::GptLiveTranscribe => "gpt-live-transcribe",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,29 +130,24 @@ pub(crate) enum PublicationMode {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PublicationConfig {
-    #[serde(default)]
     pub(crate) mode: PublicationMode,
 }
 
 impl SttProvider {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
-            Self::Mock => "mock",
             Self::OpenAi => "openai",
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct OscConfig {
-    #[serde(default = "default_osc_host")]
     pub(crate) host: String,
-    #[serde(default = "default_osc_port")]
     pub(crate) port: u16,
-    #[serde(default = "default_true")]
     pub(crate) enabled: bool,
 }
 
@@ -147,9 +162,8 @@ impl Default for OscConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct UiConfig {
-    #[serde(default = "default_true")]
     pub(crate) show_partial: bool,
 }
 
@@ -159,16 +173,8 @@ impl Default for UiConfig {
     }
 }
 
-fn default_language() -> String {
-    "en".to_string()
-}
-
-fn default_app_config_schema_version() -> u32 {
-    APP_CONFIG_SCHEMA_VERSION
-}
-
-fn default_stt_model() -> String {
-    "gpt-4o-mini-transcribe".to_string()
+fn default_languages() -> Vec<String> {
+    vec!["en".to_string()]
 }
 
 fn default_osc_host() -> String {
@@ -179,6 +185,6 @@ fn default_osc_port() -> u16 {
     9000
 }
 
-fn default_true() -> bool {
-    true
-}
+#[cfg(test)]
+#[path = "config_tests.rs"]
+mod tests;

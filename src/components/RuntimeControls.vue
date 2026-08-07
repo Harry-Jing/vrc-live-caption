@@ -13,7 +13,6 @@ const props = defineProps<{
   isStartBlocked: boolean;
   pendingCommand: RuntimeCommand | null;
   runtimeStatus: RuntimeStatusEvent;
-  showMockTranscript: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -27,10 +26,6 @@ const canStart = computed(
 const canStop = computed(() =>
   ["starting", "running", "error"].includes(props.runtimeStatus.status),
 );
-const canEmitMockTranscript = computed(
-  () => props.runtimeStatus.status === "running",
-);
-
 function run(command: RuntimeCommand) {
   emit("run", command);
 }
@@ -80,16 +75,6 @@ function run(command: RuntimeCommand) {
         variant="subtle"
         block
         @click="run('stop_runtime')"
-      />
-      <UButton
-        v-if="showMockTranscript"
-        :disabled="isBusy || !canEmitMockTranscript"
-        icon="i-lucide-message-square-text"
-        :label="uiText('runtime.actions.mockTranscript')"
-        :loading="pendingCommand === 'emit_mock_transcript'"
-        variant="subtle"
-        block
-        @click="run('emit_mock_transcript')"
       />
       <UButton
         :disabled="isBusy"

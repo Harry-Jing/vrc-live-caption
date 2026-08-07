@@ -14,7 +14,11 @@ import {
 const desiredConfig: AppConfig = {
   schemaVersion: APP_CONFIG_SCHEMA_VERSION,
   audio: { inputDeviceId: "next-device" },
-  stt: { provider: "mock", language: "zh", model: "next-model" },
+  stt: {
+    provider: "openai",
+    languages: ["zh", "en"],
+    model: "gpt-live-transcribe",
+  },
   osc: { enabled: false, host: "192.0.2.20", port: 9010 },
   publication: { mode: "live" },
   ui: { showPartial: false },
@@ -23,7 +27,7 @@ const desiredRuntimePlan = previewRuntimePlan(desiredConfig);
 
 test("projects desired settings separately from the immutable active session", () => {
   const snapshot: RuntimeControlSnapshot = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 4,
     runtime: {
       status: "running",
@@ -52,8 +56,8 @@ test("projects desired settings separately from the immutable active session", (
         audio: { inputDeviceId: "active-device" },
         stt: {
           provider: "openai",
-          language: "en",
-          model: "gpt-4o-mini-transcribe",
+          languages: ["en"],
+          model: "gpt-transcribe",
         },
         osc: { enabled: true, host: "127.0.0.1", port: 9000 },
         publication: { mode: "completed" },
@@ -62,8 +66,8 @@ test("projects desired settings separately from the immutable active session", (
         ...desiredConfig,
         stt: {
           provider: "openai",
-          language: "en",
-          model: "gpt-4o-mini-transcribe",
+          languages: ["en"],
+          model: "gpt-transcribe",
         },
         publication: { mode: "completed" },
       }),
@@ -97,8 +101,8 @@ test("projects desired settings separately from the immutable active session", (
     audio: { inputDeviceId: "active-device" },
     stt: {
       provider: "openai",
-      language: "en",
-      model: "gpt-4o-mini-transcribe",
+      languages: ["en"],
+      model: "gpt-transcribe",
     },
     osc: { enabled: true, host: "127.0.0.1", port: 9000 },
     publication: { mode: "completed" },
@@ -118,7 +122,7 @@ test("projects desired settings separately from the immutable active session", (
 
 test("ignores duplicate and older authoritative control snapshots", () => {
   const current = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 8,
     runtime: { status: "running", timestampMs: 80 },
     desired: {
@@ -142,7 +146,7 @@ test("ignores duplicate and older authoritative control snapshots", () => {
 
 test("accepts a newer snapshot and uses desired settings when no session exists", () => {
   const current = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 3,
     runtime: { status: "idle", timestampMs: 30 },
     desired: {
@@ -173,7 +177,7 @@ test("accepts a newer snapshot and uses desired settings when no session exists"
 
 test("requests a control pull when a legacy status outpaces a missed control event", () => {
   const startingSnapshot = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 4,
     runtime: {
       status: "starting",
@@ -212,7 +216,7 @@ test("requests a control pull when a legacy status outpaces a missed control eve
 
 test("requests a control pull for an accepted same-timestamp status mismatch", () => {
   const snapshot = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 4,
     runtime: { status: "starting", timestampMs: 40 },
     desired: {

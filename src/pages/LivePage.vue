@@ -95,12 +95,6 @@ const chatboxBadge = computed(() => {
   };
 });
 
-const showMockTranscript = computed(
-  () =>
-    runtimeStatus.value.status === "running" &&
-    currentSession.value?.selected.stt.provider === "mock",
-);
-
 const pendingSessionChangesDescription = computed(() =>
   uiText(
     currentSession.value?.phase === "error"
@@ -220,7 +214,6 @@ const isStartBlocked = computed(() =>
         :is-start-blocked="isStartBlocked"
         :pending-command="pendingRuntimeCommand"
         :runtime-status="runtimeStatus"
-        :show-mock-transcript="showMockTranscript"
         @run="runCommand"
       />
 

@@ -32,7 +32,7 @@ describe("caption session contract", () => {
           state: "completed",
           language: "en",
           provider: "openai",
-          model: "gpt-4o-mini-transcribe",
+          model: "gpt-transcribe",
           unitStartedAtMs: 1000,
           timestampMs: 1200,
         },

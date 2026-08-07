@@ -8,8 +8,8 @@ import {
 import type { PublicationPlan, RuntimePlan } from "./types";
 
 const recognition: RuntimePlan["recognition"] = {
-  path: "openAiBounded",
-  inputShape: "completedAudioUnits",
+  path: "openAiGptTranscribe",
+  inputShape: "continuousAudioFrames",
   boundaryOwner: "application",
   unitBehavior: "unitBased",
   lanes: [
@@ -47,17 +47,11 @@ describe("publication plan presentation", () => {
     });
   });
 
-  test("preserves the backend-resolved policy and delay", () => {
+  test("preserves the backend-resolved unit policy and delay", () => {
     const unitPlan = runtimePlan({
       state: "ready",
       mode: "live",
       policy: { policy: "liveUnit", observationWindowMs: 750 },
-      selectedLanes: ["source"],
-    });
-    const unitlessPlan = runtimePlan({
-      state: "ready",
-      mode: "live",
-      policy: { policy: "liveUnitless", firstNonEmptyDelayMs: 1250 },
       selectedLanes: ["source"],
     });
 
@@ -66,12 +60,6 @@ describe("publication plan presentation", () => {
       mode: "live",
       policy: "liveUnit",
       delayMs: 750,
-    });
-    expect(publicationPlanView(unitlessPlan)).toEqual({
-      state: "ready",
-      mode: "live",
-      policy: "liveUnitless",
-      delayMs: 1250,
     });
   });
 

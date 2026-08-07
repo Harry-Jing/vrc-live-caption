@@ -41,10 +41,6 @@ pub(crate) struct AppState {
     // credential capture. Stop never waits for this gate: file or credential
     // store I/O must not delay the hard generation boundary.
     desired_state_gate: Mutex<()>,
-    // Linearizes the short synthetic-Mock event sequence with Stop. No file,
-    // credential, network, pacing, or runtime join work other than Stop itself
-    // may be added under this gate.
-    runtime_action_gate: Mutex<()>,
     chatbox_pacer: ChatboxPacer,
     caption_session: CaptionSessionStore,
     pub(crate) runtime: RuntimeManager,
@@ -56,6 +52,7 @@ struct RuntimeControlState {
     credential_revision: u64,
     next_generation: u64,
     config: AppConfig,
+    config_requires_review: bool,
     provider_secrets: Vec<ProviderSecretStatus>,
     runtime: RuntimeStatusEvent,
     session: Option<RuntimeSessionSnapshot>,
@@ -69,6 +66,7 @@ impl Default for RuntimeControlState {
             credential_revision: 0,
             next_generation: 0,
             config: AppConfig::default(),
+            config_requires_review: false,
             provider_secrets: Vec::new(),
             runtime: RuntimeStatusEvent::idle(),
             session: None,
@@ -81,7 +79,6 @@ impl Default for AppState {
         Self {
             control: Mutex::new(RuntimeControlState::default()),
             desired_state_gate: Mutex::new(()),
-            runtime_action_gate: Mutex::new(()),
             chatbox_pacer: ChatboxPacer::default(),
             caption_session: CaptionSessionStore::default(),
             runtime: RuntimeManager::default(),
@@ -109,14 +106,18 @@ impl AppState {
         // by the active session was deleted after that session began.
         self.runtime.ensure_start_available(app)?;
 
-        let (config, config_revision, credential_revision) = {
+        let (config, config_requires_review, config_revision, credential_revision) = {
             let control = self.lock_control()?;
             (
                 control.config.clone(),
+                control.config_requires_review,
                 control.config_revision,
                 control.credential_revision,
             )
         };
+        if let Err(error) = ensure_config_was_reviewed(config_requires_review) {
+            return self.finish_start_failure(app, error, None, expected_stop_epoch);
+        }
         if let Err(error) = config.validate() {
             return self.finish_start_failure(app, error, None, expected_stop_epoch);
         }
@@ -124,32 +125,26 @@ impl AppState {
         if let Err(error) = ensure_runtime_plan_is_startable(&runtime_plan) {
             return self.finish_start_failure(app, error, None, expected_stop_epoch);
         }
-        let (openai_api_key, credential) = if matches!(config.stt.provider, SttProvider::OpenAi) {
-            let resolved = match openai_api_key() {
-                Ok(resolved) => resolved,
-                Err(error) => {
-                    emit_diagnostic(
-                        app,
-                        DiagnosticUpdate::error(
-                            DiagnosticCategory::Config,
-                            "config.openai_api_key_missing",
-                            "Cloud STT is not configured",
-                            error.to_string(),
-                        ),
-                    );
-                    return self.finish_start_failure(app, error, None, expected_stop_epoch);
-                }
-            };
-            let credential = crate::runtime_control::RuntimeCredentialSnapshot {
-                provider: SttProvider::OpenAi,
-                storage: resolved.storage,
-                display_suffix: resolved.display_suffix,
-                revision: credential_revision,
-            };
-
-            (Some(resolved.secret), Some(credential))
-        } else {
-            (None, None)
+        let resolved = match openai_api_key() {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                emit_diagnostic(
+                    app,
+                    DiagnosticUpdate::error(
+                        DiagnosticCategory::Config,
+                        "config.openai_api_key_missing",
+                        "Cloud STT is not configured",
+                        error.to_string(),
+                    ),
+                );
+                return self.finish_start_failure(app, error, None, expected_stop_epoch);
+            }
+        };
+        let credential = crate::runtime_control::RuntimeCredentialSnapshot {
+            provider: SttProvider::OpenAi,
+            storage: resolved.storage,
+            display_suffix: resolved.display_suffix,
+            revision: credential_revision,
         };
 
         let generation = {
@@ -167,7 +162,7 @@ impl AppState {
                 caption_session: self.caption_session_store(),
                 generation_id: generation,
                 config_revision,
-                openai_api_key,
+                openai_api_key: resolved.secret,
                 credential,
                 expected_stop_epoch,
             },
@@ -188,10 +183,6 @@ impl AppState {
         &self,
         app: &AppHandle<R>,
     ) -> AppResult<RuntimeControlSnapshot> {
-        let _runtime_action = self
-            .runtime_action_gate
-            .lock()
-            .map_err(|_| AppError::state("Runtime action gate was poisoned."))?;
         // Deliberately do not hold the control-state lock while RuntimeManager
         // joins: the worker may emit its final status through that short lock.
         self.runtime.stop(app)?;
@@ -209,11 +200,6 @@ impl AppState {
 
     pub(crate) fn caption_session_store(&self) -> CaptionSessionStore {
         self.caption_session.clone()
-    }
-
-    pub(crate) fn session_snapshot(&self) -> AppResult<Option<RuntimeSessionSnapshot>> {
-        let control = self.lock_control()?;
-        Ok(control.session.clone())
     }
 
     pub(crate) fn record_runtime_status(
@@ -386,40 +372,19 @@ impl AppState {
             .unwrap_or_else(|| control.config.osc.clone()))
     }
 
-    pub(crate) fn with_running_mock_session<T>(
-        &self,
-        operation: impl FnOnce(&RuntimeSessionSnapshot) -> AppResult<T>,
-    ) -> AppResult<T> {
-        let _runtime_action = self
-            .runtime_action_gate
-            .lock()
-            .map_err(|_| AppError::state("Runtime action gate was poisoned."))?;
-        let session = self
-            .session_snapshot()?
-            .filter(|session| {
-                session.phase == RuntimeSessionPhase::Running
-                    && matches!(session.selected.stt.provider, SttProvider::Mock)
-            })
-            .ok_or_else(|| {
-                AppError::runtime("Mock Transcript requires a running Mock provider session.")
-            })?;
-
-        operation(&session)
-    }
-
     pub(crate) fn load_config<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<AppConfig> {
         let _operation = self
             .desired_state_gate
             .lock()
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
         let path = config_path(app)?;
-        let config = match fs::read_to_string(&path) {
+        let (config, config_requires_review) = match fs::read_to_string(&path) {
             // A corrupt or invalid config file must not lock the user out of
             // the Settings page (the form only renders with a loaded config),
             // so fall back to defaults and report it; the next save replaces
             // the broken file.
             Ok(contents) => match parse_valid_config(&contents) {
-                Ok(config) => config,
+                Ok(config) => (config, false),
                 Err(error) => {
                     tracing::warn!(
                         path = %path.display(),
@@ -441,10 +406,10 @@ impl AppState {
                         ),
                     );
 
-                    AppConfig::default()
+                    (AppConfig::default(), true)
                 }
             },
-            Err(error) if error.kind() == ErrorKind::NotFound => AppConfig::default(),
+            Err(error) if error.kind() == ErrorKind::NotFound => (AppConfig::default(), false),
             Err(error) => {
                 return Err(AppError::config_io(format!(
                     "Failed to read app config at {}: {error}",
@@ -456,6 +421,7 @@ impl AppState {
         let provider_secrets = provider_secret_statuses();
         let mut control = self.lock_control()?;
         control.config = config.clone();
+        control.config_requires_review = config_requires_review;
         control.provider_secrets = provider_secrets;
         control.config_revision = control.config_revision.saturating_add(1);
         Self::advance_revision(&mut control);
@@ -508,6 +474,7 @@ impl AppState {
 
         let mut control = self.lock_control()?;
         control.config = config;
+        control.config_requires_review = false;
         control.config_revision = control.config_revision.saturating_add(1);
         Self::advance_revision(&mut control);
         Ok(Self::snapshot_from(&control))
@@ -525,9 +492,7 @@ impl AppState {
         save_provider_secret(provider, secret)?;
         let statuses = provider_secret_statuses();
         let mut control = self.lock_control()?;
-        if matches!(provider, SttProvider::OpenAi) {
-            control.credential_revision = control.credential_revision.saturating_add(1);
-        }
+        control.credential_revision = control.credential_revision.saturating_add(1);
         control.provider_secrets = statuses;
         Self::advance_revision(&mut control);
         Ok(Self::snapshot_from(&control))
@@ -544,9 +509,7 @@ impl AppState {
         delete_provider_secret(provider)?;
         let statuses = provider_secret_statuses();
         let mut control = self.lock_control()?;
-        if matches!(provider, SttProvider::OpenAi) {
-            control.credential_revision = control.credential_revision.saturating_add(1);
-        }
+        control.credential_revision = control.credential_revision.saturating_add(1);
         control.provider_secrets = statuses;
         Self::advance_revision(&mut control);
         Ok(Self::snapshot_from(&control))
@@ -555,17 +518,25 @@ impl AppState {
 
 fn ensure_runtime_plan_is_startable(plan: &RuntimePlanSnapshot) -> AppResult<()> {
     match plan.publication.resolved_policy() {
-        Some(
-            ResolvedPublicationPolicy::Completed
-            | ResolvedPublicationPolicy::LiveUnit { .. }
-            | ResolvedPublicationPolicy::LiveUnitless { .. },
-        ) => Ok(()),
+        Some(ResolvedPublicationPolicy::Completed | ResolvedPublicationPolicy::LiveUnit { .. }) => {
+            Ok(())
+        }
         None => Err(AppError::config(format!(
             "The selected recognition path and publication mode are incompatible ({}).",
             plan.publication
                 .incompatibility_code()
                 .unwrap_or("publication.incompatible")
         ))),
+    }
+}
+
+fn ensure_config_was_reviewed(config_requires_review: bool) -> AppResult<()> {
+    if config_requires_review {
+        Err(AppError::config(
+            "Saved settings use a removed or invalid configuration. Review and save the current settings before starting recognition.",
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -579,64 +550,23 @@ fn config_path<R: Runtime>(app: &AppHandle<R>) -> AppResult<PathBuf> {
 }
 
 fn parse_valid_config(contents: &str) -> AppResult<AppConfig> {
-    let value = serde_json::from_str::<serde_json::Value>(contents)
+    let mut value = serde_json::from_str::<serde_json::Value>(contents)
         .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?;
-    let schema_version = match value.get("schemaVersion") {
-        None => 1,
-        Some(serde_json::Value::Number(version)) => version.as_u64().ok_or_else(|| {
-            AppError::config("Config schemaVersion must be a non-negative integer.")
-        })?,
-        Some(_) => {
-            return Err(AppError::config(
-                "Config schemaVersion must be a non-negative integer.",
-            ));
-        }
-    };
-
-    let config = match schema_version {
-        1 => {
-            let legacy =
-                serde_json::from_value::<PersistedAppConfigV1>(value).map_err(|error| {
-                    AppError::config_io(format!("Failed to parse version 1 app config: {error}."))
-                })?;
-            AppConfig {
-                schema_version: crate::config::APP_CONFIG_SCHEMA_VERSION,
-                audio: legacy.audio,
-                stt: legacy.stt,
-                osc: legacy.osc,
-                publication: crate::config::PublicationConfig::default(),
-                ui: legacy.ui,
-            }
-        }
-        version if version == u64::from(crate::config::APP_CONFIG_SCHEMA_VERSION) => {
-            serde_json::from_value::<AppConfig>(value).map_err(|error| {
-                AppError::config_io(format!("Failed to parse app config: {error}."))
-            })?
-        }
-        version => {
-            return Err(AppError::config(format!(
-                "Unsupported config schema version {version}. Expected 1 or {}.",
-                crate::config::APP_CONFIG_SCHEMA_VERSION
-            )));
-        }
-    };
+    if let Some(osc) = value
+        .get_mut("osc")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        // This pacing knob was removed by ADR 0015. Ignoring only this known
+        // field preserves unrelated settings without restoring a configurable
+        // rate or weakening strict model/config decoding.
+        osc.remove("minIntervalMs");
+    }
+    let config = serde_json::from_value::<AppConfig>(value)
+        .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?;
 
     config.validate()?;
 
     Ok(config)
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PersistedAppConfigV1 {
-    #[serde(default)]
-    audio: crate::config::AudioConfig,
-    #[serde(default)]
-    stt: crate::config::SttConfig,
-    #[serde(default)]
-    osc: crate::config::OscConfig,
-    #[serde(default)]
-    ui: crate::config::UiConfig,
 }
 
 #[cfg(test)]

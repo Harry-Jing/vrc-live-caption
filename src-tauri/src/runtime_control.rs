@@ -6,7 +6,7 @@ use crate::events::RuntimeStatusEvent;
 use crate::secrets::{ProviderSecretStatus, ProviderSecretStorage};
 use serde::Serialize;
 
-pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 2;
+pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,9 +122,7 @@ pub(crate) fn pending_session_changes(
     if desired.stt != selected.stt {
         changes.push(PendingSessionChange::Recognition);
     }
-    if matches!(selected.stt.provider, SttProvider::OpenAi)
-        && desired_credential_revision != session_credential_revision
-    {
+    if desired_credential_revision != session_credential_revision {
         changes.push(PendingSessionChange::Credential);
     }
     if desired.osc != selected.osc {
@@ -164,12 +162,14 @@ mod tests {
     }
 
     #[test]
-    fn openai_credential_change_does_not_affect_an_active_mock_session() {
-        let mut active = AppConfig::default();
-        active.stt.provider = crate::config::SttProvider::Mock;
+    fn openai_credential_change_requires_a_new_session() {
+        let active = AppConfig::default();
         let selected = RuntimeSelectedConfig::from(&active);
 
-        assert!(pending_session_changes(&active, &selected, 2, 1).is_empty());
+        assert_eq!(
+            pending_session_changes(&active, &selected, 2, 1),
+            vec![PendingSessionChange::Credential]
+        );
     }
 
     #[test]

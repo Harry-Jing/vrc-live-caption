@@ -81,7 +81,6 @@ struct LivePublisherShared {
 #[derive(Clone, Copy)]
 enum LiveObservationPolicy {
     Unit { observation_window: Duration },
-    Unitless { first_non_empty_delay: Duration },
 }
 
 struct LivePublisherJoinState {
@@ -94,7 +93,6 @@ struct LivePublisherState {
     highest_snapshot_revision: u64,
     stream_id: Option<String>,
     unit_first_seen: HashMap<String, Instant>,
-    unitless_first_non_empty: Option<(String, Instant)>,
     candidate: Option<LiveCandidate>,
     last_attempted: Option<LiveCandidateAttempt>,
     last_published: Option<PublishedLiveView>,
@@ -193,18 +191,6 @@ impl LiveChatboxPublisher {
             } => LiveObservationPolicy::Unit {
                 observation_window: Duration::from_millis(observation_window_ms),
             },
-            ResolvedPublicationPolicy::LiveUnitless {
-                first_non_empty_delay_ms: 0,
-            } => {
-                return Err(AppError::state(
-                    "Live publisher first-non-empty delay must be greater than zero.",
-                ));
-            }
-            ResolvedPublicationPolicy::LiveUnitless {
-                first_non_empty_delay_ms,
-            } => LiveObservationPolicy::Unitless {
-                first_non_empty_delay: Duration::from_millis(first_non_empty_delay_ms),
-            },
             ResolvedPublicationPolicy::Completed => {
                 return Err(AppError::state(
                     "Live publisher requires a resolved Live publication policy.",
@@ -218,7 +204,6 @@ impl LiveChatboxPublisher {
                 highest_snapshot_revision: 0,
                 stream_id: None,
                 unit_first_seen: HashMap::new(),
-                unitless_first_non_empty: None,
                 candidate: None,
                 last_attempted: None,
                 last_published: None,
@@ -303,7 +288,6 @@ impl LiveChatboxPublisher {
         if state.stream_id.as_deref() != Some(active.stream_id.as_str()) {
             state.stream_id = Some(active.stream_id.clone());
             state.unit_first_seen.clear();
-            state.unitless_first_non_empty = None;
             state.candidate = None;
             state.last_attempted = None;
             state.last_layout_failure = None;
@@ -348,7 +332,7 @@ impl LiveChatboxPublisher {
             None => None,
         };
         state.candidate = candidate;
-        refresh_typing_desired(&mut state, self.shared.policy);
+        refresh_typing_desired(&mut state);
 
         self.shared
             .interrupt_text_wait
@@ -521,45 +505,22 @@ impl LiveChatboxPublisher {
         source_captions: &[&CaptionSnapshotV1],
         now: Instant,
     ) -> Option<Instant> {
-        match self.shared.policy {
-            LiveObservationPolicy::Unit { observation_window } => {
-                let mut ready_at = now;
-                for caption in source_captions {
-                    match (caption.unit_id.as_deref(), caption.state) {
-                        (Some(_), CaptionState::Completed) => {}
-                        (Some(unit_id), CaptionState::Ongoing) => {
-                            let first_seen = *state
-                                .unit_first_seen
-                                .entry(unit_id.to_string())
-                                .or_insert(now);
-                            ready_at = ready_at.max(first_seen + observation_window);
-                        }
-                        (None, _) => return None,
-                    }
+        let LiveObservationPolicy::Unit { observation_window } = self.shared.policy;
+        let mut ready_at = now;
+        for caption in source_captions {
+            match (caption.unit_id.as_deref(), caption.state) {
+                (Some(_), CaptionState::Completed) => {}
+                (Some(unit_id), CaptionState::Ongoing) => {
+                    let first_seen = *state
+                        .unit_first_seen
+                        .entry(unit_id.to_string())
+                        .or_insert(now);
+                    ready_at = ready_at.max(first_seen + observation_window);
                 }
-                Some(ready_at)
-            }
-            LiveObservationPolicy::Unitless {
-                first_non_empty_delay,
-            } => {
-                if source_captions.iter().any(|caption| {
-                    caption.unit_id.is_some() || caption.state != CaptionState::Ongoing
-                }) {
-                    return None;
-                }
-                let stream_id = &source_captions.first()?.stream_id;
-                let first_seen = match state.unitless_first_non_empty.as_ref() {
-                    Some((current_stream_id, first_seen)) if current_stream_id == stream_id => {
-                        *first_seen
-                    }
-                    _ => {
-                        state.unitless_first_non_empty = Some((stream_id.clone(), now));
-                        now
-                    }
-                };
-                Some(first_seen + first_non_empty_delay)
+                (None, _) => return None,
             }
         }
+        Some(ready_at)
     }
 
     fn lock_state(&self) -> AppResult<std::sync::MutexGuard<'_, LivePublisherState>> {
@@ -826,7 +787,7 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
                 });
         }
     }
-    refresh_typing_desired(&mut state, shared.policy);
+    refresh_typing_desired(&mut state);
     shared.wake.notify_all();
     Ok(())
 }
@@ -898,13 +859,8 @@ fn process_cleanup_typing(shared: &LivePublisherShared) -> AppResult<()> {
     Ok(())
 }
 
-fn refresh_typing_desired(state: &mut LivePublisherState, policy: LiveObservationPolicy) {
-    let desired = match policy {
-        LiveObservationPolicy::Unit { .. } => {
-            !state.unit_first_seen.is_empty() || candidate_needs_publication(state)
-        }
-        LiveObservationPolicy::Unitless { .. } => state.unitless_first_non_empty.is_some(),
-    };
+fn refresh_typing_desired(state: &mut LivePublisherState) {
+    let desired = !state.unit_first_seen.is_empty() || candidate_needs_publication(state);
     if desired != state.typing_desired {
         state.typing_desired = desired;
         state.typing_epoch = state.typing_epoch.wrapping_add(1);

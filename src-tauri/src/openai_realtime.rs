@@ -1,0 +1,949 @@
+//! OpenAI Realtime transcription protocol adapter.
+//!
+//! This module is a transport-independent deep module: it owns the OpenAI JSON
+//! protocol, item correlation, model-specific output semantics, completion
+//! ordering, and the hard Stop fence. Runtime only supplies a WebSocket
+//! transport and consumes normalized `RecognitionEvent`s.
+
+use crate::caption_session::{CaptionLane, CaptionSnapshotV1, CaptionState};
+use crate::config::OpenAiTranscriptionModel;
+use crate::error::{AppError, AppResult};
+use crate::recognition::{
+    RecognitionAudioChunk, RecognitionEndReason, RecognitionEvent, RecognitionSession,
+};
+use crate::recognition_audio::RealtimePcm16Encoder;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+
+pub(crate) const OPENAI_REALTIME_WEBSOCKET_BASE_URL: &str = "wss://api.openai.com/v1/realtime";
+const PROVIDER_NAME: &str = "openai";
+const RECENT_FINISHED_ITEM_LIMIT: usize = 128;
+const MAX_OUTSTANDING_TURNS: usize = 32;
+const MAX_PENDING_PROVIDER_ITEMS: usize = 32;
+const MAX_PENDING_EVENTS_PER_ITEM: usize = 64;
+const MAX_SERVER_FRAMES_PER_DRAIN: usize = 64;
+const MAX_SATURATED_DRAINS_AFTER_DEADLINE: u8 = 2;
+const MAX_TRANSCRIPT_BYTES_PER_TURN: usize = 256 * 1024;
+const MAX_PENDING_TRANSCRIPT_BYTES: usize = 1024 * 1024;
+const ITEM_COMPLETION_TIMEOUT_MS: u64 = 30_000;
+
+pub(crate) fn realtime_websocket_url(model: OpenAiTranscriptionModel) -> String {
+    format!(
+        "{OPENAI_REALTIME_WEBSOCKET_BASE_URL}?model={}",
+        model.as_str()
+    )
+}
+
+impl TryFrom<&str> for OpenAiTranscriptionModel {
+    type Error = AppError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "gpt-transcribe" => Ok(Self::GptTranscribe),
+            "gpt-live-transcribe" => Ok(Self::GptLiveTranscribe),
+            _ => Err(AppError::config(format!(
+                "Unsupported OpenAI transcription model: {value}."
+            ))),
+        }
+    }
+}
+
+/// Narrow external seam implemented by the eventual WebSocket connector and
+/// by deterministic tests. It intentionally deals only in text frames because
+/// Realtime audio is base64 inside JSON client events.
+pub(crate) trait RealtimeTransport: Send {
+    fn send_text(&mut self, message: String) -> AppResult<()>;
+    fn try_receive_text(&mut self) -> AppResult<Option<String>>;
+    fn close(&mut self) -> AppResult<()>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OpenAiRealtimeSessionContext {
+    pub(crate) generation: u64,
+    pub(crate) stream_id: String,
+}
+
+struct RecognitionTurn {
+    unit_id: String,
+    started_at_ms: u64,
+    provider_item_id: Option<String>,
+    revision: u64,
+    live_text: String,
+    terminal: Option<TurnTerminal>,
+    completion_wait_started_at_ms: Option<u64>,
+}
+
+struct CaptionEmission {
+    unit_id: String,
+    started_at_ms: u64,
+    revision: u64,
+    text: String,
+    state: CaptionState,
+    language: Option<String>,
+    timestamp_ms: u64,
+}
+
+enum TurnTerminal {
+    Caption(CaptionSnapshotV1),
+    Ended(RecognitionEndReason),
+}
+
+enum PendingTranscriptEvent {
+    Delta {
+        delta: String,
+        received_at_ms: u64,
+    },
+    Completed {
+        transcript: String,
+        detected_languages: Vec<String>,
+        received_at_ms: u64,
+    },
+    Failed {
+        detail: String,
+    },
+}
+
+impl PendingTranscriptEvent {
+    fn text_bytes(&self) -> usize {
+        match self {
+            Self::Delta { delta, .. } => delta.len(),
+            Self::Completed { transcript, .. } => transcript.len(),
+            Self::Failed { .. } => 0,
+        }
+    }
+}
+
+pub(crate) struct OpenAiRealtimeSession<T: RealtimeTransport> {
+    context: OpenAiRealtimeSessionContext,
+    model: OpenAiTranscriptionModel,
+    languages: Vec<String>,
+    transport: T,
+    audio_encoder: RealtimePcm16Encoder,
+    ready: bool,
+    stopped: bool,
+    next_sequence: u64,
+    active_sequence: Option<u64>,
+    turns: BTreeMap<u64, RecognitionTurn>,
+    committed_order: VecDeque<u64>,
+    item_to_sequence: HashMap<String, u64>,
+    pending_by_item: HashMap<String, VecDeque<PendingTranscriptEvent>>,
+    pending_transcript_bytes: usize,
+    ready_events: VecDeque<RecognitionEvent>,
+    recent_finished_items: VecDeque<String>,
+    saturated_drains_after_deadline: u8,
+}
+
+impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
+    pub(crate) fn connect(
+        context: OpenAiRealtimeSessionContext,
+        model: OpenAiTranscriptionModel,
+        languages: Vec<String>,
+        transport: T,
+    ) -> AppResult<Self> {
+        if context.stream_id.trim().is_empty() {
+            return Err(AppError::stt(
+                "Realtime recognition stream ID cannot be empty.",
+            ));
+        }
+        let languages = normalize_languages(languages)?;
+        let mut session = Self {
+            context,
+            model,
+            languages,
+            transport,
+            audio_encoder: RealtimePcm16Encoder::new(),
+            ready: false,
+            stopped: false,
+            next_sequence: 0,
+            active_sequence: None,
+            turns: BTreeMap::new(),
+            committed_order: VecDeque::new(),
+            item_to_sequence: HashMap::new(),
+            pending_by_item: HashMap::new(),
+            pending_transcript_bytes: 0,
+            ready_events: VecDeque::new(),
+            recent_finished_items: VecDeque::new(),
+            saturated_drains_after_deadline: 0,
+        };
+        let update = session_update(model, &session.languages, session.context.generation);
+        session.send_client_event(update)?;
+        Ok(session)
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        self.ready
+    }
+
+    fn ensure_running(&self) -> AppResult<()> {
+        if self.stopped {
+            Err(AppError::stt(
+                "Realtime recognition session has already stopped.",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn send_client_event(&mut self, event: Value) -> AppResult<()> {
+        let message = serde_json::to_string(&event).map_err(|error| {
+            AppError::stt(format!(
+                "Failed to serialize an OpenAI Realtime client event: {error}"
+            ))
+        })?;
+        self.transport.send_text(message)
+    }
+
+    fn send_audio_bytes(&mut self, pcm16: &[u8]) -> AppResult<()> {
+        if pcm16.is_empty() {
+            return Ok(());
+        }
+        self.send_client_event(json!({
+            "type": "input_audio_buffer.append",
+            "audio": BASE64_STANDARD.encode(pcm16),
+        }))
+    }
+
+    fn handle_server_message(&mut self, message: &str, received_at_ms: u64) -> AppResult<()> {
+        let event: ServerEvent = serde_json::from_str(message).map_err(|error| {
+            AppError::stt(format!(
+                "OpenAI Realtime returned an invalid server event: {error}"
+            ))
+        })?;
+        match event {
+            ServerEvent::SessionUpdated => {
+                self.ready = true;
+                Ok(())
+            }
+            ServerEvent::BufferCommitted { item_id } => self.bind_committed_item(item_id),
+            ServerEvent::TranscriptDelta { item_id, delta } => {
+                self.handle_delta(item_id, delta, received_at_ms)
+            }
+            ServerEvent::TranscriptCompleted {
+                item_id,
+                transcript,
+                languages,
+            } => self.handle_completed(
+                item_id,
+                transcript,
+                languages
+                    .into_iter()
+                    .map(|language| language.code)
+                    .collect(),
+                received_at_ms,
+            ),
+            ServerEvent::TranscriptFailed { item_id, error } => {
+                let diagnostic = error.diagnostic_summary();
+                tracing::warn!(
+                    provider = PROVIDER_NAME,
+                    provider_error_type = error.kind.as_deref().unwrap_or("unknown"),
+                    provider_error_code = error.code.as_deref().unwrap_or("unknown"),
+                    provider_error_param = error.param.as_deref().unwrap_or("unknown"),
+                    provider_event_id = error.event_id.as_deref().unwrap_or("unknown"),
+                    error_message = %error.message,
+                    "OpenAI Realtime transcription item failed"
+                );
+                self.handle_failed(item_id, diagnostic)
+            }
+            ServerEvent::Error { error } => {
+                let diagnostic = error.diagnostic_summary();
+                tracing::error!(
+                    provider = PROVIDER_NAME,
+                    provider_error_type = error.kind.as_deref().unwrap_or("unknown"),
+                    provider_error_code = error.code.as_deref().unwrap_or("unknown"),
+                    provider_error_param = error.param.as_deref().unwrap_or("unknown"),
+                    provider_event_id = error.event_id.as_deref().unwrap_or("unknown"),
+                    error_message = %error.message,
+                    "OpenAI Realtime session error requires a clean reconnect"
+                );
+
+                // Although some provider errors are recoverable, append/commit
+                // failures can leave the remote audio buffer ambiguous. A clean
+                // reconnect is safer than publishing captions from a drifted turn.
+                let _ = self.stop();
+                Err(AppError::stt(format!(
+                    "OpenAI Realtime transcription failed: {diagnostic}"
+                )))
+            }
+            ServerEvent::Other => Ok(()),
+        }
+    }
+
+    fn bind_committed_item(&mut self, item_id: String) -> AppResult<()> {
+        if self.is_recently_finished(&item_id) {
+            return Ok(());
+        }
+        if self.item_to_sequence.contains_key(&item_id) {
+            return self.replay_pending_item_events(&item_id);
+        }
+
+        let Some(sequence) = self.committed_order.iter().copied().find(|sequence| {
+            self.turns
+                .get(sequence)
+                .is_some_and(|turn| turn.provider_item_id.is_none())
+        }) else {
+            return Err(AppError::stt(
+                "An OpenAI committed item did not match a local committed unit.",
+            ));
+        };
+        self.bind_item_to_turn(sequence, item_id.clone())?;
+        self.replay_pending_item_events(&item_id)
+    }
+
+    fn bind_item_to_turn(&mut self, sequence: u64, item_id: String) -> AppResult<()> {
+        if let Some(existing_sequence) = self.item_to_sequence.get(&item_id) {
+            if *existing_sequence == sequence {
+                return Ok(());
+            }
+            return Err(AppError::stt(
+                "OpenAI assigned one provider item to more than one local unit.",
+            ));
+        }
+
+        let turn = self.turns.get_mut(&sequence).ok_or_else(|| {
+            AppError::stt("OpenAI item referenced an unknown local recognition unit.")
+        })?;
+        if let Some(existing_item_id) = turn.provider_item_id.as_deref() {
+            if existing_item_id == item_id {
+                return Ok(());
+            }
+            return Err(AppError::stt(
+                "OpenAI assigned more than one provider item to one local recognition unit.",
+            ));
+        }
+        turn.provider_item_id = Some(item_id.clone());
+        self.item_to_sequence.insert(item_id, sequence);
+        Ok(())
+    }
+
+    fn handle_delta(
+        &mut self,
+        item_id: String,
+        delta: String,
+        received_at_ms: u64,
+    ) -> AppResult<()> {
+        if self.model == OpenAiTranscriptionModel::GptTranscribe
+            || self.is_recently_finished(&item_id)
+        {
+            return Ok(());
+        }
+
+        let sequence = if let Some(sequence) = self.item_to_sequence.get(&item_id).copied() {
+            sequence
+        } else if let Some(sequence) = self.bindable_active_sequence() {
+            self.bind_item_to_turn(sequence, item_id.clone())?;
+            self.replay_pending_item_events(&item_id)?;
+            sequence
+        } else {
+            return self.queue_pending_event(
+                item_id,
+                PendingTranscriptEvent::Delta {
+                    delta,
+                    received_at_ms,
+                },
+            );
+        };
+        self.apply_delta(sequence, delta, received_at_ms)
+    }
+
+    fn apply_delta(&mut self, sequence: u64, delta: String, received_at_ms: u64) -> AppResult<()> {
+        let (unit_id, started_at_ms, revision, text) = {
+            let Some(turn) = self.turns.get_mut(&sequence) else {
+                return Ok(());
+            };
+            if turn.terminal.is_some() || delta.is_empty() {
+                return Ok(());
+            }
+            if turn.live_text.len().saturating_add(delta.len()) > MAX_TRANSCRIPT_BYTES_PER_TURN {
+                return Err(AppError::stt(
+                    "OpenAI Realtime transcript exceeded the per-turn text limit.",
+                ));
+            }
+            turn.revision = turn.revision.checked_add(1).ok_or_else(|| {
+                AppError::stt("Realtime caption revision exceeded the supported range.")
+            })?;
+            turn.live_text.push_str(&delta);
+            (
+                turn.unit_id.clone(),
+                turn.started_at_ms,
+                turn.revision,
+                turn.live_text.clone(),
+            )
+        };
+        let caption = self.caption(CaptionEmission {
+            unit_id,
+            started_at_ms,
+            revision,
+            text,
+            state: CaptionState::Ongoing,
+            language: None,
+            timestamp_ms: received_at_ms,
+        });
+        self.ready_events
+            .push_back(RecognitionEvent::Caption(caption));
+        Ok(())
+    }
+
+    fn handle_completed(
+        &mut self,
+        item_id: String,
+        transcript: String,
+        detected_languages: Vec<String>,
+        received_at_ms: u64,
+    ) -> AppResult<()> {
+        if self.is_recently_finished(&item_id) {
+            return Ok(());
+        }
+        let Some(sequence) = self.item_to_sequence.get(&item_id).copied() else {
+            return self.queue_pending_event(
+                item_id,
+                PendingTranscriptEvent::Completed {
+                    transcript,
+                    detected_languages,
+                    received_at_ms,
+                },
+            );
+        };
+        self.apply_completed(sequence, transcript, detected_languages, received_at_ms)
+    }
+
+    fn apply_completed(
+        &mut self,
+        sequence: u64,
+        transcript: String,
+        detected_languages: Vec<String>,
+        received_at_ms: u64,
+    ) -> AppResult<()> {
+        if transcript.len() > MAX_TRANSCRIPT_BYTES_PER_TURN {
+            return Err(AppError::stt(
+                "OpenAI Realtime transcript exceeded the per-turn text limit.",
+            ));
+        }
+        let (unit_id, started_at_ms, revision) = {
+            let Some(turn) = self.turns.get_mut(&sequence) else {
+                return Ok(());
+            };
+            if turn.terminal.is_some() {
+                return Ok(());
+            }
+            turn.revision = turn.revision.checked_add(1).ok_or_else(|| {
+                AppError::stt("Realtime caption revision exceeded the supported range.")
+            })?;
+            (turn.unit_id.clone(), turn.started_at_ms, turn.revision)
+        };
+        let terminal = if transcript.trim().is_empty() {
+            TurnTerminal::Ended(RecognitionEndReason::NoSpeech)
+        } else {
+            TurnTerminal::Caption(self.caption(CaptionEmission {
+                unit_id,
+                started_at_ms,
+                revision,
+                text: transcript,
+                state: CaptionState::Completed,
+                language: single_detected_language(detected_languages),
+                timestamp_ms: received_at_ms,
+            }))
+        };
+        if let Some(turn) = self.turns.get_mut(&sequence) {
+            turn.terminal = Some(terminal);
+        }
+        self.release_completed_in_order();
+        Ok(())
+    }
+
+    fn handle_failed(&mut self, item_id: String, detail: String) -> AppResult<()> {
+        if self.is_recently_finished(&item_id) {
+            return Ok(());
+        }
+        let Some(sequence) = self.item_to_sequence.get(&item_id).copied() else {
+            return self.queue_pending_event(item_id, PendingTranscriptEvent::Failed { detail });
+        };
+        self.apply_failed(sequence, detail)
+    }
+
+    fn apply_failed(&mut self, sequence: u64, detail: String) -> AppResult<()> {
+        let turn = self.turns.get_mut(&sequence).ok_or_else(|| {
+            AppError::stt("OpenAI item failure referenced an unknown local recognition unit.")
+        })?;
+        if turn.terminal.is_none() {
+            turn.terminal = Some(TurnTerminal::Ended(RecognitionEndReason::Failed { detail }));
+        }
+        self.release_completed_in_order();
+        Ok(())
+    }
+
+    fn queue_pending_event(
+        &mut self,
+        item_id: String,
+        event: PendingTranscriptEvent,
+    ) -> AppResult<()> {
+        if !self.pending_by_item.contains_key(&item_id)
+            && self.pending_by_item.len() >= MAX_PENDING_PROVIDER_ITEMS
+        {
+            return Err(AppError::stt(
+                "OpenAI Realtime exceeded the bounded number of uncorrelated provider items.",
+            ));
+        }
+        let pending_transcript_bytes = self
+            .pending_transcript_bytes
+            .checked_add(event.text_bytes())
+            .ok_or_else(|| AppError::stt("OpenAI Realtime pending text size overflowed."))?;
+        if pending_transcript_bytes > MAX_PENDING_TRANSCRIPT_BYTES {
+            return Err(AppError::stt(
+                "OpenAI Realtime exceeded the bounded amount of uncorrelated transcript text.",
+            ));
+        }
+        let pending = self.pending_by_item.entry(item_id).or_default();
+        if pending.len() >= MAX_PENDING_EVENTS_PER_ITEM {
+            return Err(AppError::stt(
+                "OpenAI Realtime exceeded the bounded number of pending events for one item.",
+            ));
+        }
+        pending.push_back(event);
+        self.pending_transcript_bytes = pending_transcript_bytes;
+        Ok(())
+    }
+
+    fn replay_pending_item_events(&mut self, item_id: &str) -> AppResult<()> {
+        let Some(sequence) = self.item_to_sequence.get(item_id).copied() else {
+            return Ok(());
+        };
+        let Some(mut pending) = self.pending_by_item.remove(item_id) else {
+            return Ok(());
+        };
+        let replayed_bytes = pending
+            .iter()
+            .map(PendingTranscriptEvent::text_bytes)
+            .sum::<usize>();
+        self.pending_transcript_bytes =
+            self.pending_transcript_bytes.saturating_sub(replayed_bytes);
+        while let Some(event) = pending.pop_front() {
+            match event {
+                PendingTranscriptEvent::Delta {
+                    delta,
+                    received_at_ms,
+                } => {
+                    if self.model == OpenAiTranscriptionModel::GptLiveTranscribe {
+                        self.apply_delta(sequence, delta, received_at_ms)?;
+                    }
+                }
+                PendingTranscriptEvent::Completed {
+                    transcript,
+                    detected_languages,
+                    received_at_ms,
+                } => {
+                    self.apply_completed(sequence, transcript, detected_languages, received_at_ms)?
+                }
+                PendingTranscriptEvent::Failed { detail } => self.apply_failed(sequence, detail)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn bindable_active_sequence(&self) -> Option<u64> {
+        if self.committed_order.iter().any(|sequence| {
+            self.turns
+                .get(sequence)
+                .is_some_and(|turn| turn.provider_item_id.is_none())
+        }) {
+            return None;
+        }
+        self.active_sequence.filter(|sequence| {
+            self.turns
+                .get(sequence)
+                .is_some_and(|turn| turn.provider_item_id.is_none())
+        })
+    }
+
+    fn release_completed_in_order(&mut self) {
+        while let Some(sequence) = self.committed_order.front().copied() {
+            let is_terminal = self
+                .turns
+                .get(&sequence)
+                .is_some_and(|turn| turn.terminal.is_some());
+            if !is_terminal {
+                break;
+            }
+
+            self.committed_order.pop_front();
+            let Some(mut turn) = self.turns.remove(&sequence) else {
+                continue;
+            };
+            if let Some(item_id) = turn.provider_item_id.take() {
+                self.item_to_sequence.remove(&item_id);
+                self.remember_finished_item(item_id);
+            }
+            if let Some(terminal) = turn.terminal.take() {
+                match terminal {
+                    TurnTerminal::Caption(caption) => self
+                        .ready_events
+                        .push_back(RecognitionEvent::Caption(caption)),
+                    TurnTerminal::Ended(reason) => {
+                        self.ready_events.push_back(RecognitionEvent::UnitEnded {
+                            generation: self.context.generation,
+                            stream_id: self.context.stream_id.clone(),
+                            unit_id: turn.unit_id,
+                            reason,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn expire_overdue_committed_turns(&mut self, received_at_ms: u64) -> AppResult<()> {
+        let mut expired = Vec::new();
+        for sequence in self.committed_order.iter().copied() {
+            let Some(turn) = self.turns.get_mut(&sequence) else {
+                continue;
+            };
+            if turn.terminal.is_some() {
+                continue;
+            }
+            let Some(wait_started_at_ms) = turn.completion_wait_started_at_ms else {
+                continue;
+            };
+            if received_at_ms.saturating_sub(wait_started_at_ms) < ITEM_COMPLETION_TIMEOUT_MS {
+                continue;
+            }
+            if turn.provider_item_id.is_none() {
+                return Err(AppError::stt_network(format!(
+                    "OpenAI Realtime did not acknowledge a committed audio item within {} seconds; reconnect before sending more audio.",
+                    ITEM_COMPLETION_TIMEOUT_MS / 1_000
+                )));
+            }
+            expired.push(sequence);
+        }
+
+        for sequence in expired {
+            self.apply_failed(
+                sequence,
+                format!(
+                    "OpenAI Realtime did not complete one recognition item within {} seconds.",
+                    ITEM_COMPLETION_TIMEOUT_MS / 1_000
+                ),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn arm_completion_waits(&mut self, received_at_ms: u64) {
+        for sequence in &self.committed_order {
+            if let Some(turn) = self.turns.get_mut(sequence)
+                && turn.terminal.is_none()
+                && turn.completion_wait_started_at_ms.is_none()
+            {
+                turn.completion_wait_started_at_ms = Some(received_at_ms);
+            }
+        }
+    }
+
+    fn has_overdue_committed_turn(&self, received_at_ms: u64) -> bool {
+        self.committed_order.iter().copied().any(|sequence| {
+            self.turns.get(&sequence).is_some_and(|turn| {
+                turn.terminal.is_none()
+                    && turn
+                        .completion_wait_started_at_ms
+                        .is_some_and(|started_at_ms| {
+                            received_at_ms.saturating_sub(started_at_ms)
+                                >= ITEM_COMPLETION_TIMEOUT_MS
+                        })
+            })
+        })
+    }
+
+    fn caption(&self, emission: CaptionEmission) -> CaptionSnapshotV1 {
+        CaptionSnapshotV1 {
+            generation: self.context.generation,
+            stream_id: self.context.stream_id.clone(),
+            unit_id: Some(emission.unit_id),
+            lane: CaptionLane::Source,
+            revision: emission.revision,
+            text: emission.text,
+            state: emission.state,
+            language: emission.language,
+            provider: PROVIDER_NAME.to_string(),
+            model: self.model.as_str().to_string(),
+            unit_started_at_ms: Some(emission.started_at_ms),
+            timestamp_ms: emission.timestamp_ms,
+        }
+    }
+
+    fn is_recently_finished(&self, item_id: &str) -> bool {
+        self.recent_finished_items
+            .iter()
+            .any(|finished| finished == item_id)
+    }
+
+    fn remember_finished_item(&mut self, item_id: String) {
+        self.recent_finished_items.push_back(item_id);
+        while self.recent_finished_items.len() > RECENT_FINISHED_ITEM_LIMIT {
+            self.recent_finished_items.pop_front();
+        }
+    }
+}
+
+impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
+    fn start_unit(&mut self, unit_id: String, started_at_ms: u64) -> AppResult<RecognitionEvent> {
+        self.ensure_running()?;
+        if self.active_sequence.is_some() {
+            return Err(AppError::stt(
+                "Cannot start a Realtime recognition unit before committing the active unit.",
+            ));
+        }
+        if self.turns.len() >= MAX_OUTSTANDING_TURNS {
+            return Err(AppError::stt(
+                "OpenAI Realtime exceeded the bounded number of outstanding recognition units.",
+            ));
+        }
+        if unit_id.trim().is_empty() {
+            return Err(AppError::stt(
+                "Realtime recognition unit ID cannot be empty.",
+            ));
+        }
+        if self.turns.values().any(|turn| turn.unit_id == unit_id) {
+            return Err(AppError::stt(format!(
+                "Realtime recognition unit ID {unit_id} is already active."
+            )));
+        }
+
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.checked_add(1).ok_or_else(|| {
+            AppError::stt("Realtime recognition unit sequence exceeded the supported range.")
+        })?;
+        self.turns.insert(
+            sequence,
+            RecognitionTurn {
+                unit_id: unit_id.clone(),
+                started_at_ms,
+                provider_item_id: None,
+                revision: 0,
+                live_text: String::new(),
+                terminal: None,
+                completion_wait_started_at_ms: None,
+            },
+        );
+        self.active_sequence = Some(sequence);
+
+        Ok(RecognitionEvent::UnitStarted {
+            generation: self.context.generation,
+            stream_id: self.context.stream_id.clone(),
+            unit_id,
+            started_at_ms,
+        })
+    }
+
+    fn append_audio(&mut self, audio: RecognitionAudioChunk<'_>) -> AppResult<()> {
+        self.ensure_running()?;
+        if self.active_sequence.is_none() {
+            return Err(AppError::stt(
+                "Cannot append Realtime audio without an active recognition unit.",
+            ));
+        }
+        let pcm16 = self
+            .audio_encoder
+            .append(audio.sample_rate_hz, audio.samples)?;
+        self.send_audio_bytes(&pcm16)
+    }
+
+    fn end_input(&mut self) -> AppResult<()> {
+        self.ensure_running()?;
+        let sequence = self.active_sequence.ok_or_else(|| {
+            AppError::stt("Cannot commit Realtime audio without an active recognition unit.")
+        })?;
+
+        let final_pcm16 = self.audio_encoder.finish_unit();
+        self.send_audio_bytes(&final_pcm16)?;
+        self.send_client_event(json!({
+            "event_id": format!("vrc-commit-{}-{sequence}", self.context.generation),
+            "type": "input_audio_buffer.commit",
+        }))?;
+
+        self.active_sequence = None;
+        self.committed_order.push_back(sequence);
+        self.release_completed_in_order();
+        Ok(())
+    }
+
+    fn drain_events(&mut self, received_at_ms: u64) -> AppResult<Vec<RecognitionEvent>> {
+        if self.stopped {
+            return Ok(Vec::new());
+        }
+        self.arm_completion_waits(received_at_ms);
+        let mut transport_drained = false;
+        for _ in 0..MAX_SERVER_FRAMES_PER_DRAIN {
+            let Some(message) = self.transport.try_receive_text()? else {
+                transport_drained = true;
+                break;
+            };
+            self.handle_server_message(&message, received_at_ms)?;
+        }
+        if transport_drained {
+            self.saturated_drains_after_deadline = 0;
+            self.expire_overdue_committed_turns(received_at_ms)?;
+        } else if self.has_overdue_committed_turn(received_at_ms) {
+            self.saturated_drains_after_deadline =
+                self.saturated_drains_after_deadline.saturating_add(1);
+            if self.saturated_drains_after_deadline >= MAX_SATURATED_DRAINS_AFTER_DEADLINE {
+                self.saturated_drains_after_deadline = 0;
+                self.expire_overdue_committed_turns(received_at_ms)?;
+            }
+        } else {
+            self.saturated_drains_after_deadline = 0;
+        }
+        Ok(self.ready_events.drain(..).collect())
+    }
+
+    fn stop(&mut self) -> AppResult<()> {
+        if self.stopped {
+            return Ok(());
+        }
+        self.stopped = true;
+        self.active_sequence = None;
+        self.turns.clear();
+        self.committed_order.clear();
+        self.item_to_sequence.clear();
+        self.pending_by_item.clear();
+        self.pending_transcript_bytes = 0;
+        self.ready_events.clear();
+        self.recent_finished_items.clear();
+        self.saturated_drains_after_deadline = 0;
+        self.audio_encoder.reset_unit();
+        self.transport.close()
+    }
+}
+
+fn normalize_languages(languages: Vec<String>) -> AppResult<Vec<String>> {
+    if languages.is_empty() {
+        return Err(AppError::stt(
+            "At least one expected language is required for Realtime transcription.",
+        ));
+    }
+    let mut normalized = Vec::with_capacity(languages.len());
+    let mut seen = HashSet::with_capacity(languages.len());
+    for language in languages {
+        let language = language.trim().to_string();
+        if language.is_empty() {
+            return Err(AppError::stt(
+                "Realtime transcription languages cannot contain an empty value.",
+            ));
+        }
+        if !seen.insert(language.to_ascii_lowercase()) {
+            return Err(AppError::stt(format!(
+                "Realtime transcription language {language} is duplicated."
+            )));
+        }
+        normalized.push(language);
+    }
+    Ok(normalized)
+}
+
+fn session_update(model: OpenAiTranscriptionModel, languages: &[String], generation: u64) -> Value {
+    json!({
+        "event_id": format!("vrc-session-update-{generation}"),
+        "type": "session.update",
+        "session": {
+            "type": "transcription",
+            "audio": {
+                "input": {
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": 24_000,
+                    },
+                    "transcription": {
+                        "model": model.as_str(),
+                        "languages": languages,
+                    },
+                    "turn_detection": null,
+                }
+            }
+        }
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum ServerEvent {
+    #[serde(rename = "session.updated")]
+    SessionUpdated,
+    #[serde(rename = "input_audio_buffer.committed")]
+    BufferCommitted { item_id: String },
+    #[serde(rename = "conversation.item.input_audio_transcription.delta")]
+    TranscriptDelta { item_id: String, delta: String },
+    #[serde(rename = "conversation.item.input_audio_transcription.completed")]
+    TranscriptCompleted {
+        item_id: String,
+        transcript: String,
+        #[serde(default)]
+        languages: Vec<DetectedLanguage>,
+    },
+    #[serde(rename = "conversation.item.input_audio_transcription.failed")]
+    TranscriptFailed {
+        item_id: String,
+        error: ProviderError,
+    },
+    #[serde(rename = "error")]
+    Error { error: ProviderError },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+struct ProviderError {
+    message: String,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    param: Option<String>,
+    #[serde(default)]
+    event_id: Option<String>,
+}
+
+impl ProviderError {
+    fn diagnostic_summary(&self) -> String {
+        let mut metadata = Vec::new();
+        if let Some(kind) = self.kind.as_deref() {
+            metadata.push(format!("type={kind}"));
+        }
+        if let Some(code) = self.code.as_deref() {
+            metadata.push(format!("code={code}"));
+        }
+        if let Some(param) = self.param.as_deref() {
+            metadata.push(format!("param={param}"));
+        }
+        if let Some(event_id) = self.event_id.as_deref() {
+            metadata.push(format!("event_id={event_id}"));
+        }
+
+        if metadata.is_empty() {
+            self.message.clone()
+        } else {
+            format!("{} ({})", self.message, metadata.join(", "))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct DetectedLanguage {
+    code: String,
+}
+
+fn single_detected_language(languages: Vec<String>) -> Option<String> {
+    if languages.len() != 1 {
+        return None;
+    }
+
+    languages
+        .into_iter()
+        .next()
+        .map(|language| language.trim().to_string())
+        .filter(|language| !language.is_empty())
+}
+
+#[cfg(test)]
+#[path = "openai_realtime_tests.rs"]
+mod tests;

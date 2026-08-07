@@ -1,5 +1,5 @@
 // Backend gateway for the runtime UI. The interface is implemented once per
-// environment (Tauri IPC, browser preview mock, unsupported) and selected a
+// environment (Tauri IPC, browser-only preview, unsupported) and selected a
 // single time at startup, so composables and components never branch on the
 // execution environment themselves.
 

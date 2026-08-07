@@ -2,6 +2,9 @@
 
 Date: 2026-06
 
+Status: superseded by
+[ADR 0024](./0024-use-openai-realtime-transcription.md).
+
 The first STT provider is the OpenAI transcriptions API with
 `gpt-4o-mini-transcribe`, uploading each bounded speech segment as one
 request. It validates the cloud path with simple credential handling and no

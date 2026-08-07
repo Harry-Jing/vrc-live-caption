@@ -8,7 +8,6 @@ import {
   APP_CONFIG_SCHEMA_VERSION,
   type AppConfig,
   type CaptionSessionSnapshotV1,
-  type CaptionSnapshotV1,
   type DiagnosticCategory,
   type ProviderSecretStatus,
   type RuntimeCommand,
@@ -27,8 +26,8 @@ const PREVIEW_DEFAULT_CONFIG: AppConfig = {
   },
   stt: {
     provider: "openai",
-    language: "en",
-    model: "gpt-4o-mini-transcribe",
+    languages: ["en"],
+    model: "gpt-transcribe",
   },
   osc: {
     host: "127.0.0.1",
@@ -45,10 +44,10 @@ const PREVIEW_DEFAULT_CONFIG: AppConfig = {
 
 export function previewRuntimePlan(config: AppConfig): RuntimePlan {
   const recognition =
-    config.stt.provider === "openai"
+    config.stt.model === "gpt-transcribe"
       ? {
-          path: "openAiBounded" as const,
-          inputShape: "completedAudioUnits" as const,
+          path: "openAiGptTranscribe" as const,
+          inputShape: "continuousAudioFrames" as const,
           boundaryOwner: "application" as const,
           unitBehavior: "unitBased" as const,
           lanes: [
@@ -59,55 +58,26 @@ export function previewRuntimePlan(config: AppConfig): RuntimePlan {
             },
           ],
         }
-      : config.stt.model === "mock-bounded"
-        ? {
-            path: "mockBounded" as const,
-            inputShape: "completedAudioUnits" as const,
-            boundaryOwner: "application" as const,
-            unitBehavior: "unitBased" as const,
-            lanes: [
-              {
-                lane: "source" as const,
-                updates: "completedOnly" as const,
-                revisions: "appendOnly" as const,
-              },
-            ],
-          }
-        : config.stt.model === "mock-ongoing-only"
-          ? {
-              path: "mockOngoingOnly" as const,
-              inputShape: "continuousAudioFrames" as const,
-              boundaryOwner: "none" as const,
-              unitBehavior: "unitless" as const,
-              lanes: [
-                {
-                  lane: "source" as const,
-                  updates: "ongoingOnly" as const,
-                  revisions: "revisableFullSnapshot" as const,
-                },
-              ],
-            }
-          : {
-              path: "mockOngoingCompleted" as const,
-              inputShape: "continuousAudioFrames" as const,
-              boundaryOwner: "provider" as const,
-              unitBehavior: "unitBased" as const,
-              lanes: [
-                {
-                  lane: "source" as const,
-                  updates: "ongoingAndCompleted" as const,
-                  revisions: "revisableFullSnapshot" as const,
-                },
-              ],
-            };
+      : {
+          path: "openAiGptLiveTranscribe" as const,
+          inputShape: "continuousAudioFrames" as const,
+          boundaryOwner: "application" as const,
+          unitBehavior: "unitBased" as const,
+          lanes: [
+            {
+              lane: "source" as const,
+              updates: "ongoingAndCompleted" as const,
+              revisions: "revisableFullSnapshot" as const,
+            },
+          ],
+        };
   const sourceUpdates = recognition.lanes[0]?.updates;
   if (!sourceUpdates) {
     throw new Error("Preview recognition profile must produce a source lane.");
   }
   const compatible =
-    config.publication.mode === "completed"
-      ? sourceUpdates !== "ongoingOnly"
-      : sourceUpdates !== "completedOnly";
+    config.publication.mode === "completed" ||
+    sourceUpdates === "ongoingAndCompleted";
 
   return {
     recognition,
@@ -118,9 +88,7 @@ export function previewRuntimePlan(config: AppConfig): RuntimePlan {
           policy:
             config.publication.mode === "completed"
               ? { policy: "completed" }
-              : recognition.unitBehavior === "unitBased"
-                ? { policy: "liveUnit", observationWindowMs: 1000 }
-                : { policy: "liveUnitless", firstNonEmptyDelayMs: 1000 },
+              : { policy: "liveUnit", observationWindowMs: 1000 },
           selectedLanes: ["source"],
         }
       : {
@@ -128,9 +96,7 @@ export function previewRuntimePlan(config: AppConfig): RuntimePlan {
           requestedMode: config.publication.mode,
           selectedLanes: ["source"],
           reason: { reason: "modeUnsupported", lanes: ["source"] },
-          supportedModes: [
-            config.publication.mode === "completed" ? "live" : "completed",
-          ],
+          supportedModes: ["completed"],
         },
   };
 }
@@ -216,167 +182,6 @@ export function createPreviewBackend(): RuntimeBackend {
     });
   }
 
-  function emitMockTranscript(): Error | null {
-    if (
-      latestStatus.status !== "running" ||
-      session?.selected.stt.provider !== "mock"
-    ) {
-      return new Error(
-        "Mock Transcript requires an active Mock runtime session.",
-      );
-    }
-
-    const active = captionSession.active;
-
-    if (active === null) {
-      return new Error("Mock runtime has no active recognition stream.");
-    }
-
-    if (session.selected.stt.model === "mock-ongoing-only") {
-      const selectedStt = session.selected.stt;
-      const latestRevision =
-        captionSession.captions.find(
-          (caption) =>
-            caption.generation === active.generation &&
-            caption.streamId === active.streamId &&
-            caption.unitId === null &&
-            caption.lane === "source",
-        )?.revision ?? 0;
-      const scriptedTexts = [
-        "Testing live caption preview...",
-        "Testing live caption preview from the ongoing-only mock runtime.",
-      ];
-
-      scriptedTexts.forEach((text, index) => {
-        const caption: CaptionSnapshotV1 = {
-          generation: active.generation,
-          streamId: active.streamId,
-          unitId: null,
-          lane: "source",
-          revision: latestRevision + index + 1,
-          text,
-          state: "ongoing",
-          language: selectedStt.language,
-          provider: selectedStt.provider,
-          model: selectedStt.model,
-          unitStartedAtMs: null,
-          timestampMs: Date.now(),
-        };
-        publishCaptionSession({
-          active,
-          activeUnits: [],
-          captions: [
-            caption,
-            ...captionSession.captions.filter(
-              (candidate) => candidate.state === "completed",
-            ),
-          ],
-        });
-      });
-      emitDiagnostic(
-        "stt",
-        "stt.mock_transcript_emitted",
-        "Mock transcript emitted",
-        "The UI received full ongoing unitless caption snapshots without a completion.",
-      );
-
-      return null;
-    }
-
-    const utteranceId = eventId("utterance");
-    const timestampMs = Date.now();
-    const captionBase = {
-      generation: active.generation,
-      streamId: active.streamId,
-      unitId: utteranceId,
-      lane: "source" as const,
-      language: session.selected.stt.language,
-      provider: session.selected.stt.provider,
-      model: session.selected.stt.model,
-      unitStartedAtMs: timestampMs,
-      timestampMs,
-    };
-
-    emit({
-      type: "utteranceStarted",
-      payload: {
-        id: eventId("utterance-start"),
-        generation: active.generation,
-        streamId: active.streamId,
-        utteranceId,
-        timestampMs,
-      },
-    });
-    publishCaptionSession({
-      active,
-      activeUnits: [{ unitId: utteranceId, startedAtMs: timestampMs }],
-      captions: captionSession.captions.filter(
-        (caption) => caption.state === "completed",
-      ),
-    });
-    if (session.selected.stt.model === "mock-bounded") {
-      const completed: CaptionSnapshotV1 = {
-        ...captionBase,
-        revision: 1,
-        text: "Testing bounded caption preview from the mock runtime.",
-        state: "completed",
-      };
-      publishCaptionSession({
-        active,
-        activeUnits: [],
-        captions: [
-          completed,
-          ...captionSession.captions.filter(
-            (caption) => caption.state === "completed",
-          ),
-        ].slice(0, 5),
-      });
-      emitDiagnostic(
-        "stt",
-        "stt.mock_transcript_emitted",
-        "Mock transcript emitted",
-        "The UI received one completed bounded caption snapshot.",
-      );
-
-      return null;
-    }
-    const ongoing: CaptionSnapshotV1 = {
-      ...captionBase,
-      revision: 1,
-      text: "Testing live caption preview...",
-      state: "ongoing",
-    };
-    publishCaptionSession({
-      active,
-      activeUnits: [{ unitId: utteranceId, startedAtMs: timestampMs }],
-      captions: [ongoing, ...captionSession.captions],
-    });
-    const completed: CaptionSnapshotV1 = {
-      ...captionBase,
-      revision: 2,
-      text: "Testing live caption preview from the mock runtime.",
-      state: "completed",
-    };
-    publishCaptionSession({
-      active,
-      activeUnits: [],
-      captions: [
-        completed,
-        ...captionSession.captions.filter(
-          (caption) => caption.state === "completed",
-        ),
-      ].slice(0, 5),
-    });
-    emitDiagnostic(
-      "stt",
-      "stt.mock_transcript_emitted",
-      "Mock transcript emitted",
-      "The UI received ongoing and completed caption-session snapshots.",
-    );
-
-    return null;
-  }
-
   function openAiSecretStatus(): ProviderSecretStatus {
     return {
       provider: "openai",
@@ -389,7 +194,7 @@ export function createPreviewBackend(): RuntimeBackend {
 
   function controlSnapshot(): RuntimeControlSnapshot {
     return {
-      contractVersion: 2,
+      contractVersion: 3,
       revision: controlRevision,
       runtime: { ...latestStatus },
       desired: {
@@ -414,16 +219,15 @@ export function createPreviewBackend(): RuntimeBackend {
       pending.push("microphone");
     }
     if (
-      session.selected.stt.provider !== config.stt.provider ||
-      session.selected.stt.language !== config.stt.language ||
+      session.selected.stt.languages.length !== config.stt.languages.length ||
+      session.selected.stt.languages.some(
+        (language, index) => language !== config.stt.languages[index],
+      ) ||
       session.selected.stt.model !== config.stt.model
     ) {
       pending.push("recognition");
     }
-    if (
-      session.selected.stt.provider === "openai" &&
-      sessionSecretRevision !== secretRevision
-    ) {
+    if (sessionSecretRevision !== secretRevision) {
       pending.push("credential");
     }
     if (
@@ -468,7 +272,7 @@ export function createPreviewBackend(): RuntimeBackend {
       selected,
       runtimePlan: previewRuntimePlan(config),
       credential:
-        selected.stt.provider === "openai" && openAiSecretSuffix !== null
+        openAiSecretSuffix !== null
           ? {
               provider: "openai",
               storage: "systemCredentialStore",
@@ -481,7 +285,7 @@ export function createPreviewBackend(): RuntimeBackend {
         host: selected.osc.host,
         port: selected.osc.port,
       },
-      uploadsMicrophoneAudio: selected.stt.provider === "openai",
+      uploadsMicrophoneAudio: true,
     };
   }
 
@@ -501,8 +305,7 @@ export function createPreviewBackend(): RuntimeBackend {
       );
     }
     nextGeneration += 1;
-    sessionSecretRevision =
-      config.stt.provider === "openai" ? secretRevision : null;
+    sessionSecretRevision = secretRevision;
     session = createSession("starting");
     publishCaptionSession({
       active: {
@@ -577,12 +380,6 @@ export function createPreviewBackend(): RuntimeBackend {
         return startRuntimeControl().then(() => undefined);
       } else if (command === "stop_runtime") {
         return stopRuntimeControl().then(() => undefined);
-      } else if (command === "emit_mock_transcript") {
-        const error = emitMockTranscript();
-
-        if (error) {
-          return Promise.reject(error);
-        }
       } else {
         const oscConfig = oscConfigForTest();
 
@@ -627,10 +424,7 @@ export function createPreviewBackend(): RuntimeBackend {
     },
 
     saveProviderSecret(provider: SttProvider, secret: string) {
-      if (provider !== "openai") {
-        return Promise.reject(new Error("Mock STT does not use an API key."));
-      }
-
+      void provider;
       const trimmed = secret.trim();
 
       if (!trimmed) {
@@ -651,11 +445,10 @@ export function createPreviewBackend(): RuntimeBackend {
     },
 
     deleteProviderSecret(provider: SttProvider) {
-      if (provider === "openai") {
-        openAiSecretSuffix = null;
-        secretRevision += 1;
-        publishControl();
-      }
+      void provider;
+      openAiSecretSuffix = null;
+      secretRevision += 1;
+      publishControl();
 
       return Promise.resolve(controlSnapshot());
     },

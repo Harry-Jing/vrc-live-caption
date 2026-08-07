@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { decodeCaptionSessionSnapshotV1 } from "./captionSession";
-import { decodeRuntimeControlSnapshotV2 } from "./runtimeControlContract";
+import { decodeRuntimeControlSnapshotV3 } from "./runtimeControlContract";
 import type {
   RuntimeBackend,
   RuntimeEventListener,
@@ -47,7 +47,7 @@ export function createTauriBackend(
   ) {
     const payload = await bridge.invoke<unknown>(command, args);
 
-    return decodeRuntimeControlSnapshotV2(payload);
+    return decodeRuntimeControlSnapshotV3(payload);
   }
 
   return {
@@ -132,7 +132,7 @@ export function createTauriBackend(
 
     async listenControl(listener) {
       const unlisten = await bridge.listen(RUNTIME_CONTROL_EVENT, (event) => {
-        listener(decodeRuntimeControlSnapshotV2(event.payload));
+        listener(decodeRuntimeControlSnapshotV3(event.payload));
       });
 
       return () => {

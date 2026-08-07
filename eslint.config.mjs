@@ -28,6 +28,7 @@ export default defineConfigWithVueTs(
       "auto-imports.d.ts",
       "components.d.ts",
       ".tmp/**",
+      ".local/**",
     ],
     "app/global-ignores",
   ),

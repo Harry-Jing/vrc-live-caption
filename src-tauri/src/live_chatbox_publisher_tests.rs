@@ -364,20 +364,6 @@ fn start_unit_publisher_with_window(
     )
 }
 
-fn start_unitless_publisher(
-    clock: Arc<ManualClock>,
-    transport: Arc<RecordingTransport>,
-    first_non_empty_delay_ms: u64,
-) -> AppResult<(LiveChatboxPublisher, ChatboxPacer)> {
-    start_publisher(
-        clock,
-        transport,
-        ResolvedPublicationPolicy::LiveUnitless {
-            first_non_empty_delay_ms,
-        },
-    )
-}
-
 fn close(publisher: &LiveChatboxPublisher) -> AppResult<()> {
     publisher.request_close(PublisherCloseReason::Stop)?;
     publisher.join()
@@ -403,22 +389,16 @@ fn rejects_non_live_resolved_policy() {
 }
 
 #[test]
-fn rejects_zero_live_observation_delays() {
-    for policy in [
+fn rejects_zero_live_observation_delay() {
+    let result = start_publisher(
+        Arc::new(ManualClock::new()),
+        Arc::new(RecordingTransport::new([])),
         ResolvedPublicationPolicy::LiveUnit {
             observation_window_ms: 0,
         },
-        ResolvedPublicationPolicy::LiveUnitless {
-            first_non_empty_delay_ms: 0,
-        },
-    ] {
-        let result = start_publisher(
-            Arc::new(ManualClock::new()),
-            Arc::new(RecordingTransport::new([])),
-            policy,
-        );
-        assert!(result.is_err());
-    }
+    );
+
+    assert!(result.is_err());
 }
 
 #[test]
@@ -647,44 +627,6 @@ fn removing_a_non_head_ongoing_unit_republishes_the_recomputed_viewport() -> App
     clock.advance(Duration::from_secs(1));
     publisher.shared.wake.notify_all();
     assert_eq!(transport.wait_for_texts(2)?, ["newer older", "newer"]);
-
-    close(&publisher)
-}
-
-#[test]
-fn unitless_stream_waits_from_first_non_empty_and_sends_latest() -> AppResult<()> {
-    let clock = Arc::new(ManualClock::new());
-    let transport = Arc::new(RecordingTransport::new([]));
-    let (publisher, _) = start_unitless_publisher(clock.clone(), transport.clone(), 250)?;
-
-    observe(
-        &publisher,
-        &snapshot(1, &[], vec![caption(None, 1, "", CaptionState::Ongoing)]),
-    )?;
-    clock.advance(Duration::from_secs(2));
-    assert!(transport.text_events()?.is_empty());
-
-    observe(
-        &publisher,
-        &snapshot(
-            2,
-            &[],
-            vec![caption(None, 2, "first", CaptionState::Ongoing)],
-        ),
-    )?;
-    clock.advance(Duration::from_millis(249));
-    observe(
-        &publisher,
-        &snapshot(
-            3,
-            &[],
-            vec![caption(None, 3, "latest", CaptionState::Ongoing)],
-        ),
-    )?;
-    assert!(transport.text_events()?.is_empty());
-
-    clock.advance(Duration::from_millis(1));
-    assert_eq!(transport.wait_for_texts(1)?, ["latest"]);
 
     close(&publisher)
 }

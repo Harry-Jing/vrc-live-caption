@@ -13,7 +13,6 @@
     "allow-stop-runtime",
     "allow-get-runtime-control-snapshot",
     "allow-get-caption-session-snapshot",
-    "allow-emit-mock-transcript",
     "allow-send-osc-test-message",
     "allow-save-provider-secret",
     "allow-delete-provider-secret"

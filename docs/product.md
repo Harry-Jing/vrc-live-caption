@@ -21,18 +21,36 @@ The implemented path today:
 
 ```text
 microphone
-  -> application-bounded speech segment
-  -> gpt-4o-mini-transcribe
-  -> App preview
-  -> Completed VRChat Chatbox output
+  -> application-owned speech units
+  -> gpt-transcribe or gpt-live-transcribe over Realtime WebSocket
+  -> normalized Completed or Live captions, as supported
+  -> App and VRChat Chatbox output
 ```
 
-This is one working provider path, not a product-wide rule. Implementation
-status and what comes next live in [roadmap.md](./roadmap.md).
+This implementation has deterministic protocol and runtime coverage, but it is
+not yet a completed Phase 4 product path: authenticated OpenAI behavior and a
+Windows/VRChat session still need validation. Implementation status and what
+comes next live in [roadmap.md](./roadmap.md).
 
 ## User choices
 
-Users answer three independent questions.
+These choices remain independent. A model determines which publication timing
+is possible; it does not silently choose that timing for the user.
+
+### Which OpenAI recognizer
+
+The OpenAI release catalog is intentionally closed:
+
+| Model | Completed | Live | User-visible behavior |
+|---|---|---|---|
+| `gpt-transcribe` | supported | unsupported | text appears after an audio item is committed and completed |
+| `gpt-live-transcribe` | supported | supported | text can revise while speech continues, then completes |
+
+One running recognition session uses exactly one model. Changing the saved
+model takes effect on the next Start; the app never runs both models as an
+implicit two-pass path. A removed or unknown model is an explicit unsupported
+selection, not a reason to migrate or fall back silently
+([ADR 0024](./adr/0024-use-openai-realtime-transcription.md)).
 
 ### When to publish
 
@@ -118,6 +136,11 @@ text from the stopped session reaches the App or the Chatbox afterward
 - Capture, recognition, and translation never wait on Chatbox pacing.
 - The app never silently changes provider, model, backend, mode, or content
   selection, and never falls back to cloud when a local path fails.
+- The OpenAI release path accepts only `gpt-transcribe` and
+  `gpt-live-transcribe`, uses Realtime transcription WebSockets for both, and
+  has no REST/WAV recognition fallback, legacy-model compatibility path, or
+  production Mock provider
+  ([ADR 0024](./adr/0024-use-openai-realtime-transcription.md)).
 - Secrets never enter ordinary config or logs
   ([ADR 0005](./adr/0005-keep-secrets-out-of-config-and-logs.md)).
 - The app discloses when microphone audio is uploaded to a cloud provider

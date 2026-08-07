@@ -1,16 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { RuntimeBackend } from "./backend";
 import { createPreviewBackend, previewRuntimePlan } from "./previewBackend";
-import {
-  createCaptionSessionState,
-  reduceCaptionSessionState,
-  selectCaptionSessionView,
-} from "./captionSession";
-import {
-  createRuntimeState,
-  reduceRuntimeState,
-  selectRuntimeView,
-} from "./runtimeState";
 import { createTauriBackend, type TauriBackendBridge } from "./tauriBackend";
 import {
   APP_CONFIG_SCHEMA_VERSION,
@@ -18,7 +8,6 @@ import {
   RUNTIME_CONTROL_EVENT,
   type AppConfig,
   type CaptionSessionSnapshotV1,
-  type CaptionSnapshotV1,
   type DiagnosticCategory,
   type RuntimeControlSnapshot,
   type RuntimeEvent,
@@ -26,15 +15,13 @@ import {
   type RuntimeStatusEvent,
 } from "./types";
 
-const expectedFinalText = "Testing live caption preview from the mock runtime.";
-
 const fakeInitialConfig: AppConfig = {
   schemaVersion: APP_CONFIG_SCHEMA_VERSION,
   audio: { inputDeviceId: null },
   stt: {
     provider: "openai",
-    language: "en",
-    model: "gpt-4o-mini-transcribe",
+    languages: ["en"],
+    model: "gpt-transcribe",
   },
   osc: {
     host: "127.0.0.1",
@@ -94,7 +81,7 @@ function createFakeTauriBridge(): TauriBackendBridge {
 
   function controlSnapshot(): RuntimeControlSnapshot {
     return {
-      contractVersion: 2,
+      contractVersion: 3,
       revision: controlRevision,
       runtime: { ...latestStatus },
       desired: {
@@ -184,7 +171,7 @@ function createFakeTauriBridge(): TauriBackendBridge {
             host: selected.osc.host,
             port: selected.osc.port,
           },
-          uploadsMicrophoneAudio: selected.stt.provider === "openai",
+          uploadsMicrophoneAudio: true,
         };
         publishCaptionSession({
           active: {
@@ -224,82 +211,6 @@ function createFakeTauriBridge(): TauriBackendBridge {
           emitDiagnostic("runtime", "runtime.stopped", "Runtime stopped");
         }
         result = controlSnapshot();
-      } else if (command === "emit_mock_transcript") {
-        if (
-          latestStatus.status !== "running" ||
-          session?.selected.stt.provider !== "mock"
-        ) {
-          return Promise.reject(
-            new Error(
-              "Mock Transcript requires an active Mock runtime session.",
-            ),
-          );
-        }
-        const utteranceId = eventId("utterance");
-        const timestampMs = timestamp();
-        const active = captionSession.active;
-
-        if (active === null) {
-          return Promise.reject(new Error("Recognition stream is missing."));
-        }
-        const base = {
-          generation: active.generation,
-          streamId: active.streamId,
-          unitId: utteranceId,
-          lane: "source" as const,
-          language: session.selected.stt.language,
-          provider: session.selected.stt.provider,
-          model: session.selected.stt.model,
-          unitStartedAtMs: timestampMs,
-          timestampMs,
-        };
-
-        emit(RUNTIME_EVENTS.utteranceStarted, {
-          id: eventId("utterance-start"),
-          generation: active.generation,
-          streamId: active.streamId,
-          utteranceId,
-          timestampMs,
-        });
-        publishCaptionSession({
-          active,
-          activeUnits: [{ unitId: utteranceId, startedAtMs: timestampMs }],
-          captions: captionSession.captions.filter(
-            (caption) => caption.state === "completed",
-          ),
-        });
-        const ongoing: CaptionSnapshotV1 = {
-          ...base,
-          revision: 1,
-          text: "Testing live caption preview...",
-          state: "ongoing",
-        };
-        publishCaptionSession({
-          active,
-          activeUnits: [{ unitId: utteranceId, startedAtMs: timestampMs }],
-          captions: [ongoing, ...captionSession.captions],
-        });
-        const completed: CaptionSnapshotV1 = {
-          ...base,
-          revision: 2,
-          text: expectedFinalText,
-          state: "completed",
-        };
-        publishCaptionSession({
-          active,
-          activeUnits: [],
-          captions: [
-            completed,
-            ...captionSession.captions.filter(
-              (caption) => caption.state === "completed",
-            ),
-          ].slice(0, 5),
-        });
-        emitDiagnostic(
-          "stt",
-          "stt.mock_transcript_emitted",
-          "Mock transcript emitted",
-        );
       } else if (command === "send_osc_test_message") {
         emitDiagnostic("osc", "osc.test_simulated", "OSC test simulated");
       } else if (command === "get_runtime_control_snapshot") {
@@ -315,31 +226,6 @@ function createFakeTauriBridge(): TauriBackendBridge {
 
       return Promise.resolve(result as Result);
     },
-  };
-}
-
-function projectEvents(events: readonly RuntimeEvent[]) {
-  let state = createRuntimeState({
-    status: "idle",
-    message: "Synthetic initial state",
-    timestampMs: 0,
-  });
-  let captionState = createCaptionSessionState();
-
-  for (const event of events) {
-    if (event.type === "captionSessionChanged") {
-      captionState = reduceCaptionSessionState(captionState, {
-        type: "snapshotReceived",
-        snapshot: event.payload,
-      });
-    } else {
-      state = reduceRuntimeState(state, { type: "backendEvent", event });
-    }
-  }
-
-  return {
-    runtime: selectRuntimeView(state),
-    caption: selectCaptionSessionView(captionState, true),
   };
 }
 
@@ -375,87 +261,6 @@ describe.each(backendCases)("$name contract", ({ create }) => {
     }
 
     expect(observed).toEqual(["control", "status", "control", "status"]);
-  });
-
-  test("normalizes the same completed lifecycle and Stop behavior", async () => {
-    const backend = create();
-    const events: RuntimeEvent[] = [];
-    const unsubscribe = await backend.listen((event) => {
-      events.push(event);
-    });
-
-    try {
-      const initialConfig = (await backend.getControlSnapshot()).desired.config;
-      await backend.saveConfig({
-        ...initialConfig,
-        stt: { ...initialConfig.stt, provider: "mock" },
-      });
-      await backend.startRuntime();
-      expect((await backend.getControlSnapshot()).runtime.status).toBe(
-        "running",
-      );
-
-      await backend.runCommand("emit_mock_transcript");
-      await backend.stopRuntime();
-      expect((await backend.getControlSnapshot()).runtime.status).toBe(
-        "stopped",
-      );
-    } finally {
-      unsubscribe();
-    }
-
-    expect(events.map((event) => event.type)).toEqual([
-      "captionSessionChanged",
-      "status",
-      "status",
-      "utteranceStarted",
-      "captionSessionChanged",
-      "captionSessionChanged",
-      "captionSessionChanged",
-      "diagnostic",
-      "status",
-      "captionSessionChanged",
-      "status",
-      "diagnostic",
-    ]);
-
-    const captionAggregates = events.filter(
-      (event) => event.type === "captionSessionChanged",
-    );
-    const ongoing = captionAggregates.find((event) =>
-      event.payload.captions.some((caption) => caption.state === "ongoing"),
-    );
-    const completed = captionAggregates.find((event) =>
-      event.payload.captions.some(
-        (caption) => caption.text === expectedFinalText,
-      ),
-    );
-
-    expect(ongoing?.payload.captions[0]).toMatchObject({
-      state: "ongoing",
-      language: "en",
-      provider: "mock",
-      revision: 1,
-      text: "Testing live caption preview...",
-    });
-    expect(completed?.payload.captions[0]).toMatchObject({
-      state: "completed",
-      language: "en",
-      provider: "mock",
-      revision: 2,
-      text: expectedFinalText,
-    });
-
-    const view = projectEvents(events);
-
-    expect(view.runtime.runtimeStatus.status).toBe("stopped");
-    expect(view.caption.captionMode).toBe("final");
-    expect(view.caption.visibleCaption?.text).toBe(expectedFinalText);
-    expect(view.caption.completedCaptions).toHaveLength(1);
-    expect(view.runtime.diagnostics.at(0)?.code).toBe("runtime.stopped");
-    expect(view.runtime.diagnostics.at(1)?.code).toBe(
-      "stt.mock_transcript_emitted",
-    );
   });
 
   test("rejects duplicate Start while preserving the active runtime", async () => {

@@ -1,23 +1,23 @@
 use super::*;
 use crate::caption_session::CaptionLane;
-use crate::config::{PublicationMode, SttConfig, SttProvider};
+use crate::config::{OpenAiTranscriptionModel, PublicationMode, SttConfig, SttProvider};
 
-fn stt(provider: SttProvider, model: &str) -> SttConfig {
+fn stt(model: OpenAiTranscriptionModel) -> SttConfig {
     SttConfig {
-        provider,
-        language: "en".to_string(),
-        model: model.to_string(),
+        provider: SttProvider::OpenAi,
+        languages: vec!["zh".to_string(), "en".to_string()],
+        model,
     }
 }
 
 #[test]
-fn bounded_openai_profile_describes_the_complete_adapter_path() {
-    let profile = recognition_capabilities(&stt(SttProvider::OpenAi, "any-bounded-model"));
+fn gpt_transcribe_profile_is_completed_only_after_application_commit() {
+    let profile = recognition_capabilities(&stt(OpenAiTranscriptionModel::GptTranscribe));
 
-    assert_eq!(profile.path, RecognitionPath::OpenAiBounded);
+    assert_eq!(profile.path, RecognitionPath::OpenAiGptTranscribe);
     assert_eq!(
         profile.input_shape,
-        RecognitionInputShape::CompletedAudioUnits
+        RecognitionInputShape::ContinuousAudioFrames
     );
     assert_eq!(profile.boundary_owner, BoundaryOwner::Application);
     assert_eq!(profile.unit_behavior, CaptionUnitBehavior::UnitBased);
@@ -32,43 +32,40 @@ fn bounded_openai_profile_describes_the_complete_adapter_path() {
 }
 
 #[test]
-fn mock_profiles_cover_every_phase_three_update_shape() {
-    let bounded = recognition_capabilities(&stt(SttProvider::Mock, MOCK_BOUNDED_MODEL));
-    let ongoing_completed =
-        recognition_capabilities(&stt(SttProvider::Mock, MOCK_ONGOING_COMPLETED_MODEL));
-    let ongoing_only = recognition_capabilities(&stt(SttProvider::Mock, MOCK_ONGOING_ONLY_MODEL));
-    let legacy_mock = recognition_capabilities(&stt(SttProvider::Mock, "saved-before-phase-3"));
+fn gpt_live_transcribe_profile_exposes_ongoing_and_completed_snapshots() {
+    let profile = recognition_capabilities(&stt(OpenAiTranscriptionModel::GptLiveTranscribe));
 
-    assert_eq!(bounded.path, RecognitionPath::MockBounded);
-    assert_eq!(bounded.lanes[0].updates, LaneUpdateBehavior::CompletedOnly);
+    assert_eq!(profile.path, RecognitionPath::OpenAiGptLiveTranscribe);
     assert_eq!(
-        ongoing_completed.path,
-        RecognitionPath::MockOngoingCompleted
+        profile.input_shape,
+        RecognitionInputShape::ContinuousAudioFrames
     );
+    assert_eq!(profile.boundary_owner, BoundaryOwner::Application);
+    assert_eq!(profile.unit_behavior, CaptionUnitBehavior::UnitBased);
     assert_eq!(
-        ongoing_completed.lanes[0].updates,
-        LaneUpdateBehavior::OngoingAndCompleted
+        profile.lanes,
+        vec![LaneCapabilities {
+            lane: CaptionLane::Source,
+            updates: LaneUpdateBehavior::OngoingAndCompleted,
+            revisions: RevisionBehavior::RevisableFullSnapshot,
+        }]
     );
-    assert_eq!(
-        ongoing_completed.lanes[0].revisions,
-        RevisionBehavior::RevisableFullSnapshot
-    );
-    assert_eq!(ongoing_only.path, RecognitionPath::MockOngoingOnly);
-    assert_eq!(ongoing_only.unit_behavior, CaptionUnitBehavior::Unitless);
-    assert_eq!(
-        ongoing_only.lanes[0].updates,
-        LaneUpdateBehavior::OngoingOnly
-    );
-    assert_eq!(legacy_mock, ongoing_completed);
 }
 
 #[test]
-fn completed_only_path_keeps_requested_live_mode_in_an_incompatible_plan() {
-    let profile = recognition_capabilities(&stt(SttProvider::OpenAi, "bounded"));
-    let plan = plan_publication(&profile, PublicationMode::Live, &[CaptionLane::Source]);
+fn gpt_transcribe_completed_is_ready_and_live_is_explicitly_incompatible() {
+    let profile = recognition_capabilities(&stt(OpenAiTranscriptionModel::GptTranscribe));
 
     assert_eq!(
-        plan,
+        plan_publication(&profile, PublicationMode::Completed, &[CaptionLane::Source]),
+        PublicationPlan::Ready {
+            mode: PublicationMode::Completed,
+            policy: ResolvedPublicationPolicy::Completed,
+            selected_lanes: vec![CaptionLane::Source],
+        }
+    );
+    assert_eq!(
+        plan_publication(&profile, PublicationMode::Live, &[CaptionLane::Source]),
         PublicationPlan::Incompatible {
             requested_mode: PublicationMode::Live,
             selected_lanes: vec![CaptionLane::Source],
@@ -81,8 +78,8 @@ fn completed_only_path_keeps_requested_live_mode_in_an_incompatible_plan() {
 }
 
 #[test]
-fn ongoing_plus_completed_supports_both_modes() {
-    let profile = recognition_capabilities(&stt(SttProvider::Mock, MOCK_ONGOING_COMPLETED_MODEL));
+fn gpt_live_transcribe_keeps_both_publication_modes_ready() {
+    let profile = recognition_capabilities(&stt(OpenAiTranscriptionModel::GptLiveTranscribe));
 
     for mode in [PublicationMode::Completed, PublicationMode::Live] {
         assert_eq!(
@@ -102,34 +99,8 @@ fn ongoing_plus_completed_supports_both_modes() {
 }
 
 #[test]
-fn ongoing_only_supports_live_without_fabricating_completed_support() {
-    let profile = recognition_capabilities(&stt(SttProvider::Mock, MOCK_ONGOING_ONLY_MODEL));
-
-    assert_eq!(
-        plan_publication(&profile, PublicationMode::Completed, &[CaptionLane::Source],),
-        PublicationPlan::Incompatible {
-            requested_mode: PublicationMode::Completed,
-            selected_lanes: vec![CaptionLane::Source],
-            reason: PublicationIncompatibility::ModeUnsupported {
-                lanes: vec![CaptionLane::Source],
-            },
-            supported_modes: vec![PublicationMode::Live],
-        }
-    );
-    assert!(matches!(
-        plan_publication(&profile, PublicationMode::Live, &[CaptionLane::Source]),
-        PublicationPlan::Ready {
-            policy: ResolvedPublicationPolicy::LiveUnitless {
-                first_non_empty_delay_ms: LIVE_OBSERVATION_MILLIS,
-            },
-            ..
-        }
-    ));
-}
-
-#[test]
 fn missing_selected_lane_is_incompatible_in_every_mode() {
-    let profile = recognition_capabilities(&stt(SttProvider::OpenAi, "bounded"));
+    let profile = recognition_capabilities(&stt(OpenAiTranscriptionModel::GptTranscribe));
 
     for mode in [PublicationMode::Completed, PublicationMode::Live] {
         assert_eq!(
@@ -148,7 +119,7 @@ fn missing_selected_lane_is_incompatible_in_every_mode() {
 
 #[test]
 fn planner_requires_at_least_one_selected_lane() {
-    let profile = recognition_capabilities(&stt(SttProvider::OpenAi, "bounded"));
+    let profile = recognition_capabilities(&stt(OpenAiTranscriptionModel::GptTranscribe));
 
     assert_eq!(
         plan_publication(&profile, PublicationMode::Completed, &[]),
@@ -162,13 +133,14 @@ fn planner_requires_at_least_one_selected_lane() {
 }
 
 #[test]
-fn runtime_plan_keeps_openai_live_as_the_requested_incompatible_mode() {
+fn runtime_plan_never_rewrites_an_incompatible_model_or_mode() {
     let mut config = crate::config::AppConfig::default();
     config.publication.mode = PublicationMode::Live;
 
     let plan = plan_runtime(&config);
 
-    assert_eq!(plan.recognition.path, RecognitionPath::OpenAiBounded);
+    assert_eq!(config.stt.model, OpenAiTranscriptionModel::GptTranscribe);
+    assert_eq!(plan.recognition.path, RecognitionPath::OpenAiGptTranscribe);
     assert!(matches!(
         plan.publication,
         PublicationPlan::Incompatible {

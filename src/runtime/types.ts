@@ -1,24 +1,27 @@
 export type RuntimeStatus =
   "idle" | "starting" | "running" | "stopping" | "stopped" | "error";
-export const STT_PROVIDERS = ["openai", "mock"] as const;
+export const STT_PROVIDERS = ["openai"] as const;
 export type SttProvider = (typeof STT_PROVIDERS)[number];
+export const OPENAI_TRANSCRIPTION_MODELS = [
+  "gpt-transcribe",
+  "gpt-live-transcribe",
+] as const;
+export type OpenAiTranscriptionModel =
+  (typeof OPENAI_TRANSCRIPTION_MODELS)[number];
 export type ProviderSecretStorage = "systemCredentialStore" | "environment";
 export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";
 export type DiagnosticSeverity = "info" | "warning" | "error";
-export type UtteranceEndReason = "noSpeech" | "sttFailed" | "discarded";
+export type UtteranceEndReason = "noSpeech" | "sttFailed";
 export type CaptionMode = "waiting" | "listening" | "partial" | "final";
 
 export type CaptionLane = "source" | "translation";
 export type CaptionState = "ongoing" | "completed";
 export type PublicationMode = "completed" | "live";
-export type RecognitionPath =
-  "openAiBounded" | "mockBounded" | "mockOngoingCompleted" | "mockOngoingOnly";
-export type RecognitionInputShape =
-  "completedAudioUnits" | "continuousAudioFrames";
-export type BoundaryOwner = "application" | "provider" | "none";
-export type CaptionUnitBehavior = "unitBased" | "unitless";
-export type LaneUpdateBehavior =
-  "completedOnly" | "ongoingAndCompleted" | "ongoingOnly";
+export type RecognitionPath = "openAiGptTranscribe" | "openAiGptLiveTranscribe";
+export type RecognitionInputShape = "continuousAudioFrames";
+export type BoundaryOwner = "application";
+export type CaptionUnitBehavior = "unitBased";
+export type LaneUpdateBehavior = "completedOnly" | "ongoingAndCompleted";
 export type RevisionBehavior = "appendOnly" | "revisableFullSnapshot";
 
 export type RecognitionCapabilityProfile = Readonly<{
@@ -35,11 +38,7 @@ export type RecognitionCapabilityProfile = Readonly<{
 
 export type ResolvedPublicationPolicy =
   | Readonly<{ policy: "completed" }>
-  | Readonly<{ policy: "liveUnit"; observationWindowMs: number }>
-  | Readonly<{
-      policy: "liveUnitless";
-      firstNonEmptyDelayMs: number;
-    }>;
+  | Readonly<{ policy: "liveUnit"; observationWindowMs: number }>;
 
 export type PublicationPlan =
   | Readonly<{
@@ -98,10 +97,7 @@ export type CaptionSessionSnapshotV1 = Readonly<{
 export type CaptionDisplay = CaptionSnapshotV1 & Readonly<{ id: string }>;
 
 export type RuntimeCommand =
-  | "start_runtime"
-  | "stop_runtime"
-  | "emit_mock_transcript"
-  | "send_osc_test_message";
+  "start_runtime" | "stop_runtime" | "send_osc_test_message";
 
 export const RUNTIME_EVENTS = {
   status: "runtime-status",
@@ -113,7 +109,7 @@ export const RUNTIME_EVENTS = {
 
 export const RUNTIME_CONTROL_EVENT = "runtime-control-changed" as const;
 
-export const APP_CONFIG_SCHEMA_VERSION = 2 as const;
+export const APP_CONFIG_SCHEMA_VERSION = 3 as const;
 
 export type AppConfig = {
   schemaVersion: typeof APP_CONFIG_SCHEMA_VERSION;
@@ -122,8 +118,8 @@ export type AppConfig = {
   };
   stt: {
     provider: SttProvider;
-    language: string;
-    model: string;
+    languages: string[];
+    model: OpenAiTranscriptionModel;
   };
   osc: {
     host: string;
@@ -194,7 +190,7 @@ export type RuntimeSession = {
 };
 
 export type RuntimeControlSnapshot = {
-  contractVersion: 2;
+  contractVersion: 3;
   revision: number;
   runtime: RuntimeStatusEvent;
   desired: {

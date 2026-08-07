@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
-import runtimeControlFixture from "../../contracts/runtime-control-snapshot-v2.json?raw";
-import { decodeRuntimeControlSnapshotV2 } from "./runtimeControlContract";
+import runtimeControlFixture from "../../contracts/runtime-control-snapshot-v3.json?raw";
+import { decodeRuntimeControlSnapshotV3 } from "./runtimeControlContract";
 
 const completePayload = {
-  contractVersion: 2,
+  contractVersion: 3,
   revision: 9,
   runtime: {
     status: "running",
@@ -13,12 +13,12 @@ const completePayload = {
   desired: {
     revision: 4,
     config: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       audio: { inputDeviceId: null },
       stt: {
-        provider: "mock",
-        language: "en",
-        model: "mock-ongoing-completed",
+        provider: "openai",
+        languages: ["zh", "en"],
+        model: "gpt-live-transcribe",
       },
       osc: { host: "127.0.0.1", port: 9000, enabled: true },
       publication: { mode: "live" },
@@ -26,9 +26,9 @@ const completePayload = {
     },
     runtimePlan: {
       recognition: {
-        path: "mockOngoingCompleted",
+        path: "openAiGptLiveTranscribe",
         inputShape: "continuousAudioFrames",
-        boundaryOwner: "provider",
+        boundaryOwner: "application",
         unitBehavior: "unitBased",
         lanes: [
           {
@@ -62,18 +62,18 @@ const completePayload = {
     selected: {
       audio: { inputDeviceId: null },
       stt: {
-        provider: "mock",
-        language: "en",
-        model: "mock-ongoing-completed",
+        provider: "openai",
+        languages: ["zh", "en"],
+        model: "gpt-live-transcribe",
       },
       osc: { host: "127.0.0.1", port: 9000, enabled: true },
       publication: { mode: "live" },
     },
     runtimePlan: {
       recognition: {
-        path: "mockOngoingCompleted",
+        path: "openAiGptLiveTranscribe",
         inputShape: "continuousAudioFrames",
-        boundaryOwner: "provider",
+        boundaryOwner: "application",
         unitBehavior: "unitBased",
         lanes: [
           {
@@ -96,20 +96,20 @@ const completePayload = {
       host: "127.0.0.1",
       port: 9000,
     },
-    uploadsMicrophoneAudio: false,
+    uploadsMicrophoneAudio: true,
   },
   pendingChanges: [],
 };
 
 describe("runtime control contract", () => {
-  test("decodes the shared Rust-serialized V2 fixture", () => {
+  test("decodes the shared Rust-serialized V3 fixture", () => {
     const fixture = JSON.parse(runtimeControlFixture) as unknown;
 
-    expect(decodeRuntimeControlSnapshotV2(fixture)).toEqual(fixture);
+    expect(decodeRuntimeControlSnapshotV3(fixture)).toEqual(fixture);
   });
 
-  test("decodes a complete authoritative V2 snapshot", () => {
-    expect(decodeRuntimeControlSnapshotV2(completePayload)).toEqual(
+  test("decodes a complete authoritative V3 snapshot", () => {
+    expect(decodeRuntimeControlSnapshotV3(completePayload)).toEqual(
       completePayload,
     );
   });
@@ -134,7 +134,7 @@ describe("runtime control contract", () => {
       session: null,
     };
 
-    expect(decodeRuntimeControlSnapshotV2(payload)).toMatchObject({
+    expect(decodeRuntimeControlSnapshotV3(payload)).toMatchObject({
       desired: {
         config: { publication: { mode: "live" } },
         runtimePlan: { publication: incompatiblePublication },
@@ -143,7 +143,7 @@ describe("runtime control contract", () => {
     });
   });
 
-  test("decodes completed and unitless Live policies", () => {
+  test("decodes completed and unit-based Live policies", () => {
     const cases = [
       {
         mode: "completed",
@@ -151,7 +151,7 @@ describe("runtime control contract", () => {
       },
       {
         mode: "live",
-        policy: { policy: "liveUnitless", firstNonEmptyDelayMs: 1000 },
+        policy: { policy: "liveUnit", observationWindowMs: 1000 },
       },
     ];
 
@@ -178,9 +178,79 @@ describe("runtime control contract", () => {
       };
 
       expect(
-        decodeRuntimeControlSnapshotV2(payload).desired.runtimePlan.publication,
+        decodeRuntimeControlSnapshotV3(payload).desired.runtimePlan.publication,
       ).toEqual(payload.desired.runtimePlan.publication);
     }
+  });
+
+  test.each([
+    ["inputShape", "completedAudioUnits"],
+    ["boundaryOwner", "provider"],
+    ["boundaryOwner", "none"],
+    ["unitBehavior", "unitless"],
+  ] as const)("rejects removed recognition %s value %s", (field, value) => {
+    const payload = {
+      ...completePayload,
+      desired: {
+        ...completePayload.desired,
+        runtimePlan: {
+          ...completePayload.desired.runtimePlan,
+          recognition: {
+            ...completePayload.desired.runtimePlan.recognition,
+            [field]: value,
+          },
+        },
+      },
+    };
+
+    expect(() => decodeRuntimeControlSnapshotV3(payload)).toThrow(
+      `$.desired.runtimePlan.recognition.${field}`,
+    );
+  });
+
+  test("rejects removed ongoing-only lane behavior", () => {
+    const payload = {
+      ...completePayload,
+      desired: {
+        ...completePayload.desired,
+        runtimePlan: {
+          ...completePayload.desired.runtimePlan,
+          recognition: {
+            ...completePayload.desired.runtimePlan.recognition,
+            lanes: [
+              {
+                ...completePayload.desired.runtimePlan.recognition.lanes[0],
+                updates: "ongoingOnly",
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    expect(() => decodeRuntimeControlSnapshotV3(payload)).toThrow(
+      "$.desired.runtimePlan.recognition.lanes[0].updates",
+    );
+  });
+
+  test("rejects removed unitless Live policy", () => {
+    const payload = {
+      ...completePayload,
+      desired: {
+        ...completePayload.desired,
+        runtimePlan: {
+          ...completePayload.desired.runtimePlan,
+          publication: {
+            ...completePayload.desired.runtimePlan.publication,
+            policy: { policy: "liveUnitless", firstNonEmptyDelayMs: 1000 },
+          },
+        },
+      },
+    };
+
+    expect(() => decodeRuntimeControlSnapshotV3(payload)).toThrow(
+      "$.desired.runtimePlan.publication.policy.policy",
+    );
   });
 
   test("rejects an incompatible plan on an installed session", () => {
@@ -201,12 +271,69 @@ describe("runtime control contract", () => {
       },
     };
 
-    expect(() => decodeRuntimeControlSnapshotV2(payload)).toThrow(
+    expect(() => decodeRuntimeControlSnapshotV3(payload)).toThrow(
       "Invalid runtime control payload at $.session.runtimePlan.publication.state: installed sessions require a ready publication plan.",
     );
   });
 
   test.each([
+    [
+      "a legacy contract version",
+      { ...completePayload, contractVersion: 2 },
+      "$.contractVersion",
+    ],
+    [
+      "a legacy OpenAI model",
+      {
+        ...completePayload,
+        desired: {
+          ...completePayload.desired,
+          config: {
+            ...completePayload.desired.config,
+            stt: {
+              ...completePayload.desired.config.stt,
+              model: "gpt-4o-mini-transcribe",
+            },
+          },
+        },
+      },
+      "$.desired.config.stt.model",
+    ],
+    [
+      "the removed Mock provider",
+      {
+        ...completePayload,
+        desired: {
+          ...completePayload.desired,
+          config: {
+            ...completePayload.desired.config,
+            stt: {
+              ...completePayload.desired.config.stt,
+              provider: "mock",
+            },
+          },
+        },
+      },
+      "$.desired.config.stt.provider",
+    ],
+    [
+      "the legacy singular language field",
+      {
+        ...completePayload,
+        desired: {
+          ...completePayload.desired,
+          config: {
+            ...completePayload.desired.config,
+            stt: {
+              provider: "openai",
+              language: "en",
+              model: "gpt-transcribe",
+            },
+          },
+        },
+      },
+      "$.desired.config.stt.language",
+    ],
     [
       "unknown nested fields",
       {
@@ -264,6 +391,6 @@ describe("runtime control contract", () => {
       "$.desired.runtimePlan.publication.mode",
     ],
   ])("rejects %s", (_name, payload, path) => {
-    expect(() => decodeRuntimeControlSnapshotV2(payload)).toThrow(path);
+    expect(() => decodeRuntimeControlSnapshotV3(payload)).toThrow(path);
   });
 });

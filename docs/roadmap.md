@@ -23,7 +23,8 @@ surface. Keep this foundation stable; do not reopen it as a general rewrite.
 
 ## Phase 1: Completed cloud baseline
 
-Status: complete, including real Windows/VRChat validation.
+Status: complete and superseded as the active provider implementation,
+including its original real Windows/VRChat validation.
 
 The segmented `gpt-4o-mini-transcribe` Completed path is the trustworthy
 baseline: process-wide 1000 ms pacing
@@ -53,35 +54,61 @@ Status: generic foundation complete. The first real Live provider is Phase 4.
 
 Backend-owned `CaptionSessionSnapshotV1` state, the capability planner
 ([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md),
-[ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)), config
-schema v2 migration, deterministic Mock provider shapes, a latest-wins Live
-worker sharing pacing and Stop with the unchanged Completed path, and
-Settings that keeps both modes visible with explicit alternatives instead of
-automatic fallback.
+[ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)), a
+versioned config/control contract, a latest-wins Live worker sharing pacing and
+Stop with the Completed path, and Settings that keeps both modes visible with
+explicit alternatives instead of automatic fallback. The current config and
+runtime-control contract are V3; deterministic recognition scripts are now
+test-only rather than a product provider.
 
-## Phase 4: First real cloud Live path
+## Phase 4: OpenAI Realtime recognition cutover
 
-Status: not started; gated on protocol evidence.
+Status: implementation complete; authenticated OpenAI and Windows/VRChat
+validation pending.
 
-Goal: prove that a real provider can deliver the Live experience. The Mock
-paths prove the plumbing, not the product.
+Goal: replace the bounded OpenAI implementation with the complete release
+recognition surface: `gpt-transcribe` for Completed, and
+`gpt-live-transcribe` for Completed or Live, both over Realtime transcription
+WebSockets ([ADR 0024](./adr/0024-use-openai-realtime-transcription.md)).
 
-- run an authenticated protocol spike for OpenAI Realtime transcription and
-  resolve the documented model/session conflict
+Implemented:
+
+- the backend-owned catalog contains exactly the two release paths and their
+  publication capabilities; legacy models and incompatible timing are rejected
+  without migration or fallback;
+- the runtime uses one provider-independent `RecognitionSession` Interface;
+  scripted deterministic Adapters are test-only;
+- the OpenAI Module owns authenticated Realtime WebSocket setup, system-proxy
+  routing, 24 kHz PCM conversion, append/commit, `item_id` correlation,
+  full-snapshot normalization, detected-language handling, and explicit Stop;
+- ordering, item failure, terminal session errors, bounded audio/protocol
+  queues, a 30-second post-commit completion deadline, visible per-item
+  diagnostics, authentication/status diagnostics, and late events after Stop
+  are deterministic under tests;
+- invalid legacy settings block Start until the current strict configuration is
+  reviewed and saved, while malformed or unsupported selected environment,
+  Windows, or macOS proxy settings fail closed rather than allowing a direct
+  connection; and
+- the production Mock selection, bounded HTTP/WAV Adapter, old model fields,
+  and otherwise-unused direct HTTP/WAV dependencies are removed with no
+  fallback branch.
+
+Remaining before exit:
+
+- run a paid authenticated smoke for both exact models and retain redacted,
+  timestamped evidence for session update, append, commit, delta/completion,
+  provider error, and disconnect behavior
   ([research](./research/openai-speech-streaming-options.md));
-- capture raw timestamped event traces — VAD and commit behavior, revisions,
-  item completion, corrections, usage, disconnects — before writing the
-  adapter;
-- implement one real Realtime recognition adapter mapped to the normalized
-  contract; provider failure stays explicit and never switches provider,
-  model, or mode;
-- validate short speech, long uninterrupted speech, code-switching, network
-  interruption, and Stop on Windows with VRChat running; record latency,
-  revision, correction, and resource measurements.
+- validate the native system-proxy route and cancellation/Stop behavior on the
+  Windows Tier 1 path; and
+- run short, long uninterrupted, English, Chinese, mixed-language, network
+  interruption, and Stop scenarios with VRChat active; record latency,
+  revision/correction, and resource measurements.
 
-Exit: the Live experience passes thresholds chosen and recorded from the
-measured Windows/VRChat session, or a no-go record defers cloud Live without
-blocking later phases.
+Exit: only the two catalog paths can start an OpenAI recognition session; the
+capability matrix is enforced; no REST/WAV, legacy-model, production-Mock, or
+silent fallback path remains; both models pass contract tests and recorded
+Windows/VRChat protocol validation.
 
 ## Phase 5: Completed translation
 
@@ -160,8 +187,9 @@ silent cloud fallback
   download, or a managed component catalog;
 - define a narrow Rust worker protocol with bounded queues, health checks,
   and crash isolation;
-- implement sherpa-onnx plus SenseVoiceSmall on CPU as the first bounded
-  local adapter ([research](./research/local-inference-notes.md));
+- implement sherpa-onnx plus SenseVoiceSmall on CPU as the first bounded local
+  worker Adapter behind the same `RecognitionSession` Interface used by
+  OpenAI ([research](./research/local-inference-notes.md));
 - record an English/Chinese/mixed-speech, latency, and resource baseline with
   VRChat running;
 - add distinct diagnostics for missing files, incompatible runtime, load
@@ -181,7 +209,7 @@ Goal: complete the local backend choice and add real local Live candidates
 - package and validate the CUDA runtime path; preserve the preference when a
   model lacks CUDA support;
 - implement Streaming Paraformer and Streaming Zipformer as independent local
-  Live candidates;
+  Live Adapters behind the same `RecognitionSession` Interface;
 - bring every model/runtime pack through the Phase 8 distribution,
   verification, and removal flow;
 - benchmark accuracy, mixed-language speech, latency, resources, and VRChat

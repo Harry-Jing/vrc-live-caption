@@ -1,18 +1,17 @@
 use super::*;
 use crate::capability_planner::{
-    MOCK_ONGOING_COMPLETED_MODEL, PublicationIncompatibility, PublicationPlan,
-    ResolvedPublicationPolicy, plan_runtime,
+    PublicationIncompatibility, PublicationPlan, ResolvedPublicationPolicy, plan_runtime,
 };
 use crate::caption_session::CaptionLane;
-use crate::config::{AppConfig, PublicationMode, SttProvider};
+use crate::config::{AppConfig, OpenAiTranscriptionModel, PublicationMode, SttProvider};
 use crate::events::RuntimeStatus;
 use crate::secrets::{ProviderSecretStatus, ProviderSecretStorage};
 
 #[test]
-fn shared_v2_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Error> {
+fn shared_v3_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Error> {
     let mut config = AppConfig::default();
-    config.stt.provider = SttProvider::Mock;
-    config.stt.model = MOCK_ONGOING_COMPLETED_MODEL.to_string();
+    config.stt.languages = vec!["zh".to_string(), "en".to_string()];
+    config.stt.model = OpenAiTranscriptionModel::GptLiveTranscribe;
     config.publication.mode = PublicationMode::Live;
     let runtime_plan = plan_runtime(&config);
     let snapshot = RuntimeControlSnapshot {
@@ -41,17 +40,22 @@ fn shared_v2_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Err
             started_from_config_revision: 4,
             selected: RuntimeSelectedConfig::from(&config),
             runtime_plan,
-            credential: None,
+            credential: Some(RuntimeCredentialSnapshot {
+                provider: SttProvider::OpenAi,
+                storage: ProviderSecretStorage::SystemCredentialStore,
+                display_suffix: Some("abcd".to_string()),
+                revision: 2,
+            }),
             chatbox: RuntimeChatboxSnapshot::Ready {
                 host: "127.0.0.1".to_string(),
                 port: 9000,
             },
-            uploads_microphone_audio: false,
+            uploads_microphone_audio: true,
         }),
         pending_changes: Vec::new(),
     };
     let expected = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../contracts/runtime-control-snapshot-v2.json"
+        "../../contracts/runtime-control-snapshot-v3.json"
     ))?;
 
     assert_eq!(serde_json::to_value(snapshot)?, expected);
@@ -61,12 +65,12 @@ fn shared_v2_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Err
 #[test]
 fn every_struct_variant_field_uses_camel_case() -> Result<(), serde_json::Error> {
     assert_eq!(
-        serde_json::to_value(ResolvedPublicationPolicy::LiveUnitless {
-            first_non_empty_delay_ms: 1_000,
+        serde_json::to_value(ResolvedPublicationPolicy::LiveUnit {
+            observation_window_ms: 1_000,
         })?,
         serde_json::json!({
-            "policy": "liveUnitless",
-            "firstNonEmptyDelayMs": 1_000,
+            "policy": "liveUnit",
+            "observationWindowMs": 1_000,
         })
     );
     assert_eq!(

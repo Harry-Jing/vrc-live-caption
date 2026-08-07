@@ -117,7 +117,6 @@ fn utterance_ended_payload_uses_stable_wire_format() {
     let reasons = [
         (UtteranceEndReason::NoSpeech, "noSpeech"),
         (UtteranceEndReason::SttFailed, "sttFailed"),
-        (UtteranceEndReason::Discarded, "discarded"),
     ];
 
     for (reason, expected) in reasons {
@@ -166,7 +165,6 @@ fn error_codes_share_the_prefix_of_their_diagnostic_category() {
         AppError::state("x"),
         AppError::stt("x"),
         AppError::stt_network("x"),
-        AppError::wav("x"),
     ];
 
     for error in errors {

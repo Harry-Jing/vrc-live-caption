@@ -9,7 +9,6 @@ import {
   type AppConfig,
   type CaptionSessionSnapshotV1,
   type RuntimeControlSnapshot,
-  type RuntimeEvent,
 } from "./types";
 
 const initialConfig: AppConfig = {
@@ -17,8 +16,8 @@ const initialConfig: AppConfig = {
   audio: { inputDeviceId: null },
   stt: {
     provider: "openai",
-    language: "en",
-    model: "gpt-4o-mini-transcribe",
+    languages: ["en"],
+    model: "gpt-transcribe",
   },
   osc: { enabled: true, host: "127.0.0.1", port: 9000 },
   publication: { mode: "completed" },
@@ -31,7 +30,7 @@ function createControlBridge(): TauriBackendBridge {
     Set<(event: Readonly<{ payload: unknown }>) => void>
   >();
   let snapshot: RuntimeControlSnapshot = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 1,
     runtime: { status: "idle", timestampMs: 1 },
     desired: {
@@ -91,16 +90,15 @@ function createControlBridge(): TauriBackendBridge {
       pending.push("microphone");
     }
     if (
-      selected.stt.provider !== config.stt.provider ||
-      selected.stt.language !== config.stt.language ||
+      selected.stt.languages.length !== config.stt.languages.length ||
+      selected.stt.languages.some(
+        (language, index) => language !== config.stt.languages[index],
+      ) ||
       selected.stt.model !== config.stt.model
     ) {
       pending.push("recognition");
     }
-    if (
-      selected.stt.provider === "openai" &&
-      sessionSecretRevision !== secretRevision
-    ) {
+    if (sessionSecretRevision !== secretRevision) {
       pending.push("credential");
     }
     if (
@@ -163,7 +161,7 @@ function createControlBridge(): TauriBackendBridge {
               host: selected.osc.host,
               port: selected.osc.port,
             },
-            uploadsMicrophoneAudio: selected.stt.provider === "openai",
+            uploadsMicrophoneAudio: true,
           },
         };
         publishCaptionSession({
@@ -230,77 +228,6 @@ function createControlBridge(): TauriBackendBridge {
           pendingChanges: pendingChanges(snapshot.desired.config),
         };
         emitControl();
-      } else if (command === "emit_mock_transcript") {
-        const activeSession = snapshot.session;
-
-        if (
-          snapshot.runtime.status !== "running" ||
-          activeSession?.selected.stt.provider !== "mock"
-        ) {
-          return Promise.reject(
-            new Error(
-              "Mock Transcript requires an active Mock runtime session.",
-            ),
-          );
-        }
-
-        const utteranceId = "fake-control-utterance";
-        const active = captionSession.active;
-
-        if (active === null) {
-          return Promise.reject(new Error("Recognition stream is missing."));
-        }
-        const base = {
-          generation: active.generation,
-          streamId: active.streamId,
-          unitId: utteranceId,
-          lane: "source" as const,
-          language: activeSession.selected.stt.language,
-          provider: activeSession.selected.stt.provider,
-          model: activeSession.selected.stt.model,
-          unitStartedAtMs: 4,
-          timestampMs: 4,
-        };
-        emit(RUNTIME_EVENTS.utteranceStarted, {
-          id: "fake-control-start",
-          generation: active.generation,
-          streamId: active.streamId,
-          utteranceId,
-          timestampMs: 4,
-        });
-        publishCaptionSession({
-          active,
-          activeUnits: [{ unitId: utteranceId, startedAtMs: 4 }],
-          captions: captionSession.captions,
-        });
-        publishCaptionSession({
-          active,
-          activeUnits: [{ unitId: utteranceId, startedAtMs: 4 }],
-          captions: [
-            {
-              ...base,
-              text: "Testing live caption preview...",
-              revision: 1,
-              state: "ongoing" as const,
-            },
-            ...captionSession.captions,
-          ],
-        });
-        publishCaptionSession({
-          active,
-          activeUnits: [],
-          captions: [
-            {
-              ...base,
-              text: "Testing live caption preview from the mock runtime.",
-              revision: 2,
-              state: "completed" as const,
-            },
-            ...captionSession.captions.filter(
-              (caption) => caption.state === "completed",
-            ),
-          ].slice(0, 5),
-        });
       } else if (command === "get_caption_session_snapshot") {
         return Promise.resolve(structuredClone(captionSession) as Result);
       }
@@ -362,7 +289,7 @@ test("TauriBackend rejects an invalid runtime-control pull", async () => {
   });
 
   await expect(backend.getControlSnapshot()).rejects.toThrow(
-    "Invalid runtime control payload at $.contractVersion: expected 2.",
+    "Invalid runtime control payload at $.contractVersion: expected 3.",
   );
 });
 
@@ -401,7 +328,7 @@ test.each([
   });
 
   await expect(invoke(backend)).rejects.toThrow(
-    "Invalid runtime control payload at $.contractVersion: expected 2.",
+    "Invalid runtime control payload at $.contractVersion: expected 3.",
   );
 });
 
@@ -425,7 +352,7 @@ test("TauriBackend decodes runtime-control pushes before delivery", async () => 
   });
 
   expect(() => deliver?.({ payload: { contractVersion: 1 } })).toThrow(
-    "Invalid runtime control payload at $.contractVersion: expected 2.",
+    "Invalid runtime control payload at $.contractVersion: expected 3.",
   );
   expect(received).toEqual([]);
   unsubscribe();
@@ -443,7 +370,7 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
     const started = await backend.startRuntime();
     unsubscribe();
 
-    expect(initial.contractVersion).toBe(2);
+    expect(initial.contractVersion).toBe(3);
     expect(initial.session).toBeNull();
     expect(started.session?.selected.stt.provider).toBe("openai");
     expect(observed.at(-1)?.revision).toBe(started.revision);
@@ -455,7 +382,11 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
     const changed: AppConfig = {
       ...initialConfig,
       audio: { inputDeviceId: "next-device" },
-      stt: { provider: "mock", language: "zh", model: "next-model" },
+      stt: {
+        provider: "openai",
+        languages: ["zh", "en"],
+        model: "gpt-live-transcribe",
+      },
       osc: { enabled: false, host: "192.0.2.30", port: 9012 },
       publication: { mode: "live" },
       ui: { showPartial: false },
@@ -532,50 +463,6 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
       supportedModes: ["completed"],
     });
     expect(retained.session).toBeNull();
-  });
-
-  test("uses the immutable Mock session metadata after desired settings change", async () => {
-    const backend = create();
-    const mockConfig: AppConfig = {
-      ...initialConfig,
-      stt: { provider: "mock", language: "ja", model: "mock-model" },
-    };
-    await backend.saveConfig(mockConfig);
-    await backend.startRuntime();
-    await backend.saveConfig(initialConfig);
-    const events: RuntimeEvent[] = [];
-    const unsubscribe = await backend.listen((event) => {
-      events.push(event);
-    });
-
-    try {
-      await backend.runCommand("emit_mock_transcript");
-    } finally {
-      unsubscribe();
-    }
-
-    const completed = events
-      .filter((event) => event.type === "captionSessionChanged")
-      .flatMap((event) => event.payload.captions)
-      .find((caption) => caption.state === "completed");
-    expect(completed).toMatchObject({
-      provider: "mock",
-      language: "ja",
-    });
-  });
-
-  test("does not make an OpenAI key change pending for an active Mock session", async () => {
-    const backend = create();
-    await backend.saveConfig({
-      ...initialConfig,
-      stt: { provider: "mock", language: "en", model: "mock-model" },
-    });
-    await backend.startRuntime();
-
-    const saved = await backend.saveProviderSecret("openai", "sk-test-efgh");
-
-    expect(saved.session?.selected.stt.provider).toBe("mock");
-    expect(saved.pendingChanges).not.toContain("credential");
   });
 
   test("restores the active session and pending changes from a pull snapshot", async () => {

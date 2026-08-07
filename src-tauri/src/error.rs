@@ -54,9 +54,6 @@ pub(crate) enum AppError {
     SttNetwork {
         message: String,
     },
-    Wav {
-        message: String,
-    },
 }
 
 impl AppError {
@@ -131,12 +128,6 @@ impl AppError {
         }
     }
 
-    pub(crate) fn wav(message: impl Into<String>) -> Self {
-        Self::Wav {
-            message: format!("Failed to encode captured audio as WAV: {}", message.into()),
-        }
-    }
-
     /// Machine-readable code for logs and diagnostic events. Codes follow the
     /// diagnostic naming convention `<category>.<detail>`, where the prefix
     /// matches the serialized category chosen by
@@ -155,7 +146,6 @@ impl AppError {
             Self::State { .. } => "runtime.state_failed",
             Self::Stt { .. } => "stt.failed",
             Self::SttNetwork { .. } => "stt.network_unreachable",
-            Self::Wav { .. } => "stt.wav_encode_failed",
         }
     }
 
@@ -183,7 +173,6 @@ impl AppError {
             Self::State { message } => message.clone(),
             Self::Stt { message } => message.clone(),
             Self::SttNetwork { message } => message.clone(),
-            Self::Wav { message } => message.clone(),
         }
     }
 }

@@ -10,15 +10,18 @@ mod config;
 mod error;
 mod events;
 mod live_chatbox_publisher;
-mod openai_bounded;
+mod openai_realtime;
+mod openai_realtime_transport;
 mod osc;
+mod recognition;
+mod recognition_audio;
+#[cfg(test)]
 mod recognition_fakes;
 mod runtime;
 mod runtime_control;
 mod secrets;
 mod segmenter;
 mod state;
-mod stt;
 
 use tauri::Manager;
 
@@ -44,7 +47,6 @@ pub fn run() {
             commands::stop_runtime,
             commands::get_runtime_control_snapshot,
             commands::get_caption_session_snapshot,
-            commands::emit_mock_transcript,
             commands::send_osc_test_message,
             commands::save_provider_secret,
             commands::delete_provider_secret

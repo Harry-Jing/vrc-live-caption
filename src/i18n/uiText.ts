@@ -16,7 +16,12 @@ const englishMessages = {
   "audio.devices.savedDisconnected": "Saved device (not connected)",
 
   "stt.providers.openai": "OpenAI",
-  "stt.providers.mock": "Mock",
+  "stt.models.gptTranscribe": "GPT Transcribe",
+  "stt.models.gptLiveTranscribe": "GPT Live Transcribe",
+  "stt.models.gptTranscribe.description":
+    "Transcription begins after each speech unit is committed. Supports Completed publication.",
+  "stt.models.gptLiveTranscribe.description":
+    "Low-latency transcription while you speak. Supports both Completed and Live publication.",
 
   "publication.mode.completed": "Completed",
   "publication.mode.live": "Live",
@@ -27,9 +32,6 @@ const englishMessages = {
   "publication.policy.completed": "Sends completed captions only.",
   "publication.policy.liveUnit": ({ delayMs }: { delayMs: number }) =>
     `Observes the first ${String(delayMs)} ms, then updates the newest caption until its unit completes.`,
-  "publication.policy.liveUnitless": ({ delayMs }: { delayMs: number }) =>
-    `Waits ${String(delayMs)} ms after the first text, then updates the Live caption without inventing completion.`,
-
   "runtime.title": "Runtime",
   "runtime.status.idle": "Idle",
   "runtime.status.starting": "Starting",
@@ -41,7 +43,6 @@ const englishMessages = {
   "runtime.status.noMessage": "No runtime status message.",
   "runtime.actions.start": "Start",
   "runtime.actions.stop": "Stop",
-  "runtime.actions.mockTranscript": "Mock Caption",
   "runtime.actions.oscTest": "OSC Test",
   "runtime.errors.actionFailed": "Runtime action failed",
   "runtime.errors.unknownAction": "Action failed.",
@@ -140,12 +141,16 @@ const englishMessages = {
   "settings.feedback.nextStart.change.chatboxOutput": "Chatbox output",
   "settings.feedback.nextStart.change.publication": "publication timing",
   "settings.sections.audio": "Audio",
-  "settings.sections.speechProvider": "Speech provider",
+  "settings.sections.speechProvider": "Speech recognition",
   "settings.sections.chatboxOutput": "Chatbox output",
   "settings.fields.microphone": "Microphone",
   "settings.fields.provider": "Provider",
-  "settings.fields.language": "Language",
-  "settings.fields.sttModel": "STT model",
+  "settings.fields.language": "Expected languages",
+  "settings.fields.language.description":
+    "Add one or more language hints, such as zh, en, or ja.",
+  "settings.fields.language.required":
+    "Add at least one non-empty language hint without duplicates.",
+  "settings.fields.sttModel": "OpenAI transcription model",
   "settings.fields.oscHost": "OSC host",
   "settings.fields.port": "Port",
   "settings.fields.chatboxOutput": "Chatbox output",
@@ -158,7 +163,7 @@ const englishMessages = {
     `Backend plan: ${description}`,
   "settings.publication.unverified.title": "Save to validate this timing",
   "settings.publication.unverified.description":
-    "This form has unsaved changes. After Save, the backend will validate the provider, model, and publication timing together.",
+    "This form has unsaved changes. After Save, the backend will validate the model and publication timing together.",
   "settings.publication.incompatible.title": ({ mode }: { mode: string }) =>
     `${mode} is not supported by this recognition path`,
   "settings.publication.incompatible.description":
@@ -169,7 +174,7 @@ const englishMessages = {
     mode,
   }: {
     mode: string;
-  }) => `Keep ${mode} · Change provider/model`,
+  }) => `Keep ${mode} · Change model`,
   "settings.loading": "Loading settings...",
   "settings.loadFailed": "Settings could not be loaded.",
   "settings.credentials.openai.title": "OpenAI credentials",
