@@ -882,15 +882,9 @@ fn candidate_needs_publication(state: &LivePublisherState) -> bool {
 }
 
 fn compose_recent_source(captions: &[&CaptionSnapshotV1]) -> String {
-    let mut captions = captions.to_vec();
-    captions.sort_by_key(|caption| {
-        (
-            caption.unit_started_at_ms.unwrap_or(caption.timestamp_ms),
-            caption.timestamp_ms,
-        )
-    });
     captions
-        .into_iter()
+        .iter()
+        .rev()
         .map(|caption| caption.text.trim())
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()

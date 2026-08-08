@@ -1,7 +1,8 @@
 use super::*;
 use crate::capability_planner::ResolvedPublicationPolicy;
 use crate::caption_session::{
-    CaptionActiveUnitV1, CaptionLane, CaptionSessionActiveV1, CaptionSnapshotV1, CaptionState,
+    CaptionActiveUnitV1, CaptionLane, CaptionSessionActiveV1, CaptionSessionStore,
+    CaptionSnapshotV1, CaptionState,
 };
 use crate::chatbox_pacer::Clock;
 use std::collections::HashSet;
@@ -452,10 +453,20 @@ fn active_unit_turns_typing_on_reasserts_at_four_seconds_and_cleans_up_once() ->
 }
 
 #[test]
-fn live_viewport_combines_recent_source_captions_in_time_order() -> AppResult<()> {
+fn live_viewport_uses_backend_unit_order_when_wall_clock_moves_backward() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, _) = start_unit_publisher(clock.clone(), transport.clone())?;
+    let store = CaptionSessionStore::default();
+    let active = store
+        .begin_generation(1)?
+        .active
+        .ok_or_else(|| AppError::state("Test generation was not active."))?;
+    assert!(
+        store
+            .start_unit(1, &active.stream_id, "unit-1".to_string(), 100)?
+            .is_some()
+    );
     let mut earlier = caption(
         Some("unit-1"),
         1,
@@ -464,19 +475,21 @@ fn live_viewport_combines_recent_source_captions_in_time_order() -> AppResult<()
     );
     earlier.unit_started_at_ms = Some(100);
     earlier.timestamp_ms = 200;
+    assert!(store.accept_caption(earlier)?.is_some());
+    assert!(
+        store
+            .start_unit(1, &active.stream_id, "unit-2".to_string(), 50)?
+            .is_some()
+    );
     let mut current = caption(Some("unit-2"), 1, "current words", CaptionState::Ongoing);
-    current.unit_started_at_ms = Some(300);
-    current.timestamp_ms = 350;
+    current.unit_started_at_ms = Some(50);
+    current.timestamp_ms = 75;
+    assert!(store.accept_caption(current)?.is_some());
 
-    observe(
-        &publisher,
-        &snapshot(
-            1,
-            &["unit-2"],
-            // Aggregate storage is newest-first; rendering must be chronological.
-            vec![current, earlier],
-        ),
-    )?;
+    // This is the publisher's first observation. The full aggregate must be
+    // sufficient to rebuild chronological recent text without replaying the
+    // unit-start lifecycle or consulting wall-clock metadata.
+    observe(&publisher, &store.snapshot()?)?;
     clock.advance(Duration::from_secs(1));
     publisher.shared.wake.notify_all();
 
@@ -578,8 +591,8 @@ fn overlapping_units_do_not_publish_a_newer_draft_before_its_observation_window(
             3,
             &["newer"],
             vec![
-                caption(Some("older"), 1, "older completed", CaptionState::Completed),
                 caption(Some("newer"), 1, "newer draft", CaptionState::Ongoing),
+                caption(Some("older"), 1, "older completed", CaptionState::Completed),
             ],
         ),
     )?;
@@ -619,14 +632,14 @@ fn removing_a_non_head_ongoing_unit_republishes_the_recomputed_viewport() -> App
     )?;
     clock.advance(Duration::from_secs(1));
     publisher.shared.wake.notify_all();
-    assert_eq!(transport.wait_for_texts(1)?, ["newer older"]);
+    assert_eq!(transport.wait_for_texts(1)?, ["older newer"]);
 
     // The newer caption remains byte-for-byte identical while the older unit
     // ends without completion and disappears from the authoritative aggregate.
     observe(&publisher, &snapshot(2, &["newer"], vec![newer]))?;
     clock.advance(Duration::from_secs(1));
     publisher.shared.wake.notify_all();
-    assert_eq!(transport.wait_for_texts(2)?, ["newer older", "newer"]);
+    assert_eq!(transport.wait_for_texts(2)?, ["older newer", "newer"]);
 
     close(&publisher)
 }

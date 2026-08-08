@@ -1,5 +1,29 @@
 use super::*;
 
+fn source_caption(
+    generation: u64,
+    stream_id: &str,
+    unit_id: &str,
+    text: impl Into<String>,
+    state: CaptionState,
+    started_at_ms: u64,
+) -> CaptionSnapshotV1 {
+    CaptionSnapshotV1 {
+        generation,
+        stream_id: stream_id.to_string(),
+        unit_id: Some(unit_id.to_string()),
+        lane: CaptionLane::Source,
+        revision: 1,
+        text: text.into(),
+        state,
+        language: Some("en".to_string()),
+        provider: "openai".to_string(),
+        model: "gpt-live-transcribe".to_string(),
+        unit_started_at_ms: Some(started_at_ms),
+        timestamp_ms: started_at_ms.saturating_add(1),
+    }
+}
+
 #[test]
 fn shared_v1_fixture_round_trips_without_a_stable_state() -> Result<(), serde_json::Error> {
     let fixture = include_str!("../../contracts/caption-session-snapshot-v1.json");
@@ -278,6 +302,162 @@ fn completed_history_keeps_the_five_newest_units_in_newest_first_order()
             .map(|caption| caption.unit_id.as_deref().unwrap_or_default())
             .collect::<Vec<_>>(),
         vec!["unit-6", "unit-5", "unit-4", "unit-3", "unit-2"]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn completing_an_older_unit_preserves_backend_unit_order_after_clock_rollback()
+-> crate::error::AppResult<()> {
+    let store = CaptionSessionStore::default();
+    let active = store
+        .begin_generation(6)?
+        .active
+        .ok_or_else(|| crate::error::AppError::state("Generation 6 was not active."))?;
+
+    assert!(
+        store
+            .start_unit(6, &active.stream_id, "older".to_string(), 200)?
+            .is_some()
+    );
+    assert!(
+        store
+            .start_unit(6, &active.stream_id, "newer".to_string(), 100)?
+            .is_some()
+    );
+
+    let mut older = source_caption(
+        6,
+        &active.stream_id,
+        "older",
+        "older draft",
+        CaptionState::Ongoing,
+        200,
+    );
+    older.timestamp_ms = 250;
+    let mut newer = source_caption(
+        6,
+        &active.stream_id,
+        "newer",
+        "newer draft",
+        CaptionState::Ongoing,
+        100,
+    );
+    newer.timestamp_ms = 150;
+    assert!(store.accept_caption(older.clone())?.is_some());
+    assert!(store.accept_caption(newer)?.is_some());
+    assert!(
+        store
+            .accept_caption(CaptionSnapshotV1 {
+                revision: 2,
+                text: "older completed".to_string(),
+                state: CaptionState::Completed,
+                timestamp_ms: 300,
+                ..older
+            })?
+            .is_some()
+    );
+
+    assert_eq!(
+        store
+            .snapshot()?
+            .captions
+            .iter()
+            .map(|caption| caption.unit_id.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        ["newer", "older"]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn unit_order_is_generation_scoped_when_unit_ids_are_reused() -> crate::error::AppResult<()> {
+    let store = CaptionSessionStore::default();
+    let first = store
+        .begin_generation(7)?
+        .active
+        .ok_or_else(|| crate::error::AppError::state("Generation 7 was not active."))?;
+
+    for (unit_id, started_at_ms) in [("first", 10), ("second", 20)] {
+        assert!(
+            store
+                .start_unit(7, &first.stream_id, unit_id.to_string(), started_at_ms)?
+                .is_some()
+        );
+        assert!(
+            store
+                .accept_caption(source_caption(
+                    7,
+                    &first.stream_id,
+                    unit_id,
+                    format!("generation 7 {unit_id}"),
+                    CaptionState::Completed,
+                    started_at_ms,
+                ))?
+                .is_some()
+        );
+    }
+    assert!(store.close_generation(7)?.is_some());
+
+    let second = store
+        .begin_generation(8)?
+        .active
+        .ok_or_else(|| crate::error::AppError::state("Generation 8 was not active."))?;
+    assert!(
+        store
+            .start_unit(8, &second.stream_id, "second".to_string(), 200)?
+            .is_some()
+    );
+    assert!(
+        store
+            .start_unit(8, &second.stream_id, "first".to_string(), 100)?
+            .is_some()
+    );
+
+    let mut older = source_caption(
+        8,
+        &second.stream_id,
+        "second",
+        "generation 8 second",
+        CaptionState::Ongoing,
+        200,
+    );
+    older.timestamp_ms = 250;
+    assert!(store.accept_caption(older.clone())?.is_some());
+    let mut newer = source_caption(
+        8,
+        &second.stream_id,
+        "first",
+        "generation 8 first",
+        CaptionState::Ongoing,
+        100,
+    );
+    newer.timestamp_ms = 150;
+    assert!(store.accept_caption(newer)?.is_some());
+    assert!(
+        store
+            .accept_caption(CaptionSnapshotV1 {
+                revision: 2,
+                text: "generation 8 second revised".to_string(),
+                timestamp_ms: 300,
+                ..older
+            })?
+            .is_some()
+    );
+
+    assert_eq!(
+        store
+            .snapshot()?
+            .captions
+            .iter()
+            .map(|caption| (
+                caption.generation,
+                caption.unit_id.as_deref().unwrap_or_default()
+            ))
+            .collect::<Vec<_>>(),
+        [(8, "first"), (8, "second"), (7, "second"), (7, "first")]
     );
 
     Ok(())

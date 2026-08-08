@@ -1,6 +1,7 @@
 //! Backend-owned normalized caption-session state.
 
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -79,9 +80,13 @@ struct CaptionUnitKey {
 struct CaptionSessionState {
     generation_fence: u64,
     snapshot_revision: u64,
+    // Backend-only ordering metadata. The V1 wire contract conveys this order
+    // through its `captions` array and does not expose another clock-like field.
+    next_unit_ordinal: u64,
     active: Option<CaptionSessionActiveV1>,
     active_units: Vec<CaptionActiveUnitV1>,
     captions: Vec<CaptionSnapshotV1>,
+    unit_ordinals: Vec<(CaptionUnitKey, u64)>,
     completed_units: VecDeque<CaptionUnitKey>,
     recent_terminal_units: VecDeque<CaptionUnitKey>,
 }
@@ -108,6 +113,8 @@ impl CaptionSessionStore {
         state
             .captions
             .retain(|caption| caption.state == CaptionState::Completed);
+        state.next_unit_ordinal = 0;
+        Self::retain_caption_unit_ordinals(&mut state);
         Self::advance_revision(&mut state);
 
         Ok(Self::snapshot_from(&state))
@@ -137,6 +144,11 @@ impl CaptionSessionStore {
             return Ok(None);
         }
 
+        let unit_ordinal = state.next_unit_ordinal.checked_add(1).ok_or_else(|| {
+            AppError::state("Caption unit order was exhausted for the active generation.")
+        })?;
+        state.next_unit_ordinal = unit_ordinal;
+        state.unit_ordinals.push((unit_key, unit_ordinal));
         state.active_units.push(CaptionActiveUnitV1 {
             unit_id,
             started_at_ms,
@@ -216,6 +228,7 @@ impl CaptionSessionStore {
         } else {
             state.captions.insert(0, caption);
         }
+        Self::sort_captions_by_unit_order(&mut state);
         Self::advance_revision(&mut state);
 
         Ok(Some(Self::snapshot_from(&state)))
@@ -252,6 +265,7 @@ impl CaptionSessionStore {
                 unit_id: unit_id.to_string(),
             },
         );
+        Self::retain_caption_unit_ordinals(&mut state);
         Self::advance_revision(&mut state);
 
         Ok(Some(Self::snapshot_from(&state)))
@@ -271,6 +285,7 @@ impl CaptionSessionStore {
         state
             .captions
             .retain(|caption| caption.state == CaptionState::Completed);
+        Self::retain_caption_unit_ordinals(&mut state);
         Self::advance_revision(&mut state);
 
         Ok(Some(Self::snapshot_from(&state)))
@@ -318,6 +333,43 @@ impl CaptionSessionStore {
                 });
             }
         }
+        Self::retain_caption_unit_ordinals(state);
+    }
+
+    fn sort_captions_by_unit_order(state: &mut CaptionSessionState) {
+        let unit_ordinals = &state.unit_ordinals;
+        state.captions.sort_by_key(|caption| {
+            let unit_ordinal = match caption.unit_id.as_deref() {
+                None => u64::MAX,
+                Some(unit_id) => unit_ordinals
+                    .iter()
+                    .find_map(|(key, ordinal)| {
+                        (key.generation == caption.generation
+                            && key.stream_id == caption.stream_id
+                            && key.unit_id == unit_id)
+                            .then_some(*ordinal)
+                    })
+                    .unwrap_or_default(),
+            };
+            Reverse((caption.generation, unit_ordinal))
+        });
+    }
+
+    fn retain_caption_unit_ordinals(state: &mut CaptionSessionState) {
+        let captions = &state.captions;
+        let active = state.active.as_ref();
+        let active_units = &state.active_units;
+        state.unit_ordinals.retain(|(key, _)| {
+            captions.iter().any(|caption| {
+                caption.generation == key.generation
+                    && caption.stream_id == key.stream_id
+                    && caption.unit_id.as_deref() == Some(key.unit_id.as_str())
+            }) || active.is_some_and(|session| {
+                session.generation == key.generation
+                    && session.stream_id == key.stream_id
+                    && active_units.iter().any(|unit| unit.unit_id == key.unit_id)
+            })
+        });
     }
 
     fn record_terminal_unit(state: &mut CaptionSessionState, unit: CaptionUnitKey) {

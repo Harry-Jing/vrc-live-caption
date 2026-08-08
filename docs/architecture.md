@@ -168,6 +168,9 @@ Rust owns one versioned caption-session aggregate,
 generation and stream identity, active units, and full-text caption snapshots
 with lane, per-scope revision, and ongoing/completed state
 ([ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)).
+Unit-based captions are newest-unit-first by backend-accepted unit sequence;
+later revisions keep their unit's position, and wall-clock timestamps are
+metadata rather than ordering keys.
 
 Event delivery is best-effort and at-most-once; the frontend can always pull
 the same aggregate to resynchronize, and reducers ignore older revisions
