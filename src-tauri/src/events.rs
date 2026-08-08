@@ -205,7 +205,9 @@ impl DiagnosticCategory {
             | AppError::OscSend { .. }
             | AppError::OscSendIncomplete { .. } => Self::Osc,
             AppError::Runtime { .. } | AppError::State { .. } => Self::Runtime,
-            AppError::Stt { .. } | AppError::SttNetwork { .. } => Self::Stt,
+            AppError::Stt { .. }
+            | AppError::SttBackpressure { .. }
+            | AppError::SttNetwork { .. } => Self::Stt,
         }
     }
 }

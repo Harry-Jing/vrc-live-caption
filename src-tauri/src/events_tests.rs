@@ -164,6 +164,7 @@ fn error_codes_share_the_prefix_of_their_diagnostic_category() {
         AppError::secret("x"),
         AppError::state("x"),
         AppError::stt("x"),
+        AppError::stt_backpressure("x"),
         AppError::stt_network("x"),
     ];
 

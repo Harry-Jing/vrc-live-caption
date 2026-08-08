@@ -551,7 +551,7 @@ fn stop_cancels_work_before_waiting_for_an_app_commit() -> AppResult<()> {
 }
 
 #[test]
-fn a_full_recognition_queue_fails_visibly_without_dropping_audio() -> AppResult<()> {
+fn a_full_recognition_queue_reports_backpressure_and_cancels_work() -> AppResult<()> {
     let generation = RuntimeGeneration::active();
     let (sender, _receiver) = sync_channel(1);
     send_recognition_command(
@@ -574,8 +574,54 @@ fn a_full_recognition_queue_fails_visibly_without_dropping_audio() -> AppResult<
     .err()
     .ok_or_else(|| AppError::state("A full recognition queue silently accepted audio."))?;
 
-    assert_eq!(error.code(), "stt.network_unreachable");
+    assert_eq!(error.code(), "stt.backpressure");
+    assert!(
+        error
+            .to_string()
+            .contains("the session stopped instead of silently dropping audio")
+    );
     assert!(generation.is_work_cancelled());
+    Ok(())
+}
+
+#[test]
+fn one_capture_callback_dispatches_every_segmenter_update_in_order() -> AppResult<()> {
+    let generation = RuntimeGeneration::active();
+    let (sender, receiver) = sync_channel(4);
+    let mut segmenter = SpeechSegmenter::new(10, 0.1, Duration::from_millis(100), 0.3, 0.3, 0.0);
+    let updates = segmenter.push_samples(vec![0.21, 0.22, 0.23, 0.24], Instant::now());
+
+    apply_segmenter_updates(&generation, &sender, segmenter.sample_rate(), updates)?;
+
+    match receiver
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::state("The first bounded unit was not dispatched."))?
+    {
+        RecognitionCommand::Start { initial_audio, .. } => {
+            assert_eq!(initial_audio, vec![0.21, 0.22, 0.23]);
+        }
+        _ => return Err(AppError::state("The first bounded unit did not start.")),
+    }
+    assert!(matches!(
+        receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::state("The first bounded unit did not end."))?,
+        RecognitionCommand::EndInput
+    ));
+    match receiver
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::state("The callback remainder was not dispatched."))?
+    {
+        RecognitionCommand::Start { initial_audio, .. } => {
+            assert_eq!(initial_audio, vec![0.24]);
+        }
+        _ => {
+            return Err(AppError::state(
+                "The callback remainder did not start the next unit.",
+            ));
+        }
+    }
+    assert!(receiver.try_recv().is_err());
     Ok(())
 }
 

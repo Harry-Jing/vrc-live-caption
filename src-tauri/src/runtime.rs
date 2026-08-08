@@ -1123,16 +1123,20 @@ fn run_openai_runtime<R: Runtime>(
 
     let runtime_result = (|| -> AppResult<()> {
         while !generation.is_work_cancelled() {
-            let update = match receive_audio(&capture.receiver, RECEIVE_TIMEOUT)? {
-                Some(samples) => segmenter.push_samples(samples, Instant::now()),
-                None => segmenter.tick(Instant::now()),
-            };
-            apply_segmenter_update(
-                &generation,
-                &recognition_sender,
-                segmenter.sample_rate(),
-                update,
-            )?;
+            match receive_audio(&capture.receiver, RECEIVE_TIMEOUT)? {
+                Some(samples) => apply_segmenter_updates(
+                    &generation,
+                    &recognition_sender,
+                    segmenter.sample_rate(),
+                    segmenter.push_samples(samples, Instant::now()),
+                )?,
+                None => apply_segmenter_updates(
+                    &generation,
+                    &recognition_sender,
+                    segmenter.sample_rate(),
+                    [segmenter.tick(Instant::now())],
+                )?,
+            }
         }
 
         Ok(())
@@ -1170,6 +1174,18 @@ fn run_openai_runtime<R: Runtime>(
         (Ok(()), Err(worker_error)) if !generation.is_hard_stopped() => Err(worker_error),
         (Ok(()), Err(_)) | (Ok(()), Ok(())) => Ok(()),
     }
+}
+
+fn apply_segmenter_updates(
+    generation: &RuntimeGeneration,
+    recognition_sender: &SyncSender<RecognitionCommand>,
+    sample_rate_hz: u32,
+    updates: impl IntoIterator<Item = crate::segmenter::SegmenterUpdate>,
+) -> AppResult<()> {
+    for update in updates {
+        apply_segmenter_update(generation, recognition_sender, sample_rate_hz, update)?;
+    }
+    Ok(())
 }
 
 fn apply_segmenter_update(
@@ -1226,8 +1242,8 @@ fn send_recognition_command(
         Ok(()) => Ok(()),
         Err(TrySendError::Full(_)) => {
             generation.cancel_work();
-            Err(AppError::stt_network(
-                "OpenAI Realtime could not keep up with microphone audio; the bounded recognition queue filled without dropping audio.",
+            Err(AppError::stt_backpressure(
+                "OpenAI Realtime could not keep up with microphone audio; the bounded recognition queue filled, so the session stopped instead of silently dropping audio.",
             ))
         }
         Err(TrySendError::Disconnected(_)) => {

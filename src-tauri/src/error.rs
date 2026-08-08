@@ -51,6 +51,9 @@ pub(crate) enum AppError {
     Stt {
         message: String,
     },
+    SttBackpressure {
+        message: String,
+    },
     SttNetwork {
         message: String,
     },
@@ -122,6 +125,12 @@ impl AppError {
         }
     }
 
+    pub(crate) fn stt_backpressure(message: impl Into<String>) -> Self {
+        Self::SttBackpressure {
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn stt_network(message: impl Into<String>) -> Self {
         Self::SttNetwork {
             message: message.into(),
@@ -145,6 +154,7 @@ impl AppError {
             Self::Secret { .. } => "config.secret_failed",
             Self::State { .. } => "runtime.state_failed",
             Self::Stt { .. } => "stt.failed",
+            Self::SttBackpressure { .. } => "stt.backpressure",
             Self::SttNetwork { .. } => "stt.network_unreachable",
         }
     }
@@ -172,6 +182,7 @@ impl AppError {
             Self::Secret { message } => message.clone(),
             Self::State { message } => message.clone(),
             Self::Stt { message } => message.clone(),
+            Self::SttBackpressure { message } => message.clone(),
             Self::SttNetwork { message } => message.clone(),
         }
     }
@@ -230,6 +241,24 @@ mod tests {
                 .as_str()
                 .unwrap_or_default()
                 .contains("system proxy")
+        );
+    }
+
+    #[test]
+    fn backpressure_error_serializes_with_actionable_stt_code() {
+        let error = AppError::stt_backpressure(
+            "OpenAI Realtime could not keep up with microphone audio; the session stopped instead of silently dropping audio.",
+        );
+        let value = serde_json::to_value(&error).unwrap_or_else(|serialization_error| {
+            serde_json::json!({ "serializationError": serialization_error.to_string() })
+        });
+
+        assert_eq!(value["code"], "stt.backpressure");
+        assert!(
+            value["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("stopped instead of silently dropping audio")
         );
     }
 }
