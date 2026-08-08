@@ -115,24 +115,27 @@
 - Use the package scripts as the normal quality gates:
   - `pnpm check:frontend` for Prettier, ESLint, Vue typecheck, and Vite build.
   - `pnpm check:rust` for Rust fmt, check, clippy, and tests.
-  - `pnpm check` before pushing or when a change crosses frontend/Rust/Tauri
-    contracts.
-  - `pnpm check:ci` for CI-style locked dependency checks.
+  - `pnpm check` for the normal full local quality gate.
+  - `pnpm check:ci` for the combined, locally reproducible CI-style locked gate.
 - When running Cargo directly, work from the Tauri Rust project directory:
   - `cd src-tauri && cargo fmt --all`
   - `cd src-tauri && cargo check --workspace --all-targets`
   - `cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings`
   - `cd src-tauri && cargo test --workspace`
-- Pre-commit hooks should stay fast enough to run on every commit. Pre-push and
-  CI should run the full quality gate.
+- Pre-commit hooks should stay fast enough to run on every commit.
+- Pre-push and CI must preserve the full frontend and Rust command sets. They
+  may run the component scripts as parallel jobs: pre-push uses
+  `pnpm check:frontend` plus `pnpm check:rust`; CI uses `pnpm check:frontend`
+  plus `pnpm check:rust:locked` on Windows, macOS, and Linux.
 - Rust lint policy lives in `src-tauri/Cargo.toml` under `[lints]`. Do not
   weaken those lints unless the project rule itself changes.
 - The Rust toolchain is pinned in `rust-toolchain.toml`. Upgrading Rust is an
   explicit change: update `rust-toolchain.toml`, the toolchain version in both
   GitHub workflows, and `rust-version` in `src-tauri/Cargo.toml` together.
-- In CI, use locked installs and locked Cargo resolution:
-  - `pnpm install --frozen-lockfile`
-  - `pnpm check:ci`
+- In CI, install frontend dependencies with
+  `pnpm install --frozen-lockfile` before the frontend gate and use locked
+  Cargo resolution for the Rust gate. `pnpm check:ci` remains the combined
+  local reproduction of those CI checks.
 - Use pnpm for all package scripts; never npm or yarn. There is no standalone
   typecheck script: `pnpm build` runs Vite first so generated Nuxt UI declarations
   are current, then runs `vue-tsc --build`. Lint and format have their own scripts
