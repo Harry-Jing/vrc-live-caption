@@ -22,6 +22,10 @@ commit-msg:
       run: pnpm commitlint --edit {1}
 
 pre-push:
+  parallel: true
   jobs:
-    - name: full quality gate
-      run: pnpm check
+    - name: frontend quality gate
+      run: pnpm check:frontend
+
+    - name: rust quality gate
+      run: pnpm check:rust
