@@ -271,21 +271,6 @@ fn transcript_failed(item_id: &str, message: &str) -> Value {
 }
 
 #[test]
-fn release_catalog_accepts_only_exact_transcription_models() -> AppResult<()> {
-    assert_eq!(
-        OpenAiTranscriptionModel::try_from("gpt-transcribe")?,
-        OpenAiTranscriptionModel::GptTranscribe
-    );
-    assert_eq!(
-        OpenAiTranscriptionModel::try_from("gpt-live-transcribe")?,
-        OpenAiTranscriptionModel::GptLiveTranscribe
-    );
-    assert!(OpenAiTranscriptionModel::try_from("gpt-4o-transcribe").is_err());
-    assert!(OpenAiTranscriptionModel::try_from("gpt-realtime-whisper").is_err());
-    Ok(())
-}
-
-#[test]
 fn connection_configures_a_transcription_session_with_pcm_24k_and_languages() -> AppResult<()> {
     let (_session, probe) = session(OpenAiTranscriptionModel::GptLiveTranscribe, &["en", "zh"])?;
     let sent = probe.sent_json()?;

@@ -67,7 +67,7 @@ impl ProviderSecretStatus {
 }
 
 #[cfg(not(test))]
-pub(crate) fn provider_secret_status(provider: SttProvider) -> ProviderSecretStatus {
+fn provider_secret_status(provider: SttProvider) -> ProviderSecretStatus {
     match provider {
         SttProvider::OpenAi => openai_secret_status(),
     }

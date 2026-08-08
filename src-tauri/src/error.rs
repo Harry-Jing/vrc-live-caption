@@ -109,18 +109,22 @@ impl AppError {
         }
     }
 
-    pub(crate) fn osc_encode(message: String) -> Self {
-        Self::OscEncode { message }
+    pub(crate) fn osc_encode(message: impl Into<String>) -> Self {
+        Self::OscEncode {
+            message: message.into(),
+        }
     }
 
-    pub(crate) fn osc_bind(message: String) -> Self {
-        Self::OscBind { message }
+    pub(crate) fn osc_bind(message: impl Into<String>) -> Self {
+        Self::OscBind {
+            message: message.into(),
+        }
     }
 
-    pub(crate) fn osc_send(target: &str, message: String) -> Self {
+    pub(crate) fn osc_send(target: &str, message: impl Into<String>) -> Self {
         Self::OscSend {
             target: target.to_string(),
-            message,
+            message: message.into(),
         }
     }
 

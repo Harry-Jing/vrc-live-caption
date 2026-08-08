@@ -31,20 +31,6 @@ const MAX_TRANSCRIPT_BYTES_PER_TURN: usize = 256 * 1024;
 const MAX_PENDING_TRANSCRIPT_BYTES: usize = 1024 * 1024;
 const ITEM_COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 
-impl TryFrom<&str> for OpenAiTranscriptionModel {
-    type Error = AppError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "gpt-transcribe" => Ok(Self::GptTranscribe),
-            "gpt-live-transcribe" => Ok(Self::GptLiveTranscribe),
-            _ => Err(AppError::config(format!(
-                "Unsupported OpenAI transcription model: {value}."
-            ))),
-        }
-    }
-}
-
 /// Narrow external seam implemented by the eventual WebSocket connector and
 /// by deterministic tests. It intentionally deals only in text frames because
 /// Realtime audio is base64 inside JSON client events.
