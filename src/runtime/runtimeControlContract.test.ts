@@ -114,6 +114,18 @@ describe("runtime control contract", () => {
     );
   });
 
+  test("decodes an active session while its provider connection is reconnecting", () => {
+    const payload = structuredClone(completePayload);
+    payload.runtime.status = "reconnecting";
+    payload.runtime.message = "Reconnecting speech recognition";
+    payload.session.phase = "reconnecting";
+
+    expect(decodeRuntimeControlSnapshotV3(payload)).toMatchObject({
+      runtime: { status: "reconnecting" },
+      session: { phase: "reconnecting" },
+    });
+  });
+
   test("decodes an incompatible desired plan without rewriting its mode", () => {
     const incompatiblePublication = {
       state: "incompatible",

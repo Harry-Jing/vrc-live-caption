@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import CaptionPreview from "../components/CaptionPreview.vue";
+import LiveAudioMeter from "../components/LiveAudioMeter.vue";
 import RuntimeControls from "../components/RuntimeControls.vue";
 import { uiText } from "../i18n/uiText";
 import { formatTime } from "../runtime/format";
+import { isActiveRuntimeSessionPhase } from "../runtime/lifecycle";
 import { useRuntimeContext } from "../runtime/context";
 import {
   publicationDisplayPlanView,
@@ -24,6 +26,7 @@ const {
   desiredRuntimePlan,
   finalTranscripts,
   isRuntimeBusy,
+  latestAudioLevel,
   pendingSessionChanges,
   pendingRuntimeCommand,
   runCommand,
@@ -104,9 +107,7 @@ const pendingSessionChangesDescription = computed(() =>
 );
 
 const hasActiveSession = computed(() =>
-  ["starting", "running", "stopping"].includes(
-    currentSession.value?.phase ?? "",
-  ),
+  isActiveRuntimeSessionPhase(currentSession.value?.phase),
 );
 
 const currentPublication = computed(() =>
@@ -218,6 +219,12 @@ const isStartBlocked = computed(() =>
       />
 
       <div class="grid gap-5">
+        <LiveAudioMeter
+          :generation="currentSession?.generation ?? null"
+          :level="latestAudioLevel"
+          :session-phase="currentSession?.phase ?? null"
+        />
+
         <UCard :ui="{ body: 'p-5' }">
           <template #header>
             <div class="flex items-center justify-between gap-4">

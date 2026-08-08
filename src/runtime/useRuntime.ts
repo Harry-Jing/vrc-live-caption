@@ -1,6 +1,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { uiText } from "../i18n/uiText";
 import { createRuntimeBackend, type Unsubscribe } from "./backend";
+import { useAudioInput } from "./useAudioInput";
 import {
   createCaptionSessionState,
   reduceCaptionSessionState,
@@ -79,6 +80,7 @@ function createActionState() {
 
 export function useRuntime() {
   const backend = createRuntimeBackend();
+  const audioInput = useAudioInput(backend);
   const runLifecycleCommand = createLifecycleCommandQueue(async (command) => {
     const snapshot =
       command === "start_runtime"
@@ -430,6 +432,11 @@ export function useRuntime() {
 
     try {
       unsubscribe = await backend.listen((event) => {
+        if (event.type === "audioLevel") {
+          audioInput.acceptAudioLevel(event.payload);
+          return;
+        }
+
         if (event.type === "captionSessionChanged") {
           dispatchCaptionSessionState({
             type: "snapshotReceived",
@@ -561,6 +568,8 @@ export function useRuntime() {
     activeCaptionText,
     activeRuntimePlan,
     audioInputDevices,
+    audioProbeError: audioInput.audioProbeError,
+    audioProbeResult: audioInput.audioProbeResult,
     captionMode,
     config,
     currentSession,
@@ -570,11 +579,14 @@ export function useRuntime() {
     desiredRuntimePlan,
     finalTranscripts,
     isRuntimeBusy,
+    isAudioProbeRunning: audioInput.isAudioProbeRunning,
     isSecretsBusy: secretsAction.isBusy,
     isSettingsBusy: settingsAction.isBusy,
     loadAudioInputDevices,
+    latestAudioLevel: audioInput.latestAudioLevel,
     pendingRuntimeCommand,
     pendingSessionChanges,
+    probeAudioInput: audioInput.probeAudioInput,
     runCommand,
     runtimeError,
     runtimeStatus,

@@ -7,6 +7,7 @@ import {
   RUNTIME_EVENTS,
   RUNTIME_CONTROL_EVENT,
   type AppConfig,
+  type AudioProbeRequest,
   type CaptionSessionSnapshotV1,
   type DiagnosticCategory,
   type RuntimeControlSnapshot,
@@ -148,7 +149,11 @@ function createFakeTauriBridge(): TauriBackendBridge {
       let result: unknown;
 
       if (command === "start_runtime") {
-        if (["starting", "running", "stopping"].includes(latestStatus.status)) {
+        if (
+          ["starting", "running", "reconnecting", "stopping"].includes(
+            latestStatus.status,
+          )
+        ) {
           return Promise.reject(new Error("Runtime is already active."));
         }
 
@@ -186,6 +191,15 @@ function createFakeTauriBridge(): TauriBackendBridge {
         emitStatus("starting", "Starting runtime");
         session = { ...session, phase: "running" };
         emitStatus("running", "Runtime is running");
+        emit(RUNTIME_EVENTS.audioLevel, {
+          generation: nextGeneration,
+          revision: 1,
+          rmsDbfs: -24,
+          peakDbfs: -6,
+          clipping: false,
+          gateOpen: true,
+          timestampMs: timestamp(),
+        });
         result = controlSnapshot();
       } else if (command === "stop_runtime") {
         if (
@@ -217,6 +231,16 @@ function createFakeTauriBridge(): TauriBackendBridge {
         result = controlSnapshot();
       } else if (command === "get_caption_session_snapshot") {
         result = structuredClone(captionSession);
+      } else if (command === "probe_audio_input") {
+        const request = args?.["request"] as AudioProbeRequest;
+        result = {
+          sampleRate: 48_000,
+          durationMs: request.durationMs,
+          rmsDbfs: -24,
+          peakDbfs: -6,
+          clipping: false,
+          gateOpen: true,
+        };
       } else if (command === "save_app_config") {
         config = structuredClone(args?.["config"] as AppConfig);
         configRevision += 1;
@@ -241,6 +265,38 @@ const backendCases: readonly Readonly<{
 ];
 
 describe.each(backendCases)("$name contract", ({ create }) => {
+  test("publishes a realtime audio level for the active generation", async () => {
+    const backend = create();
+    const levels: RuntimeEvent[] = [];
+    const unsubscribe = await backend.listen((event) => {
+      if (event.type === "audioLevel") {
+        levels.push(event);
+      }
+    });
+
+    try {
+      const started = await backend.startRuntime();
+      const generation = started.session?.generation;
+
+      expect(levels).toEqual([
+        {
+          type: "audioLevel",
+          payload: {
+            generation,
+            revision: 1,
+            rmsDbfs: -24,
+            peakDbfs: -6,
+            clipping: false,
+            gateOpen: true,
+            timestampMs: expect.any(Number),
+          },
+        },
+      ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   test("publishes control before each legacy lifecycle status", async () => {
     const backend = create();
     const observed: string[] = [];
@@ -336,6 +392,21 @@ describe.each(backendCases)("$name contract", ({ create }) => {
     expect((await backend.getControlSnapshot()).desired.config).toEqual(
       changed,
     );
+  });
+
+  test("returns a deterministic offline microphone probe", async () => {
+    const backend = create();
+
+    await expect(
+      backend.probeAudioInput({ inputDeviceId: null, durationMs: 1_500 }),
+    ).resolves.toEqual({
+      sampleRate: 48_000,
+      durationMs: 1_500,
+      rmsDbfs: -24,
+      peakDbfs: -6,
+      clipping: false,
+      gateOpen: true,
+    });
   });
 });
 

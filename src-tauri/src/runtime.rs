@@ -17,6 +17,7 @@
 //! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
 
 use crate::audio::{open_input_capture, receive_audio};
+use crate::audio_level::AudioLevelMeter;
 use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
 use crate::chatbox_pacer::ChatboxPacer;
@@ -28,9 +29,9 @@ use crate::chatbox_publisher::{
 use crate::config::{AppConfig, OscConfig};
 use crate::error::{AppError, AppResult};
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, UtteranceEndReason,
-    emit_caption_session_changed, emit_diagnostic, emit_status, emit_utterance_ended,
-    emit_utterance_started, next_utterance_id, now_ms,
+    AudioLevelEvent, DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, UtteranceEndReason,
+    emit_audio_level, emit_caption_session_changed, emit_diagnostic, emit_status,
+    emit_utterance_ended, emit_utterance_started, next_utterance_id, now_ms,
 };
 use crate::host_resolver::HostResolver;
 use crate::live_chatbox_publisher::{
@@ -42,6 +43,7 @@ use crate::osc::ChatboxOscSender;
 use crate::recognition::{
     RecognitionAudioChunk, RecognitionEndReason, RecognitionEvent, RecognitionSession,
 };
+use crate::reconnect::{ReconnectDecision, ReconnectSupervisor};
 use crate::runtime_control::{
     RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
     RuntimeSessionSnapshot,
@@ -52,13 +54,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Runtime};
 
 const RECEIVE_TIMEOUT: Duration = Duration::from_millis(100);
 const RECOGNITION_COMMAND_QUEUE_CAPACITY: usize = 32;
 const RECOGNITION_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const SPEECH_RMS_THRESHOLD: f32 = 0.012;
+pub(crate) const SPEECH_RMS_THRESHOLD: f32 = 0.012;
 const SILENCE_TIMEOUT: Duration = Duration::from_millis(1200);
 // Voiced audio only; long enough to drop clicks and pops, short enough to
 // keep one-word utterances such as "Yes".
@@ -85,6 +87,17 @@ fn new_recognition_segmenter(sample_rate: u32) -> SpeechSegmenter {
 pub(crate) struct RuntimeManager {
     handle: Mutex<Option<RuntimeHandle>>,
     stop_epoch: AtomicU64,
+    audio_probe_active: AtomicBool,
+}
+
+pub(crate) struct AudioProbeLease<'a> {
+    active: &'a AtomicBool,
+}
+
+impl Drop for AudioProbeLease<'_> {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::SeqCst);
+    }
 }
 
 pub(crate) struct RuntimeStartRequest {
@@ -141,6 +154,21 @@ enum RecognitionCommand {
         samples: Vec<f32>,
     },
     EndInput,
+}
+
+#[derive(Clone, Default)]
+struct ConnectionAttempt {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl ConnectionAttempt {
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
 }
 
 fn publisher_boundary(
@@ -420,6 +448,30 @@ impl RuntimeGeneration {
         Ok(true)
     }
 
+    fn abort_active_units_for_reconnect<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        publisher: Option<&RuntimeChatboxPublisher>,
+    ) -> AppResult<()> {
+        let snapshot = self.caption_session.snapshot()?;
+        for active_unit in snapshot.active_units {
+            let _accepted = self.submit_recognition_event(
+                app,
+                publisher,
+                RecognitionEvent::UnitEnded {
+                    generation: self.generation_id,
+                    stream_id: self.stream_id.clone(),
+                    unit_id: active_unit.unit_id,
+                    reason: RecognitionEndReason::Failed {
+                        detail: "Speech was discarded because the recognition connection was interrupted."
+                            .to_string(),
+                    },
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     fn report_accepted_snapshot<R: Runtime>(
         &self,
         app: &AppHandle<R>,
@@ -512,6 +564,7 @@ impl Default for RuntimeManager {
         Self {
             handle: Mutex::new(None),
             stop_epoch: AtomicU64::new(0),
+            audio_probe_active: AtomicBool::new(false),
         }
     }
 }
@@ -532,11 +585,39 @@ impl RuntimeManager {
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
         clear_finished_runtime(app, &mut guard)?;
 
+        if self.audio_probe_active.load(Ordering::SeqCst) {
+            return Err(AppError::runtime(
+                "A microphone test is already using the selected audio input.",
+            ));
+        }
         if guard.is_some() {
             return Err(AppError::runtime("Runtime is already running."));
         }
 
         Ok(())
+    }
+
+    pub(crate) fn begin_audio_probe<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> AppResult<AudioProbeLease<'_>> {
+        self.audio_probe_active
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| AppError::runtime("A microphone test is already running."))?;
+        let lease = AudioProbeLease {
+            active: &self.audio_probe_active,
+        };
+        let mut guard = self
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
+        clear_finished_runtime(app, &mut guard)?;
+        if guard.is_some() {
+            return Err(AppError::runtime(
+                "Stop the caption runtime before testing the microphone.",
+            ));
+        }
+        Ok(lease)
     }
 
     pub(crate) fn start<R: Runtime, F>(
@@ -579,6 +660,11 @@ impl RuntimeManager {
 
         if guard.is_some() {
             return Err(AppError::runtime("Runtime is already running."));
+        }
+        if self.audio_probe_active.load(Ordering::SeqCst) {
+            return Err(AppError::runtime(
+                "A microphone test is already using the selected audio input.",
+            ));
         }
 
         let generation = RuntimeGeneration::activate(&app, generation_id, caption_session)?;
@@ -1064,38 +1150,130 @@ fn run_openai_runtime<R: Runtime>(
         return Ok(());
     }
 
-    let context = OpenAiRealtimeSessionContext {
-        generation: generation.generation_id(),
-        stream_id: generation.stream_id().to_string(),
-    };
-    let mut recognition = connect_openai_realtime_session(
-        context,
-        config.stt.model,
-        config.stt.languages.clone(),
-        &openai_api_key,
-        &host_resolver,
-        &|| generation.is_work_cancelled(),
-    )?;
+    let mut reconnect = ReconnectSupervisor::default();
+    let mut audio_level_revision = 0_u64;
+    loop {
+        if generation.is_work_cancelled() || generation.is_hard_stopped() {
+            return Ok(());
+        }
+
+        let connection_epoch = reconnect.begin_connection();
+        let context = OpenAiRealtimeSessionContext {
+            generation: generation.generation_id(),
+            connection_epoch,
+            stream_id: generation.stream_id().to_string(),
+        };
+        let connection_result = connect_openai_realtime_session(
+            context,
+            config.stt.model,
+            config.stt.languages.clone(),
+            &openai_api_key,
+            &host_resolver,
+            &|| generation.is_work_cancelled(),
+        );
+        let (attempt_result, connected_for) = match connection_result {
+            Ok(recognition) => {
+                let connected_at = Instant::now();
+                let result = run_connected_openai_attempt(
+                    &app,
+                    &config,
+                    publisher.as_ref(),
+                    &generation,
+                    recognition,
+                    &mut reconnect,
+                    &mut audio_level_revision,
+                );
+                (result, Some(connected_at.elapsed()))
+            }
+            Err(error) => (Err(error), None),
+        };
+
+        if generation.is_hard_stopped() {
+            return Ok(());
+        }
+
+        let error = match attempt_result {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        let ReconnectDecision::Retry { attempt, delay } =
+            reconnect.on_failure(&error, connected_for, reconnect_jitter_percent())
+        else {
+            return Err(error);
+        };
+
+        generation.abort_active_units_for_reconnect(&app, publisher.as_ref())?;
+        let delay_ms = delay.as_millis();
+        let reconnecting = generation.commit_if_active(|| {
+            emit_status(
+                &app,
+                RuntimeStatus::Reconnecting,
+                Some(format!(
+                    "Recognition connection interrupted; retry {attempt} in {delay_ms} ms"
+                )),
+            );
+            emit_diagnostic(
+                &app,
+                DiagnosticUpdate::warning(
+                    DiagnosticCategory::Stt,
+                    "stt.reconnecting",
+                    "Recognition connection interrupted",
+                    format!(
+                        "Microphone capture is paused; retry {attempt} begins in {delay_ms} ms. Unconfirmed speech was discarded."
+                    ),
+                ),
+            );
+        })?;
+        if !reconnecting || !wait_for_reconnect(&generation, delay) {
+            return Ok(());
+        }
+    }
+}
+
+fn run_connected_openai_attempt<R: Runtime, S: RecognitionSession + 'static>(
+    app: &AppHandle<R>,
+    config: &AppConfig,
+    publisher: Option<&RuntimeChatboxPublisher>,
+    generation: &RuntimeGeneration,
+    mut recognition: S,
+    reconnect: &mut ReconnectSupervisor,
+    audio_level_revision: &mut u64,
+) -> AppResult<()> {
     if generation.is_hard_stopped() {
         recognition.stop()?;
         return Ok(());
     }
 
-    let capture = open_input_capture(&config.audio)?;
+    let capture = match open_input_capture(&config.audio) {
+        Ok(capture) => capture,
+        Err(error) => {
+            if let Err(stop_error) = recognition.stop() {
+                tracing::warn!(
+                    code = stop_error.code(),
+                    error_message = %stop_error,
+                    "Recognition session also failed while closing after microphone startup failed"
+                );
+            }
+            return Err(error);
+        }
+    };
     if generation.is_hard_stopped() {
         recognition.stop()?;
         return Ok(());
     }
 
     let sample_rate = capture.sample_rate;
+    let mut audio_level = AudioLevelMeter::new(sample_rate, SPEECH_RMS_THRESHOLD)
+        .map_err(|error| AppError::audio(error.to_string()))?;
+    let reconnected = reconnect.is_recovery();
     let running = generation.commit_if_active(|| {
         emit_status(
-            &app,
+            app,
             RuntimeStatus::Running,
             Some("Listening for microphone speech".to_string()),
         );
         emit_diagnostic(
-            &app,
+            app,
             DiagnosticUpdate::info(
                 DiagnosticCategory::Audio,
                 "audio.capture_started",
@@ -1103,18 +1281,32 @@ fn run_openai_runtime<R: Runtime>(
                 format!("Capturing mono audio at {sample_rate} Hz."),
             ),
         );
+        if reconnected {
+            emit_diagnostic(
+                app,
+                DiagnosticUpdate::info(
+                    DiagnosticCategory::Stt,
+                    "stt.reconnected",
+                    "Recognition connection restored",
+                    "Microphone capture resumed with a fresh provider session. No prior audio was replayed.",
+                ),
+            );
+        }
     })?;
     if !running {
         recognition.stop()?;
         return Ok(());
     }
+    reconnect.mark_running();
 
+    let attempt = ConnectionAttempt::default();
     let (recognition_sender, recognition_receiver) =
         sync_channel(RECOGNITION_COMMAND_QUEUE_CAPACITY);
     let recognition_worker = spawn_recognition_worker(
         app.clone(),
-        publisher.clone(),
+        publisher.cloned(),
         generation.clone(),
+        attempt.clone(),
         recognition,
         recognition_receiver,
     )?;
@@ -1122,16 +1314,43 @@ fn run_openai_runtime<R: Runtime>(
     let stream = capture.stream;
 
     let runtime_result = (|| -> AppResult<()> {
-        while !generation.is_work_cancelled() {
+        while !generation.is_work_cancelled() && !attempt.is_cancelled() {
             match receive_audio(&capture.receiver, RECEIVE_TIMEOUT)? {
-                Some(samples) => apply_segmenter_updates(
-                    &generation,
-                    &recognition_sender,
-                    segmenter.sample_rate(),
-                    segmenter.push_samples(samples, Instant::now()),
-                )?,
+                Some(samples) => {
+                    for reading in audio_level.push_samples(&samples) {
+                        let next_revision = audio_level_revision.saturating_add(1);
+                        let accepted = generation.commit_if_active(|| {
+                            emit_audio_level(
+                                app,
+                                AudioLevelEvent {
+                                    generation: generation.generation_id(),
+                                    revision: next_revision,
+                                    rms_dbfs: reading.rms_dbfs,
+                                    peak_dbfs: reading.peak_dbfs,
+                                    clipping: reading.clipping,
+                                    gate_open: reading.vad_gate_open,
+                                    timestamp_ms: now_ms(),
+                                },
+                            );
+                        })?;
+                        if !accepted {
+                            attempt.cancel();
+                            break;
+                        }
+                        *audio_level_revision = next_revision;
+                    }
+                    if attempt.is_cancelled() {
+                        continue;
+                    }
+                    apply_segmenter_updates(
+                        &attempt,
+                        &recognition_sender,
+                        segmenter.sample_rate(),
+                        segmenter.push_samples(samples, Instant::now()),
+                    )?;
+                }
                 None => apply_segmenter_updates(
-                    &generation,
+                    &attempt,
                     &recognition_sender,
                     segmenter.sample_rate(),
                     [segmenter.tick(Instant::now())],
@@ -1142,7 +1361,7 @@ fn run_openai_runtime<R: Runtime>(
         Ok(())
     })();
 
-    generation.cancel_work();
+    attempt.cancel();
     drop(stream);
     let tail_speech_discarded = segmenter.finish().speech_ended;
     drop(recognition_sender);
@@ -1151,7 +1370,7 @@ fn run_openai_runtime<R: Runtime>(
         .map_err(|_| AppError::runtime("Recognition worker thread panicked while stopping."))?;
     if tail_speech_discarded && !generation.is_hard_stopped() {
         emit_diagnostic(
-            &app,
+            app,
             DiagnosticUpdate::info(
                 DiagnosticCategory::Stt,
                 "stt.tail_speech_discarded",
@@ -1176,27 +1395,47 @@ fn run_openai_runtime<R: Runtime>(
     }
 }
 
+fn reconnect_jitter_percent() -> u32 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .subsec_nanos();
+    80 + nanos % 41
+}
+
+fn wait_for_reconnect(generation: &RuntimeGeneration, delay: Duration) -> bool {
+    let deadline = Instant::now() + delay;
+    while !generation.is_work_cancelled() && !generation.is_hard_stopped() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return true;
+        }
+        thread::sleep(remaining.min(RECEIVE_TIMEOUT));
+    }
+    false
+}
+
 fn apply_segmenter_updates(
-    generation: &RuntimeGeneration,
+    attempt: &ConnectionAttempt,
     recognition_sender: &SyncSender<RecognitionCommand>,
     sample_rate_hz: u32,
     updates: impl IntoIterator<Item = crate::segmenter::SegmenterUpdate>,
 ) -> AppResult<()> {
     for update in updates {
-        apply_segmenter_update(generation, recognition_sender, sample_rate_hz, update)?;
+        apply_segmenter_update(attempt, recognition_sender, sample_rate_hz, update)?;
     }
     Ok(())
 }
 
 fn apply_segmenter_update(
-    generation: &RuntimeGeneration,
+    attempt: &ConnectionAttempt,
     recognition_sender: &SyncSender<RecognitionCommand>,
     sample_rate_hz: u32,
     update: crate::segmenter::SegmenterUpdate,
 ) -> AppResult<()> {
     if update.speech_started {
         return send_recognition_command(
-            generation,
+            attempt,
             recognition_sender,
             RecognitionCommand::Start {
                 unit_id: next_utterance_id("speech"),
@@ -1207,11 +1446,7 @@ fn apply_segmenter_update(
         )
         .and_then(|()| {
             if update.speech_ended {
-                send_recognition_command(
-                    generation,
-                    recognition_sender,
-                    RecognitionCommand::EndInput,
-                )
+                send_recognition_command(attempt, recognition_sender, RecognitionCommand::EndInput)
             } else {
                 Ok(())
             }
@@ -1219,7 +1454,7 @@ fn apply_segmenter_update(
     }
     if !update.audio.is_empty() {
         send_recognition_command(
-            generation,
+            attempt,
             recognition_sender,
             RecognitionCommand::Audio {
                 sample_rate_hz,
@@ -1228,29 +1463,27 @@ fn apply_segmenter_update(
         )?;
     }
     if update.speech_ended {
-        send_recognition_command(generation, recognition_sender, RecognitionCommand::EndInput)?;
+        send_recognition_command(attempt, recognition_sender, RecognitionCommand::EndInput)?;
     }
     Ok(())
 }
 
 fn send_recognition_command(
-    generation: &RuntimeGeneration,
+    attempt: &ConnectionAttempt,
     sender: &SyncSender<RecognitionCommand>,
     command: RecognitionCommand,
 ) -> AppResult<()> {
     match sender.try_send(command) {
         Ok(()) => Ok(()),
         Err(TrySendError::Full(_)) => {
-            generation.cancel_work();
+            attempt.cancel();
             Err(AppError::stt_backpressure(
                 "The recognition backend could not keep up with microphone audio; the bounded recognition queue filled, so the session stopped instead of silently dropping audio.",
             ))
         }
         Err(TrySendError::Disconnected(_)) => {
-            generation.cancel_work();
-            Err(AppError::runtime(
-                "Recognition worker stopped while microphone capture was still active.",
-            ))
+            attempt.cancel();
+            Ok(())
         }
     }
 }
@@ -1259,12 +1492,15 @@ fn spawn_recognition_worker<R: Runtime, S: RecognitionSession + 'static>(
     app: AppHandle<R>,
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
+    attempt: ConnectionAttempt,
     recognition: S,
     receiver: Receiver<RecognitionCommand>,
 ) -> AppResult<JoinHandle<AppResult<()>>> {
     thread::Builder::new()
         .name("vrc-live-caption-recognition".to_string())
-        .spawn(move || run_recognition_worker(app, publisher, generation, recognition, receiver))
+        .spawn(move || {
+            run_recognition_worker(app, publisher, generation, attempt, recognition, receiver)
+        })
         .map_err(|error| {
             AppError::runtime(format!(
                 "Failed to start recognition worker thread: {error}"
@@ -1276,11 +1512,12 @@ fn run_recognition_worker<R: Runtime>(
     app: AppHandle<R>,
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
+    attempt: ConnectionAttempt,
     mut recognition: impl RecognitionSession,
     receiver: Receiver<RecognitionCommand>,
 ) -> AppResult<()> {
     let work_result = (|| -> AppResult<()> {
-        while !generation.is_work_cancelled() {
+        while !generation.is_work_cancelled() && !attempt.is_cancelled() {
             match receiver.recv_timeout(RECOGNITION_EVENT_POLL_INTERVAL) {
                 Ok(RecognitionCommand::Start {
                     unit_id,
@@ -1318,7 +1555,7 @@ fn run_recognition_worker<R: Runtime>(
         Ok(())
     })();
 
-    generation.cancel_work();
+    attempt.cancel();
     let stop_result = recognition.stop();
     match (work_result, stop_result) {
         (Err(work_error), Err(stop_error)) => {

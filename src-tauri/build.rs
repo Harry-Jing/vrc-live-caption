@@ -2,6 +2,7 @@
 const APP_COMMANDS: &[&str] = &[
     "save_app_config",
     "list_audio_input_devices",
+    "probe_audio_input",
     "start_runtime",
     "stop_runtime",
     "get_runtime_control_snapshot",

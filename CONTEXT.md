@@ -11,6 +11,13 @@ A concrete combination of provider, endpoint or session mode, model, runtime,
 backend, and relevant configuration whose behavior is evaluated together.
 _Avoid_: Model, when endpoint- or runtime-dependent behavior is intended
 
+**Runtime generation**:
+One user-started captioning lifetime, ending at its hard Stop boundary. It may
+contain more than one provider connection, but late output from an older
+connection can never re-enter the generation after that connection is retired.
+_Avoid_: Provider session or connection attempt, when the Start-to-Stop
+lifetime is intended
+
 **Caption unit**:
 An application-correlated span of speech and text. A concrete adapter decides
 how the unit ends: local VAD, provider endpointing, an application hard limit,

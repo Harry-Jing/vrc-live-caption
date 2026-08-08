@@ -6,6 +6,9 @@
 //! would freeze the window for that duration.
 
 use crate::audio::{AudioInputDevice, list_input_devices};
+use crate::audio_probe::{
+    AudioProbeRequest, AudioProbeResult, probe_audio_input as run_audio_probe,
+};
 use crate::caption_session::CaptionSessionSnapshotV1;
 use crate::config::{AppConfig, SttProvider};
 use crate::error::AppResult;
@@ -13,6 +16,7 @@ use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, emit_runtime_control_changed,
 };
 use crate::osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
+use crate::runtime::SPEECH_RMS_THRESHOLD;
 use crate::runtime_control::RuntimeControlSnapshot;
 use crate::state::AppState;
 use tauri::{AppHandle, State};
@@ -54,6 +58,39 @@ pub(crate) fn list_audio_input_devices(app: AppHandle) -> AppResult<Vec<AudioInp
     );
 
     Ok(devices)
+}
+
+#[tauri::command(async)]
+pub(crate) fn probe_audio_input(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: AudioProbeRequest,
+) -> AppResult<AudioProbeResult> {
+    let _probe_lease = state.runtime.begin_audio_probe(&app)?;
+    match run_audio_probe(&request, SPEECH_RMS_THRESHOLD) {
+        Ok(result) => {
+            emit_diagnostic(
+                &app,
+                DiagnosticUpdate::info(
+                    DiagnosticCategory::Audio,
+                    "audio.probe_completed",
+                    "Microphone test completed",
+                    format!(
+                        "Observed local microphone levels for {} ms at {} Hz; no audio left the app.",
+                        result.duration_ms, result.sample_rate
+                    ),
+                ),
+            );
+            Ok(result)
+        }
+        Err(error) => {
+            emit_diagnostic(
+                &app,
+                DiagnosticUpdate::from_error(&error, "Microphone test failed"),
+            );
+            Err(error)
+        }
+    }
 }
 
 #[tauri::command(async)]

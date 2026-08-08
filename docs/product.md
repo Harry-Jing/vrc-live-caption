@@ -146,6 +146,12 @@ text from the stopped session reaches the App or the Chatbox afterward
   ([ADR 0005](./adr/0005-keep-secrets-out-of-config-and-logs.md)).
 - The app discloses when microphone audio is uploaded to a cloud provider
   ([ADR 0009](./adr/0009-cloud-audio-disclosure-lives-in-settings.md)).
+- Temporary recognition outages reconnect visibly without replaying ambiguous
+  audio or changing the selected provider/model; Stop remains the hard user
+  boundary ([ADR 0025](./adr/0025-reconnect-within-one-runtime-generation.md)).
+- Users can see whether the selected microphone crosses the current speech
+  gate and can run a short local-only microphone test without contacting a
+  recognition provider.
 - Diagnostics separate audio, provider, translation, worker, backend, OSC,
   config, and network failures, and should be exportable as a redacted
   report.

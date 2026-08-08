@@ -1,5 +1,5 @@
 use super::*;
-use crate::error::AppResult;
+use crate::error::{AppResult, ProviderFailureClass};
 use tauri::Listener;
 
 #[test]
@@ -151,6 +151,31 @@ fn diagnostic_payload_includes_machine_readable_code() {
 }
 
 #[test]
+fn audio_level_payload_contains_only_scalar_generation_telemetry() {
+    let event = AudioLevelEvent {
+        generation: 7,
+        revision: 3,
+        rms_dbfs: -24.5,
+        peak_dbfs: -10.0,
+        clipping: false,
+        gate_open: true,
+        timestamp_ms: 42,
+    };
+    let value = serde_json::to_value(event).unwrap_or_else(|serialization_error| {
+        serde_json::json!({ "serializationError": serialization_error.to_string() })
+    });
+
+    assert_eq!(value["generation"], 7);
+    assert_eq!(value["revision"], 3);
+    assert_eq!(value["rmsDbfs"], -24.5);
+    assert_eq!(value["peakDbfs"], -10.0);
+    assert_eq!(value["clipping"], false);
+    assert_eq!(value["gateOpen"], true);
+    assert_eq!(value["timestampMs"], 42);
+    assert!(value.get("samples").is_none());
+}
+
+#[test]
 fn error_codes_share_the_prefix_of_their_diagnostic_category() {
     let errors = [
         AppError::audio("x"),
@@ -164,6 +189,7 @@ fn error_codes_share_the_prefix_of_their_diagnostic_category() {
         AppError::secret("x"),
         AppError::state("x"),
         AppError::stt("x"),
+        AppError::stt_provider(ProviderFailureClass::Unknown, "x"),
         AppError::stt_backpressure("x"),
         AppError::stt_network("x"),
     ];

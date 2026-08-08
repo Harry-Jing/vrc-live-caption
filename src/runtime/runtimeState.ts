@@ -5,6 +5,7 @@ import type {
   RuntimeStatus,
   RuntimeStatusEvent,
 } from "./types";
+import { isActiveRuntimeStatus } from "./lifecycle";
 
 const DIAGNOSTIC_LIMIT = 50;
 
@@ -124,7 +125,9 @@ function controlStatusConflictsWithLifecycleTransition(
 
   return (
     pendingCommand === "stop_runtime" &&
-    (runtimeStatus.status === "starting" || runtimeStatus.status === "running")
+    (runtimeStatus.status === "starting" ||
+      runtimeStatus.status === "running" ||
+      runtimeStatus.status === "reconnecting")
   );
 }
 
@@ -197,9 +200,7 @@ export function reduceRuntimeState(
     if (
       (input.command === "start_runtime" &&
         (state.pendingLifecycleCommand !== null ||
-          state.runtimeStatus.status === "starting" ||
-          state.runtimeStatus.status === "running" ||
-          state.runtimeStatus.status === "stopping")) ||
+          isActiveRuntimeStatus(state.runtimeStatus.status))) ||
       (input.command === "stop_runtime" &&
         state.pendingLifecycleCommand?.command === "stop_runtime")
     ) {

@@ -9,6 +9,7 @@
     "core:event:allow-unlisten",
     "allow-save-app-config",
     "allow-list-audio-input-devices",
+    "allow-probe-audio-input",
     "allow-start-runtime",
     "allow-stop-runtime",
     "allow-get-runtime-control-snapshot",

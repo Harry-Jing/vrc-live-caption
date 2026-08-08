@@ -1,4 +1,6 @@
 mod audio;
+mod audio_level;
+mod audio_probe;
 mod capability_planner;
 mod caption_session;
 mod chatbox_layout;
@@ -18,6 +20,7 @@ mod recognition;
 mod recognition_audio;
 #[cfg(test)]
 mod recognition_fakes;
+mod reconnect;
 mod runtime;
 mod runtime_control;
 mod secrets;
@@ -44,6 +47,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::save_app_config,
             commands::list_audio_input_devices,
+            commands::probe_audio_input,
             commands::start_runtime,
             commands::stop_runtime,
             commands::get_runtime_control_snapshot,

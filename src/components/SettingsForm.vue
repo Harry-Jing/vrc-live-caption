@@ -9,7 +9,9 @@ import {
   watch,
 } from "vue";
 import { onBeforeRouteLeave } from "vue-router";
+import MicrophoneProbeControl from "./MicrophoneProbeControl.vue";
 import { uiText } from "../i18n/uiText";
+import { isActiveRuntimeSessionPhase } from "../runtime/lifecycle";
 import {
   publicationModeDescriptionMessageKey,
   publicationModeMessageKey,
@@ -22,6 +24,7 @@ import {
   OPENAI_TRANSCRIPTION_MODELS,
   type AppConfig,
   type AudioInputDevice,
+  type AudioProbeResult,
   type PublicationMode,
   type ProviderSecretStatus,
   type RuntimePendingChange,
@@ -32,10 +35,13 @@ import {
 
 const props = defineProps<{
   audioInputDevices: AudioInputDevice[];
+  audioProbeError: string;
+  audioProbeResult: AudioProbeResult | null;
   config: AppConfig | null;
   desiredRuntimePlan: RuntimePlan | null;
   isSecretsBusy: boolean;
   isSettingsBusy: boolean;
+  isAudioProbeRunning: boolean;
   pendingSessionChanges: readonly RuntimePendingChange[];
   sessionPhase: RuntimeSessionPhase | null;
   sessionUploadsMicrophoneAudio: boolean;
@@ -49,6 +55,7 @@ const emit = defineEmits<{
   refreshDevices: [];
   saveConfig: [config: AppConfig, onSettled: () => void];
   saveProviderSecret: [provider: SttProvider, secret: string];
+  testMicrophone: [inputDeviceId: string | null];
 }>();
 
 // The form is a deep clone of the saved config: fields stay editable without
@@ -58,6 +65,7 @@ const apiKeyInput = ref("");
 const isConfigSaveSubmitting = ref(false);
 const isRemoveKeyModalOpen = ref(false);
 const recognitionFields = ref<HTMLElement | null>(null);
+const lastTestedInputDeviceId = ref<string | null | undefined>(undefined);
 let lastSyncedConfigJson: string | null = null;
 
 watch(
@@ -81,6 +89,23 @@ watch(
 const openAiSecretStatus = computed(() => props.secretStatuses.openai ?? null);
 const areConfigControlsDisabled = computed(
   () => isConfigSaveSubmitting.value || props.isSettingsBusy,
+);
+const isRuntimeActive = computed(() =>
+  isActiveRuntimeSessionPhase(props.sessionPhase),
+);
+
+const probeMatchesSelectedInput = computed(
+  () =>
+    lastTestedInputDeviceId.value !== undefined &&
+    lastTestedInputDeviceId.value === form.value?.audio.inputDeviceId,
+);
+
+const visibleAudioProbeResult = computed(() =>
+  probeMatchesSelectedInput.value ? props.audioProbeResult : null,
+);
+
+const visibleAudioProbeError = computed(() =>
+  probeMatchesSelectedInput.value ? props.audioProbeError : "",
 );
 
 const canSaveOpenAiApiKey = computed(() => apiKeyInput.value.trim().length > 0);
@@ -314,6 +339,16 @@ function saveOpenAiApiKey() {
   apiKeyInput.value = "";
 }
 
+function testMicrophone() {
+  const inputDeviceId = form.value?.audio.inputDeviceId;
+  if (inputDeviceId === undefined) {
+    return;
+  }
+
+  lastTestedInputDeviceId.value = inputDeviceId;
+  emit("testMicrophone", inputDeviceId);
+}
+
 function requestDeleteOpenAiApiKey() {
   isRemoveKeyModalOpen.value = true;
 }
@@ -402,6 +437,15 @@ async function focusRecognitionPath() {
             :items="inputDeviceItems"
           />
         </UFormField>
+
+        <MicrophoneProbeControl
+          :disabled="areConfigControlsDisabled"
+          :error="visibleAudioProbeError"
+          :is-running="isAudioProbeRunning"
+          :result="visibleAudioProbeResult"
+          :runtime-active="isRuntimeActive"
+          @test="testMicrophone"
+        />
       </section>
 
       <USeparator />

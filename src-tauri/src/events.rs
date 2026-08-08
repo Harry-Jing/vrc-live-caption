@@ -29,6 +29,7 @@ const EVENT_RUNTIME_CONTROL_CHANGED: &str = "runtime-control-changed";
 const EVENT_CAPTION_SESSION_CHANGED: &str = "caption-session-changed";
 const EVENT_UTTERANCE_STARTED: &str = "utterance-started";
 const EVENT_UTTERANCE_ENDED: &str = "utterance-ended";
+const EVENT_AUDIO_LEVEL: &str = "audio-level";
 const EVENT_DIAGNOSTIC: &str = "diagnostic-event";
 
 static NEXT_EVENT_ID: AtomicU64 = AtomicU64::new(1);
@@ -62,6 +63,7 @@ pub(crate) enum RuntimeStatus {
     Idle,
     Starting,
     Running,
+    Reconnecting,
     Stopping,
     Stopped,
     Error,
@@ -89,6 +91,18 @@ struct UtteranceEndedEvent {
     utterance_id: String,
     reason: UtteranceEndReason,
     timestamp_ms: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AudioLevelEvent {
+    pub(crate) generation: u64,
+    pub(crate) revision: u64,
+    pub(crate) rms_dbfs: f32,
+    pub(crate) peak_dbfs: f32,
+    pub(crate) clipping: bool,
+    pub(crate) gate_open: bool,
+    pub(crate) timestamp_ms: u64,
 }
 
 /// Why an utterance terminated without a completed caption. Successful
@@ -206,6 +220,7 @@ impl DiagnosticCategory {
             | AppError::OscSendIncomplete { .. } => Self::Osc,
             AppError::Runtime { .. } | AppError::State { .. } => Self::Runtime,
             AppError::Stt { .. }
+            | AppError::SttProvider { .. }
             | AppError::SttBackpressure { .. }
             | AppError::SttNetwork { .. } => Self::Stt,
         }
@@ -318,6 +333,10 @@ pub(crate) fn emit_utterance_ended<R: Runtime>(
             timestamp_ms,
         },
     );
+}
+
+pub(crate) fn emit_audio_level<R: Runtime>(app: &AppHandle<R>, event: AudioLevelEvent) {
+    emit_event(app, EVENT_AUDIO_LEVEL, event);
 }
 
 pub(crate) fn emit_diagnostic<R: Runtime>(app: &AppHandle<R>, update: DiagnosticUpdate) {

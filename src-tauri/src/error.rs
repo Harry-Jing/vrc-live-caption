@@ -13,6 +13,29 @@ use std::fmt;
 
 pub(crate) type AppResult<T> = Result<T, AppError>;
 
+/// Stable, provider-neutral classification for a provider-originated STT
+/// failure. Provider wire strings are mapped to this closed set inside the
+/// concrete adapter and never cross into `AppError`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProviderFailureClass {
+    Authentication,
+    PermissionDenied,
+    InvalidRequest,
+    RateLimited,
+    UsageLimit,
+    ServiceUnavailable,
+    Unknown,
+}
+
+/// Whether retrying the same operation may succeed without changing user
+/// configuration. Runtime policy still owns delay, attempt, and total-time
+/// limits for retryable failures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetryDisposition {
+    Retryable,
+    Terminal,
+}
+
 #[derive(Debug)]
 pub(crate) enum AppError {
     Audio {
@@ -51,11 +74,19 @@ pub(crate) enum AppError {
     Stt {
         message: String,
     },
+    SttProvider {
+        class: ProviderFailureClass,
+        /// Compile-time text authored by this application. Keeping this
+        /// `&'static str` prevents provider strings from entering the error by
+        /// accident.
+        message: &'static str,
+    },
     SttBackpressure {
         message: String,
     },
     SttNetwork {
         message: String,
+        retry_disposition: RetryDisposition,
     },
 }
 
@@ -125,6 +156,10 @@ impl AppError {
         }
     }
 
+    pub(crate) fn stt_provider(class: ProviderFailureClass, message: &'static str) -> Self {
+        Self::SttProvider { class, message }
+    }
+
     pub(crate) fn stt_backpressure(message: impl Into<String>) -> Self {
         Self::SttBackpressure {
             message: message.into(),
@@ -134,6 +169,14 @@ impl AppError {
     pub(crate) fn stt_network(message: impl Into<String>) -> Self {
         Self::SttNetwork {
             message: message.into(),
+            retry_disposition: RetryDisposition::Terminal,
+        }
+    }
+
+    pub(crate) fn stt_network_retryable(message: impl Into<String>) -> Self {
+        Self::SttNetwork {
+            message: message.into(),
+            retry_disposition: RetryDisposition::Retryable,
         }
     }
 
@@ -154,8 +197,37 @@ impl AppError {
             Self::Secret { .. } => "config.secret_failed",
             Self::State { .. } => "runtime.state_failed",
             Self::Stt { .. } => "stt.failed",
+            Self::SttProvider { class, .. } => match class {
+                ProviderFailureClass::Authentication => "stt.provider_authentication_failed",
+                ProviderFailureClass::PermissionDenied => "stt.provider_permission_denied",
+                ProviderFailureClass::InvalidRequest => "stt.provider_invalid_request",
+                ProviderFailureClass::RateLimited => "stt.provider_rate_limited",
+                ProviderFailureClass::UsageLimit => "stt.provider_usage_limit",
+                ProviderFailureClass::ServiceUnavailable => "stt.provider_unavailable",
+                ProviderFailureClass::Unknown => "stt.provider_failed",
+            },
             Self::SttBackpressure { .. } => "stt.backpressure",
             Self::SttNetwork { .. } => "stt.network_unreachable",
+        }
+    }
+
+    pub(crate) fn provider_failure_class(&self) -> Option<ProviderFailureClass> {
+        match self {
+            Self::SttProvider { class, .. } => Some(*class),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn retry_disposition(&self) -> RetryDisposition {
+        match self {
+            Self::SttNetwork {
+                retry_disposition, ..
+            } => *retry_disposition,
+            Self::SttProvider {
+                class: ProviderFailureClass::RateLimited | ProviderFailureClass::ServiceUnavailable,
+                ..
+            } => RetryDisposition::Retryable,
+            _ => RetryDisposition::Terminal,
         }
     }
 
@@ -182,8 +254,9 @@ impl AppError {
             Self::Secret { message } => message.clone(),
             Self::State { message } => message.clone(),
             Self::Stt { message } => message.clone(),
+            Self::SttProvider { message, .. } => (*message).to_string(),
             Self::SttBackpressure { message } => message.clone(),
-            Self::SttNetwork { message } => message.clone(),
+            Self::SttNetwork { message, .. } => message.clone(),
         }
     }
 }
@@ -242,6 +315,17 @@ mod tests {
                 .unwrap_or_default()
                 .contains("system proxy")
         );
+    }
+
+    #[test]
+    fn network_retryability_must_be_selected_explicitly() {
+        let terminal = AppError::stt_network("A proxy or TLS configuration is invalid.");
+        let retryable = AppError::stt_network_retryable("The connection was reset.");
+
+        assert_eq!(terminal.retry_disposition(), RetryDisposition::Terminal);
+        assert_eq!(retryable.retry_disposition(), RetryDisposition::Retryable);
+        assert_eq!(terminal.code(), "stt.network_unreachable");
+        assert_eq!(retryable.code(), "stt.network_unreachable");
     }
 
     #[test]

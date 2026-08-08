@@ -144,6 +144,33 @@ fn fan_out_rejects_out_of_order_duplicate_stopped_and_old_generation_events() ->
 }
 
 #[test]
+fn reconnect_boundary_aborts_active_units_without_closing_the_generation() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
+
+    for unit_id in ["pending-one", "pending-two"] {
+        assert!(generation.submit_recognition_event(
+            app.handle(),
+            None,
+            RecognitionEvent::UnitStarted {
+                generation: generation.generation_id(),
+                stream_id: generation.stream_id().to_string(),
+                unit_id: unit_id.to_string(),
+                started_at_ms: 100,
+            },
+        )?);
+    }
+
+    generation.abort_active_units_for_reconnect(app.handle(), None)?;
+
+    assert!(caption_session.snapshot()?.active_units.is_empty());
+    assert!(generation.commit_if_active(|| {})?);
+    assert!(!generation.is_work_cancelled());
+    Ok(())
+}
+
+#[test]
 fn unit_ended_events_close_the_app_unit_and_completed_typing_activity() -> AppResult<()> {
     for (index, (reason, expected_reason)) in [
         (RecognitionEndReason::NoSpeech, "noSpeech"),
@@ -551,11 +578,12 @@ fn stop_cancels_work_before_waiting_for_an_app_commit() -> AppResult<()> {
 }
 
 #[test]
-fn a_full_recognition_queue_reports_backpressure_and_cancels_work() -> AppResult<()> {
+fn a_full_recognition_queue_reports_backpressure_without_disguising_it_as_stop() -> AppResult<()> {
     let generation = RuntimeGeneration::active();
+    let attempt = ConnectionAttempt::default();
     let (sender, _receiver) = sync_channel(1);
     send_recognition_command(
-        &generation,
+        &attempt,
         &sender,
         RecognitionCommand::Audio {
             sample_rate_hz: 24_000,
@@ -564,7 +592,7 @@ fn a_full_recognition_queue_reports_backpressure_and_cancels_work() -> AppResult
     )?;
 
     let error = send_recognition_command(
-        &generation,
+        &attempt,
         &sender,
         RecognitionCommand::Audio {
             sample_rate_hz: 24_000,
@@ -580,18 +608,84 @@ fn a_full_recognition_queue_reports_backpressure_and_cancels_work() -> AppResult
             .to_string()
             .contains("the session stopped instead of silently dropping audio")
     );
-    assert!(generation.is_work_cancelled());
+    assert!(!generation.is_work_cancelled());
+    assert!(attempt.is_cancelled());
+    Ok(())
+}
+
+#[test]
+fn a_closed_worker_channel_cancels_only_the_connection_attempt() -> AppResult<()> {
+    let generation = RuntimeGeneration::active();
+    let attempt = ConnectionAttempt::default();
+    let (sender, receiver) = sync_channel(1);
+    drop(receiver);
+
+    send_recognition_command(
+        &attempt,
+        &sender,
+        RecognitionCommand::Audio {
+            sample_rate_hz: 24_000,
+            samples: vec![0.1],
+        },
+    )?;
+
+    assert!(attempt.is_cancelled());
+    assert!(!generation.is_work_cancelled());
+    assert!(generation.commit_if_active(|| {})?);
+    Ok(())
+}
+
+#[test]
+fn runtime_stop_interrupts_reconnect_backoff() -> AppResult<()> {
+    let generation = RuntimeGeneration::active();
+    let waiter_generation = generation.clone();
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let waiter = thread::spawn(move || {
+        let _ = result_sender.send(wait_for_reconnect(
+            &waiter_generation,
+            Duration::from_secs(5),
+        ));
+    });
+
+    thread::sleep(Duration::from_millis(20));
+    generation.cancel_work();
+
+    assert!(
+        !result_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Reconnect backoff ignored runtime cancellation."))?
+    );
+    waiter
+        .join()
+        .map_err(|_| AppError::runtime("Reconnect backoff test thread panicked."))?;
+    Ok(())
+}
+
+#[test]
+fn microphone_probe_lease_excludes_runtime_start_until_released() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let manager = RuntimeManager::default();
+
+    let probe = manager.begin_audio_probe(app.handle())?;
+    let start_error = manager
+        .ensure_start_available(app.handle())
+        .err()
+        .ok_or_else(|| AppError::state("Runtime start ignored the active microphone probe."))?;
+    assert_eq!(start_error.code(), "runtime.failed");
+
+    drop(probe);
+    manager.ensure_start_available(app.handle())?;
     Ok(())
 }
 
 #[test]
 fn one_capture_callback_dispatches_every_segmenter_update_in_order() -> AppResult<()> {
-    let generation = RuntimeGeneration::active();
+    let attempt = ConnectionAttempt::default();
     let (sender, receiver) = sync_channel(4);
     let mut segmenter = SpeechSegmenter::new(10, 0.1, Duration::from_millis(100), 0.3, 0.3, 0.0);
     let updates = segmenter.push_samples(vec![0.21, 0.22, 0.23, 0.24], Instant::now());
 
-    apply_segmenter_updates(&generation, &sender, segmenter.sample_rate(), updates)?;
+    apply_segmenter_updates(&attempt, &sender, segmenter.sample_rate(), updates)?;
 
     match receiver
         .recv_timeout(Duration::from_secs(1))

@@ -4,6 +4,7 @@
 // backend, so preview mode exercises the actual caption state machine.
 
 import type { RuntimeBackend, RuntimeEventListener } from "./backend";
+import { isActiveRuntimeStatus } from "./lifecycle";
 import {
   APP_CONFIG_SCHEMA_VERSION,
   type AppConfig,
@@ -290,7 +291,7 @@ export function createPreviewBackend(): RuntimeBackend {
   }
 
   function startRuntimeControl(): Promise<RuntimeControlSnapshot> {
-    if (["starting", "running", "stopping"].includes(latestStatus.status)) {
+    if (isActiveRuntimeStatus(latestStatus.status)) {
       return Promise.reject(
         new Error("The browser preview runtime is already active."),
       );
@@ -320,6 +321,18 @@ export function createPreviewBackend(): RuntimeBackend {
     emitStatus("starting", "Starting browser preview runtime");
     session = { ...session, phase: "running" };
     emitStatus("running", "Browser preview runtime is running");
+    emit({
+      type: "audioLevel",
+      payload: {
+        generation: nextGeneration,
+        revision: 1,
+        rmsDbfs: -24,
+        peakDbfs: -6,
+        clipping: false,
+        gateOpen: true,
+        timestampMs: Date.now(),
+      },
+    });
 
     return Promise.resolve(controlSnapshot());
   }
@@ -421,6 +434,17 @@ export function createPreviewBackend(): RuntimeBackend {
           isDefault: true,
         },
       ]);
+    },
+
+    probeAudioInput(request) {
+      return Promise.resolve({
+        sampleRate: 48_000,
+        durationMs: request.durationMs,
+        rmsDbfs: -24,
+        peakDbfs: -6,
+        clipping: false,
+        gateOpen: true,
+      });
     },
 
     saveProviderSecret(provider: SttProvider, secret: string) {

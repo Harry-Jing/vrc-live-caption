@@ -147,6 +147,25 @@ fn runtime_error_preserves_the_effective_session_but_stopped_clears_it() -> AppR
 }
 
 #[test]
+fn reconnecting_status_keeps_the_effective_session_active() -> AppResult<()> {
+    let state = AppState::default();
+    let selected = AppConfig::default();
+    state.install_starting_session(session_snapshot(&selected, 8))?;
+
+    let snapshot = state.record_runtime_status(RuntimeStatusEvent::new(
+        RuntimeStatus::Reconnecting,
+        Some("Reconnecting speech recognition".to_string()),
+    ))?;
+
+    assert_eq!(snapshot.runtime.status, RuntimeStatus::Reconnecting);
+    assert_eq!(
+        snapshot.session.as_ref().map(|session| session.phase),
+        Some(RuntimeSessionPhase::Reconnecting)
+    );
+    Ok(())
+}
+
+#[test]
 fn failed_new_start_clears_an_old_error_session() -> AppResult<()> {
     let state = AppState::default();
     let selected = AppConfig::default();

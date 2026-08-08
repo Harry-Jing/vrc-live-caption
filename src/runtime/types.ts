@@ -1,5 +1,11 @@
 export type RuntimeStatus =
-  "idle" | "starting" | "running" | "stopping" | "stopped" | "error";
+  | "idle"
+  | "starting"
+  | "running"
+  | "reconnecting"
+  | "stopping"
+  | "stopped"
+  | "error";
 export const STT_PROVIDERS = ["openai"] as const;
 export type SttProvider = (typeof STT_PROVIDERS)[number];
 export const OPENAI_TRANSCRIPTION_MODELS = [
@@ -101,6 +107,7 @@ export type RuntimeCommand =
 
 export const RUNTIME_EVENTS = {
   status: "runtime-status",
+  audioLevel: "audio-level",
   captionSessionChanged: "caption-session-changed",
   utteranceStarted: "utterance-started",
   utteranceEnded: "utterance-ended",
@@ -140,6 +147,30 @@ export type AudioInputDevice = {
   isDefault: boolean;
 };
 
+export type AudioLevelEvent = Readonly<{
+  generation: number;
+  revision: number;
+  rmsDbfs: number;
+  peakDbfs: number;
+  clipping: boolean;
+  gateOpen: boolean;
+  timestampMs: number;
+}>;
+
+export type AudioProbeRequest = Readonly<{
+  inputDeviceId: string | null;
+  durationMs: number;
+}>;
+
+export type AudioProbeResult = Readonly<{
+  sampleRate: number;
+  durationMs: number;
+  rmsDbfs: number;
+  peakDbfs: number;
+  clipping: boolean;
+  gateOpen: boolean;
+}>;
+
 export type ProviderSecretStatus = {
   provider: SttProvider;
   configured: boolean;
@@ -151,7 +182,8 @@ export type ProviderSecretStatus = {
 export type RuntimePendingChange =
   "microphone" | "recognition" | "credential" | "chatboxOutput" | "publication";
 
-export type RuntimeSessionPhase = "starting" | "running" | "stopping" | "error";
+export type RuntimeSessionPhase =
+  "starting" | "running" | "reconnecting" | "stopping" | "error";
 
 export type RuntimeSessionCredential = {
   provider: SttProvider;
@@ -238,6 +270,7 @@ export type DiagnosticEvent = {
 
 export type RuntimeEvent =
   | { type: "status"; payload: RuntimeStatusEvent }
+  | { type: "audioLevel"; payload: AudioLevelEvent }
   | { type: "diagnostic"; payload: DiagnosticEvent }
   | { type: "utteranceStarted"; payload: UtteranceStartedEvent }
   | { type: "utteranceEnded"; payload: UtteranceEndedEvent }

@@ -22,6 +22,135 @@ fn only_update(mut updates: Vec<SegmenterUpdate>) -> SegmenterUpdate {
     updates.pop().unwrap_or_default()
 }
 
+fn production_like_segmenter() -> SpeechSegmenter {
+    SpeechSegmenter::new(1_000, 0.1, Duration::from_millis(1_200), 0.3, 30.0, 0.25)
+}
+
+fn updates_for_partitions(samples: &[f32], partitions: &[usize]) -> Vec<SegmenterUpdate> {
+    let mut segmenter = production_like_segmenter();
+    let now = Instant::now();
+    let mut updates = Vec::new();
+    let mut offset = 0;
+
+    for partition in partitions.iter().copied().cycle() {
+        if offset >= samples.len() {
+            break;
+        }
+        let end = offset.saturating_add(partition).min(samples.len());
+        updates.extend(segmenter.push_samples(samples[offset..end].to_vec(), now));
+        offset = end;
+    }
+
+    updates
+}
+
+fn deterministic_random_partitions(sample_count: usize) -> Vec<usize> {
+    let mut state = 0xA5A5_1F3Du32;
+    let mut covered = 0;
+    let mut partitions = Vec::new();
+    while covered < sample_count {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let partition = (state as usize % 37) + 1;
+        partitions.push(partition);
+        covered = covered.saturating_add(partition);
+    }
+    partitions
+}
+
+fn timed_trace_for_partitions(
+    samples: &[f32],
+    partitions: &[usize],
+) -> (usize, Vec<usize>, Vec<f32>) {
+    let mut segmenter = production_like_segmenter();
+    let started_at = Instant::now();
+    let mut start_count = 0;
+    let mut end_offsets = Vec::new();
+    let mut emitted = Vec::new();
+    let mut offset = 0;
+
+    for partition in partitions.iter().copied().cycle() {
+        if offset >= samples.len() {
+            break;
+        }
+        let end = offset.saturating_add(partition).min(samples.len());
+        let now = started_at + Duration::from_millis(end as u64);
+        for update in segmenter.push_samples(samples[offset..end].to_vec(), now) {
+            start_count += usize::from(update.speech_started);
+            emitted.extend(update.audio);
+            if update.speech_ended {
+                end_offsets.push(emitted.len());
+            }
+        }
+        offset = end;
+    }
+
+    (start_count, end_offsets, emitted)
+}
+
+#[test]
+fn callback_partitioning_does_not_change_candidate_acceptance() {
+    // Sixty milliseconds of loud input is below the 300 ms voiced minimum.
+    // Averaging the entire callback incorrectly promotes the grouped variant.
+    let mut samples = vec![0.3; 60];
+    samples.extend(vec![0.0; 240]);
+
+    let grouped = updates_for_partitions(&samples, &[samples.len()]);
+    let per_sample = updates_for_partitions(&samples, &[1]);
+    let randomized =
+        updates_for_partitions(&samples, &deterministic_random_partitions(samples.len()));
+
+    assert_eq!(grouped, per_sample);
+    assert_eq!(grouped, randomized);
+    assert!(grouped.is_empty());
+}
+
+#[test]
+fn callback_partitioning_and_timestamps_do_not_change_the_silence_boundary() {
+    let mut samples = vec![0.3; 300];
+    samples.extend(vec![0.0; 1_200]);
+
+    let grouped = timed_trace_for_partitions(&samples, &[samples.len()]);
+    let per_sample = timed_trace_for_partitions(&samples, &[1]);
+    let randomized =
+        timed_trace_for_partitions(&samples, &deterministic_random_partitions(samples.len()));
+
+    assert_eq!(grouped, per_sample);
+    assert_eq!(grouped, randomized);
+    assert_eq!(grouped.0, 1);
+    assert_eq!(grouped.1, vec![samples.len()]);
+    assert_eq!(grouped.2, samples);
+}
+
+#[test]
+fn one_callback_preserves_audio_order_across_acceptance_and_unit_boundaries() {
+    let mut segmenter =
+        SpeechSegmenter::new(1_000, 0.1, Duration::from_millis(20), 0.02, 0.05, 0.01);
+    let mut samples = vec![0.01; 10];
+    samples.extend((0..50).map(|index| 0.2 + index as f32 / 1_000.0));
+    samples.extend(vec![0.0; 20]);
+    samples.extend((0..20).map(|index| 0.3 + index as f32 / 1_000.0));
+
+    let updates = segmenter.push_samples(samples.clone(), Instant::now());
+
+    assert_eq!(updates.len(), 3);
+    assert_eq!(updates[0].audio, samples[..50]);
+    assert!(updates[0].speech_started);
+    assert!(updates[0].speech_ended);
+    assert_eq!(updates[1].audio, samples[50..80]);
+    assert!(updates[1].speech_started);
+    assert!(updates[1].speech_ended);
+    assert_eq!(updates[2].audio, samples[80..]);
+    assert!(updates[2].speech_started);
+    assert!(!updates[2].speech_ended);
+    assert_eq!(
+        updates
+            .iter()
+            .flat_map(|update| update.audio.iter().copied())
+            .collect::<Vec<_>>(),
+        samples
+    );
+}
+
 #[test]
 fn accepts_a_candidate_and_releases_its_audio_immediately() {
     let mut segmenter = segmenter(0.3, 2.0, NO_PREROLL);
@@ -60,6 +189,57 @@ fn ends_an_announced_unit_after_silence() {
 
     assert!(update.speech_ended);
     assert!(update.audio.is_empty());
+}
+
+#[test]
+fn tick_counts_only_the_unobserved_remainder_of_the_silence_timeout() {
+    let mut segmenter = SpeechSegmenter::new(
+        1_000,
+        0.1,
+        Duration::from_millis(100),
+        0.01,
+        2.0,
+        NO_PREROLL,
+    );
+    let now = Instant::now();
+    let started = only_update(segmenter.push_samples(vec![0.2; 10], now));
+    assert!(started.speech_started);
+
+    let silence =
+        only_update(segmenter.push_samples(vec![0.0; 50], now + Duration::from_millis(50)));
+    assert_eq!(silence.audio, vec![0.0; 50]);
+    assert!(!silence.speech_ended);
+
+    let ended = segmenter.tick(now + Duration::from_millis(100));
+    assert!(ended.speech_ended);
+    assert!(ended.audio.is_empty());
+}
+
+#[test]
+fn tick_tracks_a_new_candidate_started_later_in_the_same_callback() {
+    let mut segmenter = SpeechSegmenter::new(
+        1_000,
+        0.1,
+        Duration::from_millis(100),
+        0.01,
+        2.0,
+        NO_PREROLL,
+    );
+    let now = Instant::now();
+    let mut samples = vec![0.2; 10];
+    samples.extend(vec![0.0; 100]);
+    samples.extend(vec![0.2; 10]);
+
+    let updates = segmenter.push_samples(samples, now);
+    assert_eq!(updates.len(), 2);
+    assert!(updates[0].speech_ended);
+    assert!(updates[1].speech_started);
+
+    assert!(
+        segmenter
+            .tick(now + Duration::from_millis(100))
+            .speech_ended
+    );
 }
 
 #[test]
@@ -172,7 +352,9 @@ fn voiced_callback_after_an_exact_max_boundary_starts_as_a_continuation() {
 
 #[test]
 fn trusted_continuation_keeps_silent_preroll_with_the_next_short_voice() {
-    let mut segmenter = segmenter(0.3, 0.3, 0.2);
+    // At 10 Hz, two silent samples represent 200 ms, so keep the continuation
+    // trust window above that captured duration.
+    let mut segmenter = SpeechSegmenter::new(10, 0.1, Duration::from_millis(300), 0.3, 0.3, 0.2);
     let now = Instant::now();
     let boundary = only_update(segmenter.push_samples(vec![0.21, 0.22, 0.23], now));
     assert!(boundary.speech_ended);
@@ -319,6 +501,79 @@ fn finish_marks_only_an_announced_tail_as_discarded() {
     assert!(
         pending_continuation
             .push_samples(vec![0.3], now + Duration::from_millis(10))
+            .is_empty()
+    );
+}
+
+#[test]
+fn finish_discards_a_partial_analysis_frame_without_carrying_it_forward() {
+    let mut segmenter = SpeechSegmenter::new(
+        1_000,
+        0.1,
+        Duration::from_millis(100),
+        0.01,
+        2.0,
+        NO_PREROLL,
+    );
+    let now = Instant::now();
+
+    assert!(segmenter.push_samples(vec![0.2; 9], now).is_empty());
+    assert_eq!(segmenter.finish(), SegmenterUpdate::default());
+
+    assert!(
+        segmenter
+            .push_samples(vec![0.2], now + Duration::from_millis(210))
+            .is_empty()
+    );
+}
+
+#[test]
+fn tick_discards_a_partial_analysis_frame_at_the_no_input_boundary() {
+    let mut segmenter = SpeechSegmenter::new(
+        1_000,
+        0.1,
+        Duration::from_millis(100),
+        0.01,
+        2.0,
+        NO_PREROLL,
+    );
+    let now = Instant::now();
+
+    let started = only_update(segmenter.push_samples(vec![0.2; 10], now));
+    assert!(started.speech_started);
+    assert!(
+        segmenter
+            .push_samples(vec![0.2; 9], now + Duration::from_millis(10))
+            .is_empty()
+    );
+    assert!(
+        segmenter
+            .tick(now + Duration::from_millis(110))
+            .speech_ended
+    );
+
+    assert!(
+        segmenter
+            .push_samples(vec![0.2], now + Duration::from_millis(120))
+            .is_empty()
+    );
+
+    let mut pending = SpeechSegmenter::new(
+        1_000,
+        0.1,
+        Duration::from_millis(100),
+        0.01,
+        2.0,
+        NO_PREROLL,
+    );
+    assert!(pending.push_samples(vec![0.2; 9], now).is_empty());
+    assert_eq!(
+        pending.tick(now + Duration::from_millis(100)),
+        SegmenterUpdate::default()
+    );
+    assert!(
+        pending
+            .push_samples(vec![0.2], now + Duration::from_millis(110))
             .is_empty()
     );
 }

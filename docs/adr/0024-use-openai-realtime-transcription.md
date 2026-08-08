@@ -37,10 +37,11 @@ The OpenAI recognition catalog for the release has exactly two entries:
 | `gpt-transcribe` | transcription starts for a committed audio item and eventually completes it | Completed |
 | `gpt-live-transcribe` | continuous transcript deltas followed by item completion | Completed or Live |
 
-Every OpenAI recognition session uses the Realtime transcription WebSocket.
-One session selects exactly one model, and that selection is immutable until
-the session stops. The runtime does not combine the models or switch between
-them within a session.
+Every OpenAI recognition connection uses the Realtime transcription WebSocket.
+One runtime generation selects exactly one model, and that selection is
+immutable until Stop. A transient failure may replace the provider connection
+under [ADR 0025](./0025-reconnect-within-one-runtime-generation.md), but the
+runtime does not combine or switch models.
 
 The general recognition Module owns a provider-independent
 `RecognitionSession` Interface: session lifecycle and audio enter; normalized
@@ -66,8 +67,9 @@ may load editable defaults but Start remains blocked until the user reviews
 and saves the current settings.
 
 The release has no REST/WAV recognition fallback and no production Mock
-provider. Deterministic scripted Adapters remain test-only. A network or
-provider failure is surfaced instead of changing model, timing, or provider.
+provider. Deterministic scripted Adapters remain test-only. A failure is
+surfaced instead of changing model, timing, or provider; explicitly transient
+failures may reconnect the same selection within the current generation.
 
 Future local recognizers implement the same `RecognitionSession` Interface
 through a local-worker Adapter. They do not emulate the OpenAI wire protocol
@@ -85,6 +87,9 @@ and never fall back to OpenAI silently.
   per-item diagnostic so later completed items can advance; a commit that was
   never assigned an `item_id` instead terminates the session and requires a
   clean reconnect because later identities cannot be attached safely.
+- Reconnect never replays ambiguous audio. The old connection is retired,
+  unconfirmed units end visibly, and capture resumes only after a fresh
+  provider session is ready ([ADR 0025](./0025-reconnect-within-one-runtime-generation.md)).
 - The WebSocket transport follows the selected system HTTP proxy without
   silently bypassing a failed or invalid proxy. Explicit environment proxy
   values, Windows protocol-mapped settings, and macOS manual proxy settings are

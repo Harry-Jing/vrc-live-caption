@@ -46,6 +46,7 @@ pub(crate) struct RuntimeSessionSnapshot {
 pub(crate) enum RuntimeSessionPhase {
     Starting,
     Running,
+    Reconnecting,
     Stopping,
     Error,
 }

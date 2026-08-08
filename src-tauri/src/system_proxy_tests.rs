@@ -1,7 +1,10 @@
 use super::*;
-use crate::host_resolver::HostResolver;
+use crate::error::RetryDisposition;
+use crate::host_resolver::{HostResolutionError, HostResolver};
 use std::io::{ErrorKind, Read, Write};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use tungstenite::http::Request;
@@ -191,6 +194,56 @@ fn proxy_bypass_accepts_windows_whitespace_and_environment_commas() {
 }
 
 #[test]
+fn unpaired_environment_no_proxy_does_not_override_the_system_route() -> AppResult<()> {
+    let no_proxy_was_read = std::cell::Cell::new(false);
+    let matcher = matcher_for_proxy_sources(
+        None,
+        || {
+            no_proxy_was_read.set(true);
+            Ok(Some("api.openai.com".to_string()))
+        },
+        || {
+            Ok(Matcher::builder()
+                .https("http://system-proxy.example:8443")
+                .build())
+        },
+    )?;
+    let target = "https://api.openai.com/"
+        .parse::<Uri>()
+        .map_err(|error| AppError::state(format!("Failed to parse test URI: {error}")))?;
+    let selected = matcher.intercept(&target).ok_or_else(|| {
+        AppError::state("An unpaired environment NO_PROXY overrode the selected system route.")
+    })?;
+
+    assert_eq!(selected.uri().host(), Some("system-proxy.example"));
+    assert_eq!(selected.uri().port_u16(), Some(8443));
+    assert!(!no_proxy_was_read.get());
+    Ok(())
+}
+
+#[test]
+fn explicit_environment_proxy_pairs_with_no_proxy_and_precedes_the_system_route() -> AppResult<()> {
+    let system_route_was_read = std::cell::Cell::new(false);
+    let matcher = matcher_for_proxy_sources(
+        Some("http://environment-proxy.example:8080".to_string()),
+        || Ok(Some("api.openai.com".to_string())),
+        || {
+            system_route_was_read.set(true);
+            Ok(Matcher::builder()
+                .https("http://system-proxy.example:8443")
+                .build())
+        },
+    )?;
+    let target = "https://api.openai.com/"
+        .parse::<Uri>()
+        .map_err(|error| AppError::state(format!("Failed to parse test URI: {error}")))?;
+
+    assert!(matcher.intercept(&target).is_none());
+    assert!(!system_route_was_read.get());
+    Ok(())
+}
+
+#[test]
 fn direct_hostname_resolution_obeys_the_connection_deadline() -> AppResult<()> {
     let resolver = HostResolver::with_lookup(|_, _| {
         thread::sleep(Duration::from_millis(100));
@@ -234,6 +287,114 @@ fn selected_proxy_hostname_resolution_observes_cancellation() -> AppResult<()> {
     Ok(())
 }
 
+#[test]
+fn tcp_connect_observes_cancellation_while_loopback_backlog_is_full() -> AppResult<()> {
+    let (_listener, _queued_connections, address) = saturated_loopback_listener()?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let timer_cancelled = Arc::clone(&cancelled);
+    let timer = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(75));
+        timer_cancelled.store(true, Ordering::SeqCst);
+    });
+    let started_at = Instant::now();
+
+    let result = connect_tcp(
+        &HostResolver::default(),
+        "127.0.0.1",
+        address.port(),
+        started_at + PROXY_CONNECT_BUDGET,
+        "the saturated loopback listener",
+        &|| cancelled.load(Ordering::SeqCst),
+    );
+    timer
+        .join()
+        .map_err(|_| AppError::state("TCP cancellation timer thread panicked."))?;
+    let error = result
+        .err()
+        .ok_or_else(|| AppError::state("A cancelled TCP connection unexpectedly succeeded."))?;
+
+    assert!(error.to_string().contains("cancelled"));
+    assert!(started_at.elapsed() < Duration::from_secs(1));
+    Ok(())
+}
+
+#[test]
+fn proxy_response_wait_observes_cancellation() -> AppResult<()> {
+    let request_received = Arc::new(AtomicBool::new(false));
+    let (proxy_uri, server) = spawn_unresponsive_proxy(Arc::clone(&request_received))?;
+    let matcher = Matcher::builder().https(proxy_uri).build();
+    let request = test_request("wss://api.openai.com/v1/realtime")?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let timer_cancelled = Arc::clone(&cancelled);
+    let timer = thread::spawn(move || {
+        let wait_started_at = Instant::now();
+        while !request_received.load(Ordering::SeqCst)
+            && wait_started_at.elapsed() < Duration::from_secs(2)
+        {
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(75));
+        timer_cancelled.store(true, Ordering::SeqCst);
+    });
+    let started_at = Instant::now();
+
+    let result = connect_with_matcher_until(
+        &request,
+        &matcher,
+        &HostResolver::default(),
+        started_at + PROXY_CONNECT_BUDGET,
+        &|| cancelled.load(Ordering::SeqCst),
+    );
+    timer
+        .join()
+        .map_err(|_| AppError::state("Proxy cancellation timer thread panicked."))?;
+    let error = result
+        .err()
+        .ok_or_else(|| AppError::state("A cancelled proxy response unexpectedly succeeded."))?;
+    let _ = join_server(server)?;
+
+    assert!(error.to_string().contains("cancelled"));
+    assert!(started_at.elapsed() < Duration::from_secs(1));
+    Ok(())
+}
+
+#[test]
+fn transient_resolution_failures_are_retryable_but_internal_failures_are_terminal() {
+    let timeout = map_resolution_error("OpenAI", HostResolutionError::DeadlineExceeded);
+    let lookup = map_resolution_error(
+        "OpenAI",
+        HostResolutionError::LookupFailed("temporary DNS failure".to_string()),
+    );
+    let unavailable = map_resolution_error(
+        "OpenAI",
+        HostResolutionError::WorkerUnavailable("worker stopped".to_string()),
+    );
+
+    assert_eq!(timeout.retry_disposition(), RetryDisposition::Retryable);
+    assert_eq!(lookup.retry_disposition(), RetryDisposition::Retryable);
+    assert_eq!(unavailable.retry_disposition(), RetryDisposition::Terminal);
+}
+
+#[test]
+fn proxy_gateway_failures_are_retryable_but_configuration_rejections_are_terminal() {
+    let unavailable = validate_proxy_connect_status(503)
+        .err()
+        .unwrap_or_else(|| AppError::state("HTTP 503 unexpectedly opened a proxy tunnel."));
+    let authentication = validate_proxy_connect_status(407)
+        .err()
+        .unwrap_or_else(|| AppError::state("HTTP 407 unexpectedly opened a proxy tunnel."));
+    let bad_request = validate_proxy_connect_status(400)
+        .err()
+        .unwrap_or_else(|| AppError::state("HTTP 400 unexpectedly opened a proxy tunnel."));
+
+    assert_eq!(unavailable.retry_disposition(), RetryDisposition::Retryable);
+    assert_eq!(
+        authentication.retry_disposition(),
+        RetryDisposition::Terminal
+    );
+    assert_eq!(bad_request.retry_disposition(), RetryDisposition::Terminal);
+}
+
 fn test_request(uri: &str) -> AppResult<Request<()>> {
     Request::builder()
         .uri(uri)
@@ -257,6 +418,55 @@ fn spawn_proxy(
         Ok(request)
     });
     Ok((format!("http://{address}"), server))
+}
+
+fn spawn_unresponsive_proxy(
+    request_received: Arc<AtomicBool>,
+) -> AppResult<(String, thread::JoinHandle<std::io::Result<Vec<u8>>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|error| AppError::state(format!("Failed to bind test proxy: {error}")))?;
+    let address = listener
+        .local_addr()
+        .map_err(|error| AppError::state(format!("Failed to read proxy address: {error}")))?;
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept()?;
+        let request = read_header(&mut stream)?;
+        request_received.store(true, Ordering::SeqCst);
+        let mut remainder = Vec::new();
+        stream.read_to_end(&mut remainder)?;
+        Ok(request)
+    });
+    Ok((format!("http://{address}"), server))
+}
+
+fn saturated_loopback_listener() -> AppResult<(TcpListener, Vec<TcpStream>, SocketAddr)> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| {
+        AppError::state(format!(
+            "Failed to bind the saturated loopback listener: {error}"
+        ))
+    })?;
+    let address = listener.local_addr().map_err(|error| {
+        AppError::state(format!(
+            "Failed to read the saturated loopback address: {error}"
+        ))
+    })?;
+    let mut queued_connections = Vec::new();
+    for _ in 0..512 {
+        match TcpStream::connect_timeout(&address, Duration::from_millis(20)) {
+            Ok(stream) => queued_connections.push(stream),
+            Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+                return Ok((listener, queued_connections, address));
+            }
+            Err(error) => {
+                return Err(AppError::state(format!(
+                    "Failed while saturating the loopback listener: {error}"
+                )));
+            }
+        }
+    }
+    Err(AppError::state(
+        "Could not saturate the loopback listener within 512 connections.",
+    ))
 }
 
 fn read_header(stream: &mut impl Read) -> std::io::Result<Vec<u8>> {

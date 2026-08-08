@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { decodeAudioLevelEvent, decodeAudioProbeResult } from "./audioContract";
 import { decodeCaptionSessionSnapshotV1 } from "./captionSession";
 import { decodeRuntimeControlSnapshotV3 } from "./runtimeControlContract";
 import type {
@@ -12,6 +13,7 @@ import {
   RUNTIME_CONTROL_EVENT,
   type AppConfig,
   type AudioInputDevice,
+  type AudioProbeRequest,
   type DiagnosticEvent,
   type RuntimeCommand,
   type RuntimeStatusEvent,
@@ -76,6 +78,13 @@ export function createTauriBackend(
             (payload) => payload as RuntimeStatusEvent,
             (payload) => {
               listener({ type: "status", payload });
+            },
+          ),
+          listenFor(
+            RUNTIME_EVENTS.audioLevel,
+            decodeAudioLevelEvent,
+            (payload) => {
+              listener({ type: "audioLevel", payload });
             },
           ),
           listenFor(
@@ -177,6 +186,14 @@ export function createTauriBackend(
 
     listAudioInputDevices() {
       return bridge.invoke<AudioInputDevice[]>("list_audio_input_devices");
+    },
+
+    async probeAudioInput(request: AudioProbeRequest) {
+      const payload = await bridge.invoke<unknown>("probe_audio_input", {
+        request,
+      });
+
+      return decodeAudioProbeResult(payload);
     },
 
     saveProviderSecret(provider: SttProvider, secret: string) {

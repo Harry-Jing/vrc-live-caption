@@ -14,6 +14,13 @@ const englishMessages = {
   "audio.devices.defaultNamed": ({ name }: { name: string }) =>
     `${name} (default)`,
   "audio.devices.savedDisconnected": "Saved device (not connected)",
+  "audio.level.reading": ({
+    peakDbfs,
+    rmsDbfs,
+  }: {
+    peakDbfs: number;
+    rmsDbfs: number;
+  }) => `RMS ${rmsDbfs.toFixed(1)} dBFS · Peak ${peakDbfs.toFixed(1)} dBFS`,
 
   "stt.providers.openai": "OpenAI",
   "stt.models.gptTranscribe": "GPT Transcribe",
@@ -36,6 +43,7 @@ const englishMessages = {
   "runtime.status.idle": "Idle",
   "runtime.status.starting": "Starting",
   "runtime.status.running": "Running",
+  "runtime.status.reconnecting": "Reconnecting",
   "runtime.status.stopping": "Stopping",
   "runtime.status.stopped": "Stopped",
   "runtime.status.error": "Error",
@@ -111,6 +119,28 @@ const englishMessages = {
   "live.recentActivity.latestFinalTranscript": "Latest completed caption",
   "live.recentActivity.noFinalTranscript": "No completed caption yet.",
   "live.recentActivity.latestDiagnostic": "Latest diagnostic",
+  "live.microphoneMeter.title": "Microphone level",
+  "live.microphoneMeter.accessibleLabel": "Live microphone level",
+  "live.microphoneMeter.accessibleValue": ({
+    reading,
+    status,
+  }: {
+    reading: string;
+    status: string;
+  }) => `${reading}. ${status}.`,
+  "live.microphoneMeter.accessibleStatuses": ({
+    clippingStatus,
+    gateStatus,
+  }: {
+    clippingStatus: string;
+    gateStatus: string;
+  }) => `${gateStatus}. ${clippingStatus}`,
+  "live.microphoneMeter.waiting": "Waiting for microphone audio",
+  "live.microphoneMeter.reconnecting": "Paused while reconnecting",
+  "live.microphoneMeter.stopping": "Paused while the runtime stops",
+  "live.microphoneMeter.gateOpen": "Speech gate open",
+  "live.microphoneMeter.belowThreshold": "Below speech threshold",
+  "live.microphoneMeter.clipping": "Clipping detected",
 
   "settings.title": "Settings",
   "settings.page.title": "Capture, provider, and output",
@@ -118,6 +148,17 @@ const englishMessages = {
     "Configure capture, provider credentials, and Chatbox output.",
   "settings.actions.refreshDevices": "Refresh devices",
   "settings.actions.save": "Save Settings",
+  "settings.microphoneTest.action": "Test microphone",
+  "settings.microphoneTest.runningAction": "Testing microphone…",
+  "settings.microphoneTest.pending":
+    "Listening to the selected microphone for about two seconds…",
+  "settings.microphoneTest.runtimeActive":
+    "Stop the runtime before testing this microphone.",
+  "settings.microphoneTest.heard": "Audio is above the speech threshold",
+  "settings.microphoneTest.belowThreshold":
+    "Audio is below the speech threshold",
+  "settings.microphoneTest.clipping": "Clipping detected",
+  "settings.microphoneTest.errorTitle": "Microphone test failed",
   "settings.unsavedChanges.confirmLeave":
     "Discard the unsaved settings changes?",
   "settings.errors.actionFailed": "Settings action failed",

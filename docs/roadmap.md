@@ -85,10 +85,23 @@ Implemented:
   queues, a 30-second post-commit completion deadline, visible per-item
   diagnostics, authentication/status diagnostics, and late events after Stop
   are deterministic under tests;
+- provider-authored error text is discarded at the Adapter boundary; stable
+  structured classes distinguish terminal failures from transient network,
+  rate-limit, and provider-availability failures;
+- transient recognition failures reconnect inside the same runtime generation
+  with capped jittered backoff, a fresh provider session, no ambiguous audio
+  replay, explicit unconfirmed-unit termination, and Stop-cancellable waits
+  ([ADR 0025](./adr/0025-reconnect-within-one-runtime-generation.md));
+- VAD analysis uses fixed 10 ms frames and sample-count boundaries independent
+  of capture callback partitioning; the UI receives only 100 ms scalar audio
+  levels and provides a local-only, runtime-exclusive microphone probe;
 - invalid legacy settings block Start until the current strict configuration is
   reviewed and saved, while malformed or unsupported selected environment,
   Windows, or macOS proxy settings fail closed rather than allowing a direct
   connection;
+- macOS target routing preserves `ExceptionsList` and
+  `ExcludeSimpleHostnames` through CFNetwork instead of translating Apple
+  rules into `NO_PROXY` semantics;
 - an authenticated production-adapter smoke covers both exact models with
   Chinese, English, and mixed-language audio plus a provider-error probe; it
   exposed and verified fixes for the transcription-intent route and rustls

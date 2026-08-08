@@ -5,20 +5,23 @@
 //! API-key handshake. Tests never contact an external network.
 
 use crate::config::OpenAiTranscriptionModel;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ProviderFailureClass};
 use crate::host_resolver::HostResolver;
 use crate::openai_realtime::{
-    OpenAiRealtimeSession, OpenAiRealtimeSessionContext, RealtimeTransport,
+    OpenAiRealtimeSession, OpenAiRealtimeSessionContext, ProviderError, RealtimeTransport,
+    openai_provider_failure,
 };
 use crate::recognition::RecognitionSession;
 use secrecy::{ExposeSecret, SecretString};
+use serde::Deserialize;
 use std::io::{self, ErrorKind};
 use std::net::{Shutdown, TcpStream};
 use std::time::{Duration, Instant};
 use tungstenite::client::IntoClientRequest;
+use tungstenite::error::ProtocolError;
 use tungstenite::handshake::client::Request;
-use tungstenite::handshake::{HandshakeError, client::ClientHandshake};
-use tungstenite::protocol::WebSocketConfig;
+use tungstenite::handshake::{HandshakeError, MidHandshake, client::ClientHandshake};
+use tungstenite::protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{
     ClientRequestBuilder, Error as WebSocketError, Message, WebSocket, client_tls_with_config,
@@ -28,6 +31,7 @@ use tungstenite::{
 mod system_proxy;
 
 const HANDSHAKE_IO_TIMEOUT: Duration = Duration::from_secs(10);
+const HANDSHAKE_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const OPENAI_REALTIME_TRANSCRIPTION_WEBSOCKET_URL: &str =
     "wss://api.openai.com/v1/realtime?intent=transcription";
 const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -39,6 +43,7 @@ const MAX_WEBSOCKET_WRITE_BUFFER_BYTES: usize = 2_097_152;
 
 type OpenAiSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 type OpenAiHandshakeError = HandshakeError<ClientHandshake<MaybeTlsStream<TcpStream>>>;
+type OpenAiMidHandshake = MidHandshake<ClientHandshake<MaybeTlsStream<TcpStream>>>;
 
 pub(crate) struct OpenAiWebSocketTransport {
     socket: OpenAiSocket,
@@ -60,15 +65,18 @@ impl OpenAiWebSocketTransport {
             let _ = tcp.shutdown(Shutdown::Both);
             return Err(startup_cancelled_error());
         }
-        configure_handshake_timeout(&tcp)?;
         let websocket_config = WebSocketConfig::default()
             .write_buffer_size(64 * 1024)
             .max_write_buffer_size(MAX_WEBSOCKET_WRITE_BUFFER_BYTES)
             .max_message_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES))
             .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES));
-        let (mut socket, _response) =
-            client_tls_with_config(request, tcp, Some(websocket_config), None)
-                .map_err(map_handshake_error)?;
+        let mut socket = open_websocket_until(
+            request,
+            tcp,
+            websocket_config,
+            Instant::now() + HANDSHAKE_IO_TIMEOUT,
+            is_cancelled,
+        )?;
         if is_cancelled() {
             let _ = shutdown_socket(socket.get_mut());
             return Err(startup_cancelled_error());
@@ -81,14 +89,67 @@ impl OpenAiWebSocketTransport {
     }
 }
 
-fn configure_handshake_timeout(tcp: &TcpStream) -> AppResult<()> {
-    tcp.set_read_timeout(Some(HANDSHAKE_IO_TIMEOUT))
-        .and_then(|()| tcp.set_write_timeout(Some(HANDSHAKE_IO_TIMEOUT)))
-        .map_err(|error| {
-            AppError::stt_network(format!(
-                "Failed to configure the OpenAI Realtime handshake timeout: {error}"
-            ))
-        })
+fn open_websocket_until(
+    request: Request,
+    tcp: TcpStream,
+    websocket_config: WebSocketConfig,
+    deadline: Instant,
+    is_cancelled: &dyn Fn() -> bool,
+) -> AppResult<OpenAiSocket> {
+    if is_cancelled() {
+        let _ = tcp.shutdown(Shutdown::Both);
+        return Err(startup_cancelled_error());
+    }
+    if Instant::now() >= deadline {
+        let _ = tcp.shutdown(Shutdown::Both);
+        return Err(handshake_timeout_error());
+    }
+    tcp.set_nonblocking(true).map_err(|error| {
+        AppError::stt_network(format!(
+            "Failed to configure cancellable OpenAI Realtime handshake I/O: {error}"
+        ))
+    })?;
+
+    let mut result = client_tls_with_config(request, tcp, Some(websocket_config), None);
+    loop {
+        match result {
+            Ok((socket, _response)) => {
+                if is_cancelled() {
+                    let _ = shutdown_socket(socket.get_ref());
+                    return Err(startup_cancelled_error());
+                }
+                if Instant::now() >= deadline {
+                    let _ = shutdown_socket(socket.get_ref());
+                    return Err(handshake_timeout_error());
+                }
+                return Ok(socket);
+            }
+            Err(HandshakeError::Failure(error)) => {
+                return Err(map_handshake_error(HandshakeError::Failure(error)));
+            }
+            Err(HandshakeError::Interrupted(handshake)) => {
+                if is_cancelled() {
+                    let _ = shutdown_mid_handshake(&handshake);
+                    return Err(startup_cancelled_error());
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    let _ = shutdown_mid_handshake(&handshake);
+                    return Err(handshake_timeout_error());
+                }
+                std::thread::sleep(remaining.min(HANDSHAKE_CANCEL_POLL_INTERVAL));
+                result = handshake.handshake();
+            }
+        }
+    }
+}
+
+fn shutdown_mid_handshake(handshake: &OpenAiMidHandshake) -> io::Result<()> {
+    shutdown_socket(handshake.get_ref().get_ref())
+}
+
+fn handshake_timeout_error() -> AppError {
+    AppError::stt_network_retryable("OpenAI Realtime TLS or WebSocket handshake timed out.")
 }
 
 /// Runtime wiring entry point: credentials and transport stay inside the
@@ -111,7 +172,7 @@ pub(crate) fn connect_openai_realtime_session(
         }
         if Instant::now() >= deadline {
             let _ = session.stop();
-            return Err(AppError::stt_network(
+            return Err(AppError::stt_network_retryable(
                 "OpenAI Realtime did not confirm the transcription session configuration within 10 seconds.",
             ));
         }
@@ -131,7 +192,7 @@ fn startup_cancelled_error() -> AppError {
 impl RealtimeTransport for OpenAiWebSocketTransport {
     fn send_text(&mut self, message: String) -> AppResult<()> {
         if self.closed {
-            return Err(AppError::stt_network(
+            return Err(AppError::stt_network_retryable(
                 "OpenAI Realtime WebSocket is already closed.",
             ));
         }
@@ -148,11 +209,9 @@ impl RealtimeTransport for OpenAiWebSocketTransport {
             match self.socket.read() {
                 Ok(Message::Text(text)) => return Ok(Some(text.as_str().to_string())),
                 Ok(Message::Ping(_) | Message::Pong(_)) => continue,
-                Ok(Message::Close(_)) => {
+                Ok(Message::Close(frame)) => {
                     self.closed = true;
-                    return Err(AppError::stt_network(
-                        "OpenAI closed the Realtime WebSocket.",
-                    ));
+                    return Err(map_close_frame(frame.as_ref()));
                 }
                 Ok(Message::Binary(_)) => {
                     return Err(AppError::stt(
@@ -167,7 +226,7 @@ impl RealtimeTransport for OpenAiWebSocketTransport {
                 }
                 Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
                     self.closed = true;
-                    return Err(AppError::stt_network(
+                    return Err(AppError::stt_network_retryable(
                         "OpenAI Realtime WebSocket connection ended.",
                     ));
                 }
@@ -191,6 +250,36 @@ impl RealtimeTransport for OpenAiWebSocketTransport {
                 "Failed to shut down the OpenAI Realtime socket: {error}"
             ))
         })
+    }
+}
+
+fn map_close_frame(frame: Option<&CloseFrame>) -> AppError {
+    let Some(frame) = frame else {
+        return AppError::stt_network_retryable(
+            "OpenAI closed the Realtime WebSocket without a status code.",
+        );
+    };
+
+    let code = frame.code;
+    if matches!(
+        code,
+        CloseCode::Normal
+            | CloseCode::Away
+            | CloseCode::Status
+            | CloseCode::Abnormal
+            | CloseCode::Error
+            | CloseCode::Restart
+            | CloseCode::Again
+    ) {
+        AppError::stt_network_retryable(format!(
+            "OpenAI closed the Realtime WebSocket with retryable status code {}.",
+            u16::from(code)
+        ))
+    } else {
+        AppError::stt(format!(
+            "OpenAI closed the Realtime WebSocket with non-retryable status code {}.",
+            u16::from(code)
+        ))
     }
 }
 
@@ -234,6 +323,7 @@ fn configure_read_poll_timeout(stream: &mut MaybeTlsStream<TcpStream>) -> AppRes
 }
 
 fn configure_established_tcp(tcp: &TcpStream) -> io::Result<()> {
+    tcp.set_nonblocking(false)?;
     tcp.set_read_timeout(Some(SOCKET_READ_POLL_TIMEOUT))?;
     tcp.set_write_timeout(Some(SOCKET_WRITE_TIMEOUT))
 }
@@ -251,28 +341,39 @@ fn shutdown_socket(stream: &MaybeTlsStream<TcpStream>) -> io::Result<()> {
 fn map_handshake_error(error: OpenAiHandshakeError) -> AppError {
     match error {
         HandshakeError::Failure(WebSocketError::Http(response)) => {
-            map_handshake_http_status(response.status().as_u16())
+            map_handshake_http_status(response.status().as_u16(), response.body().as_deref())
         }
         HandshakeError::Failure(error) => {
             map_socket_error("Failed to connect to OpenAI Realtime", error)
         }
-        HandshakeError::Interrupted(_) => {
-            AppError::stt_network("OpenAI Realtime TLS or WebSocket handshake timed out.")
-        }
+        HandshakeError::Interrupted(_) => handshake_timeout_error(),
     }
 }
 
-fn map_handshake_http_status(status: u16) -> AppError {
+#[derive(Deserialize)]
+struct HandshakeProviderErrorEnvelope {
+    error: ProviderError,
+}
+
+fn map_handshake_http_status(status: u16, body: Option<&[u8]>) -> AppError {
     match status {
         401 | 403 => AppError::secret(format!(
             "OpenAI Realtime rejected the API key or project access (HTTP {status})."
         )),
-        429 => AppError::stt(
-            "OpenAI Realtime rejected the connection because a rate or usage limit was reached (HTTP 429).",
+        429 => {
+            let class = body
+                .and_then(|body| {
+                    serde_json::from_slice::<HandshakeProviderErrorEnvelope>(body).ok()
+                })
+                .map(|envelope| envelope.error.classification())
+                .filter(|class| *class != ProviderFailureClass::Unknown)
+                .unwrap_or(ProviderFailureClass::RateLimited);
+            openai_provider_failure(class)
+        }
+        500..=599 => AppError::stt_provider(
+            ProviderFailureClass::ServiceUnavailable,
+            "OpenAI Realtime is temporarily unavailable.",
         ),
-        500..=599 => AppError::stt(format!(
-            "OpenAI Realtime is temporarily unavailable (HTTP {status}). Try again later."
-        )),
         _ => AppError::stt(format!(
             "Failed to connect to OpenAI Realtime: HTTP {status}."
         )),
@@ -281,13 +382,37 @@ fn map_handshake_http_status(status: u16) -> AppError {
 
 fn map_socket_error(context: &str, error: WebSocketError) -> AppError {
     match error {
-        WebSocketError::Io(_)
-        | WebSocketError::Tls(_)
-        | WebSocketError::ConnectionClosed
-        | WebSocketError::AlreadyClosed
-        | WebSocketError::Url(_) => AppError::stt_network(format!("{context}: {error}")),
+        WebSocketError::Io(io_error) if is_transient_io_error(io_error.kind()) => {
+            AppError::stt_network_retryable(format!("{context}: {io_error}"))
+        }
+        WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed => {
+            AppError::stt_network_retryable(format!("{context}: {error}"))
+        }
+        WebSocketError::Protocol(ProtocolError::ResetWithoutClosingHandshake) => {
+            AppError::stt_network_retryable(format!("{context}: {error}"))
+        }
+        WebSocketError::Io(_) | WebSocketError::Tls(_) | WebSocketError::Url(_) => {
+            AppError::stt_network(format!("{context}: {error}"))
+        }
         other => AppError::stt(format!("{context}: {other}")),
     }
+}
+
+fn is_transient_io_error(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::ConnectionRefused
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::NetworkUnreachable
+            | ErrorKind::HostUnreachable
+            | ErrorKind::NotConnected
+            | ErrorKind::BrokenPipe
+            | ErrorKind::TimedOut
+            | ErrorKind::UnexpectedEof
+            | ErrorKind::Interrupted
+            | ErrorKind::WouldBlock
+    )
 }
 
 #[cfg(test)]

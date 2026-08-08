@@ -38,6 +38,9 @@ every translation to wait behind STT.
   frontend.
 - Provider raw events never reach UI-facing consumers or output sinks
   ([ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)).
+- Provider-authored error messages and metadata are discarded inside the
+  Adapter. Only an allowlisted application classification and stable,
+  application-authored diagnostic text may cross the seam.
 - A provider adapter never publishes directly to Chatbox. Chatbox is an
   output sink, not the center of the runtime.
 - Publication eligibility and sink pacing are separate decisions.
@@ -70,8 +73,9 @@ worker message.
 
 These invariants hold on both sides of the seam:
 
-- one session owns exactly one provider, Adapter, and model; saved changes take
-  effect only on a later Start;
+- one runtime generation owns exactly one provider, Adapter selection, and
+  model; saved changes take effect only on a later Start. A generation may
+  replace a failed provider connection without changing that selection;
 - each unit has one stable normalized identity, revisions increase within its
   lane, and completion is terminal for that unit;
 - raw deltas are accumulated inside the Adapter and leave it only as full
@@ -82,9 +86,12 @@ These invariants hold on both sides of the seam:
   advance without attaching to or overtaking the wrong unit; an unacknowledged
   commit fails the whole session because its later provider identity cannot be
   attached safely;
-- recoverable item failure may end that item and keep the session running;
-  connection, authentication, protocol, or worker failure ends the session
-  visibly; neither kind changes provider, model, or publication timing; and
+- recoverable item failure may end that item and keep the connection running;
+  explicitly transient connection or provider availability failures enter a
+  visible reconnect loop, while authentication, permission, invalid-request,
+  usage-limit, proxy-policy, TLS-configuration, protocol, worker, and unknown
+  failures end the generation visibly. Neither kind changes provider, model,
+  or publication timing; and
 - the runtime generation gate rejects all output after Stop, including a
   provider's drained tail or a local worker's late response.
 
@@ -142,8 +149,11 @@ client and WAV encoder are not retained for hypothetical future translation.
 The current transport honors a selected manual system HTTP proxy, rejects
 malformed explicit, Windows protocol-mapped, and macOS manual proxy settings
 instead of silently connecting directly, and never falls back to direct after
-a selected proxy fails. Unsupported SOCKS and PAC/WPAD selections fail
-visibly. The relay/base-URL option remains later work under
+a selected proxy fails. macOS resolves the actual target through CFNetwork so
+`ExceptionsList` and `ExcludeSimpleHostnames` retain Apple semantics; an
+unpaired environment `NO_PROXY` cannot override that operating-system route.
+Unsupported SOCKS and PAC/WPAD selections fail visibly. The relay/base-URL
+option remains later work under
 [ADR 0019](./adr/0019-follow-system-proxy-plan-relay-api.md).
 
 Hostname resolution is a shared application boundary for OpenAI target/proxy
@@ -157,10 +167,11 @@ microphone is opened.
 
 | Semantic concept | Tauri event | Meaning |
 |---|---|---|
-| `runtime.status` | `runtime-status` | `idle`, `starting`, `running`, `stopping`, `stopped`, or `error` |
+| `runtime.status` | `runtime-status` | `idle`, `starting`, `running`, `reconnecting`, `stopping`, `stopped`, or `error` |
 | `utterance.started` | `utterance-started` | speech activity before caption text exists |
 | `caption.session.changed` | `caption-session-changed` | the newest full `CaptionSessionSnapshotV1` aggregate |
 | `utterance.ended` | `utterance-ended` | a unit ended without a final result |
+| `audio.level` | `audio-level` | generation/revision-scoped 100 ms RMS/peak/gate/clipping scalars; never PCM |
 | `diagnostic` | `diagnostic-event` | categorized report with a stable code ([ADR 0014](./adr/0014-diagnostic-codes-are-category-detail.md)) |
 
 Rust owns one versioned caption-session aggregate,
@@ -172,12 +183,14 @@ Unit-based captions are newest-unit-first by backend-accepted unit sequence;
 later revisions keep their unit's position, and wall-clock timestamps are
 metadata rather than ordering keys.
 
-Event delivery is best-effort and at-most-once; the frontend can always pull
-the same aggregate to resynchronize, and reducers ignore older revisions
-([ADR 0013](./adr/0013-event-delivery-is-best-effort.md)). A shared JSON
-fixture pins the Rust serialization and the TypeScript runtime decoder to the
-same V1 wire shape. Admission, ordering, and reload-race handling live in the
-reducers and their tests.
+Event delivery is best-effort and at-most-once. The frontend can always pull
+the caption aggregate to resynchronize, and reducers ignore older revisions
+([ADR 0013](./adr/0013-event-delivery-is-best-effort.md)). Audio level telemetry
+is deliberately ephemeral: the UI accepts only newer generation/revision pairs
+and hides stale readings outside Running. A shared JSON fixture pins the Rust
+caption serialization and TypeScript runtime decoder to the same V1 wire
+shape. Admission, ordering, and reload-race handling live in reducers and
+their tests.
 
 Caption text never contains presentation placeholders; the UI derives
 listening, translating, degraded, and failure states from lifecycle and
@@ -200,8 +213,18 @@ Start validates configuration, credentials, audio devices, and the requested
 plan before capture begins. An incompatible combination is explained with
 explicit alternatives, never adjusted silently. A safe per-unit provider,
 translation, or OSC failure emits a diagnostic and may leave the session
-running; a session-level failure moves the runtime to an explicit error
-state.
+running. A classified transient recognition failure closes capture, retires
+and joins the old connection, ends unconfirmed units, and enters visible
+`reconnecting` backoff within the same generation. A fresh connection starts
+with no audio replay. A terminal session-level failure moves the runtime to an
+explicit error state
+([ADR 0025](./adr/0025-reconnect-within-one-runtime-generation.md)).
+
+While Running, the backend derives fixed-window RMS/peak, gate, and clipping
+scalars from the same mono capture frames used by recognition. Raw PCM never
+crosses IPC. Settings also offers a short, local-only microphone probe that is
+mutually exclusive with the runtime and does not open a provider, OSC, secret,
+or persistence path.
 
 Stop is a hard generation boundary
 ([ADR 0011](./adr/0011-stop-is-a-hard-cutoff.md)): release the microphone,

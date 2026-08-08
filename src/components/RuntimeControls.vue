@@ -2,6 +2,10 @@
 import { computed } from "vue";
 import { uiText } from "../i18n/uiText";
 import {
+  isActiveRuntimeStatus,
+  isStoppableRuntimeStatus,
+} from "../runtime/lifecycle";
+import {
   runtimeStatusColor,
   runtimeStatusMessageKey,
 } from "../runtime/presentation";
@@ -20,11 +24,10 @@ const emit = defineEmits<{
 }>();
 
 const canStart = computed(
-  () =>
-    !["starting", "running", "stopping"].includes(props.runtimeStatus.status),
+  () => !isActiveRuntimeStatus(props.runtimeStatus.status),
 );
 const canStop = computed(() =>
-  ["starting", "running", "error"].includes(props.runtimeStatus.status),
+  isStoppableRuntimeStatus(props.runtimeStatus.status),
 );
 function run(command: RuntimeCommand) {
   emit("run", command);

@@ -44,6 +44,7 @@ const RUNTIME_STATUSES = [
   "idle",
   "starting",
   "running",
+  "reconnecting",
   "stopping",
   "stopped",
   "error",
@@ -51,6 +52,7 @@ const RUNTIME_STATUSES = [
 const RUNTIME_SESSION_PHASES = [
   "starting",
   "running",
+  "reconnecting",
   "stopping",
   "error",
 ] as const;

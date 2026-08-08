@@ -21,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 base64 = "0.22.1"
 cpal = "0.18.1"
 keyring-core = "1.0.0"
+mio = { version = "1.2.1", features = ["net", "os-poll"] }
 rosc = "0.11.4"
 # Tungstenite enables rustls transport and native roots but no crypto provider.
 rustls = { version = "0.23.41", default-features = false, features = ["ring", "std"] }

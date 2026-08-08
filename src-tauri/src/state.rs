@@ -220,6 +220,9 @@ impl AppState {
             RuntimeStatus::Running => {
                 Self::set_session_phase(&mut control, RuntimeSessionPhase::Running)
             }
+            RuntimeStatus::Reconnecting => {
+                Self::set_session_phase(&mut control, RuntimeSessionPhase::Reconnecting)
+            }
             RuntimeStatus::Stopping => {
                 Self::set_session_phase(&mut control, RuntimeSessionPhase::Stopping)
             }

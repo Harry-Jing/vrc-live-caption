@@ -3,7 +3,7 @@
 Date: 2026-07
 
 Cloud requests follow the operating system's manual proxy configuration, read
-when the runtime creates its HTTP client. This serves players in China who
+when the runtime opens its cloud transport. This serves players in China who
 reach OpenAI through a Clash-style proxy: the common "system proxy" toggle is
 covered, TUN mode needs nothing from the app, and connection failures get a
 dedicated network-unreachable diagnostic. Executing PAC scripts, resolving
@@ -17,6 +17,16 @@ settings are read through the documented WinHTTP IE-configuration bridge. That
 bridge exposes manual proxy, bypass, PAC, and auto-detection selections for the
 active LAN or VPN; it does not add standalone WinHTTP or machine-policy proxy
 routing to the supported surface.
+
+On macOS, manual proxy settings are resolved for the actual OpenAI target with
+CFNetwork. This preserves Apple's `ExceptionsList` wildcard rules and
+`ExcludeSimpleHostnames` behavior instead of translating them into curl-style
+`NO_PROXY` semantics. The proxy dictionary is type-checked before the narrow
+CFNetwork boundary; malformed values fail closed. PAC and WPAD are rejected
+before target resolution, and the first target-specific CFNetwork route is
+authoritative. Environment `NO_PROXY` is consulted only when an explicit
+environment `HTTPS_PROXY` or `ALL_PROXY` selected that environment route; it
+does not override operating-system routing by itself.
 
 The maintainer is in the US and cannot validate these setups personally, so
 real Chinese-network testing is required before recommending the app to that

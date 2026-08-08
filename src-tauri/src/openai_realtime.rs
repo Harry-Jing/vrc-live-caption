@@ -7,7 +7,7 @@
 
 use crate::caption_session::{CaptionLane, CaptionSnapshotV1, CaptionState};
 use crate::config::OpenAiTranscriptionModel;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ProviderFailureClass};
 use crate::recognition::{
     RecognitionAudioChunk, RecognitionEndReason, RecognitionEvent, RecognitionSession,
 };
@@ -15,6 +15,7 @@ use crate::recognition_audio::RealtimePcm16Encoder;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Deserialize;
+use serde::de::IgnoredAny;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
@@ -78,6 +79,7 @@ impl MonotonicClock for InstantClock {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OpenAiRealtimeSessionContext {
     pub(crate) generation: u64,
+    pub(crate) connection_epoch: u64,
     pub(crate) stream_id: String,
 }
 
@@ -201,7 +203,12 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
             saturated_drains_after_deadline: 0,
             clock,
         };
-        let update = session_update(model, &session.languages, session.context.generation);
+        let update = session_update(
+            model,
+            &session.languages,
+            session.context.generation,
+            session.context.connection_epoch,
+        );
         session.send_client_event(update)?;
         Ok(session)
     }
@@ -241,9 +248,13 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
 
     fn handle_server_message(&mut self, message: &str, received_at_ms: u64) -> AppResult<()> {
         let event: ServerEvent = serde_json::from_str(message).map_err(|error| {
-            AppError::stt(format!(
-                "OpenAI Realtime returned an invalid server event: {error}"
-            ))
+            tracing::warn!(
+                json_error_category = ?error.classify(),
+                line = error.line(),
+                column = error.column(),
+                "OpenAI Realtime returned an invalid server event"
+            );
+            AppError::stt("OpenAI Realtime returned an invalid server event.")
         })?;
         match event {
             ServerEvent::SessionUpdated => {
@@ -268,40 +279,44 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
                 received_at_ms,
             ),
             ServerEvent::TranscriptFailed { item_id, error } => {
-                let diagnostic = error.diagnostic_summary();
-                tracing::warn!(
-                    provider = PROVIDER_NAME,
-                    provider_error_type = error.kind.as_deref().unwrap_or("unknown"),
-                    provider_error_code = error.code.as_deref().unwrap_or("unknown"),
-                    provider_error_param = error.param.as_deref().unwrap_or("unknown"),
-                    provider_event_id = error.event_id.as_deref().unwrap_or("unknown"),
-                    error_message = %error.message,
-                    "OpenAI Realtime transcription item failed"
-                );
-                self.handle_failed(item_id, diagnostic)
+                let class = error.classification();
+                if class == ProviderFailureClass::Unknown {
+                    tracing::warn!(
+                        provider = PROVIDER_NAME,
+                        provider_failure_class = ?class,
+                        "OpenAI Realtime transcription item failed"
+                    );
+                    self.handle_failed(
+                        item_id,
+                        "OpenAI could not transcribe one audio item.".to_string(),
+                    )
+                } else {
+                    self.fail_provider_session(class)
+                }
             }
             ServerEvent::Error { error } => {
-                let diagnostic = error.diagnostic_summary();
-                tracing::error!(
-                    provider = PROVIDER_NAME,
-                    provider_error_type = error.kind.as_deref().unwrap_or("unknown"),
-                    provider_error_code = error.code.as_deref().unwrap_or("unknown"),
-                    provider_error_param = error.param.as_deref().unwrap_or("unknown"),
-                    provider_event_id = error.event_id.as_deref().unwrap_or("unknown"),
-                    error_message = %error.message,
-                    "OpenAI Realtime session error requires a clean reconnect"
-                );
-
-                // Although some provider errors are recoverable, append/commit
-                // failures can leave the remote audio buffer ambiguous. A clean
-                // reconnect is safer than publishing captions from a drifted turn.
-                let _ = self.stop();
-                Err(AppError::stt(format!(
-                    "OpenAI Realtime transcription failed: {diagnostic}"
-                )))
+                let class = error.classification();
+                self.fail_provider_session(class)
             }
             ServerEvent::Other => Ok(()),
         }
+    }
+
+    fn fail_provider_session(&mut self, class: ProviderFailureClass) -> AppResult<()> {
+        let failure = openai_provider_failure(class);
+        tracing::error!(
+            provider = PROVIDER_NAME,
+            provider_failure_class = ?failure.provider_failure_class(),
+            retry_disposition = ?failure.retry_disposition(),
+            code = failure.code(),
+            "OpenAI Realtime provider failure requires a clean reconnect"
+        );
+
+        // Although some provider errors are recoverable, append/commit and
+        // item failures can leave the remote audio buffer ambiguous. A clean
+        // reconnect is safer than publishing captions from a drifted turn.
+        let _ = self.stop();
+        Err(failure)
     }
 
     fn bind_committed_item(&mut self, item_id: String) -> AppResult<()> {
@@ -642,7 +657,7 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
                 continue;
             }
             if turn.provider_item_id.is_none() {
-                return Err(AppError::stt_network(format!(
+                return Err(AppError::stt_network_retryable(format!(
                     "OpenAI Realtime did not acknowledge a committed audio item within {} seconds; reconnect before sending more audio.",
                     ITEM_COMPLETION_TIMEOUT.as_secs()
                 )));
@@ -776,7 +791,10 @@ impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
         let final_pcm16 = self.audio_encoder.finish_unit();
         self.send_audio_bytes(&final_pcm16)?;
         self.send_client_event(json!({
-            "event_id": format!("vrc-commit-{}-{sequence}", self.context.generation),
+            "event_id": format!(
+                "vrc-commit-{}-{}-{sequence}",
+                self.context.generation, self.context.connection_epoch
+            ),
             "type": "input_audio_buffer.commit",
         }))?;
 
@@ -865,9 +883,14 @@ fn normalize_languages(languages: Vec<String>) -> AppResult<Vec<String>> {
     Ok(normalized)
 }
 
-fn session_update(model: OpenAiTranscriptionModel, languages: &[String], generation: u64) -> Value {
+fn session_update(
+    model: OpenAiTranscriptionModel,
+    languages: &[String],
+    generation: u64,
+    connection_epoch: u64,
+) -> Value {
     json!({
-        "event_id": format!("vrc-session-update-{generation}"),
+        "event_id": format!("vrc-session-update-{generation}-{connection_epoch}"),
         "type": "session.update",
         "session": {
             "type": "transcription",
@@ -916,40 +939,83 @@ enum ServerEvent {
 }
 
 #[derive(Deserialize)]
-struct ProviderError {
-    message: String,
+pub(crate) struct ProviderError {
+    #[serde(rename = "message", default)]
+    _message: Option<IgnoredAny>,
     #[serde(rename = "type", default)]
-    kind: Option<String>,
+    kind: Option<Value>,
     #[serde(default)]
-    code: Option<String>,
-    #[serde(default)]
-    param: Option<String>,
-    #[serde(default)]
-    event_id: Option<String>,
+    code: Option<Value>,
+    #[serde(rename = "param", default)]
+    _param: Option<IgnoredAny>,
+    #[serde(rename = "event_id", default)]
+    _event_id: Option<IgnoredAny>,
 }
 
 impl ProviderError {
-    fn diagnostic_summary(&self) -> String {
-        let mut metadata = Vec::new();
-        if let Some(kind) = self.kind.as_deref() {
-            metadata.push(format!("type={kind}"));
-        }
-        if let Some(code) = self.code.as_deref() {
-            metadata.push(format!("code={code}"));
-        }
-        if let Some(param) = self.param.as_deref() {
-            metadata.push(format!("param={param}"));
-        }
-        if let Some(event_id) = self.event_id.as_deref() {
-            metadata.push(format!("event_id={event_id}"));
+    pub(crate) fn classification(&self) -> ProviderFailureClass {
+        // `code` is more specific than `type`, especially for 429 errors:
+        // OpenAI documents that quota/billing failures can share the broader
+        // `insufficient_quota` type. Never inspect the human-readable message.
+        match self.code.as_ref().and_then(Value::as_str) {
+            Some("invalid_api_key" | "authentication_error") => {
+                return ProviderFailureClass::Authentication;
+            }
+            Some("permission_denied" | "access_terminated") => {
+                return ProviderFailureClass::PermissionDenied;
+            }
+            Some(
+                "credit_balance_exhausted"
+                | "insufficient_quota"
+                | "organization_spend_limit_exceeded"
+                | "project_spend_limit_exceeded"
+                | "organization_usage_limit_exceeded",
+            ) => return ProviderFailureClass::UsageLimit,
+            Some("rate_limit_exceeded") => return ProviderFailureClass::RateLimited,
+            Some("server_error" | "websocket_connection_limit_reached") => {
+                return ProviderFailureClass::ServiceUnavailable;
+            }
+            Some("invalid_value" | "invalid_request_error") => {
+                return ProviderFailureClass::InvalidRequest;
+            }
+            Some(_) | None => {}
         }
 
-        if metadata.is_empty() {
-            self.message.clone()
-        } else {
-            format!("{} ({})", self.message, metadata.join(", "))
+        match self.kind.as_ref().and_then(Value::as_str) {
+            Some("authentication_error") => ProviderFailureClass::Authentication,
+            Some("permission_error") => ProviderFailureClass::PermissionDenied,
+            Some("invalid_request_error") => ProviderFailureClass::InvalidRequest,
+            Some("rate_limit_error") => ProviderFailureClass::RateLimited,
+            Some("insufficient_quota") => ProviderFailureClass::UsageLimit,
+            Some("api_error" | "server_error" | "overloaded_error") => {
+                ProviderFailureClass::ServiceUnavailable
+            }
+            Some(_) | None => ProviderFailureClass::Unknown,
         }
     }
+}
+
+pub(crate) fn openai_provider_failure(class: ProviderFailureClass) -> AppError {
+    let message = match class {
+        ProviderFailureClass::Authentication => {
+            "OpenAI rejected the Realtime transcription credentials."
+        }
+        ProviderFailureClass::PermissionDenied => "OpenAI denied access to Realtime transcription.",
+        ProviderFailureClass::InvalidRequest => {
+            "OpenAI rejected the Realtime transcription request."
+        }
+        ProviderFailureClass::RateLimited => {
+            "OpenAI temporarily rate-limited Realtime transcription."
+        }
+        ProviderFailureClass::UsageLimit => {
+            "OpenAI Realtime transcription reached a credit, spend, or usage limit."
+        }
+        ProviderFailureClass::ServiceUnavailable => {
+            "OpenAI Realtime transcription is temporarily unavailable."
+        }
+        ProviderFailureClass::Unknown => "OpenAI Realtime transcription failed.",
+    };
+    AppError::stt_provider(class, message)
 }
 
 #[derive(Deserialize)]

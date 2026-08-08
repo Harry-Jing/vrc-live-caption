@@ -1,11 +1,12 @@
 use super::*;
 use crate::caption_session::{CaptionSnapshotV1, CaptionState};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ProviderFailureClass, RetryDisposition};
 use crate::recognition::{
     RecognitionAudioChunk, RecognitionEndReason, RecognitionEvent, RecognitionSession,
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -33,6 +34,11 @@ impl FakeTransportProbe {
         Ok(())
     }
 
+    fn push_raw_server_event(&self, event: impl Into<String>) -> AppResult<()> {
+        self.lock()?.received.push_back(event.into());
+        Ok(())
+    }
+
     fn sent_json(&self) -> AppResult<Vec<Value>> {
         self.lock()?
             .sent
@@ -52,6 +58,47 @@ impl FakeTransportProbe {
 
 struct FakeTransport {
     probe: FakeTransportProbe,
+}
+
+#[derive(Clone, Default)]
+struct TracingCapture {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl TracingCapture {
+    fn writer(&self) -> TracingCaptureWriter {
+        TracingCaptureWriter {
+            bytes: self.bytes.clone(),
+        }
+    }
+
+    fn contents(&self) -> AppResult<String> {
+        let bytes = self
+            .bytes
+            .lock()
+            .map_err(|_| AppError::state("Tracing capture lock was poisoned."))?
+            .clone();
+        String::from_utf8(bytes)
+            .map_err(|error| AppError::state(format!("Tracing output was not UTF-8: {error}")))
+    }
+}
+
+struct TracingCaptureWriter {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Write for TracingCaptureWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.bytes
+            .lock()
+            .map_err(|_| io::Error::other("Tracing capture lock was poisoned."))?
+            .extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 impl FakeTransport {
@@ -112,6 +159,7 @@ fn session(
     let session = OpenAiRealtimeSession::connect(
         OpenAiRealtimeSessionContext {
             generation: 7,
+            connection_epoch: 3,
             stream_id: "recognition-7-1".to_string(),
         },
         model,
@@ -134,6 +182,7 @@ fn session_with_manual_clock(
     let session = OpenAiRealtimeSession::connect_with_clock(
         OpenAiRealtimeSessionContext {
             generation: 7,
+            connection_epoch: 3,
             stream_id: "recognition-7-1".to_string(),
         },
         model,
@@ -244,7 +293,7 @@ fn connection_configures_a_transcription_session_with_pcm_24k_and_languages() ->
     assert_eq!(
         sent,
         vec![json!({
-            "event_id": "vrc-session-update-7",
+            "event_id": "vrc-session-update-7-3",
             "type": "session.update",
             "session": {
                 "type": "transcription",
@@ -303,7 +352,7 @@ fn append_encodes_mono_pcm16_at_24k_then_commit_is_a_separate_event() -> AppResu
     assert_eq!(
         sent[2],
         json!({
-            "event_id": "vrc-commit-7-0",
+            "event_id": "vrc-commit-7-3-0",
             "type": "input_audio_buffer.commit",
         })
     );
@@ -311,16 +360,23 @@ fn append_encodes_mono_pcm16_at_24k_then_commit_is_a_separate_event() -> AppResu
 }
 
 #[test]
-fn provider_error_preserves_protocol_metadata_for_diagnostics() -> AppResult<()> {
+fn provider_error_does_not_escape_through_app_error_display_or_serialization() -> AppResult<()> {
     let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let canaries = [
+        "provider-message-canary",
+        "provider-type-canary",
+        "provider-code-canary",
+        "provider-param-canary",
+        "provider-event-id-canary",
+    ];
     probe.push_server_event(json!({
         "type": "error",
         "error": {
-            "type": "invalid_request_error",
-            "code": "invalid_value",
-            "message": "The committed audio was invalid.",
-            "param": "input_audio_buffer",
-            "event_id": "vrc-commit-7-0",
+            "type": canaries[1],
+            "code": canaries[2],
+            "message": canaries[0],
+            "param": canaries[3],
+            "event_id": canaries[4],
         }
     }))?;
 
@@ -328,13 +384,207 @@ fn provider_error_preserves_protocol_metadata_for_diagnostics() -> AppResult<()>
         .drain_events(100)
         .err()
         .ok_or_else(|| AppError::state("A provider error unexpectedly succeeded."))?;
-    let message = error.to_string();
-    assert!(message.contains("The committed audio was invalid."));
-    assert!(message.contains("type=invalid_request_error"));
-    assert!(message.contains("code=invalid_value"));
-    assert!(message.contains("param=input_audio_buffer"));
-    assert!(message.contains("event_id=vrc-commit-7-0"));
+    let display = error.to_string();
+    let serialized = serde_json::to_string(&error)
+        .map_err(|error| AppError::state(format!("Failed to serialize provider error: {error}")))?;
+
+    assert_eq!(error.code(), "stt.provider_failed");
+    assert_eq!(
+        error.provider_failure_class(),
+        Some(ProviderFailureClass::Unknown)
+    );
+    assert_eq!(error.retry_disposition(), RetryDisposition::Terminal);
+    assert_eq!(display, "OpenAI Realtime transcription failed.");
+    for canary in canaries {
+        assert!(!display.contains(canary));
+        assert!(!serialized.contains(canary));
+    }
     assert_eq!(probe.close_count()?, 1);
+    Ok(())
+}
+
+#[test]
+fn provider_error_classification_uses_structured_fields_not_message_text() -> AppResult<()> {
+    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    probe.push_server_event(json!({
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "code": "invalid_value",
+            "message": "server_error rate_limit_exceeded invalid_api_key",
+            "param": "message-text-must-not-control-classification",
+            "event_id": "classification-event-canary",
+        }
+    }))?;
+
+    let error = session
+        .drain_events(100)
+        .err()
+        .ok_or_else(|| AppError::state("A provider error unexpectedly succeeded."))?;
+
+    assert_eq!(
+        error.provider_failure_class(),
+        Some(ProviderFailureClass::InvalidRequest)
+    );
+    assert_eq!(error.retry_disposition(), RetryDisposition::Terminal);
+    assert_eq!(error.code(), "stt.provider_invalid_request");
+    assert_eq!(
+        error.to_string(),
+        "OpenAI rejected the Realtime transcription request."
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_error_classes_have_stable_retry_dispositions() -> AppResult<()> {
+    let cases = [
+        (
+            "authentication_error",
+            None,
+            ProviderFailureClass::Authentication,
+            RetryDisposition::Terminal,
+            "stt.provider_authentication_failed",
+        ),
+        (
+            "permission_error",
+            None,
+            ProviderFailureClass::PermissionDenied,
+            RetryDisposition::Terminal,
+            "stt.provider_permission_denied",
+        ),
+        (
+            "rate_limit_error",
+            None,
+            ProviderFailureClass::RateLimited,
+            RetryDisposition::Retryable,
+            "stt.provider_rate_limited",
+        ),
+        (
+            "insufficient_quota",
+            Some("credit_balance_exhausted"),
+            ProviderFailureClass::UsageLimit,
+            RetryDisposition::Terminal,
+            "stt.provider_usage_limit",
+        ),
+        (
+            "server_error",
+            None,
+            ProviderFailureClass::ServiceUnavailable,
+            RetryDisposition::Retryable,
+            "stt.provider_unavailable",
+        ),
+    ];
+
+    for (kind, code, expected_class, expected_retry, expected_code) in cases {
+        let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+        probe.push_server_event(json!({
+            "type": "error",
+            "error": {
+                "type": kind,
+                "code": code,
+                "message": "invalid_request_error must not control this classification",
+            }
+        }))?;
+
+        let error = session
+            .drain_events(100)
+            .err()
+            .ok_or_else(|| AppError::state("A provider error unexpectedly succeeded."))?;
+        assert_eq!(error.provider_failure_class(), Some(expected_class));
+        assert_eq!(error.retry_disposition(), expected_retry);
+        assert_eq!(error.code(), expected_code);
+    }
+    Ok(())
+}
+
+#[test]
+fn provider_error_does_not_escape_through_tracing() -> AppResult<()> {
+    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let canaries = [
+        "trace-message-canary",
+        "trace-type-canary",
+        "trace-code-canary",
+        "trace-param-canary",
+        "trace-event-id-canary",
+    ];
+    probe.push_server_event(json!({
+        "type": "error",
+        "error": {
+            "type": canaries[1],
+            "code": canaries[2],
+            "message": canaries[0],
+            "param": canaries[3],
+            "event_id": canaries[4],
+        }
+    }))?;
+
+    let capture = TracingCapture::default();
+    let writer_capture = capture.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_target(false)
+        .with_writer(move || writer_capture.writer())
+        .finish();
+    let result = tracing::subscriber::with_default(subscriber, || session.drain_events(100));
+    assert!(result.is_err());
+
+    let tracing_output = capture.contents()?;
+    assert!(tracing_output.contains("OpenAI Realtime provider failure"));
+    for canary in canaries {
+        assert!(!tracing_output.contains(canary));
+    }
+    Ok(())
+}
+
+#[test]
+fn malformed_provider_metadata_is_discarded_without_entering_parser_errors() -> AppResult<()> {
+    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let numeric_canary = 31_415_926_535_u64;
+    let nested_canary = "nested-provider-code-canary";
+    probe.push_server_event(json!({
+        "type": "error",
+        "error": {
+            "type": numeric_canary,
+            "code": { "value": nested_canary },
+            "message": ["provider-message-array-canary"],
+        }
+    }))?;
+
+    let error = session
+        .drain_events(100)
+        .err()
+        .ok_or_else(|| AppError::state("A malformed provider error unexpectedly succeeded."))?;
+    let observable = format!("{error:?}\n{error}");
+
+    assert_eq!(
+        error.provider_failure_class(),
+        Some(ProviderFailureClass::Unknown)
+    );
+    assert!(!observable.contains(&numeric_canary.to_string()));
+    assert!(!observable.contains(nested_canary));
+    assert!(!observable.contains("provider-message-array-canary"));
+    Ok(())
+}
+
+#[test]
+fn malformed_provider_error_shape_cannot_escape_through_the_json_decoder() -> AppResult<()> {
+    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let canary = "provider-message-canary";
+    probe.push_raw_server_event(format!(r#"{{"type":"error","error":"{canary}"}}"#))?;
+
+    let error = session
+        .drain_events(100)
+        .err()
+        .ok_or_else(|| AppError::state("A malformed provider event unexpectedly succeeded."))?;
+    let observable = format!("{error:?}\n{error}");
+
+    assert_eq!(error.code(), "stt.failed");
+    assert_eq!(
+        error.to_string(),
+        "OpenAI Realtime returned an invalid server event."
+    );
+    assert!(!observable.contains(canary));
     Ok(())
 }
 
@@ -608,13 +858,106 @@ fn failed_first_item_ends_explicitly_then_releases_the_completed_second_item() -
             unit_id,
             reason: RecognitionEndReason::Failed { detail },
             ..
-        }) if unit_id == "unit-a" && detail.contains("recognition failed")
+        }) if unit_id == "unit-a" && detail == "OpenAI could not transcribe one audio item."
     ));
     assert!(matches!(
         events.get(1),
         Some(RecognitionEvent::Caption(caption))
             if caption.unit_id.as_deref() == Some("unit-b") && caption.text == "second"
     ));
+    Ok(())
+}
+
+#[test]
+fn structured_item_failures_promote_session_wide_conditions_to_clean_failure() -> AppResult<()> {
+    for (kind, code, expected_class, expected_retry) in [
+        (
+            "rate_limit_error",
+            "rate_limit_exceeded",
+            ProviderFailureClass::RateLimited,
+            RetryDisposition::Retryable,
+        ),
+        (
+            "insufficient_quota",
+            "insufficient_quota",
+            ProviderFailureClass::UsageLimit,
+            RetryDisposition::Terminal,
+        ),
+    ] {
+        let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+        start_unit(&mut session, "unit-a", 100)?;
+        session.end_input()?;
+        probe.push_server_event(buffer_committed("item-a"))?;
+        probe.push_server_event(json!({
+            "type": "conversation.item.input_audio_transcription.failed",
+            "item_id": "item-a",
+            "error": {
+                "message": "provider-item-message-canary",
+                "type": kind,
+                "code": code,
+            }
+        }))?;
+
+        let error = session.drain_events(180).err().ok_or_else(|| {
+            AppError::state("A session-wide item failure unexpectedly succeeded.")
+        })?;
+        assert_eq!(error.provider_failure_class(), Some(expected_class));
+        assert_eq!(error.retry_disposition(), expected_retry);
+        assert!(!format!("{error:?}\n{error}").contains("provider-item-message-canary"));
+        assert_eq!(probe.close_count()?, 1);
+    }
+    Ok(())
+}
+
+#[test]
+fn item_failure_does_not_escape_through_recognition_events_or_tracing() -> AppResult<()> {
+    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut session, "unit-a", 100)?;
+    session.end_input()?;
+    let canaries = [
+        "item-id-canary",
+        "item-message-canary",
+        "item-type-canary",
+        "item-code-canary",
+        "item-param-canary",
+        "item-event-id-canary",
+    ];
+    probe.push_server_event(buffer_committed(canaries[0]))?;
+    probe.push_server_event(json!({
+        "type": "conversation.item.input_audio_transcription.failed",
+        "item_id": canaries[0],
+        "error": {
+            "message": canaries[1],
+            "type": canaries[2],
+            "code": canaries[3],
+            "param": canaries[4],
+            "event_id": canaries[5],
+        }
+    }))?;
+
+    let capture = TracingCapture::default();
+    let writer_capture = capture.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_target(false)
+        .with_writer(move || writer_capture.writer())
+        .finish();
+    let events = tracing::subscriber::with_default(subscriber, || session.drain_events(180))?;
+
+    assert!(matches!(
+        events.as_slice(),
+        [RecognitionEvent::UnitEnded {
+            unit_id,
+            reason: RecognitionEndReason::Failed { detail },
+            ..
+        }] if unit_id == "unit-a"
+            && detail == "OpenAI could not transcribe one audio item."
+    ));
+    let observable = format!("{events:?}\n{}", capture.contents()?);
+    for canary in canaries {
+        assert!(!observable.contains(canary));
+    }
     Ok(())
 }
 
@@ -702,6 +1045,7 @@ fn an_unacknowledged_commit_times_out_instead_of_misbinding_a_later_item() -> Ap
 
     assert!(error.to_string().contains("did not acknowledge"));
     assert!(error.to_string().contains("reconnect"));
+    assert_eq!(error.retry_disposition(), RetryDisposition::Retryable);
     Ok(())
 }
 

@@ -2,7 +2,11 @@ import { createRenderer, defineComponent } from "vue";
 import { expect, test, vi } from "vitest";
 import captionSessionFixture from "../../contracts/caption-session-snapshot-v1.json?raw";
 import runtimeControlFixture from "../../contracts/runtime-control-snapshot-v3.json?raw";
-import type { RuntimeBackend, RuntimeControlListener } from "./backend";
+import type {
+  RuntimeBackend,
+  RuntimeControlListener,
+  RuntimeEventListener,
+} from "./backend";
 import { decodeCaptionSessionSnapshotV1 } from "./captionSession";
 import { decodeRuntimeControlSnapshotV3 } from "./runtimeControlContract";
 import type { CaptionSessionSnapshotV1, RuntimeControlSnapshot } from "./types";
@@ -143,11 +147,17 @@ function mountRuntimeHarness() {
   let controlListener: RuntimeControlListener = () => {
     throw new Error("The runtime control listener is not registered.");
   };
+  let eventListener: RuntimeEventListener = () => {
+    throw new Error("The runtime event listener is not registered.");
+  };
   let currentControl = initialControl;
   let currentCaption: CaptionSessionSnapshotV1 = initialCaption;
   const startRuntime = vi.fn(() => pendingStart.promise);
   const backend: RuntimeBackend = {
-    listen: () => Promise.resolve(() => undefined),
+    listen(listener) {
+      eventListener = listener;
+      return Promise.resolve(() => undefined);
+    },
     listenControl(listener) {
       controlListener = listener;
       return Promise.resolve(() => undefined);
@@ -163,6 +173,15 @@ function mountRuntimeHarness() {
     getCaptionSessionSnapshot: () => Promise.resolve(currentCaption),
     saveConfig: () => Promise.resolve(currentControl),
     listAudioInputDevices: () => Promise.resolve([]),
+    probeAudioInput: () =>
+      Promise.resolve({
+        sampleRate: 48_000,
+        durationMs: 2_000,
+        rmsDbfs: -24,
+        peakDbfs: -6,
+        clipping: false,
+        gateOpen: true,
+      }),
     saveProviderSecret: () => Promise.resolve(currentControl),
     deleteProviderSecret: () => Promise.resolve(currentControl),
   };
@@ -190,11 +209,40 @@ function mountRuntimeHarness() {
       currentControl = snapshot;
       controlListener(snapshot);
     },
+    publishEvent(event: Parameters<RuntimeEventListener>[0]) {
+      eventListener(event);
+    },
     setCaption(snapshot: CaptionSessionSnapshotV1) {
       currentCaption = snapshot;
     },
   };
 }
+
+test("routes realtime audio levels outside the lifecycle reducer", async () => {
+  const harness = mountRuntimeHarness();
+
+  try {
+    await vi.waitFor(() => {
+      expect(harness.runtime.runtimeStatus.value.status).toBe("running");
+    });
+    const level = {
+      generation: 7,
+      revision: 3,
+      rmsDbfs: -28,
+      peakDbfs: -5,
+      clipping: false,
+      gateOpen: true,
+      timestampMs: 1_010,
+    } as const;
+
+    harness.publishEvent({ type: "audioLevel", payload: level });
+
+    expect(harness.runtime.latestAudioLevel.value).toEqual(level);
+    expect(harness.runtime.runtimeStatus.value.status).toBe("running");
+  } finally {
+    harness.app.unmount();
+  }
+});
 
 test("reopens caption admission when Running arrives before Start resolves", async () => {
   const harness = mountRuntimeHarness();
