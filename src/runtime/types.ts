@@ -1,11 +1,13 @@
-export type RuntimeStatus =
-  | "idle"
-  | "starting"
-  | "running"
-  | "reconnecting"
-  | "stopping"
-  | "stopped"
-  | "error";
+export const RUNTIME_STATUSES = [
+  "idle",
+  "starting",
+  "running",
+  "reconnecting",
+  "stopping",
+  "stopped",
+  "error",
+] as const;
+export type RuntimeStatus = (typeof RUNTIME_STATUSES)[number];
 export const STT_PROVIDERS = ["openai"] as const;
 export type SttProvider = (typeof STT_PROVIDERS)[number];
 export const OPENAI_TRANSCRIPTION_MODELS = [
@@ -14,21 +16,50 @@ export const OPENAI_TRANSCRIPTION_MODELS = [
 ] as const;
 export type OpenAiTranscriptionModel =
   (typeof OPENAI_TRANSCRIPTION_MODELS)[number];
-export type ProviderSecretStorage = "systemCredentialStore" | "environment";
-export type DiagnosticCategory = "config" | "runtime" | "audio" | "stt" | "osc";
-export type DiagnosticSeverity = "info" | "warning" | "error";
-export type UtteranceEndReason = "noSpeech" | "sttFailed";
+export const PROVIDER_SECRET_STORAGES = [
+  "systemCredentialStore",
+  "environment",
+] as const;
+export type ProviderSecretStorage = (typeof PROVIDER_SECRET_STORAGES)[number];
+export const DIAGNOSTIC_CATEGORIES = [
+  "config",
+  "runtime",
+  "audio",
+  "stt",
+  "osc",
+] as const;
+export type DiagnosticCategory = (typeof DIAGNOSTIC_CATEGORIES)[number];
+export const DIAGNOSTIC_SEVERITIES = ["info", "warning", "error"] as const;
+export type DiagnosticSeverity = (typeof DIAGNOSTIC_SEVERITIES)[number];
 export type CaptionMode = "waiting" | "listening" | "partial" | "final";
 
-export type CaptionLane = "source" | "translation";
-export type CaptionState = "ongoing" | "completed";
-export type PublicationMode = "completed" | "live";
-export type RecognitionPath = "openAiGptTranscribe" | "openAiGptLiveTranscribe";
-export type RecognitionInputShape = "continuousAudioFrames";
-export type BoundaryOwner = "application";
-export type CaptionUnitBehavior = "unitBased";
-export type LaneUpdateBehavior = "completedOnly" | "ongoingAndCompleted";
-export type RevisionBehavior = "appendOnly" | "revisableFullSnapshot";
+export const CAPTION_LANES = ["source", "translation"] as const;
+export type CaptionLane = (typeof CAPTION_LANES)[number];
+export const CAPTION_STATES = ["ongoing", "completed"] as const;
+export type CaptionState = (typeof CAPTION_STATES)[number];
+export const PUBLICATION_MODES = ["completed", "live"] as const;
+export type PublicationMode = (typeof PUBLICATION_MODES)[number];
+export const RECOGNITION_PATHS = [
+  "openAiGptTranscribe",
+  "openAiGptLiveTranscribe",
+] as const;
+export type RecognitionPath = (typeof RECOGNITION_PATHS)[number];
+export const RECOGNITION_INPUT_SHAPES = ["continuousAudioFrames"] as const;
+export type RecognitionInputShape = (typeof RECOGNITION_INPUT_SHAPES)[number];
+export const BOUNDARY_OWNERS = ["application"] as const;
+export type BoundaryOwner = (typeof BOUNDARY_OWNERS)[number];
+export const CAPTION_UNIT_BEHAVIORS = ["unitBased"] as const;
+export type CaptionUnitBehavior = (typeof CAPTION_UNIT_BEHAVIORS)[number];
+export const LANE_UPDATE_BEHAVIORS = [
+  "completedOnly",
+  "ongoingAndCompleted",
+] as const;
+export type LaneUpdateBehavior = (typeof LANE_UPDATE_BEHAVIORS)[number];
+export const REVISION_BEHAVIORS = [
+  "appendOnly",
+  "revisableFullSnapshot",
+] as const;
+export type RevisionBehavior = (typeof REVISION_BEHAVIORS)[number];
 
 export type RecognitionCapabilityProfile = Readonly<{
   path: RecognitionPath;
@@ -104,13 +135,19 @@ export type CaptionDisplay = CaptionSnapshotV1 & Readonly<{ id: string }>;
 
 export type RuntimeCommand =
   "start_runtime" | "stop_runtime" | "send_osc_test_message";
+export type RuntimeLifecycleCommand = Extract<
+  RuntimeCommand,
+  "start_runtime" | "stop_runtime"
+>;
+export type RuntimeBackendCommand = Exclude<
+  RuntimeCommand,
+  RuntimeLifecycleCommand
+>;
 
 export const RUNTIME_EVENTS = {
   status: "runtime-status",
   audioLevel: "audio-level",
   captionSessionChanged: "caption-session-changed",
-  utteranceStarted: "utterance-started",
-  utteranceEnded: "utterance-ended",
   diagnostic: "diagnostic-event",
 } as const;
 
@@ -179,11 +216,23 @@ export type ProviderSecretStatus = {
   error: string | null;
 };
 
-export type RuntimePendingChange =
-  "microphone" | "recognition" | "credential" | "chatboxOutput" | "publication";
+export const RUNTIME_PENDING_CHANGES = [
+  "microphone",
+  "recognition",
+  "credential",
+  "chatboxOutput",
+  "publication",
+] as const;
+export type RuntimePendingChange = (typeof RUNTIME_PENDING_CHANGES)[number];
 
-export type RuntimeSessionPhase =
-  "starting" | "running" | "reconnecting" | "stopping" | "error";
+export const RUNTIME_SESSION_PHASES = [
+  "starting",
+  "running",
+  "reconnecting",
+  "stopping",
+  "error",
+] as const;
+export type RuntimeSessionPhase = (typeof RUNTIME_SESSION_PHASES)[number];
 
 export type RuntimeSessionCredential = {
   provider: SttProvider;
@@ -241,23 +290,6 @@ export type RuntimeStatusEvent = {
   timestampMs: number;
 };
 
-export type UtteranceStartedEvent = {
-  id: string;
-  generation: number;
-  streamId: string;
-  utteranceId: string;
-  timestampMs: number;
-};
-
-export type UtteranceEndedEvent = {
-  id: string;
-  generation: number;
-  streamId: string;
-  utteranceId: string;
-  reason: UtteranceEndReason;
-  timestampMs: number;
-};
-
 export type DiagnosticEvent = {
   id: string;
   category: DiagnosticCategory;
@@ -272,8 +304,6 @@ export type RuntimeEvent =
   | { type: "status"; payload: RuntimeStatusEvent }
   | { type: "audioLevel"; payload: AudioLevelEvent }
   | { type: "diagnostic"; payload: DiagnosticEvent }
-  | { type: "utteranceStarted"; payload: UtteranceStartedEvent }
-  | { type: "utteranceEnded"; payload: UtteranceEndedEvent }
   | {
       type: "captionSessionChanged";
       payload: CaptionSessionSnapshotV1;

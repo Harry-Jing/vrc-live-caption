@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 import runtimeControlFixture from "../../contracts/runtime-control-snapshot-v3.json?raw";
-import { decodeRuntimeControlSnapshotV3 } from "./runtimeControlContract";
+import {
+  RuntimeControlContractError,
+  decodeRuntimeControlSnapshotV3,
+} from "./runtimeControlContract";
 
 const completePayload = {
   contractVersion: 3,
@@ -404,5 +407,11 @@ describe("runtime control contract", () => {
     ],
   ])("rejects %s", (_name, payload, path) => {
     expect(() => decodeRuntimeControlSnapshotV3(payload)).toThrow(path);
+  });
+
+  test("preserves the runtime control contract error type", () => {
+    expect(() => decodeRuntimeControlSnapshotV3(null)).toThrow(
+      RuntimeControlContractError,
+    );
   });
 });

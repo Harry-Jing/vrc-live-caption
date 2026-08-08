@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import captionSessionFixture from "../../contracts/caption-session-snapshot-v1.json?raw";
 import {
+  CaptionContractError,
   createCaptionSessionState,
   decodeCaptionSessionSnapshotV1,
   reduceCaptionSessionState,
@@ -494,5 +495,11 @@ describe("caption session contract", () => {
         captions: [completed, { ...completed, revision: 2 }],
       }),
     ).toThrow(/unique/);
+  });
+
+  test("preserves the caption contract error type", () => {
+    expect(() => decodeCaptionSessionSnapshotV1(null)).toThrow(
+      CaptionContractError,
+    );
   });
 });

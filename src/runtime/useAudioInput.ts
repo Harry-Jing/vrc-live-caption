@@ -1,4 +1,5 @@
 import { ref, shallowRef } from "vue";
+import { uiText } from "../i18n/uiText";
 import type { RuntimeBackend } from "./backend";
 import type {
   AudioLevelEvent,
@@ -15,7 +16,7 @@ function probeErrorMessage(cause: unknown) {
   if (cause instanceof Error) {
     return cause.message;
   }
-  return "Microphone probe failed.";
+  return uiText("settings.microphoneTest.unknownError");
 }
 
 export function useAudioInput(backend: AudioInputBackend) {

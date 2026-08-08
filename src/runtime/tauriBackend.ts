@@ -3,6 +3,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { decodeAudioLevelEvent, decodeAudioProbeResult } from "./audioContract";
 import { decodeCaptionSessionSnapshotV1 } from "./captionSession";
 import { decodeRuntimeControlSnapshotV3 } from "./runtimeControlContract";
+import {
+  decodeDiagnosticEvent,
+  decodeRuntimeStatusEvent,
+} from "./runtimeEventContract";
 import type {
   RuntimeBackend,
   RuntimeEventListener,
@@ -14,12 +18,8 @@ import {
   type AppConfig,
   type AudioInputDevice,
   type AudioProbeRequest,
-  type DiagnosticEvent,
-  type RuntimeCommand,
-  type RuntimeStatusEvent,
+  type RuntimeBackendCommand,
   type SttProvider,
-  type UtteranceEndedEvent,
-  type UtteranceStartedEvent,
 } from "./types";
 
 export type TauriBackendBridge = Readonly<{
@@ -75,7 +75,7 @@ export function createTauriBackend(
         const registrations = [
           listenFor(
             RUNTIME_EVENTS.status,
-            (payload) => payload as RuntimeStatusEvent,
+            decodeRuntimeStatusEvent,
             (payload) => {
               listener({ type: "status", payload });
             },
@@ -88,13 +88,6 @@ export function createTauriBackend(
             },
           ),
           listenFor(
-            RUNTIME_EVENTS.utteranceStarted,
-            (payload) => payload as UtteranceStartedEvent,
-            (payload) => {
-              listener({ type: "utteranceStarted", payload });
-            },
-          ),
-          listenFor(
             RUNTIME_EVENTS.captionSessionChanged,
             decodeCaptionSessionSnapshotV1,
             (payload) => {
@@ -102,15 +95,8 @@ export function createTauriBackend(
             },
           ),
           listenFor(
-            RUNTIME_EVENTS.utteranceEnded,
-            (payload) => payload as UtteranceEndedEvent,
-            (payload) => {
-              listener({ type: "utteranceEnded", payload });
-            },
-          ),
-          listenFor(
             RUNTIME_EVENTS.diagnostic,
-            (payload) => payload as DiagnosticEvent,
+            decodeDiagnosticEvent,
             (payload) => {
               listener({ type: "diagnostic", payload });
             },
@@ -149,12 +135,7 @@ export function createTauriBackend(
       };
     },
 
-    async runCommand(command: RuntimeCommand) {
-      if (command === "start_runtime" || command === "stop_runtime") {
-        await invokeControlSnapshot(command);
-        return;
-      }
-
+    async runCommand(command: RuntimeBackendCommand) {
       await bridge.invoke(command);
     },
 

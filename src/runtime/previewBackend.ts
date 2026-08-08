@@ -11,7 +11,6 @@ import {
   type CaptionSessionSnapshotV1,
   type DiagnosticCategory,
   type ProviderSecretStatus,
-  type RuntimeCommand,
   type RuntimeControlSnapshot,
   type RuntimePlan,
   type RuntimeSession,
@@ -388,21 +387,15 @@ export function createPreviewBackend(): RuntimeBackend {
       });
     },
 
-    runCommand(command: RuntimeCommand) {
-      if (command === "start_runtime") {
-        return startRuntimeControl().then(() => undefined);
-      } else if (command === "stop_runtime") {
-        return stopRuntimeControl().then(() => undefined);
-      } else {
-        const oscConfig = oscConfigForTest();
+    runCommand() {
+      const oscConfig = oscConfigForTest();
 
-        emitDiagnostic(
-          "osc",
-          "osc.test_simulated",
-          "OSC test simulated",
-          `Desktop-only OSC test to ${oscConfig.host}:${String(oscConfig.port)} was simulated for UI preview.`,
-        );
-      }
+      emitDiagnostic(
+        "osc",
+        "osc.test_simulated",
+        "OSC test simulated",
+        `Desktop-only OSC test to ${oscConfig.host}:${String(oscConfig.port)} was simulated for UI preview.`,
+      );
 
       return Promise.resolve();
     },

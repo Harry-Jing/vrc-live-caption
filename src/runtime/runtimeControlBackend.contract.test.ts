@@ -297,14 +297,6 @@ test.each([
   ["Start", (backend: RuntimeBackend) => backend.startRuntime()],
   ["Stop", (backend: RuntimeBackend) => backend.stopRuntime()],
   [
-    "legacy Start command",
-    (backend: RuntimeBackend) => backend.runCommand("start_runtime"),
-  ],
-  [
-    "legacy Stop command",
-    (backend: RuntimeBackend) => backend.runCommand("stop_runtime"),
-  ],
-  [
     "config save",
     (backend: RuntimeBackend) => backend.saveConfig(initialConfig),
   ],

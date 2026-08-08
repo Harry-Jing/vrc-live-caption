@@ -1,9 +1,4 @@
-import type { RuntimeCommand } from "./types";
-
-export type RuntimeLifecycleCommand = Extract<
-  RuntimeCommand,
-  "start_runtime" | "stop_runtime"
->;
+import type { RuntimeLifecycleCommand } from "./types";
 
 export function createLifecycleCommandQueue(
   invoke: (command: RuntimeLifecycleCommand) => Promise<void>,

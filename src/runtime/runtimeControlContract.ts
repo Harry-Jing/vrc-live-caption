@@ -1,6 +1,19 @@
+import { createDecoders } from "./contractDecoding";
 import {
   APP_CONFIG_SCHEMA_VERSION,
+  BOUNDARY_OWNERS,
+  CAPTION_LANES,
+  CAPTION_UNIT_BEHAVIORS,
+  LANE_UPDATE_BEHAVIORS,
   OPENAI_TRANSCRIPTION_MODELS,
+  PROVIDER_SECRET_STORAGES,
+  PUBLICATION_MODES,
+  RECOGNITION_INPUT_SHAPES,
+  RECOGNITION_PATHS,
+  REVISION_BEHAVIORS,
+  RUNTIME_PENDING_CHANGES,
+  RUNTIME_SESSION_PHASES,
+  RUNTIME_STATUSES,
   STT_PROVIDERS,
   type AppConfig,
   type BoundaryOwner,
@@ -29,45 +42,6 @@ import {
   type SttProvider,
 } from "./types";
 
-const PUBLICATION_MODES = ["completed", "live"] as const;
-const CAPTION_LANES = ["source", "translation"] as const;
-const RECOGNITION_PATHS = [
-  "openAiGptTranscribe",
-  "openAiGptLiveTranscribe",
-] as const;
-const RECOGNITION_INPUT_SHAPES = ["continuousAudioFrames"] as const;
-const BOUNDARY_OWNERS = ["application"] as const;
-const CAPTION_UNIT_BEHAVIORS = ["unitBased"] as const;
-const LANE_UPDATE_BEHAVIORS = ["completedOnly", "ongoingAndCompleted"] as const;
-const REVISION_BEHAVIORS = ["appendOnly", "revisableFullSnapshot"] as const;
-const RUNTIME_STATUSES = [
-  "idle",
-  "starting",
-  "running",
-  "reconnecting",
-  "stopping",
-  "stopped",
-  "error",
-] as const;
-const RUNTIME_SESSION_PHASES = [
-  "starting",
-  "running",
-  "reconnecting",
-  "stopping",
-  "error",
-] as const;
-const PROVIDER_SECRET_STORAGES = [
-  "systemCredentialStore",
-  "environment",
-] as const;
-const RUNTIME_PENDING_CHANGES = [
-  "microphone",
-  "recognition",
-  "credential",
-  "chatboxOutput",
-  "publication",
-] as const;
-
 export class RuntimeControlContractError extends Error {
   constructor(path: string, expectation: string) {
     super(`Invalid runtime control payload at ${path}: ${expectation}.`);
@@ -75,94 +49,8 @@ export class RuntimeControlContractError extends Error {
   }
 }
 
-function record(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new RuntimeControlContractError(path, "expected an object");
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function exactRecord(
-  value: unknown,
-  path: string,
-  allowedFields: readonly string[],
-): Record<string, unknown> {
-  const decoded = record(value, path);
-  const allowed = new Set(allowedFields);
-  const unknownField = Object.keys(decoded).find(
-    (field) => !allowed.has(field),
-  );
-
-  if (unknownField !== undefined) {
-    throw new RuntimeControlContractError(
-      `${path}.${unknownField}`,
-      "unknown field",
-    );
-  }
-
-  return decoded;
-}
-
-function array(value: unknown, path: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new RuntimeControlContractError(path, "expected an array");
-  }
-
-  return value;
-}
-
-function string(value: unknown, path: string): string {
-  if (typeof value !== "string") {
-    throw new RuntimeControlContractError(path, "expected a string");
-  }
-
-  return value;
-}
-
-function boolean(value: unknown, path: string): boolean {
-  if (typeof value !== "boolean") {
-    throw new RuntimeControlContractError(path, "expected a boolean");
-  }
-
-  return value;
-}
-
-function safeInteger(
-  value: unknown,
-  path: string,
-  minimum: number,
-  maximum = Number.MAX_SAFE_INTEGER,
-): number {
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value < minimum ||
-    value > maximum
-  ) {
-    throw new RuntimeControlContractError(
-      path,
-      `expected a safe integer from ${String(minimum)} to ${String(maximum)}`,
-    );
-  }
-
-  return value;
-}
-
-function literal<const Value extends string>(
-  value: unknown,
-  path: string,
-  allowed: readonly Value[],
-): Value {
-  if (typeof value !== "string" || !allowed.includes(value as Value)) {
-    throw new RuntimeControlContractError(
-      path,
-      `expected one of ${allowed.join(", ")}`,
-    );
-  }
-
-  return value as Value;
-}
+const { record, exactRecord, array, string, boolean, safeInteger, literal } =
+  createDecoders(RuntimeControlContractError);
 
 function nullableString(value: unknown, path: string): string | null {
   return value === null ? null : string(value, path);

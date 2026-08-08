@@ -1,18 +1,13 @@
 import type {
   DiagnosticEvent,
-  RuntimeCommand,
   RuntimeEvent,
+  RuntimeLifecycleCommand,
   RuntimeStatus,
   RuntimeStatusEvent,
 } from "./types";
 import { isActiveRuntimeStatus } from "./lifecycle";
 
 const DIAGNOSTIC_LIMIT = 50;
-
-type RuntimeLifecycleCommand = Extract<
-  RuntimeCommand,
-  "start_runtime" | "stop_runtime"
->;
 
 type PendingLifecycleCommand = Readonly<{
   attemptId: number;

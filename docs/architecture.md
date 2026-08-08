@@ -168,11 +168,15 @@ microphone is opened.
 | Semantic concept | Tauri event | Meaning |
 |---|---|---|
 | `runtime.status` | `runtime-status` | `idle`, `starting`, `running`, `reconnecting`, `stopping`, `stopped`, or `error` |
-| `utterance.started` | `utterance-started` | speech activity before caption text exists |
 | `caption.session.changed` | `caption-session-changed` | the newest full `CaptionSessionSnapshotV1` aggregate |
-| `utterance.ended` | `utterance-ended` | a unit ended without a final result |
 | `audio.level` | `audio-level` | generation/revision-scoped 100 ms RMS/peak/gate/clipping scalars; never PCM |
 | `diagnostic` | `diagnostic-event` | categorized report with a stable code ([ADR 0014](./adr/0014-diagnostic-codes-are-category-detail.md)) |
+
+Rust still emits `utterance-started` and `utterance-ended` as internal
+recognition lifecycle signals, but Vue does not subscribe to them and they are
+not UI-facing compatibility contracts. The UI derives listening state from
+caption-session `activeUnits`; recognition failures remain visible through
+diagnostics.
 
 Rust owns one versioned caption-session aggregate,
 `CaptionSessionSnapshotV1`: a monotonic aggregate revision, backend-assigned

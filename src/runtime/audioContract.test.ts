@@ -1,5 +1,9 @@
 import { expect, test } from "vitest";
-import { decodeAudioLevelEvent, decodeAudioProbeResult } from "./audioContract";
+import {
+  AudioContractError,
+  decodeAudioLevelEvent,
+  decodeAudioProbeResult,
+} from "./audioContract";
 
 test("decodes a complete realtime audio level event", () => {
   const payload = {
@@ -58,4 +62,8 @@ test("rejects an invalid offline probe duration", () => {
       gateOpen: false,
     }),
   ).toThrow("$.durationMs");
+});
+
+test("preserves the audio contract error type", () => {
+  expect(() => decodeAudioLevelEvent(null)).toThrow(AudioContractError);
 });

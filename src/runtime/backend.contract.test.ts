@@ -436,6 +436,51 @@ test("TauriBackend cleans up successful channel registrations when one fails", a
     "listener registration failed",
   );
 
-  expect(registeredChannels).toHaveLength(Object.keys(RUNTIME_EVENTS).length);
+  expect(registeredChannels).toEqual([
+    RUNTIME_EVENTS.status,
+    RUNTIME_EVENTS.audioLevel,
+    RUNTIME_EVENTS.captionSessionChanged,
+    RUNTIME_EVENTS.diagnostic,
+  ]);
   expect(activeChannels.size).toBe(0);
 });
+
+test.each([
+  [RUNTIME_EVENTS.status, { status: "paused", timestampMs: 1 }],
+  [
+    RUNTIME_EVENTS.diagnostic,
+    {
+      id: "diagnostic-invalid",
+      category: "osc",
+      severity: "fatal",
+      code: "osc.invalid",
+      message: "Invalid diagnostic",
+      timestampMs: 1,
+    },
+  ],
+] as const)(
+  "TauriBackend rejects malformed %s pushes before delivery",
+  async (eventName, payload) => {
+    let deliver: ((event: Readonly<{ payload: unknown }>) => void) | undefined;
+    const backend = createTauriBackend({
+      listen(registeredEventName, listener) {
+        if (registeredEventName === eventName) {
+          deliver = listener;
+        }
+
+        return Promise.resolve(() => undefined);
+      },
+      invoke<Result>() {
+        return Promise.resolve(undefined as Result);
+      },
+    });
+    const received: RuntimeEvent[] = [];
+    const unsubscribe = await backend.listen((event) => {
+      received.push(event);
+    });
+
+    expect(() => deliver?.({ payload })).toThrow(/Invalid runtime event/u);
+    expect(received).toEqual([]);
+    unsubscribe();
+  },
+);

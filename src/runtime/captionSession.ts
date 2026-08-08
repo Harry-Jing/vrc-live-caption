@@ -1,10 +1,13 @@
-import type {
-  CaptionMode,
-  CaptionLane,
-  CaptionSessionSnapshotV1,
-  CaptionSnapshotV1,
-  CaptionState,
+import {
+  CAPTION_LANES,
+  CAPTION_STATES,
+  type CaptionLane,
+  type CaptionMode,
+  type CaptionSessionSnapshotV1,
+  type CaptionSnapshotV1,
+  type CaptionState,
 } from "./types";
+import { createDecoders } from "./contractDecoding";
 
 type CaptionAdmission = "open" | "stopped" | "awaitingStartSnapshot";
 
@@ -157,47 +160,8 @@ export class CaptionContractError extends Error {
   }
 }
 
-function record(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new CaptionContractError(path, "expected an object");
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function exactRecord(
-  value: unknown,
-  path: string,
-  allowedFields: readonly string[],
-): Record<string, unknown> {
-  const decoded = record(value, path);
-  const allowed = new Set(allowedFields);
-  const unknownField = Object.keys(decoded).find(
-    (field) => !allowed.has(field),
-  );
-
-  if (unknownField !== undefined) {
-    throw new CaptionContractError(`${path}.${unknownField}`, "unknown field");
-  }
-
-  return decoded;
-}
-
-function array(value: unknown, path: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new CaptionContractError(path, "expected an array");
-  }
-
-  return value;
-}
-
-function string(value: unknown, path: string): string {
-  if (typeof value !== "string") {
-    throw new CaptionContractError(path, "expected a string");
-  }
-
-  return value;
-}
+const { exactRecord, array, string, safeInteger, literal } =
+  createDecoders(CaptionContractError);
 
 function nonEmptyString(value: unknown, path: string): string {
   const decoded = string(value, path);
@@ -209,42 +173,12 @@ function nonEmptyString(value: unknown, path: string): string {
   return decoded;
 }
 
-function safeInteger(value: unknown, path: string, minimum: number): number {
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value < minimum
-  ) {
-    throw new CaptionContractError(
-      path,
-      `expected a safe integer greater than or equal to ${String(minimum)}`,
-    );
-  }
-
-  return value;
-}
-
 function explicitNullableString(value: unknown, path: string) {
   return value === null ? null : nonEmptyString(value, path);
 }
 
 function explicitNullableInteger(value: unknown, path: string) {
   return value === null ? null : safeInteger(value, path, 0);
-}
-
-function literal<T extends string>(
-  value: unknown,
-  path: string,
-  allowed: readonly T[],
-): T {
-  if (typeof value !== "string" || !allowed.includes(value as T)) {
-    throw new CaptionContractError(
-      path,
-      `expected one of ${allowed.join(", ")}`,
-    );
-  }
-
-  return value as T;
 }
 
 function decodeCaption(value: unknown, index: number): CaptionSnapshotV1 {
@@ -264,10 +198,11 @@ function decodeCaption(value: unknown, index: number): CaptionSnapshotV1 {
     "timestampMs",
   ]);
   const unitId = explicitNullableString(input["unitId"], `${path}.unitId`);
-  const state = literal<CaptionState>(input["state"], `${path}.state`, [
-    "ongoing",
-    "completed",
-  ]);
+  const state = literal<CaptionState>(
+    input["state"],
+    `${path}.state`,
+    CAPTION_STATES,
+  );
 
   if (state === "completed" && unitId === null) {
     throw new CaptionContractError(
@@ -280,10 +215,7 @@ function decodeCaption(value: unknown, index: number): CaptionSnapshotV1 {
     generation: safeInteger(input["generation"], `${path}.generation`, 1),
     streamId: nonEmptyString(input["streamId"], `${path}.streamId`),
     unitId,
-    lane: literal<CaptionLane>(input["lane"], `${path}.lane`, [
-      "source",
-      "translation",
-    ]),
+    lane: literal<CaptionLane>(input["lane"], `${path}.lane`, CAPTION_LANES),
     revision: safeInteger(input["revision"], `${path}.revision`, 1),
     text: string(input["text"], `${path}.text`),
     state,

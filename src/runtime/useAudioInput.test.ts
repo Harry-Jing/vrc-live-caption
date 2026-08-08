@@ -83,3 +83,20 @@ test("keeps an offline microphone probe failure in its own action state", async 
   expect(audio.audioProbeResult.value).toBeNull();
   expect(audio.audioProbeError.value).toBe("Microphone busy");
 });
+
+test("uses localized fallback copy for a non-error probe rejection", async () => {
+  const backend: Pick<RuntimeBackend, "probeAudioInput"> = {
+    probeAudioInput: vi.fn(() => {
+      // This test deliberately exercises the unknown rejection fallback.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      return Promise.reject();
+    }),
+  };
+  const audio = useAudioInput(backend);
+
+  await expect(
+    audio.probeAudioInput({ inputDeviceId: null, durationMs: 2_000 }),
+  ).resolves.toBeNull();
+
+  expect(audio.audioProbeError.value).toBe("Microphone probe failed.");
+});

@@ -22,6 +22,7 @@ import {
 } from "../runtime/presentation";
 import {
   OPENAI_TRANSCRIPTION_MODELS,
+  PUBLICATION_MODES,
   type AppConfig,
   type AudioInputDevice,
   type AudioProbeResult,
@@ -239,11 +240,6 @@ const hasValidLanguageHints = computed(() => {
     new Set(normalized).size === languages.length
   );
 });
-
-const PUBLICATION_MODES = [
-  "completed",
-  "live",
-] as const satisfies readonly PublicationMode[];
 
 const publicationModeItems = PUBLICATION_MODES.map((value) => ({
   label: uiText(publicationModeMessageKey[value]),

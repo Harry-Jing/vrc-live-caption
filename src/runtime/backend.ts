@@ -4,6 +4,7 @@
 // execution environment themselves.
 
 import { isTauri } from "@tauri-apps/api/core";
+import { uiText } from "../i18n/uiText";
 import { createPreviewBackend } from "./previewBackend";
 import { createTauriBackend } from "./tauriBackend";
 import type {
@@ -12,7 +13,7 @@ import type {
   AudioProbeRequest,
   AudioProbeResult,
   CaptionSessionSnapshotV1,
-  RuntimeCommand,
+  RuntimeBackendCommand,
   RuntimeControlSnapshot,
   RuntimeEvent,
   SttProvider,
@@ -26,7 +27,7 @@ export type RuntimeControlListener = (snapshot: RuntimeControlSnapshot) => void;
 export interface RuntimeBackend {
   listen(listener: RuntimeEventListener): Promise<Unsubscribe>;
   listenControl(listener: RuntimeControlListener): Promise<Unsubscribe>;
-  runCommand(command: RuntimeCommand): Promise<void>;
+  runCommand(command: RuntimeBackendCommand): Promise<void>;
   startRuntime(): Promise<RuntimeControlSnapshot>;
   stopRuntime(): Promise<RuntimeControlSnapshot>;
   getControlSnapshot(): Promise<RuntimeControlSnapshot>;
@@ -43,7 +44,7 @@ export interface RuntimeBackend {
 
 function createUnsupportedBackend(): RuntimeBackend {
   const reject = () =>
-    Promise.reject(new Error("This feature requires the Tauri desktop app."));
+    Promise.reject(new Error(uiText("runtime.errors.desktopRequired")));
 
   return {
     listen: reject,

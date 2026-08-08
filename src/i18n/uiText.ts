@@ -54,6 +54,8 @@ const englishMessages = {
   "runtime.actions.oscTest": "OSC Test",
   "runtime.errors.actionFailed": "Runtime action failed",
   "runtime.errors.unknownAction": "Action failed.",
+  "runtime.errors.desktopRequired":
+    "This feature requires the Tauri desktop app.",
 
   "caption.preview.eyebrow": "Caption Preview",
   "caption.preview.title": "Current output",
@@ -159,6 +161,7 @@ const englishMessages = {
     "Audio is below the speech threshold",
   "settings.microphoneTest.clipping": "Clipping detected",
   "settings.microphoneTest.errorTitle": "Microphone test failed",
+  "settings.microphoneTest.unknownError": "Microphone probe failed.",
   "settings.unsavedChanges.confirmLeave":
     "Discard the unsaved settings changes?",
   "settings.errors.actionFailed": "Settings action failed",
@@ -185,7 +188,6 @@ const englishMessages = {
   "settings.sections.speechProvider": "Speech recognition",
   "settings.sections.chatboxOutput": "Chatbox output",
   "settings.fields.microphone": "Microphone",
-  "settings.fields.provider": "Provider",
   "settings.fields.language": "Expected languages",
   "settings.fields.language.description":
     "Add one or more language hints, such as zh, en, or ja.",
@@ -221,10 +223,6 @@ const englishMessages = {
   "settings.credentials.openai.title": "OpenAI credentials",
   "settings.credentials.openai.cloudDisclosure":
     "When OpenAI cloud speech recognition is selected, microphone audio is uploaded to OpenAI for transcription.",
-  "settings.credentials.openai.activeCloudSession.title":
-    "The active session still uses OpenAI",
-  "settings.credentials.openai.activeCloudSession.description":
-    "The provider selection shown in this form does not change the active session. Microphone audio will continue to be uploaded to OpenAI until you Stop the runtime.",
   "settings.credentials.openai.apiKey": "API key",
   "settings.credentials.openai.apiKeyPlaceholder": "sk-...",
   "settings.credentials.openai.actions.save": "Save Key",
