@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn backpressure_error_serializes_with_actionable_stt_code() {
         let error = AppError::stt_backpressure(
-            "OpenAI Realtime could not keep up with microphone audio; the session stopped instead of silently dropping audio.",
+            "The recognition backend could not keep up with microphone audio; the session stopped instead of silently dropping audio.",
         );
         let value = serde_json::to_value(&error).unwrap_or_else(|serialization_error| {
             serde_json::json!({ "serializationError": serialization_error.to_string() })

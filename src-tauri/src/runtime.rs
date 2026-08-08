@@ -1243,7 +1243,7 @@ fn send_recognition_command(
         Err(TrySendError::Full(_)) => {
             generation.cancel_work();
             Err(AppError::stt_backpressure(
-                "OpenAI Realtime could not keep up with microphone audio; the bounded recognition queue filled, so the session stopped instead of silently dropping audio.",
+                "The recognition backend could not keep up with microphone audio; the bounded recognition queue filled, so the session stopped instead of silently dropping audio.",
             ))
         }
         Err(TrySendError::Disconnected(_)) => {
