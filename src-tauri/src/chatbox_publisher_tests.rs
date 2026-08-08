@@ -399,13 +399,67 @@ impl ChatboxTransport for ScriptedTransport {
     }
 }
 
-fn recording_reporter() -> (PublisherReporter, Arc<Mutex<Vec<PublisherDiagnostic>>>) {
-    let diagnostics = Arc::new(Mutex::new(Vec::new()));
+struct RecordedDiagnostics {
+    diagnostics: Mutex<Vec<PublisherDiagnostic>>,
+    changed: Condvar,
+}
+
+impl RecordedDiagnostics {
+    fn new() -> Self {
+        Self {
+            diagnostics: Mutex::new(Vec::new()),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn record(&self, diagnostic: PublisherDiagnostic) {
+        if let Ok(mut diagnostics) = self.diagnostics.lock() {
+            diagnostics.push(diagnostic);
+            self.changed.notify_all();
+        }
+    }
+
+    fn contains(&self, predicate: impl Fn(&PublisherDiagnostic) -> bool) -> AppResult<bool> {
+        self.diagnostics
+            .lock()
+            .map(|diagnostics| diagnostics.iter().any(predicate))
+            .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))
+    }
+
+    fn wait_for(
+        &self,
+        expectation: &str,
+        predicate: impl Fn(&PublisherDiagnostic) -> bool,
+    ) -> AppResult<()> {
+        let diagnostics = self
+            .diagnostics
+            .lock()
+            .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
+        let contains_match =
+            |diagnostics: &[PublisherDiagnostic]| diagnostics.iter().any(&predicate);
+        let (diagnostics, timeout) = self
+            .changed
+            .wait_timeout_while(diagnostics, Duration::from_secs(1), |diagnostics| {
+                !contains_match(diagnostics)
+            })
+            .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
+
+        if timeout.timed_out() && !contains_match(&diagnostics) {
+            return Err(AppError::runtime(format!(
+                "Expected {expectation} within one second; observed {} publisher diagnostic(s).",
+                diagnostics.len()
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+fn recording_reporter() -> (PublisherReporter, Arc<RecordedDiagnostics>) {
+    let diagnostics = Arc::new(RecordedDiagnostics::new());
     let recorded_diagnostics = Arc::clone(&diagnostics);
     let reporter: PublisherReporter = Arc::new(move |diagnostic| {
-        if let Ok(mut diagnostics) = recorded_diagnostics.lock() {
-            diagnostics.push(diagnostic);
-        }
+        recorded_diagnostics.record(diagnostic);
     });
 
     (reporter, diagnostics)
@@ -670,17 +724,13 @@ fn overload_drops_only_the_oldest_whole_unstarted_unit() -> AppResult<()> {
     assert_eq!(events.first(), Some(&TransportEvent::Typing(true)));
     assert_eq!(events.last(), Some(&TransportEvent::Typing(false)));
 
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
+    assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
         PublisherDiagnostic::UnitDroppedOverload {
             unit_id,
             page_count: 2,
         } if unit_id == "unit-a"
-    )));
-    drop(diagnostics);
+    ))?);
 
     publisher.request_close(PublisherCloseReason::Stop)?;
     publisher.join()?;
@@ -764,10 +814,7 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
         Duration::from_secs(1)
     );
 
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
+    assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
         PublisherDiagnostic::UnitSendFailed {
             unit_id,
@@ -776,8 +823,7 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
             pages_sent: 1,
             ..
         } if unit_id == "unit-a"
-    )));
-    drop(diagnostics);
+    ))?);
 
     publisher.request_close(PublisherCloseReason::Stop)?;
     publisher.join()?;
@@ -857,17 +903,13 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
     expected_pages.push("B".to_string());
     assert_eq!(sent_pages, expected_pages);
 
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
+    assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
         PublisherDiagnostic::UnitRejectedOverload {
             unit_id,
             page_count: 2,
         } if unit_id == "unit-c"
-    )));
-    drop(diagnostics);
+    ))?);
 
     publisher.request_close(PublisherCloseReason::Stop)?;
     publisher.join()?;
@@ -920,17 +962,13 @@ fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> A
             TransportEvent::Typing(false),
         ]
     );
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
+    assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
         PublisherDiagnostic::UnitRejectedOverload {
             unit_id,
             page_count: 3,
         } if unit_id == "oversized"
-    )));
-    drop(diagnostics);
+    ))?);
 
     publisher.request_close(PublisherCloseReason::Stop)?;
     publisher.join()?;
@@ -1000,17 +1038,13 @@ fn stale_unstarted_unit_expires_as_one_complete_publication() -> AppResult<()> {
             TransportEvent::Typing(false),
         ]
     );
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
+    assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
         PublisherDiagnostic::UnitExpired {
             unit_id,
             page_count: 2,
         } if unit_id == "expired"
-    )));
-    drop(diagnostics);
+    ))?);
 
     publisher.request_close(PublisherCloseReason::Stop)?;
     publisher.join()?;
@@ -1201,17 +1235,15 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
             TransportEvent::Typing(false),
         ]
     );
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
-        diagnostic,
-        PublisherDiagnostic::TypingFailed {
-            is_typing: true,
-            ..
-        }
-    )));
-    drop(diagnostics);
+    diagnostics.wait_for("a failed typing-on diagnostic", |diagnostic| {
+        matches!(
+            diagnostic,
+            PublisherDiagnostic::TypingFailed {
+                is_typing: true,
+                ..
+            }
+        )
+    })?;
     publisher.request_close(PublisherCloseReason::Stop)?;
     publisher.join()?;
     Ok(())
@@ -1427,15 +1459,16 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
         transport.wait_for_events(2)?,
         vec![TransportEvent::Typing(true), TransportEvent::Typing(false)]
     );
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
-        diagnostic,
-        PublisherDiagnostic::LayoutFailed { unit_id, .. }
-            if unit_id == "layout-failure"
-    )));
-    drop(diagnostics);
+    diagnostics.wait_for(
+        "a layout-failure diagnostic for layout-failure",
+        |diagnostic| {
+            matches!(
+                diagnostic,
+                PublisherDiagnostic::LayoutFailed { unit_id, .. }
+                    if unit_id == "layout-failure"
+            )
+        },
+    )?;
 
     publisher.request_close(PublisherCloseReason::Stop)?;
     publisher.join()?;
@@ -1485,17 +1518,13 @@ fn failed_typing_on_is_diagnosed_and_still_followed_by_typing_off() -> AppResult
             TransportEvent::Typing(false),
         ]
     );
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
+    assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
         PublisherDiagnostic::TypingFailed {
             is_typing: true,
             ..
         }
-    )));
-    drop(diagnostics);
+    ))?);
 
     publisher.request_close(PublisherCloseReason::Stop)?;
     publisher.join()?;
@@ -1559,10 +1588,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
         vec![TransportEvent::Typing(true), TransportEvent::Typing(false)]
     );
     assert_eq!(clock.total_sleep()?, Duration::from_millis(100));
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
+    assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
         PublisherDiagnostic::PagesDiscardedOnClose {
             reason: PublisherCloseReason::Stop,
@@ -1570,7 +1596,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
             page_count: 1,
             started_unit_count: 0,
         }
-    )));
+    ))?);
 
     Ok(())
 }
@@ -1661,10 +1687,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
             TransportEvent::Typing(false),
         ]
     );
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
+    assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
         PublisherDiagnostic::PagesDiscardedOnClose {
             reason: PublisherCloseReason::Stop,
@@ -1672,7 +1695,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
             started_unit_count: 1,
             ..
         }
-    )));
+    ))?);
 
     Ok(())
 }
@@ -1738,13 +1761,11 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
     assert!(publisher.request_close(PublisherCloseReason::Stop).is_err());
     assert!(publisher.join().is_err());
     assert_eq!(transport.events()?, vec![TransportEvent::Typing(false)]);
-    let diagnostics = diagnostics
-        .lock()
-        .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
     assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| matches!(diagnostic, PublisherDiagnostic::WorkerFailed { .. }))
+        diagnostics.contains(|diagnostic| matches!(
+            diagnostic,
+            PublisherDiagnostic::WorkerFailed { .. }
+        ))?
     );
 
     Ok(())
