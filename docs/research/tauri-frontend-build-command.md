@@ -20,9 +20,11 @@ Tauri's official Vite setup, which delegates frontend work to the package
 
 The ordering is a Nuxt UI requirement, not a Tauri requirement. Tauri waits
 for the complete hook command and only cares that it succeeds and leaves a
-valid frontend output directory. Nuxt UI's Vite plugin generates
-`auto-imports.d.ts` and `components.d.ts`, and its official Vue starter runs
-Vite build before typecheck
+valid frontend output directory. Nuxt UI's Vite plugin generates TypeScript
+declarations before its official Vue starter runs Vite build and then
+typecheck. This project disables unused composable auto-imports and local
+component scanning, so the remaining generated declaration is
+`components.d.ts`
 ([Nuxt UI Vue installation](https://ui.nuxt.com/docs/getting-started/installation/vue#add-the-nuxt-ui-vite-plugin-in-your-viteconfigts),
 [starter CI](https://github.com/nuxt-ui-templates/starter-vue/blob/73439bd669c7f8e8e7a0d8383c3f00917b789317/.github/workflows/ci.yml#L33-L40)).
 
@@ -73,10 +75,12 @@ This matches the current project layout and Vite's default output.
 
 ## Nuxt UI-Specific Ordering
 
-The official Nuxt UI Vue setup says that the Vite plugin generates
-`auto-imports.d.ts` and `components.d.ts`, that both files should be included
-by the application TypeScript configuration, and that `#build/ui` aliases are
-needed for theme type resolution
+The official Nuxt UI Vue setup enables composable and component auto-imports
+by default. This project imports composables and local components explicitly,
+so its Vite configuration disables composable auto-imports and local-component
+scanning. Nuxt UI global-component auto-import remains enabled and generates
+`components.d.ts`; that file is included by the application TypeScript
+configuration, while `#build/ui` aliases provide theme type resolution
 ([Nuxt UI Vue installation](https://ui.nuxt.com/docs/getting-started/installation/vue#add-the-nuxt-ui-vite-plugin-in-your-viteconfigts)).
 The official Vue starter separates `vite build` and `vue-tsc`, then executes
 Build before Typecheck in CI
@@ -132,10 +136,11 @@ run the frontend command separately when debugging through Cargo or an IDE
 
 Use this structure:
 
-1. Enable Nuxt UI declaration generation.
-2. Include the generated declarations and `#build/ui` aliases in the relevant
-   TypeScript configurations.
-3. Keep generated declaration files ignored rather than committed.
+1. Keep Nuxt UI global-component declaration generation enabled while
+   disabling unused composable and local-component auto-imports.
+2. Include `components.d.ts` and `#build/ui` aliases in the relevant TypeScript
+   configurations.
+3. Keep the generated declaration file ignored rather than committed.
 4. Run `vite build && vue-tsc --build` as `pnpm build`.
 5. Keep Tauri's `beforeBuildCommand` as `pnpm build` and `frontendDist` as
    `../dist`.

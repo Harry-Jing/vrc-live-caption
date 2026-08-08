@@ -2,7 +2,7 @@
   "explorer.fileNesting.enabled": true,
   "explorer.fileNesting.patterns": {
     "package.json": "pnpm-lock.yaml, package-lock.json, yarn.lock, bun.lock, bun.lockb, .npmrc, .yarnrc*, .eslint*, eslint*, .prettier*, prettier*, .editorconfig",
-    "tsconfig.json": "tsconfig.*.json, auto-imports.d.ts, components.d.ts",
+    "tsconfig.json": "tsconfig.*.json, components.d.ts",
     "vite.config.*": "jsconfig*, vitest.config.*, playwright.config.*",
     "Cargo.toml": "Cargo.lock"
   },

@@ -7,6 +7,10 @@ export default defineConfig({
   plugins: [
     vue(),
     ui({
+      autoImport: false,
+      components: {
+        dirs: [],
+      },
       icon: {
         clientBundle: {
           scan: {

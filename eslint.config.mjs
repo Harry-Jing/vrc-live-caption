@@ -25,7 +25,6 @@ export default defineConfigWithVueTs(
       "dist/**",
       "dist-ssr/**",
       "src-tauri/**",
-      "auto-imports.d.ts",
       "components.d.ts",
       ".tmp/**",
       ".local/**",

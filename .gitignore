@@ -7,7 +7,6 @@ dist-ssr/
 
 # Generated files and caches
 .tmp/
-auto-imports.d.ts
 components.d.ts
 *.tsbuildinfo
 
