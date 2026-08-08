@@ -77,8 +77,8 @@ jobs:
       - name: Run quality gate
         run: pnpm check:ci
 
-  security:
-    name: Dependency Audit
+  audit_pnpm:
+    name: Dependency Audit (pnpm)
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -97,10 +97,20 @@ jobs:
       - name: Audit pnpm dependencies
         run: pnpm audit --audit-level high
 
+  audit_cargo:
+    name: Dependency Audit (Cargo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
       - name: Install cargo-audit
         uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
         with:
           tool: cargo-audit
 
       - name: Audit Cargo dependencies
-        run: cd src-tauri && cargo audit
+        working-directory: src-tauri
+        run: cargo audit
