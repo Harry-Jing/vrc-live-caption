@@ -1,5 +1,6 @@
 use super::*;
 use crate::chatbox_pacer::Clock;
+use crate::chatbox_transport::ChatboxSendReceipt;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;

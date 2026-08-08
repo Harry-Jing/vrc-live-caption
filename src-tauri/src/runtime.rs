@@ -20,23 +20,23 @@ use crate::audio::{open_input_capture, receive_audio};
 use crate::audio_level::AudioLevelMeter;
 use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
+use crate::chatbox_diagnostics::{completed_publisher_diagnostic, live_publisher_diagnostic};
 use crate::chatbox_pacer::ChatboxPacer;
-use crate::chatbox_publication::{ChatboxPublisherBoundary, RuntimeChatboxPublisher};
+use crate::chatbox_publication::RuntimeChatboxPublisher;
 use crate::chatbox_publisher::{
-    ChatboxTransport, CompletedChatboxPublisher, CompletedPublisherEvent, PublisherCloseReason,
-    PublisherDiagnostic, PublisherReporter, PublisherSubmitOutcome,
+    CompletedChatboxPublisher, CompletedPublisherEvent, PublisherReporter,
 };
+use crate::chatbox_publisher_common::{PublisherCloseReason, PublisherSubmitOutcome};
+use crate::chatbox_transport::ChatboxTransport;
 use crate::config::{AppConfig, OscConfig};
 use crate::error::{AppError, AppResult};
 use crate::events::{
     AudioLevelEvent, DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, UtteranceEndReason,
-    emit_audio_level, emit_caption_session_changed, emit_diagnostic, emit_status,
-    emit_utterance_ended, emit_utterance_started, next_utterance_id, now_ms,
+    emit_audio_level, emit_diagnostic, emit_status, emit_utterance_ended, emit_utterance_started,
+    next_utterance_id, now_ms,
 };
 use crate::host_resolver::HostResolver;
-use crate::live_chatbox_publisher::{
-    LiveChatboxPublisher, LivePublisherDiagnostic, LivePublisherReporter,
-};
+use crate::live_chatbox_publisher::{LiveChatboxPublisher, LivePublisherReporter};
 use crate::openai_realtime::OpenAiRealtimeSessionContext;
 use crate::openai_realtime_transport::connect_openai_realtime_session;
 use crate::osc::ChatboxOscSender;
@@ -48,6 +48,7 @@ use crate::runtime_control::{
     RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
     RuntimeSessionSnapshot,
 };
+use crate::runtime_generation::{ChatboxPublisherBoundary, RuntimeGeneration};
 use crate::segmenter::SpeechSegmenter;
 use secrecy::SecretString;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -125,17 +126,6 @@ struct RuntimeHandle {
     join_handle: JoinHandle<()>,
 }
 
-#[derive(Clone)]
-pub(crate) struct RuntimeGeneration {
-    generation_id: u64,
-    stream_id: String,
-    caption_session: CaptionSessionStore,
-    caption_reporter: CaptionSessionReporter,
-    output_gate: Arc<Mutex<()>>,
-    hard_stop_requested: Arc<AtomicBool>,
-    work_cancelled: Arc<AtomicBool>,
-}
-
 enum RuntimePublisherInit {
     Disabled,
     Ready(RuntimeChatboxPublisher),
@@ -209,150 +199,32 @@ fn resolve_runtime_publication_policy(
     })
 }
 
-type CaptionSessionReporter = Arc<dyn Fn(CaptionSessionSnapshotV1) + Send + Sync>;
-
 impl RuntimeGeneration {
-    fn activate<R: Runtime>(
-        app: &AppHandle<R>,
-        generation_id: u64,
-        caption_session: CaptionSessionStore,
-    ) -> AppResult<Self> {
-        let snapshot = caption_session.begin_generation(generation_id)?;
-        let active = snapshot.active.as_ref().ok_or_else(|| {
-            AppError::state("Caption session rejected a non-monotonic runtime generation.")
-        })?;
-        if active.generation != generation_id {
-            return Err(AppError::state(
-                "Caption session activated a different runtime generation.",
-            ));
-        }
-        let stream_id = active.stream_id.clone();
-
-        let reporter_app = app.clone();
-        let caption_reporter: CaptionSessionReporter = Arc::new(move |snapshot| {
-            emit_caption_session_changed(&reporter_app, snapshot);
-        });
-        caption_reporter(snapshot);
-
-        Ok(Self {
-            generation_id,
-            stream_id,
-            caption_session,
-            caption_reporter,
-            output_gate: Arc::new(Mutex::new(())),
-            hard_stop_requested: Arc::new(AtomicBool::new(false)),
-            work_cancelled: Arc::new(AtomicBool::new(false)),
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active() -> Self {
-        let caption_session = CaptionSessionStore::default();
-        if let Err(error) = caption_session.begin_generation(1) {
-            tracing::error!(error_message = %error, "test caption session could not start");
-        }
-
-        Self {
-            generation_id: 1,
-            stream_id: "recognition-1-1".to_string(),
-            caption_session,
-            caption_reporter: Arc::new(|_| {}),
-            output_gate: Arc::new(Mutex::new(())),
-            hard_stop_requested: Arc::new(AtomicBool::new(false)),
-            work_cancelled: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    pub(crate) fn request_stop(
-        &self,
-        publisher: Option<&dyn ChatboxPublisherBoundary>,
-    ) -> AppResult<()> {
-        // Cancel capture and provider work before waiting for either sink.
-        // The explicit marker also prevents a new commit from overtaking Stop
-        // while an earlier App emit still owns the output gate.
-        self.hard_stop_requested.store(true, Ordering::SeqCst);
-        self.cancel_work();
-
-        // Keep the App-output gate closed while the Chatbox gate is closed so
-        // Stop has one linearizable cutoff across both sinks. A commit that
-        // validated before the explicit marker belongs before Stop; every
-        // later commit is rejected by this generation forever.
-        let publisher_result =
-            self.close_publisher_at_boundary(publisher, PublisherCloseReason::Stop);
-        let caption_result = self.close_caption_session_at_boundary();
-
-        match (publisher_result, caption_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(publisher_error), Err(caption_error)) => Err(AppError::state(format!(
-                "Runtime outputs could not close cleanly: {publisher_error} {caption_error}"
-            ))),
-        }
-    }
-
-    fn close_publisher_at_boundary(
-        &self,
-        publisher: Option<&dyn ChatboxPublisherBoundary>,
-        reason: PublisherCloseReason,
-    ) -> AppResult<()> {
-        // Close admission before waiting on an older App/Chatbox commit. This
-        // keeps late STT results non-blocking while making them observe a
-        // closed Publisher immediately. An already-linearized transport call
-        // may finish; the gate below waits for it before returning.
-        let close_result = match publisher {
-            Some(publisher) => publisher.request_close(reason),
-            None => Ok(()),
-        };
-
-        // Recover the guard even after a panic poisoned the gate. Normal
-        // commits already fail closed on poison, but Publisher admission must
-        // still close so Stop cannot hang while joining an idle worker.
-        let (_output_gate, gate_was_poisoned) = match self.output_gate.lock() {
-            Ok(gate) => (gate, false),
-            Err(poisoned) => (poisoned.into_inner(), true),
-        };
-
-        if gate_was_poisoned {
-            let close_note = match close_result {
-                Ok(()) => " Publisher shutdown was still requested.".to_string(),
-                Err(error) => format!(" Publisher shutdown also failed: {error}"),
-            };
-            Err(AppError::state(format!(
-                "Runtime generation lock was poisoned.{close_note}"
-            )))
-        } else {
-            close_result
-        }
-    }
-
-    pub(crate) fn commit_if_active(&self, commit: impl FnOnce()) -> AppResult<bool> {
-        let _output_gate = self
-            .output_gate
-            .lock()
-            .map_err(|_| AppError::state("Runtime generation lock was poisoned."))?;
-
-        if self.hard_stop_requested.load(Ordering::SeqCst) {
-            return Ok(false);
-        }
-
-        commit();
-        Ok(true)
-    }
-
     pub(crate) fn submit_recognition_event<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         publisher: Option<&RuntimeChatboxPublisher>,
         event: RecognitionEvent,
     ) -> AppResult<bool> {
-        let _output_gate = self
-            .output_gate
-            .lock()
-            .map_err(|_| AppError::state("Runtime generation lock was poisoned."))?;
-        if self.hard_stop_requested.load(Ordering::SeqCst) {
+        let mut submit_result = None;
+        let committed = self.commit_if_active(|| {
+            submit_result = Some(self.submit_recognition_event_at_boundary(app, publisher, event));
+        })?;
+        if !committed {
             return Ok(false);
         }
 
+        submit_result.ok_or_else(|| {
+            AppError::state("Runtime recognition event commit did not produce a result.")
+        })?
+    }
+
+    fn submit_recognition_event_at_boundary<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        publisher: Option<&RuntimeChatboxPublisher>,
+        event: RecognitionEvent,
+    ) -> AppResult<bool> {
         match event {
             RecognitionEvent::UnitStarted {
                 generation,
@@ -360,7 +232,7 @@ impl RuntimeGeneration {
                 unit_id,
                 started_at_ms,
             } => {
-                let Some(snapshot) = self.caption_session.start_unit(
+                let Some(snapshot) = self.start_caption_unit(
                     generation,
                     &stream_id,
                     unit_id.clone(),
@@ -394,9 +266,8 @@ impl RuntimeGeneration {
                         (UtteranceEndReason::SttFailed, Some(detail))
                     }
                 };
-                let Some(snapshot) = self
-                    .caption_session
-                    .end_unit_without_caption(generation, &stream_id, &unit_id)?
+                let Some(snapshot) =
+                    self.end_caption_unit_without_caption(generation, &stream_id, &unit_id)?
                 else {
                     return Ok(false);
                 };
@@ -434,7 +305,7 @@ impl RuntimeGeneration {
                 let unit_id = caption.unit_id.clone();
                 let text = caption.text.clone();
                 let is_completed = caption.state == crate::caption_session::CaptionState::Completed;
-                let Some(snapshot) = self.caption_session.accept_caption(caption)? else {
+                let Some(snapshot) = self.accept_caption(caption)? else {
                     return Ok(false);
                 };
                 self.report_accepted_snapshot(app, publisher, snapshot);
@@ -453,14 +324,14 @@ impl RuntimeGeneration {
         app: &AppHandle<R>,
         publisher: Option<&RuntimeChatboxPublisher>,
     ) -> AppResult<()> {
-        let snapshot = self.caption_session.snapshot()?;
+        let snapshot = self.caption_snapshot()?;
         for active_unit in snapshot.active_units {
             let _accepted = self.submit_recognition_event(
                 app,
                 publisher,
                 RecognitionEvent::UnitEnded {
-                    generation: self.generation_id,
-                    stream_id: self.stream_id.clone(),
+                    generation: self.generation_id(),
+                    stream_id: self.stream_id().to_string(),
                     unit_id: active_unit.unit_id,
                     reason: RecognitionEndReason::Failed {
                         detail: "Speech was discarded because the recognition connection was interrupted."
@@ -481,7 +352,7 @@ impl RuntimeGeneration {
         // The App and Live publication observe the exact same store-accepted
         // aggregate. Completed publication deliberately ignores this input and
         // keeps its existing lossless lifecycle event path.
-        (self.caption_reporter)(snapshot.clone());
+        self.report_caption_snapshot(snapshot.clone());
         let Some(publisher) = publisher else {
             return;
         };
@@ -506,56 +377,6 @@ impl RuntimeGeneration {
                 DiagnosticUpdate::from_error(&error, "Live Chatbox snapshot could not be observed"),
             ),
         }
-    }
-
-    fn close_caption_session_at_boundary(&self) -> AppResult<()> {
-        let (_output_gate, gate_was_poisoned) = match self.output_gate.lock() {
-            Ok(gate) => (gate, false),
-            Err(poisoned) => (poisoned.into_inner(), true),
-        };
-        let close_result = self.caption_session.close_generation(self.generation_id);
-        if let Ok(Some(snapshot)) = &close_result {
-            (self.caption_reporter)(snapshot.clone());
-        }
-
-        if gate_was_poisoned {
-            let close_note = match close_result {
-                Ok(_) => " Caption-session shutdown was still recorded.".to_string(),
-                Err(error) => format!(" Caption-session shutdown also failed: {error}"),
-            };
-            return Err(AppError::state(format!(
-                "Runtime generation lock was poisoned.{close_note}"
-            )));
-        }
-
-        close_result.map(|_| ())
-    }
-
-    pub(crate) fn generation_id(&self) -> u64 {
-        self.generation_id
-    }
-
-    fn stream_id(&self) -> &str {
-        &self.stream_id
-    }
-
-    fn cancel_work(&self) {
-        self.work_cancelled.store(true, Ordering::SeqCst);
-    }
-
-    fn is_work_cancelled(&self) -> bool {
-        self.work_cancelled.load(Ordering::SeqCst)
-    }
-
-    pub(crate) fn is_hard_stopped(&self) -> bool {
-        self.hard_stop_requested.load(Ordering::SeqCst)
-    }
-
-    fn try_begin_work(&self) -> bool {
-        // These loads are the work-submission decision point. If they win the
-        // race with Stop, the request is in flight and may finish, but its
-        // result still has to pass commit_if_active.
-        !self.is_work_cancelled() && !self.is_hard_stopped()
     }
 }
 
@@ -943,26 +764,18 @@ fn initialize_runtime_publisher<R: Runtime>(
         ResolvedPublicationPolicy::Completed => {
             let reporter_app = app.clone();
             let reporter: PublisherReporter = Arc::new(move |diagnostic| {
-                emit_publisher_diagnostic(&reporter_app, diagnostic);
+                emit_diagnostic(&reporter_app, completed_publisher_diagnostic(diagnostic));
             });
             CompletedChatboxPublisher::start(transport, chatbox_pacer, generation, reporter)
                 .map(RuntimeChatboxPublisher::Completed)
         }
         ResolvedPublicationPolicy::LiveUnit { .. } => {
-            let generation_id = generation.generation_id();
             let reporter_app = app.clone();
             let reporter: LivePublisherReporter = Arc::new(move |diagnostic| {
-                emit_live_publisher_diagnostic(&reporter_app, diagnostic);
+                emit_diagnostic(&reporter_app, live_publisher_diagnostic(diagnostic));
             });
-            LiveChatboxPublisher::start(
-                transport,
-                chatbox_pacer,
-                generation_id,
-                generation,
-                policy,
-                reporter,
-            )
-            .map(RuntimeChatboxPublisher::Live)
+            LiveChatboxPublisher::start(transport, chatbox_pacer, generation, policy, reporter)
+                .map(RuntimeChatboxPublisher::Live)
         }
     };
 
@@ -1614,198 +1427,6 @@ fn submit_completed_chatbox_candidate<R: Runtime>(
             DiagnosticUpdate::from_error(&error, "Completed Chatbox publication was rejected"),
         ),
     }
-}
-
-fn emit_publisher_diagnostic<R: Runtime>(app: &AppHandle<R>, diagnostic: PublisherDiagnostic) {
-    let update = match diagnostic {
-        PublisherDiagnostic::UnitPublished {
-            unit_id,
-            page_count,
-            byte_count,
-            target,
-        } => DiagnosticUpdate::info(
-            DiagnosticCategory::Osc,
-            "osc.completed_unit_sent",
-            "Completed caption published",
-            format!(
-                "Published {page_count} ordered page(s) for {unit_id} to {target} using {byte_count} encoded byte(s)."
-            ),
-        ),
-        PublisherDiagnostic::UnitDroppedOverload {
-            unit_id,
-            page_count,
-        } => DiagnosticUpdate::warning(
-            DiagnosticCategory::Osc,
-            "osc.completed_unit_dropped_overload",
-            "Completed caption dropped from Chatbox backlog",
-            format!(
-                "Dropped the oldest unstarted caption unit {unit_id} as one complete {page_count}-page publication because the Chatbox backlog was full. The App caption remains available."
-            ),
-        ),
-        PublisherDiagnostic::UnitRejectedOverload {
-            unit_id,
-            page_count,
-        } => DiagnosticUpdate::warning(
-            DiagnosticCategory::Osc,
-            "osc.completed_unit_rejected_overload",
-            "Completed caption could not enter the Chatbox backlog",
-            format!(
-                "Rejected caption unit {unit_id} as one complete {page_count}-page publication because it could not fit safely within the bounded Chatbox backlog. No partial pages were queued; the App caption remains available."
-            ),
-        ),
-        PublisherDiagnostic::UnitExpired {
-            unit_id,
-            page_count,
-        } => DiagnosticUpdate::warning(
-            DiagnosticCategory::Osc,
-            "osc.completed_unit_expired",
-            "Completed caption expired from Chatbox backlog",
-            format!(
-                "Discarded unstarted caption unit {unit_id} as one complete {page_count}-page publication after it exceeded the provisional backlog age. The App caption remains available."
-            ),
-        ),
-        PublisherDiagnostic::LayoutFailed { unit_id, reason } => DiagnosticUpdate::warning(
-            DiagnosticCategory::Osc,
-            "osc.completed_layout_failed",
-            "Completed caption could not be laid out for Chatbox",
-            format!("Caption unit {unit_id} was not published: {reason}"),
-        ),
-        PublisherDiagnostic::UnitSendFailed {
-            unit_id,
-            page_index,
-            page_count,
-            pages_sent,
-            error,
-        } => DiagnosticUpdate::from_error(
-            &error,
-            format!(
-                "Completed Chatbox publication failed for {unit_id} on page {page_index} of {page_count} after {pages_sent} successful page(s); the failed page was not retried and the unit's remaining pages were discarded"
-            ),
-        ),
-        PublisherDiagnostic::PagesDiscardedOnClose {
-            reason,
-            unit_count,
-            page_count,
-            started_unit_count,
-        } => {
-            let (code, message) = match reason {
-                PublisherCloseReason::Stop => (
-                    "osc.completed_pages_discarded_on_stop",
-                    "Pending Chatbox captions discarded on Stop",
-                ),
-                PublisherCloseReason::RuntimeError => (
-                    "osc.completed_pages_discarded_on_error",
-                    "Pending Chatbox captions discarded after Runtime failure",
-                ),
-            };
-            DiagnosticUpdate::info(
-                DiagnosticCategory::Osc,
-                code,
-                message,
-                format!(
-                    "Discarded {page_count} unsent page(s) across {unit_count} caption unit(s), including {started_unit_count} unit(s) whose publication had begun."
-                ),
-            )
-        }
-        PublisherDiagnostic::TypingFailed { is_typing, error } => {
-            let transition = if is_typing { "on" } else { "off" };
-            DiagnosticUpdate::from_error(
-                &error,
-                format!("Chatbox typing indicator could not turn {transition}"),
-            )
-        }
-        PublisherDiagnostic::WorkerFailed { reason } => DiagnosticUpdate::error(
-            DiagnosticCategory::Osc,
-            "osc.completed_publisher_failed",
-            "Completed Chatbox publisher stopped unexpectedly",
-            reason,
-        ),
-    };
-
-    emit_diagnostic(app, update);
-}
-
-fn emit_live_publisher_diagnostic<R: Runtime>(
-    app: &AppHandle<R>,
-    diagnostic: LivePublisherDiagnostic,
-) {
-    let update = match diagnostic {
-        LivePublisherDiagnostic::ViewPublished {
-            stream_id,
-            unit_id,
-            revision,
-            byte_count,
-            target,
-        } => DiagnosticUpdate::info(
-            DiagnosticCategory::Osc,
-            "osc.live_view_sent",
-            "Live caption view published",
-            format!(
-                "Published revision {revision} for {} in {stream_id} to {target} using {byte_count} encoded byte(s).",
-                unit_id.as_deref().unwrap_or("the unitless stream")
-            ),
-        ),
-        LivePublisherDiagnostic::ViewSendFailed {
-            stream_id,
-            unit_id,
-            revision,
-            error,
-        } => DiagnosticUpdate::error(
-            DiagnosticCategory::Osc,
-            "osc.live_view_send_failed",
-            "Live caption view could not be published",
-            format!(
-                "Revision {revision} for {} in {stream_id} failed and was not retried: {error}",
-                unit_id.as_deref().unwrap_or("the unitless stream")
-            ),
-        ),
-        LivePublisherDiagnostic::LayoutFailed {
-            stream_id,
-            unit_id,
-            revision,
-            reason,
-        } => DiagnosticUpdate::warning(
-            DiagnosticCategory::Osc,
-            "osc.live_layout_failed",
-            "Live caption view could not be laid out for Chatbox",
-            format!(
-                "Revision {revision} for {} in {stream_id} was not published: {reason}",
-                unit_id.as_deref().unwrap_or("the unitless stream")
-            ),
-        ),
-        LivePublisherDiagnostic::DraftDiscardedOnClose { reason } => {
-            let (code, message) = match reason {
-                PublisherCloseReason::Stop => (
-                    "osc.live_draft_discarded_on_stop",
-                    "Pending Live caption discarded on Stop",
-                ),
-                PublisherCloseReason::RuntimeError => (
-                    "osc.live_draft_discarded_on_error",
-                    "Pending Live caption discarded after Runtime failure",
-                ),
-            };
-            DiagnosticUpdate::info(
-                DiagnosticCategory::Osc,
-                code,
-                message,
-                "The newest unsent Live revision was discarded; the App caption remains available.",
-            )
-        }
-        LivePublisherDiagnostic::TypingFailed { error } => DiagnosticUpdate::error(
-            DiagnosticCategory::Osc,
-            "osc.live_typing_failed",
-            "Live Chatbox typing indicator could not update",
-            error.to_string(),
-        ),
-        LivePublisherDiagnostic::WorkerFailed { reason } => DiagnosticUpdate::error(
-            DiagnosticCategory::Osc,
-            "osc.live_publisher_failed",
-            "Live Chatbox publisher stopped unexpectedly",
-            reason,
-        ),
-    };
-
-    emit_diagnostic(app, update);
 }
 
 #[cfg(test)]

@@ -7,21 +7,16 @@
 //! state and publication behavior.
 
 use crate::caption_session::CaptionSessionSnapshotV1;
-use crate::chatbox_publisher::{
-    CompletedChatboxPublisher, CompletedPublisherEvent, PublisherCloseReason,
-    PublisherSubmitOutcome,
-};
+use crate::chatbox_publisher::{CompletedChatboxPublisher, CompletedPublisherEvent};
+use crate::chatbox_publisher_common::{PublisherCloseReason, PublisherSubmitOutcome};
 use crate::error::AppResult;
 use crate::live_chatbox_publisher::LiveChatboxPublisher;
+use crate::runtime_generation::ChatboxPublisherBoundary;
 
 #[derive(Clone)]
 pub(crate) enum RuntimeChatboxPublisher {
     Completed(CompletedChatboxPublisher),
     Live(LiveChatboxPublisher),
-}
-
-pub(crate) trait ChatboxPublisherBoundary {
-    fn request_close(&self, reason: PublisherCloseReason) -> AppResult<()>;
 }
 
 impl RuntimeChatboxPublisher {

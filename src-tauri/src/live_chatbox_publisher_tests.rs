@@ -336,7 +336,6 @@ fn start_publisher(
     let publisher = LiveChatboxPublisher::start(
         transport,
         pacer.clone(),
-        1,
         RuntimeGeneration::active(),
         policy,
         reporter(),
@@ -397,22 +396,6 @@ fn rejects_zero_live_observation_delay() {
         ResolvedPublicationPolicy::LiveUnit {
             observation_window_ms: 0,
         },
-    );
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn rejects_a_mismatched_runtime_generation() {
-    let result = LiveChatboxPublisher::start(
-        Arc::new(RecordingTransport::new([])),
-        ChatboxPacer::with_clock(Arc::new(ManualClock::new())),
-        2,
-        RuntimeGeneration::active(),
-        ResolvedPublicationPolicy::LiveUnit {
-            observation_window_ms: 1_000,
-        },
-        reporter(),
     );
 
     assert!(result.is_err());
@@ -783,7 +766,6 @@ fn successful_view_is_not_reported_as_a_discarded_draft_on_close() -> AppResult<
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        1,
         RuntimeGeneration::active(),
         ResolvedPublicationPolicy::LiveUnit {
             observation_window_ms: 1_000,
@@ -924,7 +906,6 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        1,
         generation.clone(),
         ResolvedPublicationPolicy::LiveUnit {
             observation_window_ms: 1_000,
@@ -1081,7 +1062,6 @@ fn worker_panic_discards_the_draft_cleans_typing_once_and_reports_failure() -> A
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        1,
         RuntimeGeneration::active(),
         ResolvedPublicationPolicy::LiveUnit {
             observation_window_ms: 1_000,
@@ -1133,7 +1113,6 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        1,
         RuntimeGeneration::active(),
         ResolvedPublicationPolicy::LiveUnit {
             observation_window_ms: 1_000,

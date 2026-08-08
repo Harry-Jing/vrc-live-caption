@@ -1,7 +1,9 @@
 use super::*;
-use crate::chatbox_publisher::{ChatboxSendReceipt, ChatboxTransport};
+use crate::chatbox_publisher::PublisherDiagnostic;
+use crate::chatbox_transport::{ChatboxSendReceipt, ChatboxTransport};
 use crate::config::{OpenAiTranscriptionModel, SttProvider};
 use crate::host_resolver::{HostResolutionError, HostResolver};
+use crate::live_chatbox_publisher::LivePublisherDiagnostic;
 use crate::recognition_fakes::{
     ScriptedRecognitionAdapter, ScriptedRecognitionContext, ScriptedText,
 };
@@ -722,7 +724,7 @@ fn one_capture_callback_dispatches_every_segmenter_update_in_order() -> AppResul
 #[test]
 fn poisoned_generation_gate_still_closes_and_joins_the_publisher() -> AppResult<()> {
     let generation = RuntimeGeneration::active();
-    let output_gate = Arc::clone(&generation.output_gate);
+    let output_gate = generation.test_output_gate();
     let poisoner = thread::spawn(move || {
         if let Ok(_gate) = output_gate.lock() {
             std::panic::resume_unwind(Box::new("poison generation gate for shutdown coverage"));
@@ -950,7 +952,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
     ];
 
     for (diagnostic, expected_code, expected_severity) in diagnostics {
-        emit_publisher_diagnostic(app.handle(), diagnostic);
+        emit_diagnostic(app.handle(), completed_publisher_diagnostic(diagnostic));
         let event = receive_json_event(&diagnostic_receiver, "Publisher diagnostic")?;
         assert_eq!(event["category"], "osc");
         assert_eq!(event["code"], expected_code);
@@ -1045,7 +1047,7 @@ fn live_publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
     ];
 
     for (diagnostic, expected_code, expected_severity) in diagnostics {
-        emit_live_publisher_diagnostic(app.handle(), diagnostic);
+        emit_diagnostic(app.handle(), live_publisher_diagnostic(diagnostic));
         let event = receive_json_event(&diagnostic_receiver, "Live publisher diagnostic")?;
         assert_eq!(event["category"], "osc");
         assert_eq!(event["code"], expected_code);
@@ -1117,7 +1119,6 @@ fn runtime_test_live_publisher(
             typing_sender: None,
         }),
         ChatboxPacer::default(),
-        generation.generation_id(),
         generation,
         ResolvedPublicationPolicy::LiveUnit {
             observation_window_ms: 1_000,

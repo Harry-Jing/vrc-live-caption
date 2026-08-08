@@ -5,7 +5,7 @@
 //! cancellation belong to the independent Chatbox publisher. The OSC Test
 //! command acquires the same process-wide pacer before calling this transport.
 
-use crate::chatbox_publisher::{ChatboxSendReceipt, ChatboxTransport};
+use crate::chatbox_transport::{ChatboxSendReceipt, ChatboxTransport};
 use crate::config::OscConfig;
 use crate::error::{AppError, AppResult};
 use crate::host_resolver::{HostResolutionError, HostResolver};

@@ -5,10 +5,11 @@ use crate::caption_session::{
     CaptionState,
 };
 use crate::chatbox_pacer::{ChatboxPacer, Clock};
-use crate::chatbox_publisher::{ChatboxSendReceipt, ChatboxTransport, PublisherReporter};
+use crate::chatbox_publisher::PublisherReporter;
+use crate::chatbox_transport::{ChatboxSendReceipt, ChatboxTransport};
 use crate::error::AppError;
 use crate::live_chatbox_publisher::LivePublisherReporter;
-use crate::runtime::RuntimeGeneration;
+use crate::runtime_generation::RuntimeGeneration;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -131,7 +132,6 @@ fn start_live() -> AppResult<(RuntimeChatboxPublisher, Receiver<String>)> {
     let publisher = LiveChatboxPublisher::start(
         transport,
         ChatboxPacer::default(),
-        1,
         RuntimeGeneration::active(),
         ResolvedPublicationPolicy::LiveUnit {
             observation_window_ms: 1_000,
@@ -285,7 +285,6 @@ fn completed_and_live_variants_share_the_actual_attempt_pacing_boundary() -> App
     let live = RuntimeChatboxPublisher::Live(LiveChatboxPublisher::start(
         transport,
         pacer,
-        1,
         RuntimeGeneration::active(),
         ResolvedPublicationPolicy::LiveUnit {
             observation_window_ms: 1_000,

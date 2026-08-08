@@ -6,34 +6,23 @@
 //! diagnostics. No producer waits for a Chatbox pacing opportunity or network
 //! operation.
 
-use crate::chatbox_layout::{ChatboxLayoutError, paginate_completed};
+use crate::chatbox_layout::paginate_completed;
 use crate::chatbox_pacer::{ChatboxAttemptPermit, ChatboxPacer};
+use crate::chatbox_publisher_common::{
+    PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
+    TYPING_REASSERT_INTERVAL, describe_layout_error,
+};
+use crate::chatbox_transport::ChatboxTransport;
 use crate::error::{AppError, AppResult};
-use crate::runtime::RuntimeGeneration;
+use crate::runtime_generation::RuntimeGeneration;
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 const PROVISIONAL_MAX_RESIDENT_PAGES: usize = 32;
 const PROVISIONAL_MAX_UNSTARTED_AGE: Duration = Duration::from_secs(30);
-// VRChat auto-hides its OSC typing indicator after about five seconds without
-// fresh input. Reassert `true` every four seconds while activity remains active
-// so scheduler jitter does not create a visible gap. Typing packets deliberately
-// bypass ChatboxPacer and never consume a `/chatbox/input` text-send opportunity.
-const TYPING_REASSERT_INTERVAL: Duration = Duration::from_secs(4);
-
-pub(crate) trait ChatboxTransport: Send + Sync {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt>;
-    fn send_typing(&self, is_typing: bool) -> AppResult<()>;
-}
-
-#[derive(Debug)]
-pub(crate) struct ChatboxSendReceipt {
-    pub(crate) target: String,
-    pub(crate) byte_count: usize,
-}
 
 pub(crate) type PublisherReporter = Arc<dyn Fn(PublisherDiagnostic) + Send + Sync>;
 
@@ -83,29 +72,16 @@ pub(crate) enum PublisherDiagnostic {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PublisherCloseReason {
-    Stop,
-    RuntimeError,
-}
-
 pub(crate) enum CompletedPublisherEvent {
     Started { unit_id: String },
     Completed { unit_id: String, text: String },
     Aborted { unit_id: String },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[must_use]
-pub(crate) enum PublisherSubmitOutcome {
-    Handled,
-    Closed,
-}
-
 #[derive(Clone)]
 pub(crate) struct CompletedChatboxPublisher {
     shared: Arc<PublisherShared>,
-    join_state: Arc<Mutex<PublisherJoinState>>,
+    worker_join: PublisherWorkerJoin,
 }
 
 #[derive(Clone, Copy)]
@@ -125,11 +101,6 @@ struct PublisherShared {
     limits: PublisherLimits,
 }
 
-struct PublisherJoinState {
-    worker: Option<JoinHandle<AppResult<()>>>,
-    failure: Option<String>,
-}
-
 struct PublisherState {
     lifecycle: PublisherLifecycle,
     units: VecDeque<CompletedUnit>,
@@ -141,16 +112,6 @@ struct PublisherState {
     typing_attempted_epoch: Option<u64>,
     next_typing_reassert_at: Option<Instant>,
     diagnostics: VecDeque<PublisherDiagnostic>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PublisherLifecycle {
-    Running,
-    Closing {
-        reason: PublisherCloseReason,
-        cleanup_attempted: bool,
-    },
-    Closed,
 }
 
 struct CompletedUnit {
@@ -275,10 +236,7 @@ impl CompletedChatboxPublisher {
 
         Ok(Self {
             shared,
-            join_state: Arc::new(Mutex::new(PublisherJoinState {
-                worker: Some(worker),
-                failure: None,
-            })),
+            worker_join: PublisherWorkerJoin::new("Completed", worker),
         })
     }
 
@@ -404,31 +362,7 @@ impl CompletedChatboxPublisher {
     }
 
     pub(crate) fn join(&self) -> AppResult<()> {
-        let mut join_state = self
-            .join_state
-            .lock()
-            .map_err(|_| AppError::state("Completed publisher join lock was poisoned."))?;
-
-        if let Some(worker) = join_state.worker.take() {
-            let result = worker.join().map_err(|_| {
-                AppError::runtime("Completed publisher worker thread panicked while stopping.")
-            });
-            let result = match result {
-                Ok(worker_result) => worker_result,
-                Err(error) => Err(error),
-            };
-
-            if let Err(error) = result {
-                join_state.failure = Some(error.to_string());
-            }
-        }
-
-        match &join_state.failure {
-            Some(failure) => Err(AppError::runtime(format!(
-                "Completed publisher worker failed: {failure}"
-            ))),
-            None => Ok(()),
-        }
+        self.worker_join.join()
     }
 
     fn try_submit_completed(
@@ -1003,14 +937,6 @@ fn refresh_typing_desired(state: &mut PublisherState) {
         state.typing_epoch = state.typing_epoch.wrapping_add(1);
         state.typing_attempted_epoch = None;
         state.next_typing_reassert_at = None;
-    }
-}
-
-fn describe_layout_error(error: ChatboxLayoutError) -> String {
-    match error {
-        ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units } => format!(
-            "One grapheme requires {utf16_units} UTF-16 units, exceeding the 144-unit Chatbox input budget."
-        ),
     }
 }
 

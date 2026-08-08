@@ -9,21 +9,22 @@ use crate::capability_planner::ResolvedPublicationPolicy;
 use crate::caption_session::{
     CaptionLane, CaptionSessionSnapshotV1, CaptionSnapshotV1, CaptionState,
 };
-use crate::chatbox_layout::{ChatboxLayoutError, render_live_viewport};
+use crate::chatbox_layout::render_live_viewport;
 use crate::chatbox_pacer::ChatboxPacer;
-use crate::chatbox_publisher::{
-    ChatboxSendReceipt, ChatboxTransport, PublisherCloseReason, PublisherSubmitOutcome,
+use crate::chatbox_publisher_common::{
+    PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
+    TYPING_REASSERT_INTERVAL, describe_layout_error,
 };
+use crate::chatbox_transport::{ChatboxSendReceipt, ChatboxTransport};
 use crate::error::{AppError, AppResult};
-use crate::runtime::RuntimeGeneration;
+use crate::runtime_generation::RuntimeGeneration;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 const OBSERVATION_WAIT_POLL: Duration = Duration::from_millis(50);
-const TYPING_REASSERT_INTERVAL: Duration = Duration::from_secs(4);
 
 pub(crate) type LivePublisherReporter = Arc<dyn Fn(LivePublisherDiagnostic) + Send + Sync>;
 
@@ -62,7 +63,7 @@ pub(crate) enum LivePublisherDiagnostic {
 #[derive(Clone)]
 pub(crate) struct LiveChatboxPublisher {
     shared: Arc<LivePublisherShared>,
-    join_state: Arc<Mutex<LivePublisherJoinState>>,
+    worker_join: PublisherWorkerJoin,
 }
 
 struct LivePublisherShared {
@@ -83,13 +84,8 @@ enum LiveObservationPolicy {
     Unit { observation_window: Duration },
 }
 
-struct LivePublisherJoinState {
-    worker: Option<JoinHandle<AppResult<()>>>,
-    failure: Option<String>,
-}
-
 struct LivePublisherState {
-    lifecycle: LivePublisherLifecycle,
+    lifecycle: PublisherLifecycle,
     highest_snapshot_revision: u64,
     stream_id: Option<String>,
     unit_first_seen: HashMap<String, Instant>,
@@ -102,16 +98,6 @@ struct LivePublisherState {
     typing_attempted_epoch: Option<u64>,
     next_typing_reassert_at: Option<Instant>,
     diagnostics: VecDeque<LivePublisherDiagnostic>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum LivePublisherLifecycle {
-    Running,
-    Closing {
-        reason: PublisherCloseReason,
-        cleanup_attempted: bool,
-    },
-    Closed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,19 +148,14 @@ impl LiveChatboxPublisher {
     pub(crate) fn start(
         transport: Arc<dyn ChatboxTransport>,
         pacer: ChatboxPacer,
-        generation_id: u64,
         generation: RuntimeGeneration,
         policy: ResolvedPublicationPolicy,
         reporter: LivePublisherReporter,
     ) -> AppResult<Self> {
+        let generation_id = generation.generation_id();
         if generation_id == 0 {
             return Err(AppError::state(
                 "Live publisher generation must be greater than zero.",
-            ));
-        }
-        if generation.generation_id() != generation_id {
-            return Err(AppError::state(
-                "Live publisher generation did not match its runtime generation boundary.",
             ));
         }
 
@@ -200,7 +181,7 @@ impl LiveChatboxPublisher {
 
         let shared = Arc::new(LivePublisherShared {
             state: Mutex::new(LivePublisherState {
-                lifecycle: LivePublisherLifecycle::Running,
+                lifecycle: PublisherLifecycle::Running,
                 highest_snapshot_revision: 0,
                 stream_id: None,
                 unit_first_seen: HashMap::new(),
@@ -256,10 +237,7 @@ impl LiveChatboxPublisher {
 
         Ok(Self {
             shared,
-            join_state: Arc::new(Mutex::new(LivePublisherJoinState {
-                worker: Some(worker),
-                failure: None,
-            })),
+            worker_join: PublisherWorkerJoin::new("Live", worker),
         })
     }
 
@@ -269,7 +247,7 @@ impl LiveChatboxPublisher {
         snapshot: &CaptionSessionSnapshotV1,
     ) -> AppResult<PublisherSubmitOutcome> {
         let mut state = self.lock_state()?;
-        if state.lifecycle != LivePublisherLifecycle::Running
+        if state.lifecycle != PublisherLifecycle::Running
             || self.shared.generation.is_hard_stopped()
         {
             return Ok(PublisherSubmitOutcome::Closed);
@@ -351,25 +329,25 @@ impl LiveChatboxPublisher {
             Err(poisoned) => (poisoned.into_inner(), true),
         };
         match state.lifecycle {
-            LivePublisherLifecycle::Running => {
+            PublisherLifecycle::Running => {
                 discard_live_candidate_on_close(&mut state, reason);
-                state.lifecycle = LivePublisherLifecycle::Closing {
+                state.lifecycle = PublisherLifecycle::Closing {
                     reason,
                     cleanup_attempted: false,
                 };
             }
-            LivePublisherLifecycle::Closing {
+            PublisherLifecycle::Closing {
                 reason: current_reason,
                 cleanup_attempted,
             } if reason == PublisherCloseReason::Stop
                 && current_reason == PublisherCloseReason::RuntimeError =>
             {
-                state.lifecycle = LivePublisherLifecycle::Closing {
+                state.lifecycle = PublisherLifecycle::Closing {
                     reason,
                     cleanup_attempted,
                 };
             }
-            LivePublisherLifecycle::Closing { .. } | LivePublisherLifecycle::Closed => {}
+            PublisherLifecycle::Closing { .. } | PublisherLifecycle::Closed => {}
         }
 
         // A selected candidate clears this flag before waiting on the pacer.
@@ -380,23 +358,23 @@ impl LiveChatboxPublisher {
             .store(true, Ordering::SeqCst);
         let perform_poison_cleanup = if state_was_poisoned {
             match state.lifecycle {
-                LivePublisherLifecycle::Closing {
+                PublisherLifecycle::Closing {
                     reason,
                     cleanup_attempted: false,
                 } => {
                     discard_live_candidate_on_close(&mut state, reason);
-                    state.lifecycle = LivePublisherLifecycle::Closing {
+                    state.lifecycle = PublisherLifecycle::Closing {
                         reason,
                         cleanup_attempted: true,
                     };
                     true
                 }
-                LivePublisherLifecycle::Closing {
+                PublisherLifecycle::Closing {
                     cleanup_attempted: true,
                     ..
                 }
-                | LivePublisherLifecycle::Running
-                | LivePublisherLifecycle::Closed => false,
+                | PublisherLifecycle::Running
+                | PublisherLifecycle::Closed => false,
             }
         } else {
             false
@@ -431,29 +409,7 @@ impl LiveChatboxPublisher {
     }
 
     pub(crate) fn join(&self) -> AppResult<()> {
-        let mut join_state = self
-            .join_state
-            .lock()
-            .map_err(|_| AppError::state("Live publisher join lock was poisoned."))?;
-        if let Some(worker) = join_state.worker.take() {
-            let result = worker
-                .join()
-                .map_err(|_| AppError::runtime("Live publisher worker panicked while stopping."));
-            let result = match result {
-                Ok(worker_result) => worker_result,
-                Err(error) => Err(error),
-            };
-            if let Err(error) = result {
-                join_state.failure = Some(error.to_string());
-            }
-        }
-
-        match &join_state.failure {
-            Some(failure) => Err(AppError::runtime(format!(
-                "Live publisher worker failed: {failure}"
-            ))),
-            None => Ok(()),
-        }
+        self.worker_join.join()
     }
 
     fn candidate_from_captions(
@@ -551,25 +507,25 @@ fn emergency_close_after_worker_failure(shared: &LivePublisherShared, failure_re
         Ok(state) => state,
         Err(poisoned) => poisoned.into_inner(),
     };
-    if state.lifecycle == LivePublisherLifecycle::Closed {
+    if state.lifecycle == PublisherLifecycle::Closed {
         return;
     }
 
     let cleanup_already_attempted = matches!(
         state.lifecycle,
-        LivePublisherLifecycle::Closing {
+        PublisherLifecycle::Closing {
             cleanup_attempted: true,
             ..
         }
     );
     let reason = match state.lifecycle {
-        LivePublisherLifecycle::Closing { reason, .. } => reason,
-        LivePublisherLifecycle::Running | LivePublisherLifecycle::Closed => {
+        PublisherLifecycle::Closing { reason, .. } => reason,
+        PublisherLifecycle::Running | PublisherLifecycle::Closed => {
             PublisherCloseReason::RuntimeError
         }
     };
     discard_live_candidate_on_close(&mut state, reason);
-    state.lifecycle = LivePublisherLifecycle::Closed;
+    state.lifecycle = PublisherLifecycle::Closed;
     let mut diagnostics = state.diagnostics.drain(..).collect::<Vec<_>>();
     diagnostics.push(LivePublisherDiagnostic::WorkerFailed {
         reason: failure_reason,
@@ -593,29 +549,29 @@ fn next_live_worker_item(shared: &LivePublisherShared) -> AppResult<LiveWorkerIt
 
     loop {
         match state.lifecycle {
-            LivePublisherLifecycle::Closing {
+            PublisherLifecycle::Closing {
                 reason,
                 cleanup_attempted: false,
             } => {
-                state.lifecycle = LivePublisherLifecycle::Closing {
+                state.lifecycle = PublisherLifecycle::Closing {
                     reason,
                     cleanup_attempted: true,
                 };
                 return Ok(LiveWorkerItem::CleanupTyping);
             }
-            LivePublisherLifecycle::Closing {
+            PublisherLifecycle::Closing {
                 cleanup_attempted: true,
                 ..
             } => {
                 if let Some(diagnostic) = state.diagnostics.pop_front() {
                     return Ok(LiveWorkerItem::Diagnostic(diagnostic));
                 }
-                state.lifecycle = LivePublisherLifecycle::Closed;
+                state.lifecycle = PublisherLifecycle::Closed;
                 shared.wake.notify_all();
                 return Ok(LiveWorkerItem::Exit);
             }
-            LivePublisherLifecycle::Closed => return Ok(LiveWorkerItem::Exit),
-            LivePublisherLifecycle::Running => {}
+            PublisherLifecycle::Closed => return Ok(LiveWorkerItem::Exit),
+            PublisherLifecycle::Running => {}
         }
 
         if state.typing_attempted_epoch != Some(state.typing_epoch) {
@@ -713,7 +669,7 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
             .lock()
             .map_err(|_| AppError::state("Live publisher state lock was poisoned."))
             .map(|mut state| {
-                let is_current = state.lifecycle == LivePublisherLifecycle::Running
+                let is_current = state.lifecycle == PublisherLifecycle::Running
                     && state.candidate.as_ref().is_some_and(|candidate| {
                         candidate.identity == selected.identity && candidate.view == selected.view
                     })
@@ -802,7 +758,7 @@ fn process_typing(shared: &LivePublisherShared, epoch: u64, is_typing: bool) -> 
             .state
             .lock()
             .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?;
-        state.lifecycle == LivePublisherLifecycle::Running
+        state.lifecycle == PublisherLifecycle::Running
             && state.typing_epoch == epoch
             && state.typing_desired == is_typing
     };
@@ -829,7 +785,7 @@ fn process_typing(shared: &LivePublisherShared, epoch: u64, is_typing: bool) -> 
         .lock()
         .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?;
     if is_typing
-        && state.lifecycle == LivePublisherLifecycle::Running
+        && state.lifecycle == PublisherLifecycle::Running
         && state.typing_epoch == epoch
         && state.typing_desired
     {
@@ -889,14 +845,6 @@ fn compose_recent_source(captions: &[&CaptionSnapshotV1]) -> String {
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn describe_layout_error(error: ChatboxLayoutError) -> String {
-    match error {
-        ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units } => format!(
-            "One grapheme requires {utf16_units} UTF-16 units, exceeding the 144-unit Chatbox input budget."
-        ),
-    }
 }
 
 #[cfg(test)]
