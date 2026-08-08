@@ -1,5 +1,4 @@
 import "./assets/css/main.css";
-import "virtual:nuxt-icon-bundle/register";
 
 import { createApp } from "vue";
 import ui from "@nuxt/ui/vue-plugin";

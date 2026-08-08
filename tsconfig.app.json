@@ -9,7 +9,7 @@
   ],
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
-    "types": ["vite/client", "@nuxt/icon/client"],
+    "types": ["vite/client"],
     "paths": {
       "#build/ui/*": ["./node_modules/.nuxt-ui/ui/*"]
     },
