@@ -62,7 +62,7 @@ jobs:
 
       # Keep this version in sync with rust-toolchain.toml.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1a3a6d54512beeaffd394f8d516ca16f2c506a20 # 1.97.0
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
         with:
           components: clippy,rustfmt
 
