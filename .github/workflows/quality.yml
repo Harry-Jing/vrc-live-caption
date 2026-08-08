@@ -15,8 +15,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
-    name: Quality Gate (${{ matrix.os }})
+  frontend:
+    name: Frontend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm and Node
+        uses: pnpm/setup@4700d737c3d7a2e7199f3d42a920f0bf7f34e411 # v2.0.1
+        with:
+          runtime: node@24
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run frontend quality gate
+        run: pnpm check:frontend
+
+  rust:
+    name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Windows needs headroom for the first uncached Rust compile.
     timeout-minutes: 45
@@ -54,8 +82,6 @@ jobs:
         uses: pnpm/setup@4700d737c3d7a2e7199f3d42a920f0bf7f34e411 # v2.0.1
         with:
           runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
           install: false
 
       # Keep this version in sync with rust-toolchain.toml.
@@ -69,11 +95,8 @@ jobs:
         with:
           workspaces: ./src-tauri -> target
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run quality gate
-        run: pnpm check:ci
+      - name: Run Rust quality gate
+        run: pnpm check:rust:locked
 
   audit_pnpm:
     name: Dependency Audit (pnpm)
