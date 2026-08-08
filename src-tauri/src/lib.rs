@@ -34,10 +34,13 @@ mod state;
 use tauri::Manager;
 
 fn configure_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
-    builder.manage(state::AppState::default()).setup(|app| {
-        app.state::<state::AppState>().load_config(app.handle())?;
-        Ok(())
-    })
+    builder
+        .plugin(tauri_plugin_dialog::init())
+        .manage(state::AppState::default())
+        .setup(|app| {
+            app.state::<state::AppState>().load_config(app.handle())?;
+            Ok(())
+        })
 }
 
 #[expect(

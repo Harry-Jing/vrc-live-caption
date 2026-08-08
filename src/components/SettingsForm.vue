@@ -11,6 +11,7 @@ import {
 import { onBeforeRouteLeave } from "vue-router";
 import MicrophoneProbeControl from "./MicrophoneProbeControl.vue";
 import { uiText } from "../i18n/uiText";
+import { requestConfirmation } from "../runtime/confirmation";
 import { isActiveRuntimeSessionPhase } from "../runtime/lifecycle";
 import {
   publicationModeDescriptionMessageKey,
@@ -266,11 +267,12 @@ const publicationDescription = computed(() =>
     : "",
 );
 
-function confirmDiscardDraft() {
-  return (
-    !isFormDirty.value ||
-    window.confirm(uiText("settings.unsavedChanges.confirmLeave"))
-  );
+async function confirmDiscardDraft() {
+  if (!isFormDirty.value) {
+    return true;
+  }
+
+  return requestConfirmation(uiText("settings.unsavedChanges.confirmLeave"));
 }
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {

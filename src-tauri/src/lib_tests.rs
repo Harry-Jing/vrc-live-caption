@@ -63,6 +63,19 @@ fn microphone_probe_command_has_a_narrow_generated_permission() {
 }
 
 #[test]
+fn unsaved_changes_dialog_has_a_narrow_message_permission() {
+    let production_lib = production_lib_source();
+    let desktop_capability = include_str!("../capabilities/default.json");
+
+    assert!(production_lib.contains("tauri_plugin_dialog::init()"));
+    assert!(desktop_capability.contains("\"dialog:allow-message\""));
+
+    for permission in ["dialog:default", "dialog:allow-open", "dialog:allow-save"] {
+        assert!(!desktop_capability.contains(&format!("\"{permission}\"")));
+    }
+}
+
+#[test]
 #[expect(
     deprecated,
     reason = "Tauri's mock runtime requires one run iteration to execute the production setup hook."
