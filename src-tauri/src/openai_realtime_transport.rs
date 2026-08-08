@@ -27,7 +27,6 @@ use tungstenite::{
     ClientRequestBuilder, Error as WebSocketError, Message, WebSocket, client_tls_with_config,
 };
 
-#[path = "system_proxy.rs"]
 mod system_proxy;
 
 const HANDSHAKE_IO_TIMEOUT: Duration = Duration::from_secs(10);
