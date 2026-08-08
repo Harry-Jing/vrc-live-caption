@@ -222,14 +222,14 @@ fn transcript_failed(item_id: &str, message: &str) -> Value {
 }
 
 #[test]
-fn exact_models_build_the_generic_realtime_websocket_url() -> AppResult<()> {
+fn release_catalog_accepts_only_exact_transcription_models() -> AppResult<()> {
     assert_eq!(
-        realtime_websocket_url(OpenAiTranscriptionModel::GptTranscribe),
-        "wss://api.openai.com/v1/realtime?model=gpt-transcribe"
+        OpenAiTranscriptionModel::try_from("gpt-transcribe")?,
+        OpenAiTranscriptionModel::GptTranscribe
     );
     assert_eq!(
-        realtime_websocket_url(OpenAiTranscriptionModel::GptLiveTranscribe),
-        "wss://api.openai.com/v1/realtime?model=gpt-live-transcribe"
+        OpenAiTranscriptionModel::try_from("gpt-live-transcribe")?,
+        OpenAiTranscriptionModel::GptLiveTranscribe
     );
     assert!(OpenAiTranscriptionModel::try_from("gpt-4o-transcribe").is_err());
     assert!(OpenAiTranscriptionModel::try_from("gpt-realtime-whisper").is_err());

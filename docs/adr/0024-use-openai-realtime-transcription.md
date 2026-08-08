@@ -2,8 +2,8 @@
 
 Date: 2026-08
 
-Status: accepted and implemented; authenticated provider and Windows/VRChat
-validation remain Phase 4 exit work.
+Status: accepted and implemented; authenticated adapter smoke complete;
+Windows/VRChat validation remains Phase 4 exit work.
 
 Supersedes
 [ADR 0018](./0018-default-to-openai-for-cloud-stt.md).
@@ -96,8 +96,9 @@ and never fall back to OpenAI silently.
   and its otherwise-unused direct HTTP/WAV dependencies are removed rather than
   retained as a fallback.
 - Protocol-level tests cover normalization, ordering, bounded queues, Stop,
-  proxy routing, and error mapping. An authenticated OpenAI smoke test and the
-  Windows/VRChat session are still required before Phase 4 is marked complete.
+  proxy routing, and error mapping. An authenticated OpenAI adapter smoke has
+  covered both release models; the Windows/VRChat session is still required
+  before Phase 4 is marked complete.
 - Adding another provider or local runtime requires a catalog entry and a
   concrete Adapter with explicit capabilities; it does not widen the OpenAI
   model field into an arbitrary string.

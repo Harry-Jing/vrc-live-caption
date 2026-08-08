@@ -31,7 +31,7 @@ fn https_proxy_match_uses_connect_without_openai_authorization() -> AppResult<()
     let authenticated_proxy_uri =
         proxy_uri.replacen("http://", "http://proxy-user:proxy-password@", 1);
     let matcher = Matcher::builder().https(authenticated_proxy_uri).build();
-    let request = test_request("wss://api.openai.com/v1/realtime?model=gpt-transcribe")?;
+    let request = test_request("wss://api.openai.com/v1/realtime?intent=transcription")?;
 
     let stream = connect_with_matcher(&request, &matcher)?;
     drop(stream);

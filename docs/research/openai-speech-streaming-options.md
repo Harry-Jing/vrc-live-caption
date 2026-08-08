@@ -1,7 +1,7 @@
 # OpenAI Realtime Transcription Options
 
-Status: official protocol facts rechecked 2026-08-07. The code cutover is
-implemented; authenticated OpenAI and Windows/VRChat validation remain.
+Status: official protocol facts and authenticated adapter behavior rechecked
+2026-08-07. The code cutover is implemented; Windows/VRChat validation remains.
 
 ## Scope and sources
 
@@ -15,10 +15,15 @@ Primary sources:
 - [`gpt-live-transcribe` model](https://developers.openai.com/api/docs/models/gpt-live-transcribe)
 - [Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription)
 - [Realtime WebSocket connection](https://developers.openai.com/api/docs/guides/realtime-websocket)
+- [Realtime client events](https://developers.openai.com/api/reference/resources/realtime/client-events)
 
 The model and protocol names below are intentionally exact. Older OpenAI
 transcription model names in repository history describe the implementation
 being replaced; they are not aliases for these paths.
+
+OpenAI's current provider catalog also lists other transcription models. The
+release catalog remains the two-model product decision in ADR 0024; a broader
+provider catalog does not silently widen saved config or adapter behavior.
 
 ## Documented recognition behavior
 
@@ -29,7 +34,7 @@ correlate events when work on multiple items overlaps.
 
 | Model | When recognition produces text | Transcript events | Language configuration |
 |---|---|---|---|
-| `gpt-transcribe` | after the client commits an audio item | the project consumes the item's `conversation.item.input_audio_transcription.completed` result | optional `languages[]`; completed results can report detected `languages` |
+| `gpt-transcribe` | after the client commits an audio item | the provider may emit post-commit deltas; the project intentionally publishes only the item's `conversation.item.input_audio_transcription.completed` result | optional `languages[]`; completed results can report detected `languages` |
 | `gpt-live-transcribe` | continuously as audio arrives | `conversation.item.input_audio_transcription.delta` updates followed by `.completed` | optional `languages[]` hints |
 
 `completed` contains the provider's completed transcript for that item. A
@@ -38,10 +43,11 @@ emit the complete current text with a monotonic local revision. Completion of
 one item says nothing about the completion state of another item.
 
 For `gpt-transcribe`, commit is the start signal for recognition of the item.
-The project therefore does not market it as Live and does not synthesize
-ongoing captions while waiting for `completed`. For `gpt-live-transcribe`,
-continuous deltas are real ongoing recognition, so both publication timings
-are honest.
+Any provider delta therefore arrives after the application has already closed
+the speech unit, not continuously while the user speaks. The project does not
+market that as Live and intentionally suppresses those post-commit deltas while
+waiting for `completed`. For `gpt-live-transcribe`, continuous deltas are real
+ongoing recognition, so both publication timings are honest.
 
 Language hints and detected language are different facts. The current product
 requires at least one nonempty, unique hint and sends `languages[]` for either
@@ -51,14 +57,21 @@ the provider reports exactly one nonempty detected language; no detection or
 multiple detections remain unlabeled in the current V1 caption contract.
 
 The concrete session setup uses
-`wss://api.openai.com/v1/realtime?model=<exact-model>` with Bearer
-authentication, `type: "transcription"`, 24 kHz mono PCM, and
+`wss://api.openai.com/v1/realtime?intent=transcription` with Bearer
+authentication. The transcription model belongs only in
+`session.audio.input.transcription.model`; it is not the top-level Realtime
+session model. The session uses `type: "transcription"`, 24 kHz mono PCM, and
 `turn_detection: null` so the application owns the unit boundary. Client event
-IDs on session update and commit make provider errors diagnosable. The current
-OpenAI documentation conflicts about `delay` support: the model-specific guide
-shows it for `gpt-live-transcribe`, while the general client-event schema still
-describes it as restricted to an older model. The implementation therefore
-omits `delay` until an authenticated smoke resolves the effective behavior.
+IDs on session update and commit make provider errors diagnosable.
+
+The general WebSocket guide documents authentication and handshake mechanics,
+but its URL example creates a normal Realtime conversation session. The exact
+transcription-intent route above was confirmed against the live API on
+2026-08-07. The current OpenAI documentation conflicts about `delay` support:
+the model-specific guide shows it for `gpt-live-transcribe`, while the general
+client-event schema describes it as restricted to `gpt-realtime-whisper` in GA
+Realtime sessions. The implementation therefore omits `delay` until a later
+representative-audio evaluation resolves the effective product setting.
 
 ## Release capability mapping
 
@@ -128,24 +141,47 @@ work under [ADR 0019](../adr/0019-follow-system-proxy-plan-relay-api.md).
 
 ## Phase 4 validation
 
-Deterministic protocol tests establish the Interface mapping; they do not
-establish paid-service behavior, recognition quality, latency, or Windows
-network behavior. Before Phase 4 exits, run a small authenticated smoke for
-both models and verify:
+Deterministic protocol tests establish the Interface mapping. An authenticated,
+repo-external harness then compiled the production transport, PCM encoder,
+adapter, and `RecognitionSession` and ran them against the live API on
+2026-08-07.
 
-1. session configuration, 24 kHz PCM append, and commit ordering;
-2. first-delta and completion latency for short, long, English, Chinese, and
-   mixed-language speech;
-3. `languages[]`, detected-language, and code-switching behavior without
-   treating input hints as detection;
-4. interleaved and out-of-order events correlated by `item_id` without unit or
-   publication-order corruption;
-5. empty items, item errors, authentication failure, rate limits, disconnects,
-   and reconnect policy;
-6. bounded buffering and explicit diagnostics under network backpressure;
-7. hard Stop while audio is buffered, an item is committed, a delta is in
-   flight, and a completion is pending; and
-8. system-proxy behavior on the Windows Tier 1 path.
+The first unmodified connection attempt exposed two release-blocking defects:
+
+- the WebSocket URL supplied a transcription model as the top-level Realtime
+  session model, which the provider rejected with `invalid_model`; and
+- tungstenite enabled rustls without selecting a crypto provider, so TLS setup
+  panicked before the handshake.
+
+With the candidate transcription-intent route and rustls `ring` provider
+enabled in the temporary harness, both release models passed Chinese, English,
+and mixed-language samples from the normalized synthetic corpus:
+
+| Model | Ongoing output | Completed output | Detected language |
+|---|---:|---:|---|
+| `gpt-transcribe` | 0 for all three samples | exactly 1 per sample | `zh`, `en`, `zh` |
+| `gpt-live-transcribe` | 18, 17, and 16 revisions | exactly 1 per sample | none, as documented |
+
+All six completed transcripts matched their expected text after normalization
+for punctuation, case, and spacing. A separate empty-commit probe returned
+`input_audio_buffer_commit_empty`; the production adapter mapped it to a
+terminal STT error without leaking a later caption. The harness did not log the
+Bearer token or audio payload, and it did not retain the temporary key after
+the run.
+
+This closes the paid wire-shape question for session update, 24 kHz PCM append,
+commit, delta/completion normalization, language hints, detected language, and
+one provider error. It does not establish recognition quality or latency for a
+real microphone, Windows network behavior, proxy interception, long sessions,
+disconnect/reconnect behavior, or the complete Tauri/VAD/Stop/OSC path. Before
+Phase 4 exits, validate:
+
+1. native system-proxy and TLS trust behavior on the Windows Tier 1 path;
+2. short and long real-microphone speech in English, Chinese, and mixed language
+   with VRChat active;
+3. network interruption plus the chosen reconnect policy;
+4. hard Stop while audio is buffered, committed, in flight, and pending; and
+5. bounded buffering and explicit diagnostics under sustained backpressure.
 
 The existing synthetic WAV corpus can remain a fixed recognition input fixture;
 it does not need a TTS-quality benchmark or further voice-model evaluation.

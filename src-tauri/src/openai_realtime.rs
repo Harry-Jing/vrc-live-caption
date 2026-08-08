@@ -19,7 +19,6 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-pub(crate) const OPENAI_REALTIME_WEBSOCKET_BASE_URL: &str = "wss://api.openai.com/v1/realtime";
 const PROVIDER_NAME: &str = "openai";
 const RECENT_FINISHED_ITEM_LIMIT: usize = 128;
 const MAX_OUTSTANDING_TURNS: usize = 32;
@@ -30,13 +29,6 @@ const MAX_SATURATED_DRAINS_AFTER_DEADLINE: u8 = 2;
 const MAX_TRANSCRIPT_BYTES_PER_TURN: usize = 256 * 1024;
 const MAX_PENDING_TRANSCRIPT_BYTES: usize = 1024 * 1024;
 const ITEM_COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
-
-pub(crate) fn realtime_websocket_url(model: OpenAiTranscriptionModel) -> String {
-    format!(
-        "{OPENAI_REALTIME_WEBSOCKET_BASE_URL}?model={}",
-        model.as_str()
-    )
-}
 
 impl TryFrom<&str> for OpenAiTranscriptionModel {
     type Error = AppError;

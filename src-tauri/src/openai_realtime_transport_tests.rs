@@ -2,13 +2,19 @@ use super::*;
 use crate::error::AppResult;
 
 #[test]
-fn handshake_request_uses_exact_model_url_and_bearer_auth_without_extra_intent() -> AppResult<()> {
+fn rustls_crypto_provider_is_available_for_websocket_tls() {
+    let _provider = rustls::crypto::ring::default_provider();
+    let _builder = rustls::ClientConfig::builder();
+}
+
+#[test]
+fn handshake_request_uses_transcription_intent_without_session_model() -> AppResult<()> {
     let api_key = SecretString::from("test-api-key".to_string());
-    let request = openai_websocket_request(OpenAiTranscriptionModel::GptTranscribe, &api_key)?;
+    let request = openai_websocket_request(&api_key)?;
 
     assert_eq!(
         request.uri().to_string(),
-        "wss://api.openai.com/v1/realtime?model=gpt-transcribe"
+        "wss://api.openai.com/v1/realtime?intent=transcription"
     );
     let authorization = request
         .headers()
@@ -17,7 +23,7 @@ fn handshake_request_uses_exact_model_url_and_bearer_auth_without_extra_intent()
         .to_str()
         .map_err(|error| AppError::state(format!("Invalid test Authorization header: {error}")))?;
     assert_eq!(authorization, "Bearer test-api-key");
-    assert!(!request.uri().to_string().contains("intent"));
+    assert!(!request.uri().to_string().contains("model="));
     assert!(request.headers().get("OpenAI-Beta").is_none());
     Ok(())
 }
@@ -25,9 +31,7 @@ fn handshake_request_uses_exact_model_url_and_bearer_auth_without_extra_intent()
 #[test]
 fn empty_api_key_is_rejected_before_any_network_connection() {
     let api_key = SecretString::from("   ".to_string());
-    assert!(
-        openai_websocket_request(OpenAiTranscriptionModel::GptLiveTranscribe, &api_key).is_err()
-    );
+    assert!(openai_websocket_request(&api_key).is_err());
 }
 
 #[test]

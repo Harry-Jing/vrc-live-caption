@@ -27,10 +27,11 @@ microphone
   -> App and VRChat Chatbox output
 ```
 
-This implementation has deterministic protocol and runtime coverage, but it is
-not yet a completed Phase 4 product path: authenticated OpenAI behavior and a
-Windows/VRChat session still need validation. Implementation status and what
-comes next live in [roadmap.md](./roadmap.md).
+This implementation has deterministic protocol and runtime coverage, and both
+OpenAI models have passed an authenticated production-adapter smoke. It is not
+yet a completed Phase 4 product path: the Windows/VRChat and real-microphone
+paths still need validation. Implementation status and what comes next live in
+[roadmap.md](./roadmap.md).
 
 ## User choices
 

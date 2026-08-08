@@ -8,7 +8,7 @@ use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppError, AppResult};
 use crate::host_resolver::HostResolver;
 use crate::openai_realtime::{
-    OpenAiRealtimeSession, OpenAiRealtimeSessionContext, RealtimeTransport, realtime_websocket_url,
+    OpenAiRealtimeSession, OpenAiRealtimeSessionContext, RealtimeTransport,
 };
 use crate::recognition::RecognitionSession;
 use secrecy::{ExposeSecret, SecretString};
@@ -28,6 +28,8 @@ use tungstenite::{
 mod system_proxy;
 
 const HANDSHAKE_IO_TIMEOUT: Duration = Duration::from_secs(10);
+const OPENAI_REALTIME_TRANSCRIPTION_WEBSOCKET_URL: &str =
+    "wss://api.openai.com/v1/realtime?intent=transcription";
 const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const SOCKET_READ_POLL_TIMEOUT: Duration = Duration::from_millis(2);
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -48,12 +50,11 @@ impl OpenAiWebSocketTransport {
     /// system HTTP proxy when required. Redirects are disabled so the
     /// Authorization header can never be forwarded to a different origin.
     pub(crate) fn connect(
-        model: OpenAiTranscriptionModel,
         api_key: &SecretString,
         resolver: &HostResolver,
         is_cancelled: &dyn Fn() -> bool,
     ) -> AppResult<Self> {
-        let request = openai_websocket_request(model, api_key)?;
+        let request = openai_websocket_request(api_key)?;
         let tcp = system_proxy::connect_with_system_proxy(&request, resolver, is_cancelled)?;
         if is_cancelled() {
             let _ = tcp.shutdown(Shutdown::Both);
@@ -100,7 +101,7 @@ pub(crate) fn connect_openai_realtime_session(
     resolver: &HostResolver,
     is_cancelled: &dyn Fn() -> bool,
 ) -> AppResult<OpenAiRealtimeSession<OpenAiWebSocketTransport>> {
-    let transport = OpenAiWebSocketTransport::connect(model, api_key, resolver, is_cancelled)?;
+    let transport = OpenAiWebSocketTransport::connect(api_key, resolver, is_cancelled)?;
     let mut session = OpenAiRealtimeSession::connect(context, model, languages, transport)?;
     let deadline = Instant::now() + SESSION_READY_TIMEOUT;
     while !session.is_ready() {
@@ -193,18 +194,17 @@ impl RealtimeTransport for OpenAiWebSocketTransport {
     }
 }
 
-fn openai_websocket_request(
-    model: OpenAiTranscriptionModel,
-    api_key: &SecretString,
-) -> AppResult<Request> {
+fn openai_websocket_request(api_key: &SecretString) -> AppResult<Request> {
     if api_key.expose_secret().trim().is_empty() {
         return Err(AppError::secret("OpenAI API key cannot be empty."));
     }
-    let uri = realtime_websocket_url(model).parse().map_err(|error| {
-        AppError::stt(format!(
-            "Failed to build the OpenAI Realtime WebSocket URI: {error}"
-        ))
-    })?;
+    let uri = OPENAI_REALTIME_TRANSCRIPTION_WEBSOCKET_URL
+        .parse()
+        .map_err(|error| {
+            AppError::stt(format!(
+                "Failed to build the OpenAI Realtime WebSocket URI: {error}"
+            ))
+        })?;
     ClientRequestBuilder::new(uri)
         .with_header(
             "Authorization",

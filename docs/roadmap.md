@@ -63,7 +63,7 @@ test-only rather than a product provider.
 
 ## Phase 4: OpenAI Realtime recognition cutover
 
-Status: implementation complete; authenticated OpenAI and Windows/VRChat
+Status: implementation and authenticated adapter smoke complete; Windows/VRChat
 validation pending.
 
 Goal: replace the bounded OpenAI implementation with the complete release
@@ -88,17 +88,17 @@ Implemented:
 - invalid legacy settings block Start until the current strict configuration is
   reviewed and saved, while malformed or unsupported selected environment,
   Windows, or macOS proxy settings fail closed rather than allowing a direct
-  connection; and
+  connection;
+- an authenticated production-adapter smoke covers both exact models with
+  Chinese, English, and mixed-language audio plus a provider-error probe; it
+  exposed and verified fixes for the transcription-intent route and rustls
+  crypto-provider selection; and
 - the production Mock selection, bounded HTTP/WAV Adapter, old model fields,
   and otherwise-unused direct HTTP/WAV dependencies are removed with no
   fallback branch.
 
 Remaining before exit:
 
-- run a paid authenticated smoke for both exact models and retain redacted,
-  timestamped evidence for session update, append, commit, delta/completion,
-  provider error, and disconnect behavior
-  ([research](./research/openai-speech-streaming-options.md));
 - validate the native system-proxy route and cancellation/Stop behavior on the
   Windows Tier 1 path; and
 - run short, long uninterrupted, English, Chinese, mixed-language, network
