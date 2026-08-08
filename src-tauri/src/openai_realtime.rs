@@ -17,6 +17,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
 
 pub(crate) const OPENAI_REALTIME_WEBSOCKET_BASE_URL: &str = "wss://api.openai.com/v1/realtime";
 const PROVIDER_NAME: &str = "openai";
@@ -28,7 +29,7 @@ const MAX_SERVER_FRAMES_PER_DRAIN: usize = 64;
 const MAX_SATURATED_DRAINS_AFTER_DEADLINE: u8 = 2;
 const MAX_TRANSCRIPT_BYTES_PER_TURN: usize = 256 * 1024;
 const MAX_PENDING_TRANSCRIPT_BYTES: usize = 1024 * 1024;
-const ITEM_COMPLETION_TIMEOUT_MS: u64 = 30_000;
+const ITEM_COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) fn realtime_websocket_url(model: OpenAiTranscriptionModel) -> String {
     format!(
@@ -60,6 +61,28 @@ pub(crate) trait RealtimeTransport: Send {
     fn close(&mut self) -> AppResult<()>;
 }
 
+trait MonotonicClock: Send {
+    fn now(&self) -> Duration;
+}
+
+struct InstantClock {
+    origin: Instant,
+}
+
+impl InstantClock {
+    fn start() -> Self {
+        Self {
+            origin: Instant::now(),
+        }
+    }
+}
+
+impl MonotonicClock for InstantClock {
+    fn now(&self) -> Duration {
+        self.origin.elapsed()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OpenAiRealtimeSessionContext {
     pub(crate) generation: u64,
@@ -73,7 +96,7 @@ struct RecognitionTurn {
     revision: u64,
     live_text: String,
     terminal: Option<TurnTerminal>,
-    completion_wait_started_at_ms: Option<u64>,
+    completion_wait_started_at: Option<Duration>,
 }
 
 struct CaptionEmission {
@@ -134,6 +157,7 @@ pub(crate) struct OpenAiRealtimeSession<T: RealtimeTransport> {
     ready_events: VecDeque<RecognitionEvent>,
     recent_finished_items: VecDeque<String>,
     saturated_drains_after_deadline: u8,
+    clock: Box<dyn MonotonicClock>,
 }
 
 impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
@@ -142,6 +166,22 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
         model: OpenAiTranscriptionModel,
         languages: Vec<String>,
         transport: T,
+    ) -> AppResult<Self> {
+        Self::connect_with_clock(
+            context,
+            model,
+            languages,
+            transport,
+            Box::new(InstantClock::start()),
+        )
+    }
+
+    fn connect_with_clock(
+        context: OpenAiRealtimeSessionContext,
+        model: OpenAiTranscriptionModel,
+        languages: Vec<String>,
+        transport: T,
+        clock: Box<dyn MonotonicClock>,
     ) -> AppResult<Self> {
         if context.stream_id.trim().is_empty() {
             return Err(AppError::stt(
@@ -167,6 +207,7 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
             ready_events: VecDeque::new(),
             recent_finished_items: VecDeque::new(),
             saturated_drains_after_deadline: 0,
+            clock,
         };
         let update = session_update(model, &session.languages, session.context.generation);
         session.send_client_event(update)?;
@@ -593,7 +634,7 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
         }
     }
 
-    fn expire_overdue_committed_turns(&mut self, received_at_ms: u64) -> AppResult<()> {
+    fn expire_overdue_committed_turns(&mut self, now: Duration) -> AppResult<()> {
         let mut expired = Vec::new();
         for sequence in self.committed_order.iter().copied() {
             let Some(turn) = self.turns.get_mut(&sequence) else {
@@ -602,16 +643,16 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
             if turn.terminal.is_some() {
                 continue;
             }
-            let Some(wait_started_at_ms) = turn.completion_wait_started_at_ms else {
+            let Some(wait_started_at) = turn.completion_wait_started_at else {
                 continue;
             };
-            if received_at_ms.saturating_sub(wait_started_at_ms) < ITEM_COMPLETION_TIMEOUT_MS {
+            if now.saturating_sub(wait_started_at) < ITEM_COMPLETION_TIMEOUT {
                 continue;
             }
             if turn.provider_item_id.is_none() {
                 return Err(AppError::stt_network(format!(
                     "OpenAI Realtime did not acknowledge a committed audio item within {} seconds; reconnect before sending more audio.",
-                    ITEM_COMPLETION_TIMEOUT_MS / 1_000
+                    ITEM_COMPLETION_TIMEOUT.as_secs()
                 )));
             }
             expired.push(sequence);
@@ -622,34 +663,20 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
                 sequence,
                 format!(
                     "OpenAI Realtime did not complete one recognition item within {} seconds.",
-                    ITEM_COMPLETION_TIMEOUT_MS / 1_000
+                    ITEM_COMPLETION_TIMEOUT.as_secs()
                 ),
             )?;
         }
         Ok(())
     }
 
-    fn arm_completion_waits(&mut self, received_at_ms: u64) {
-        for sequence in &self.committed_order {
-            if let Some(turn) = self.turns.get_mut(sequence)
-                && turn.terminal.is_none()
-                && turn.completion_wait_started_at_ms.is_none()
-            {
-                turn.completion_wait_started_at_ms = Some(received_at_ms);
-            }
-        }
-    }
-
-    fn has_overdue_committed_turn(&self, received_at_ms: u64) -> bool {
+    fn has_overdue_committed_turn(&self, now: Duration) -> bool {
         self.committed_order.iter().copied().any(|sequence| {
             self.turns.get(&sequence).is_some_and(|turn| {
                 turn.terminal.is_none()
-                    && turn
-                        .completion_wait_started_at_ms
-                        .is_some_and(|started_at_ms| {
-                            received_at_ms.saturating_sub(started_at_ms)
-                                >= ITEM_COMPLETION_TIMEOUT_MS
-                        })
+                    && turn.completion_wait_started_at.is_some_and(|started_at| {
+                        now.saturating_sub(started_at) >= ITEM_COMPLETION_TIMEOUT
+                    })
             })
         })
     }
@@ -722,7 +749,7 @@ impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
                 revision: 0,
                 live_text: String::new(),
                 terminal: None,
-                completion_wait_started_at_ms: None,
+                completion_wait_started_at: None,
             },
         );
         self.active_sequence = Some(sequence);
@@ -761,6 +788,12 @@ impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
             "type": "input_audio_buffer.commit",
         }))?;
 
+        let wait_started_at = self.clock.now();
+        let turn = self
+            .turns
+            .get_mut(&sequence)
+            .ok_or_else(|| AppError::stt("OpenAI committed an unknown local recognition unit."))?;
+        turn.completion_wait_started_at = Some(wait_started_at);
         self.active_sequence = None;
         self.committed_order.push_back(sequence);
         self.release_completed_in_order();
@@ -771,7 +804,6 @@ impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
         if self.stopped {
             return Ok(Vec::new());
         }
-        self.arm_completion_waits(received_at_ms);
         let mut transport_drained = false;
         for _ in 0..MAX_SERVER_FRAMES_PER_DRAIN {
             let Some(message) = self.transport.try_receive_text()? else {
@@ -780,15 +812,16 @@ impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
             };
             self.handle_server_message(&message, received_at_ms)?;
         }
+        let now = self.clock.now();
         if transport_drained {
             self.saturated_drains_after_deadline = 0;
-            self.expire_overdue_committed_turns(received_at_ms)?;
-        } else if self.has_overdue_committed_turn(received_at_ms) {
+            self.expire_overdue_committed_turns(now)?;
+        } else if self.has_overdue_committed_turn(now) {
             self.saturated_drains_after_deadline =
                 self.saturated_drains_after_deadline.saturating_add(1);
             if self.saturated_drains_after_deadline >= MAX_SATURATED_DRAINS_AFTER_DEADLINE {
                 self.saturated_drains_after_deadline = 0;
-                self.expire_overdue_committed_turns(received_at_ms)?;
+                self.expire_overdue_committed_turns(now)?;
             }
         } else {
             self.saturated_drains_after_deadline = 0;

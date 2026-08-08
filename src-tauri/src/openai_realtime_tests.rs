@@ -6,6 +6,7 @@ use crate::recognition::{
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Default)]
@@ -81,6 +82,28 @@ impl RealtimeTransport for FakeTransport {
     }
 }
 
+#[derive(Clone, Default)]
+struct ManualClock {
+    elapsed_ms: Arc<AtomicU64>,
+}
+
+impl ManualClock {
+    fn advance_ms(&self, elapsed_ms: u64) -> AppResult<()> {
+        self.elapsed_ms
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                current.checked_add(elapsed_ms)
+            })
+            .map(|_| ())
+            .map_err(|_| AppError::state("Manual monotonic clock exceeded its supported range."))
+    }
+}
+
+impl MonotonicClock for ManualClock {
+    fn now(&self) -> Duration {
+        Duration::from_millis(self.elapsed_ms.load(Ordering::SeqCst))
+    }
+}
+
 fn session(
     model: OpenAiTranscriptionModel,
     languages: &[&str],
@@ -96,6 +119,29 @@ fn session(
         transport,
     )?;
     Ok((session, probe))
+}
+
+fn session_with_manual_clock(
+    model: OpenAiTranscriptionModel,
+    languages: &[&str],
+) -> AppResult<(
+    OpenAiRealtimeSession<FakeTransport>,
+    FakeTransportProbe,
+    ManualClock,
+)> {
+    let (transport, probe) = FakeTransport::new();
+    let clock = ManualClock::default();
+    let session = OpenAiRealtimeSession::connect_with_clock(
+        OpenAiRealtimeSessionContext {
+            generation: 7,
+            stream_id: "recognition-7-1".to_string(),
+        },
+        model,
+        languages.iter().map(|value| (*value).to_string()).collect(),
+        transport,
+        Box::new(clock.clone()),
+    )?;
+    Ok((session, probe, clock))
 }
 
 fn start_unit(
@@ -574,7 +620,8 @@ fn failed_first_item_ends_explicitly_then_releases_the_completed_second_item() -
 
 #[test]
 fn a_timed_out_item_ends_explicitly_and_releases_later_completed_items() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let (mut session, probe, clock) =
+        session_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
     start_unit(&mut session, "unit-a", 100)?;
     session.end_input()?;
     start_unit(&mut session, "unit-b", 200)?;
@@ -584,12 +631,10 @@ fn a_timed_out_item_ends_explicitly_and_releases_later_completed_items() -> AppR
     probe.push_server_event(transcript_completed("item-b", "second"))?;
 
     assert!(session.drain_events(1_000)?.is_empty());
-    assert!(
-        session
-            .drain_events(1_000 + ITEM_COMPLETION_TIMEOUT_MS - 1)?
-            .is_empty()
-    );
-    let events = session.drain_events(1_000 + ITEM_COMPLETION_TIMEOUT_MS)?;
+    clock.advance_ms(29_999)?;
+    assert!(session.drain_events(1_001)?.is_empty());
+    clock.advance_ms(1)?;
+    let events = session.drain_events(1_002)?;
 
     assert!(matches!(
         events.first(),
@@ -608,14 +653,50 @@ fn a_timed_out_item_ends_explicitly_and_releases_later_completed_items() -> AppR
 }
 
 #[test]
+fn wall_clock_jump_forward_does_not_expire_a_committed_item() -> AppResult<()> {
+    let (mut session, probe, _clock) =
+        session_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut session, "unit-a", 100)?;
+    session.end_input()?;
+    probe.push_server_event(buffer_committed("item-a"))?;
+
+    assert!(session.drain_events(1_000)?.is_empty());
+    assert!(session.drain_events(u64::MAX)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn wall_clock_jump_backward_does_not_delay_a_committed_item_timeout() -> AppResult<()> {
+    let (mut session, probe, clock) =
+        session_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut session, "unit-a", 100)?;
+    session.end_input()?;
+    probe.push_server_event(buffer_committed("item-a"))?;
+
+    assert!(session.drain_events(u64::MAX)?.is_empty());
+    clock.advance_ms(30_000)?;
+    let events = session.drain_events(0)?;
+    assert!(matches!(
+        events.as_slice(),
+        [RecognitionEvent::UnitEnded {
+            unit_id,
+            reason: RecognitionEndReason::Failed { detail },
+            ..
+        }] if unit_id == "unit-a" && detail.contains("did not complete")
+    ));
+    Ok(())
+}
+
+#[test]
 fn an_unacknowledged_commit_times_out_instead_of_misbinding_a_later_item() -> AppResult<()> {
-    let (mut session, _probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let (mut session, _probe, clock) =
+        session_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
     start_unit(&mut session, "unit-a", 100)?;
     session.end_input()?;
 
-    assert!(session.drain_events(1_000)?.is_empty());
+    clock.advance_ms(30_000)?;
     let error = session
-        .drain_events(1_000 + ITEM_COMPLETION_TIMEOUT_MS)
+        .drain_events(1_000)
         .err()
         .ok_or_else(|| AppError::state("An unacknowledged commit never timed out."))?;
 
@@ -626,7 +707,8 @@ fn an_unacknowledged_commit_times_out_instead_of_misbinding_a_later_item() -> Ap
 
 #[test]
 fn a_saturated_provider_stream_cannot_postpone_an_overdue_item_forever() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let (mut session, probe, clock) =
+        session_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
     start_unit(&mut session, "unit-a", 100)?;
     session.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
@@ -635,12 +717,9 @@ fn a_saturated_provider_stream_cannot_postpone_an_overdue_item_forever() -> AppR
     for _ in 0..(MAX_SERVER_FRAMES_PER_DRAIN * 2) {
         probe.push_server_event(json!({ "type": "provider.keepalive" }))?;
     }
-    assert!(
-        session
-            .drain_events(1_000 + ITEM_COMPLETION_TIMEOUT_MS)?
-            .is_empty()
-    );
-    let events = session.drain_events(1_001 + ITEM_COMPLETION_TIMEOUT_MS)?;
+    clock.advance_ms(30_000)?;
+    assert!(session.drain_events(1_001)?.is_empty());
+    let events = session.drain_events(1_002)?;
 
     assert!(matches!(
         events.as_slice(),
