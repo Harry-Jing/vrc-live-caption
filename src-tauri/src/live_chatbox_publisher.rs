@@ -657,7 +657,7 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
         return Ok(());
     };
 
-    let _output = shared
+    let output_guard = shared
         .output_gate
         .lock()
         .map_err(|_| AppError::state("Live publisher output gate was poisoned."))?;
@@ -697,6 +697,8 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
         }
     })?;
     if !committed {
+        drop(output_guard);
+        thread::yield_now();
         return Ok(());
     }
 
@@ -749,7 +751,7 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
 }
 
 fn process_typing(shared: &LivePublisherShared, epoch: u64, is_typing: bool) -> AppResult<()> {
-    let _output = shared
+    let output_guard = shared
         .output_gate
         .lock()
         .map_err(|_| AppError::state("Live publisher output gate was poisoned."))?;
@@ -771,6 +773,8 @@ fn process_typing(shared: &LivePublisherShared, epoch: u64, is_typing: bool) -> 
         transport_result = Some(shared.transport.send_typing(is_typing));
     })?;
     if !committed {
+        drop(output_guard);
+        thread::yield_now();
         return Ok(());
     }
 

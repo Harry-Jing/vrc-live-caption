@@ -132,6 +132,9 @@ impl OscTransport for UdpOscTransport {
     fn send_packet(&self, packet: &OscPacket) -> AppResult<usize> {
         let packet_bytes =
             encoder::encode(packet).map_err(|error| AppError::osc_encode(error.to_string()))?;
+        // Nonblocking UDP keeps Stop bounded under kernel backpressure. A
+        // WouldBlock is an accepted send loss: Completed publication discards
+        // the rest of that unit, while Live waits for a newer revision.
         let sent = self
             .socket
             .send_to(&packet_bytes, self.target_address)

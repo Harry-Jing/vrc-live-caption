@@ -697,6 +697,7 @@ fn process_typing(shared: &PublisherShared, epoch: u64, is_typing: bool) -> AppR
     }
 
     if !committed {
+        thread::yield_now();
         return Ok(());
     }
 
