@@ -168,6 +168,7 @@ microphone is opened.
 | Semantic concept | Tauri event | Meaning |
 |---|---|---|
 | `runtime.status` | `runtime-status` | `idle`, `starting`, `running`, `reconnecting`, `stopping`, `stopped`, or `error` |
+| `runtime.control.changed` | `runtime-control-changed` | the newest revisioned, redacted `RuntimeControlSnapshot` after an authoritative control change |
 | `caption.session.changed` | `caption-session-changed` | the newest full `CaptionSessionSnapshotV1` aggregate |
 | `audio.level` | `audio-level` | generation/revision-scoped 100 ms RMS/peak/gate/clipping scalars; never PCM |
 | `diagnostic` | `diagnostic-event` | categorized report with a stable code ([ADR 0014](./adr/0014-diagnostic-codes-are-category-detail.md)) |
@@ -179,10 +180,12 @@ caption-session `activeUnits`; recognition failures remain visible through
 diagnostics.
 
 The Diagnostics page can copy a versioned, redacted JSON report containing
-only app metadata, the latest runtime status, and the bounded in-memory
-diagnostic events. Caption text, configuration, and provider-secret status are
-not report inputs. Clipboard access is write-only, and the App does not create
-or retain a report file.
+only app metadata, a normalized platform family, runtime status and timestamp,
+and each bounded diagnostic's category, severity, stable code, and timestamp.
+The report is built through an explicit field allowlist: caption text,
+diagnostic messages and details, configuration, device identifiers, network
+targets, paths, and provider-secret status are not serialized. Clipboard
+access is write-only, and the App does not create or retain a report file.
 
 Rust owns one versioned caption-session aggregate,
 `CaptionSessionSnapshotV1`: a monotonic aggregate revision, backend-assigned
