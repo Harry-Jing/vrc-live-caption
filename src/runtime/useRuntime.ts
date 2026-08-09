@@ -53,6 +53,10 @@ function normalizeError(error: unknown) {
   return uiText("runtime.errors.unknownAction");
 }
 
+function assertUnreachableRuntimeCommand(command: never): never {
+  throw new Error(`Unsupported runtime command: ${String(command)}`);
+}
+
 // One busy/error scope per action domain, so a slow settings save cannot
 // disable runtime controls or surface its error on an unrelated page.
 function createActionState() {
@@ -331,10 +335,16 @@ export function useRuntime() {
 
     try {
       const commandSucceeded = await runtimeAction.run(async () => {
-        if (command === "start_runtime" || command === "stop_runtime") {
-          await runLifecycleCommand(command);
-        } else {
-          await backend.sendOscTestMessage();
+        switch (command) {
+          case "start_runtime":
+          case "stop_runtime":
+            await runLifecycleCommand(command);
+            break;
+          case "send_osc_test_message":
+            await backend.sendOscTestMessage();
+            break;
+          default:
+            assertUnreachableRuntimeCommand(command);
         }
       });
 
