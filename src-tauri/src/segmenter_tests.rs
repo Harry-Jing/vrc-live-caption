@@ -485,19 +485,22 @@ fn silent_remainder_after_the_max_becomes_preroll_for_later_voice() {
 }
 
 #[test]
-fn finish_marks_only_an_announced_tail_as_discarded() {
+fn discard_open_tail_marks_only_an_announced_tail_as_discarded() {
     let mut accepted = segmenter(0.2, 2.0, NO_PREROLL);
     accepted.push_samples(vec![0.2, 0.2], Instant::now());
-    assert!(accepted.finish().speech_ended);
+    assert!(accepted.discard_open_tail().speech_ended);
 
     let mut candidate = segmenter(0.3, 2.0, NO_PREROLL);
     candidate.push_samples(vec![0.2, 0.2], Instant::now());
-    assert_eq!(candidate.finish(), SegmenterUpdate::default());
+    assert_eq!(candidate.discard_open_tail(), SegmenterUpdate::default());
 
     let mut pending_continuation = segmenter(0.3, 0.3, NO_PREROLL);
     let now = Instant::now();
     pending_continuation.push_samples(vec![0.2, 0.2, 0.2], now);
-    assert_eq!(pending_continuation.finish(), SegmenterUpdate::default());
+    assert_eq!(
+        pending_continuation.discard_open_tail(),
+        SegmenterUpdate::default()
+    );
     assert!(
         pending_continuation
             .push_samples(vec![0.3], now + Duration::from_millis(10))
@@ -506,7 +509,7 @@ fn finish_marks_only_an_announced_tail_as_discarded() {
 }
 
 #[test]
-fn finish_discards_a_partial_analysis_frame_without_carrying_it_forward() {
+fn discard_open_tail_drops_a_partial_analysis_frame_without_carrying_it_forward() {
     let mut segmenter = SpeechSegmenter::new(
         1_000,
         0.1,
@@ -518,7 +521,7 @@ fn finish_discards_a_partial_analysis_frame_without_carrying_it_forward() {
     let now = Instant::now();
 
     assert!(segmenter.push_samples(vec![0.2; 9], now).is_empty());
-    assert_eq!(segmenter.finish(), SegmenterUpdate::default());
+    assert_eq!(segmenter.discard_open_tail(), SegmenterUpdate::default());
 
     assert!(
         segmenter

@@ -6,7 +6,7 @@ pub(super) fn system_proxy_matcher(no_proxy: Option<String>) -> AppResult<Matche
     // connection. The individual Internet Settings registry values do not
     // provide an equivalent, reliable WPAD signal.
     let config = winhttp::get_ie_proxy_config().map_err(|error| {
-        AppError::stt_network(format!(
+        AppError::stt_network_terminal(format!(
             "Windows current-connection proxy settings could not be read; refusing a direct OpenAI connection: {error}"
         ))
     })?;
@@ -38,7 +38,7 @@ fn matcher_for_settings(
         .as_deref()
         .is_some_and(|url| !url.trim().is_empty());
     if selected_pac || settings.auto_detect {
-        return Err(AppError::stt_network(
+        return Err(AppError::stt_network_terminal(
             "Windows selected PAC or automatic proxy discovery, which is not supported for OpenAI Realtime; configure a manual HTTP CONNECT proxy.",
         ));
     }
@@ -60,7 +60,7 @@ fn matcher_for_proxy_server(proxy_server: &str, no_proxy: Option<&str>) -> AppRe
 fn https_proxy(proxy_server: &str) -> AppResult<Option<String>> {
     let proxy_server = proxy_server.trim();
     if proxy_server.is_empty() {
-        return Err(AppError::stt_network(
+        return Err(AppError::stt_network_terminal(
             "Windows has a system proxy enabled but ProxyServer is empty.",
         ));
     }
@@ -77,20 +77,20 @@ fn https_proxy(proxy_server: &str) -> AppResult<Option<String>> {
     let mut socks_proxy = None;
     for entry in proxy_list_entries(proxy_server) {
         let (protocol, proxy) = entry.split_once('=').ok_or_else(|| {
-            AppError::stt_network(format!(
+            AppError::stt_network_terminal(format!(
                 "Windows ProxyServer contains an invalid protocol entry: {entry}."
             ))
         })?;
         let proxy = proxy.trim();
         if proxy.is_empty() {
-            return Err(AppError::stt_network(format!(
+            return Err(AppError::stt_network_terminal(format!(
                 "Windows ProxyServer has an empty {protocol} proxy address."
             )));
         }
         match protocol.trim().to_ascii_lowercase().as_str() {
             "https" => {
                 if https_proxy.replace(proxy.to_string()).is_some() {
-                    return Err(AppError::stt_network(
+                    return Err(AppError::stt_network_terminal(
                         "Windows ProxyServer contains more than one HTTPS proxy.",
                     ));
                 }
@@ -103,7 +103,7 @@ fn https_proxy(proxy_server: &str) -> AppResult<Option<String>> {
         return Ok(Some(proxy));
     }
     if socks_proxy.is_some() {
-        return Err(AppError::stt_network(
+        return Err(AppError::stt_network_terminal(
             "Windows selected a SOCKS system proxy, which is not supported for OpenAI Realtime; use an HTTP CONNECT proxy.",
         ));
     }

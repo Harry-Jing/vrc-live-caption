@@ -215,7 +215,7 @@ impl SpeechSegmenter {
     }
 
     /// Discards an open tail instead of committing it during Stop or failure.
-    pub(crate) fn finish(&mut self) -> SegmenterUpdate {
+    pub(crate) fn discard_open_tail(&mut self) -> SegmenterUpdate {
         let update = SegmenterUpdate {
             speech_ended: self.speech_announced,
             ..SegmenterUpdate::default()

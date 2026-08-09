@@ -191,7 +191,7 @@ fn error_codes_share_the_prefix_of_their_diagnostic_category() {
         AppError::stt("x"),
         AppError::stt_provider(ProviderFailureClass::Unknown, "x"),
         AppError::stt_backpressure("x"),
-        AppError::stt_network("x"),
+        AppError::stt_network_terminal("x"),
     ];
 
     for error in errors {

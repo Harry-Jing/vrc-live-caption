@@ -104,7 +104,7 @@ fn open_websocket_until(
         return Err(handshake_timeout_error());
     }
     tcp.set_nonblocking(true).map_err(|error| {
-        AppError::stt_network(format!(
+        AppError::stt_network_terminal(format!(
             "Failed to configure cancellable OpenAI Realtime handshake I/O: {error}"
         ))
     })?;
@@ -185,7 +185,7 @@ pub(crate) fn connect_openai_realtime_session(
 }
 
 fn startup_cancelled_error() -> AppError {
-    AppError::stt_network("OpenAI Realtime connection was cancelled during startup.")
+    AppError::stt_network_terminal("OpenAI Realtime connection was cancelled during startup.")
 }
 
 impl RealtimeTransport for OpenAiWebSocketTransport {
@@ -245,7 +245,7 @@ impl RealtimeTransport for OpenAiWebSocketTransport {
         }
         self.closed = true;
         shutdown_socket(self.socket.get_mut()).map_err(|error| {
-            AppError::stt_network(format!(
+            AppError::stt_network_terminal(format!(
                 "Failed to shut down the OpenAI Realtime socket: {error}"
             ))
         })
@@ -315,7 +315,7 @@ fn configure_read_poll_timeout(stream: &mut MaybeTlsStream<TcpStream>) -> AppRes
         )),
     };
     result.map_err(|error| {
-        AppError::stt_network(format!(
+        AppError::stt_network_terminal(format!(
             "Failed to configure the OpenAI Realtime socket: {error}"
         ))
     })
@@ -391,7 +391,7 @@ fn map_socket_error(context: &str, error: WebSocketError) -> AppError {
             AppError::stt_network_retryable(format!("{context}: {error}"))
         }
         WebSocketError::Io(_) | WebSocketError::Tls(_) | WebSocketError::Url(_) => {
-            AppError::stt_network(format!("{context}: {error}"))
+            AppError::stt_network_terminal(format!("{context}: {error}"))
         }
         other => AppError::stt(format!("{context}: {other}")),
     }

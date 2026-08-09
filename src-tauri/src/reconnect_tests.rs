@@ -9,7 +9,7 @@ fn terminal_failures_never_enter_the_reconnect_loop() {
     assert_eq!(supervisor.begin_connection_attempt(), 1);
     assert_eq!(
         supervisor.on_failure(
-            &AppError::stt_network("Invalid proxy configuration."),
+            &AppError::stt_network_terminal("Invalid proxy configuration."),
             None,
             100,
         ),

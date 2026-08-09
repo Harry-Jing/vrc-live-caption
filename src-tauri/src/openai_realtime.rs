@@ -11,7 +11,7 @@ use crate::error::{AppError, AppResult, ProviderFailureClass};
 use crate::recognition::{
     RecognitionAudioChunk, RecognitionEndReason, RecognitionEvent, RecognitionSession,
 };
-use crate::recognition_audio::RealtimePcm16Encoder;
+use crate::recognition_audio::{REALTIME_PCM_SAMPLE_RATE_HZ, RealtimePcm16Encoder};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Deserialize;
@@ -203,7 +203,7 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
         self.ready
     }
 
-    fn ensure_running(&self) -> AppResult<()> {
+    fn ensure_not_stopped(&self) -> AppResult<()> {
         if self.stopped {
             Err(AppError::stt(
                 "Realtime recognition session has already stopped.",
@@ -483,7 +483,7 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
         if let Some(turn) = self.turns.get_mut(&sequence) {
             turn.terminal = Some(terminal);
         }
-        self.release_completed_in_order();
+        self.release_terminal_turns_in_order();
         Ok(())
     }
 
@@ -504,7 +504,7 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
         if turn.terminal.is_none() {
             turn.terminal = Some(TurnTerminal::Ended(RecognitionEndReason::Failed { detail }));
         }
-        self.release_completed_in_order();
+        self.release_terminal_turns_in_order();
         Ok(())
     }
 
@@ -591,7 +591,7 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
         })
     }
 
-    fn release_completed_in_order(&mut self) {
+    fn release_terminal_turns_in_order(&mut self) {
         while let Some(sequence) = self.committed_order.front().copied() {
             let is_terminal = self
                 .turns
@@ -707,7 +707,7 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
 
 impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
     fn start_unit(&mut self, unit_id: String, started_at_ms: u64) -> AppResult<RecognitionEvent> {
-        self.ensure_running()?;
+        self.ensure_not_stopped()?;
         if self.active_sequence.is_some() {
             return Err(AppError::stt(
                 "Cannot start a Realtime recognition unit before committing the active unit.",
@@ -756,7 +756,7 @@ impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
     }
 
     fn append_audio(&mut self, audio: RecognitionAudioChunk<'_>) -> AppResult<()> {
-        self.ensure_running()?;
+        self.ensure_not_stopped()?;
         if self.active_sequence.is_none() {
             return Err(AppError::stt(
                 "Cannot append Realtime audio without an active recognition unit.",
@@ -769,7 +769,7 @@ impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
     }
 
     fn end_input(&mut self) -> AppResult<()> {
-        self.ensure_running()?;
+        self.ensure_not_stopped()?;
         let sequence = self.active_sequence.ok_or_else(|| {
             AppError::stt("Cannot commit Realtime audio without an active recognition unit.")
         })?;
@@ -792,7 +792,7 @@ impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
         turn.completion_wait_started_at = Some(wait_started_at);
         self.active_sequence = None;
         self.committed_order.push_back(sequence);
-        self.release_completed_in_order();
+        self.release_terminal_turns_in_order();
         Ok(())
     }
 
@@ -884,7 +884,7 @@ fn session_update(
                 "input": {
                     "format": {
                         "type": "audio/pcm",
-                        "rate": 24_000,
+                        "rate": REALTIME_PCM_SAMPLE_RATE_HZ,
                     },
                     "transcription": {
                         "model": model.as_str(),

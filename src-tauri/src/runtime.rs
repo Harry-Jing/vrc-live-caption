@@ -1176,7 +1176,7 @@ fn run_connected_openai_attempt<R: Runtime, S: RecognitionSession + 'static>(
 
     attempt.cancel();
     drop(stream);
-    let tail_speech_discarded = segmenter.finish().speech_ended;
+    let tail_speech_discarded = segmenter.discard_open_tail().speech_ended;
     drop(recognition_sender);
     let worker_result = recognition_worker
         .join()

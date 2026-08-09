@@ -170,7 +170,7 @@ impl AppError {
         }
     }
 
-    pub(crate) fn stt_network(message: impl Into<String>) -> Self {
+    pub(crate) fn stt_network_terminal(message: impl Into<String>) -> Self {
         Self::SttNetwork {
             message: message.into(),
             retry_disposition: RetryDisposition::Terminal,
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn network_error_serializes_with_actionable_stt_code() {
-        let error = AppError::stt_network(
+        let error = AppError::stt_network_terminal(
             "Could not reach OpenAI. Check your network connection or system proxy settings.",
         );
         let value = serde_json::to_value(&error).unwrap_or_else(|serialization_error| {
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn network_retryability_must_be_selected_explicitly() {
-        let terminal = AppError::stt_network("A proxy or TLS configuration is invalid.");
+        let terminal = AppError::stt_network_terminal("A proxy or TLS configuration is invalid.");
         let retryable = AppError::stt_network_retryable("The connection was reset.");
 
         assert_eq!(terminal.retry_disposition(), RetryDisposition::Terminal);
