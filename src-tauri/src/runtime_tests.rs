@@ -831,6 +831,40 @@ fn microphone_probe_lease_excludes_runtime_start_until_released() -> AppResult<(
 }
 
 #[test]
+fn production_segmenter_ends_an_announced_unit_after_1_2_seconds_without_input() {
+    let started_at = Instant::now();
+    let mut segmenter = new_recognition_segmenter(1_000);
+    let started = segmenter.push_samples(vec![0.02; 1_000], started_at);
+
+    assert!(started.iter().any(|update| update.speech_started));
+    assert!(
+        !segmenter
+            .tick(started_at + Duration::from_millis(1_199))
+            .speech_ended
+    );
+    assert!(
+        segmenter
+            .tick(started_at + Duration::from_millis(1_200))
+            .speech_ended
+    );
+}
+
+#[test]
+fn production_segmenter_hard_splits_continuous_speech_at_30_seconds() {
+    let started_at = Instant::now();
+    let mut segmenter = new_recognition_segmenter(1_000);
+
+    let before_boundary = segmenter.push_samples(vec![0.02; 29_990], started_at);
+    assert!(before_boundary.iter().any(|update| update.speech_started));
+    assert!(before_boundary.iter().all(|update| !update.speech_ended));
+
+    let boundary = segmenter.push_samples(vec![0.02; 10], started_at + Duration::from_millis(10));
+    assert_eq!(boundary.len(), 1);
+    assert_eq!(boundary[0].audio.len(), 10);
+    assert!(boundary[0].speech_ended);
+}
+
+#[test]
 fn one_capture_callback_dispatches_every_segmenter_update_in_order() -> AppResult<()> {
     let attempt = ConnectionAttemptCancelToken::default();
     let (sender, receiver) = sync_channel(4);

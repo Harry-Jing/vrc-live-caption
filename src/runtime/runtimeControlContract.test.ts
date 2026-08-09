@@ -117,6 +117,40 @@ describe("runtime control contract", () => {
     );
   });
 
+  test.each([
+    {
+      name: "an empty language-hint list",
+      languages: [] as string[],
+      path: "$.desired.config.stt.languages",
+    },
+    {
+      name: "a whitespace-only language hint",
+      languages: ["en", "   "],
+      path: "$.desired.config.stt.languages[1]",
+    },
+    {
+      name: "language hints duplicated with different casing",
+      languages: ["en", " EN "],
+      path: "$.desired.config.stt.languages",
+    },
+  ])("rejects $name", ({ languages, path }) => {
+    const payload = {
+      ...completePayload,
+      desired: {
+        ...completePayload.desired,
+        config: {
+          ...completePayload.desired.config,
+          stt: {
+            ...completePayload.desired.config.stt,
+            languages,
+          },
+        },
+      },
+    };
+
+    expect(() => decodeRuntimeControlSnapshotV3(payload)).toThrow(path);
+  });
+
   test("decodes an active session while its provider connection is reconnecting", () => {
     const payload = structuredClone(completePayload);
     payload.runtime.status = "reconnecting";

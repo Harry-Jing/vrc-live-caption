@@ -381,6 +381,47 @@ describe("runtime lifecycle state", () => {
     expect(state.runtimeStatus.status).toBe("running");
   });
 
+  test("clears a matching cancelled runtime status synchronization", () => {
+    let state = createRuntimeState(idle);
+    state = reduceRuntimeState(state, {
+      type: "runtimeStatusSyncStarted",
+      requestId: 7,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeStatusSyncCancelled",
+      requestId: 7,
+    });
+
+    expect(state.inFlightStatusSync).toBeNull();
+  });
+
+  test("keeps a newer runtime status synchronization after a stale cancellation", () => {
+    let state = createRuntimeState(idle);
+    state = reduceRuntimeState(state, {
+      type: "runtimeStatusSyncStarted",
+      requestId: 7,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeStatusSyncStarted",
+      requestId: 8,
+    });
+    state = reduceRuntimeState(state, {
+      type: "runtimeStatusSyncCancelled",
+      requestId: 7,
+    });
+
+    expect(state.inFlightStatusSync).toEqual({ requestId: 8 });
+
+    state = reduceRuntimeState(state, {
+      type: "runtimeStatusSyncCompleted",
+      requestId: 8,
+      controlRevision: 1,
+      snapshot: status("running", 10),
+    });
+    expect(state.runtimeStatus).toEqual(status("running", 10));
+    expect(state.inFlightStatusSync).toBeNull();
+  });
+
   test("ignores a failed duplicate Start attempt", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {

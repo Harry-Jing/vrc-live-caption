@@ -2,8 +2,12 @@ use super::{
     CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, fits_chatbox_width, grapheme_advance_units,
     is_break_space_grapheme, paginate_completed, render_live_viewport,
 };
+use proptest::prelude::*;
 use std::collections::HashSet;
 use unicode_segmentation::UnicodeSegmentation;
+
+const LAYOUT_PROPERTY_CASES: u32 = 64;
+const MAX_GENERATED_GRAPHEME_ATOMS: usize = 160;
 
 const CJK_135: &str = concat!(
     "中中中中中中中中中中中中中中中",
@@ -100,6 +104,41 @@ const TONED_EMOJI_9: &str = "👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽�
 const STANDALONE_SKIN_TONE_9: &str = "🏽 🏽 🏽 🏽 🏽 🏽 🏽 🏽 🏽";
 const ARABIC_9: &str = "ممممممممم";
 const WIDE_PUNCTUATION_9: &str = "⸻⸻⸻⸻⸻⸻⸻⸻⸻";
+
+fn representative_grapheme_text() -> impl Strategy<Value = String> {
+    let representable_atom = prop::sample::select(vec![
+        "a",
+        "W",
+        "中",
+        "語",
+        "e\u{301}",
+        "#\u{301}",
+        "👨‍👩‍👧‍👦",
+        "🧑‍💻",
+        "👍🏽",
+        "\n",
+        "\r\n",
+        "\u{2028}",
+        " ",
+        " \u{FE0F}",
+        "「",
+        "。",
+        "’",
+        "—",
+        "(",
+        ")",
+    ])
+    .prop_map(str::to_owned);
+    let oversized_grapheme = format!("e{}", "\u{301}".repeat(CHATBOX_MAX_UTF16_UNITS));
+    // Keep error inputs in the mix without crowding out successful Completed
+    // pagination, whose lossless partition invariants are the primary target.
+    let atom = prop_oneof![
+        511 => representable_atom,
+        1 => Just(oversized_grapheme),
+    ];
+
+    prop::collection::vec(atom, 0..=MAX_GENERATED_GRAPHEME_ATOMS).prop_map(|atoms| atoms.concat())
+}
 
 #[test]
 fn completed_layout_preserves_explicit_line_breaks() -> Result<(), String> {
@@ -556,4 +595,53 @@ fn live_viewport_rejects_an_unrepresentable_newest_grapheme() {
             utf16_units: CHATBOX_MAX_UTF16_UNITS + 1,
         })
     );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: LAYOUT_PROPERTY_CASES,
+        max_shrink_iters: 256,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn completed_pagination_is_lossless_bounded_nonempty_and_deterministic(
+        input in representative_grapheme_text(),
+    ) {
+        let first = paginate_completed(&input);
+        let second = paginate_completed(&input);
+
+        prop_assert_eq!(&first, &second);
+        match first {
+            Ok(pages) => {
+                prop_assert_eq!(pages.is_empty(), input.is_empty());
+                prop_assert!(pages.iter().all(|page| !page.is_empty()));
+                let every_page_is_within_budget = pages.iter().all(|page| {
+                    page.encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS
+                });
+                prop_assert!(every_page_is_within_budget);
+                prop_assert_eq!(pages.concat(), input);
+            }
+            Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units }) => {
+                prop_assert!(utf16_units > CHATBOX_MAX_UTF16_UNITS);
+                let contains_oversized_grapheme = input.graphemes(true).any(|grapheme| {
+                    grapheme.encode_utf16().count() > CHATBOX_MAX_UTF16_UNITS
+                });
+                prop_assert!(contains_oversized_grapheme);
+            }
+        }
+    }
+
+    #[test]
+    fn live_viewport_is_bounded_and_deterministic(
+        input in representative_grapheme_text(),
+    ) {
+        let first = render_live_viewport(&input);
+        let second = render_live_viewport(&input);
+
+        prop_assert_eq!(&first, &second);
+        if let Ok(viewport) = first {
+            prop_assert!(viewport.encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS);
+        }
+    }
 }

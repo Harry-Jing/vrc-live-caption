@@ -61,6 +61,24 @@ fn transient_failures_back_off_with_a_cap_and_monotonic_connection_epochs() {
 }
 
 #[test]
+fn maximum_jitter_cannot_push_saturated_backoff_past_the_delay_cap() {
+    let mut supervisor = ReconnectSupervisor::default();
+    let transient = AppError::stt_network_retryable("Connection reset.");
+
+    for _ in 0..6 {
+        let _ = supervisor.on_failure(&transient, None, 120);
+    }
+
+    assert_eq!(
+        supervisor.on_failure(&transient, None, 120),
+        ReconnectDecision::Retry {
+            attempt: 7,
+            delay: Duration::from_secs(30),
+        }
+    );
+}
+
+#[test]
 fn a_flapping_connection_keeps_the_accumulated_backoff() {
     let mut supervisor = ReconnectSupervisor::default();
     let transient = AppError::stt_network_retryable("Connection reset.");
