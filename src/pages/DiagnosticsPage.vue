@@ -8,7 +8,7 @@ import {
   runtimeStatusMessageKey,
 } from "../runtime/presentation";
 
-const { diagnostics, finalTranscripts, runtimeStatus } = useRuntimeContext();
+const { completedCaptions, diagnostics, runtimeStatus } = useRuntimeContext();
 </script>
 
 <template>
@@ -39,8 +39,8 @@ const { diagnostics, finalTranscripts, runtimeStatus } = useRuntimeContext();
     </header>
 
     <EventFeed
+      :completed-captions="completedCaptions"
       :diagnostics="diagnostics"
-      :final-transcripts="finalTranscripts"
     />
   </div>
 </template>

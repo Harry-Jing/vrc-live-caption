@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { uiText } from "../i18n/uiText";
 import {
-  captionModeColor,
-  captionModeIcon,
-  captionModeMessageKey,
+  captionPreviewStatusColor,
+  captionPreviewStatusIcon,
+  captionPreviewStatusMessageKey,
 } from "../runtime/presentation";
-import type { CaptionMode } from "../runtime/types";
+import type { CaptionPreviewStatus } from "../runtime/types";
 
 defineProps<{
-  latestFinalTranscript: Readonly<{ id: string; text: string }> | null;
-  mode: CaptionMode;
+  latestCompletedCaption: Readonly<{ id: string; text: string }> | null;
+  status: CaptionPreviewStatus;
   text: string;
 }>();
 </script>
@@ -26,18 +26,18 @@ defineProps<{
         </h2>
       </div>
       <UBadge
-        :color="captionModeColor[mode]"
+        :color="captionPreviewStatusColor[status]"
         aria-atomic="true"
         aria-live="polite"
         role="status"
         variant="subtle"
       >
         <UIcon
-          :name="captionModeIcon[mode]"
+          :name="captionPreviewStatusIcon[status]"
           class="size-3.5"
           aria-hidden="true"
         />
-        {{ uiText(captionModeMessageKey[mode]) }}
+        {{ uiText(captionPreviewStatusMessageKey[status]) }}
       </UBadge>
     </div>
 
@@ -47,10 +47,10 @@ defineProps<{
       {{ text }}
     </p>
     <p class="sr-only" aria-atomic="true" aria-live="polite">
-      <span v-if="latestFinalTranscript" :key="latestFinalTranscript.id">
+      <span v-if="latestCompletedCaption" :key="latestCompletedCaption.id">
         {{
-          uiText("caption.finalAnnouncement", {
-            text: latestFinalTranscript.text,
+          uiText("caption.completedAnnouncement", {
+            text: latestCompletedCaption.text,
           })
         }}
       </span>

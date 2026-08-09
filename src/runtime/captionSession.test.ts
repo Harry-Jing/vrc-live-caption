@@ -143,19 +143,21 @@ describe("caption session contract", () => {
       snapshot: active,
     });
 
-    expect(selectCaptionSessionView(state, true).captionMode).toBe("partial");
+    expect(selectCaptionSessionView(state, true).captionPreviewStatus).toBe(
+      "ongoing",
+    );
 
     state = reduceCaptionSessionState(state, { type: "stopRequested" });
     const stopped = selectCaptionSessionView(state, true);
 
-    expect(stopped.captionMode).toBe("final");
+    expect(stopped.captionPreviewStatus).toBe("completed");
     expect(stopped.visibleCaption?.text).toBe(
       "Full bounded OpenAI transcript.",
     );
     expect(stopped.completedCaptions).toHaveLength(1);
   });
 
-  test("shows listening while partial text is hidden and preserves the latest completion", () => {
+  test("shows listening while ongoing text is hidden and preserves the latest completion", () => {
     const fixture = decodeCaptionSessionSnapshotV1(
       JSON.parse(captionSessionFixture) as unknown,
     );
@@ -184,7 +186,7 @@ describe("caption session contract", () => {
     });
     const view = selectCaptionSessionView(state, false);
 
-    expect(view.captionMode).toBe("listening");
+    expect(view.captionPreviewStatus).toBe("listening");
     expect(view.visibleCaption?.text).toBe("Full bounded OpenAI transcript.");
   });
 
@@ -323,7 +325,7 @@ describe("caption session contract", () => {
 
     expect(state.admission).toBe("open");
     expect(selectCaptionSessionView(state, true)).toMatchObject({
-      captionMode: "partial",
+      captionPreviewStatus: "ongoing",
       visibleCaption: { text: "Still running" },
     });
   });

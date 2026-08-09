@@ -162,7 +162,7 @@ export function useRuntime() {
     ),
   );
   const runtimeStatus = computed(() => runtimeView.value.runtimeStatus);
-  const finalTranscripts = computed<readonly CaptionDisplay[]>(() =>
+  const completedCaptions = computed<readonly CaptionDisplay[]>(() =>
     captionView.value.completedCaptions.map((caption) => ({
       ...caption,
       id: [
@@ -175,9 +175,11 @@ export function useRuntime() {
     })),
   );
   const diagnostics = computed(() => runtimeView.value.diagnostics);
-  const captionMode = computed(() => captionView.value.captionMode);
+  const captionPreviewStatus = computed(
+    () => captionView.value.captionPreviewStatus,
+  );
 
-  const activeCaptionText = computed(() => {
+  const visibleCaptionText = computed(() => {
     return (
       captionView.value.visibleCaption?.text ?? uiText("caption.state.waiting")
     );
@@ -565,19 +567,18 @@ export function useRuntime() {
   });
 
   return {
-    activeCaptionText,
     activeRuntimePlan,
     audioInputDevices,
     audioProbeError: audioInput.audioProbeError,
     audioProbeResult: audioInput.audioProbeResult,
-    captionMode,
+    captionPreviewStatus,
+    completedCaptions,
     config,
     currentSession,
     currentSetupConfig,
     deleteProviderSecret,
     diagnostics,
     desiredRuntimePlan,
-    finalTranscripts,
     isRuntimeBusy,
     isAudioProbeRunning: audioInput.isAudioProbeRunning,
     isSecretsBusy: secretsAction.isBusy,
@@ -596,5 +597,6 @@ export function useRuntime() {
     sessionUploadsMicrophoneAudio,
     secretsError,
     settingsError,
+    visibleCaptionText,
   };
 }

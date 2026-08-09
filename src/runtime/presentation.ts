@@ -5,7 +5,7 @@
 
 import { uiText, type UiStaticMessageKey } from "../i18n/uiText";
 import type {
-  CaptionMode,
+  CaptionPreviewStatus,
   DiagnosticCategory,
   DiagnosticSeverity,
   OpenAiTranscriptionModel,
@@ -29,11 +29,14 @@ export const runtimeStatusColor: Record<RuntimeStatus, StatusBadgeColor> = {
   error: "error",
 };
 
-export const captionModeColor: Record<CaptionMode, StatusBadgeColor> = {
+export const captionPreviewStatusColor: Record<
+  CaptionPreviewStatus,
+  StatusBadgeColor
+> = {
   waiting: "neutral",
   listening: "info",
-  partial: "warning",
-  final: "success",
+  ongoing: "warning",
+  completed: "success",
 };
 
 export const diagnosticSeverityColor: Record<
@@ -55,19 +58,19 @@ export const runtimeStatusMessageKey = {
   error: "runtime.status.error",
 } satisfies Record<RuntimeStatus, UiStaticMessageKey>;
 
-export const captionModeMessageKey = {
-  waiting: "caption.mode.waiting",
-  listening: "caption.mode.listening",
-  partial: "caption.mode.partial",
-  final: "caption.mode.final",
-} satisfies Record<CaptionMode, UiStaticMessageKey>;
+export const captionPreviewStatusMessageKey = {
+  waiting: "caption.previewStatus.waiting",
+  listening: "caption.previewStatus.listening",
+  ongoing: "caption.previewStatus.ongoing",
+  completed: "caption.previewStatus.completed",
+} satisfies Record<CaptionPreviewStatus, UiStaticMessageKey>;
 
-export const captionModeIcon = {
+export const captionPreviewStatusIcon = {
   waiting: "i-lucide-clock-3",
   listening: "i-lucide-audio-lines",
-  partial: "i-lucide-message-square-more",
-  final: "i-lucide-circle-check",
-} satisfies Record<CaptionMode, string>;
+  ongoing: "i-lucide-message-square-more",
+  completed: "i-lucide-circle-check",
+} satisfies Record<CaptionPreviewStatus, string>;
 
 export const diagnosticSeverityMessageKey = {
   info: "diagnostics.severity.info",

@@ -249,7 +249,7 @@ test("reopens caption admission when Running arrives before Start resolves", asy
 
   try {
     await harness.runtime.runCommand("stop_runtime");
-    expect(harness.runtime.captionMode.value).toBe("waiting");
+    expect(harness.runtime.captionPreviewStatus.value).toBe("waiting");
 
     const start = harness.runtime.runCommand("start_runtime");
     await vi.waitFor(() => {
@@ -263,7 +263,7 @@ test("reopens caption admission when Running arrives before Start resolves", asy
     harness.pendingStart.resolve(harness.restartedControl);
     await start;
 
-    expect(harness.runtime.captionMode.value).toBe("listening");
+    expect(harness.runtime.captionPreviewStatus.value).toBe("listening");
   } finally {
     harness.app.unmount();
   }

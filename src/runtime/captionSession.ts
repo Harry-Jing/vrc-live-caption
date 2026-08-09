@@ -2,12 +2,14 @@ import {
   CAPTION_LANES,
   CAPTION_STATES,
   type CaptionLane,
-  type CaptionMode,
+  type CaptionPreviewStatus,
   type CaptionSessionSnapshotV1,
   type CaptionSnapshotV1,
   type CaptionState,
 } from "./types";
 import { createDecoders } from "./contractDecoding";
+
+const COMPLETED_CAPTION_DISPLAY_LIMIT = 5;
 
 type CaptionAdmission = "open" | "stopped" | "awaitingStartSnapshot";
 
@@ -28,7 +30,7 @@ export type CaptionSessionStateInput =
   | Readonly<{ type: "startSucceeded" }>;
 
 export type CaptionSessionView = Readonly<{
-  captionMode: CaptionMode;
+  captionPreviewStatus: CaptionPreviewStatus;
   visibleCaption: CaptionSnapshotV1 | null;
   completedCaptions: readonly CaptionSnapshotV1[];
 }>;
@@ -129,7 +131,7 @@ export function selectCaptionSessionView(
     .filter(
       (caption) => caption.lane === "source" && caption.state === "completed",
     )
-    .slice(0, 5);
+    .slice(0, COMPLETED_CAPTION_DISPLAY_LIMIT);
   const sessionIsAdmitted = state.admission === "open";
   const ongoingCaption =
     sessionIsAdmitted && showOngoing
@@ -141,12 +143,12 @@ export function selectCaptionSessionView(
     sessionIsAdmitted && (state.snapshot?.activeUnits.length ?? 0) > 0;
 
   return {
-    captionMode: ongoingCaption
-      ? "partial"
+    captionPreviewStatus: ongoingCaption
+      ? "ongoing"
       : hasActiveUnit
         ? "listening"
         : completedCaptions.length > 0
-          ? "final"
+          ? "completed"
           : "waiting",
     visibleCaption: ongoingCaption ?? completedCaptions[0] ?? null,
     completedCaptions,

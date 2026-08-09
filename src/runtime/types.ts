@@ -31,7 +31,8 @@ export const DIAGNOSTIC_CATEGORIES = [
 export type DiagnosticCategory = (typeof DIAGNOSTIC_CATEGORIES)[number];
 export const DIAGNOSTIC_SEVERITIES = ["info", "warning", "error"] as const;
 export type DiagnosticSeverity = (typeof DIAGNOSTIC_SEVERITIES)[number];
-export type CaptionMode = "waiting" | "listening" | "partial" | "final";
+export type CaptionPreviewStatus =
+  "waiting" | "listening" | "ongoing" | "completed";
 
 export const CAPTION_LANES = ["source", "translation"] as const;
 export type CaptionLane = (typeof CAPTION_LANES)[number];

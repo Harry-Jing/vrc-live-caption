@@ -16,15 +16,14 @@ import {
 } from "../runtime/presentation";
 
 const {
-  activeCaptionText,
   activeRuntimePlan,
   audioInputDevices,
-  captionMode,
+  captionPreviewStatus,
+  completedCaptions,
   currentSession,
   currentSetupConfig,
   diagnostics,
   desiredRuntimePlan,
-  finalTranscripts,
   isRuntimeBusy,
   latestAudioLevel,
   pendingSessionChanges,
@@ -32,11 +31,12 @@ const {
   runCommand,
   runtimeError,
   runtimeStatus,
+  visibleCaptionText,
 } = useRuntimeContext();
 
 const latestDiagnostic = computed(() => diagnostics.value.at(0) ?? null);
-const latestFinalTranscript = computed(
-  () => finalTranscripts.value.at(0) ?? null,
+const latestCompletedCaption = computed(
+  () => completedCaptions.value.at(0) ?? null,
 );
 
 const currentMicrophoneLabel = computed(() => {
@@ -203,9 +203,9 @@ const isStartBlocked = computed(() =>
     </UAlert>
 
     <CaptionPreview
-      :latest-final-transcript="latestFinalTranscript"
-      :mode="captionMode"
-      :text="activeCaptionText"
+      :latest-completed-caption="latestCompletedCaption"
+      :status="captionPreviewStatus"
+      :text="visibleCaptionText"
     />
 
     <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -308,12 +308,12 @@ const isStartBlocked = computed(() =>
           <div class="grid gap-4 text-sm">
             <div>
               <p class="text-muted">
-                {{ uiText("live.recentActivity.latestFinalTranscript") }}
+                {{ uiText("live.recentActivity.latestCompletedCaption") }}
               </p>
               <p class="mt-1 leading-6 break-words text-highlighted">
                 {{
-                  latestFinalTranscript?.text ??
-                  uiText("live.recentActivity.noFinalTranscript")
+                  latestCompletedCaption?.text ??
+                  uiText("live.recentActivity.noCompletedCaption")
                 }}
               </p>
             </div>

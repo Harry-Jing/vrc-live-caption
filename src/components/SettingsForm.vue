@@ -676,7 +676,7 @@ async function focusRecognitionPath() {
           <USwitch
             v-model="form.ui.showPartial"
             :disabled="areConfigControlsDisabled"
-            :label="uiText('settings.fields.partialPreview')"
+            :label="uiText('settings.fields.ongoingPreview')"
           />
         </div>
       </section>

@@ -10,7 +10,7 @@ import type { CaptionDisplay, DiagnosticEvent } from "../runtime/types";
 
 defineProps<{
   diagnostics: readonly DiagnosticEvent[];
-  finalTranscripts: readonly CaptionDisplay[];
+  completedCaptions: readonly CaptionDisplay[];
 }>();
 </script>
 
@@ -70,31 +70,31 @@ defineProps<{
       <template #header>
         <div class="flex items-center justify-between gap-4">
           <h2 class="text-base font-semibold text-highlighted">
-            {{ uiText("diagnostics.finalTranscripts.title") }}
+            {{ uiText("diagnostics.completedCaptions.title") }}
           </h2>
           <UBadge color="neutral" variant="subtle">{{
-            finalTranscripts.length
+            completedCaptions.length
           }}</UBadge>
         </div>
       </template>
 
-      <ol v-if="finalTranscripts.length" class="grid gap-3">
+      <ol v-if="completedCaptions.length" class="grid gap-3">
         <li
-          v-for="transcript in finalTranscripts"
-          :key="transcript.id"
+          v-for="caption in completedCaptions"
+          :key="caption.id"
           class="grid gap-1 rounded-md border border-default bg-muted/40 p-3"
         >
           <span class="text-xs text-muted">{{
-            formatTime(transcript.timestampMs)
+            formatTime(caption.timestampMs)
           }}</span>
           <p class="text-sm leading-6 break-words text-highlighted">
-            {{ transcript.text }}
+            {{ caption.text }}
           </p>
         </li>
       </ol>
 
       <p v-else class="text-sm text-muted">
-        {{ uiText("diagnostics.finalTranscripts.empty") }}
+        {{ uiText("diagnostics.completedCaptions.empty") }}
       </p>
     </UCard>
   </div>
