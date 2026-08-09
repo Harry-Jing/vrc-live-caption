@@ -34,7 +34,6 @@ const HANDSHAKE_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const OPENAI_REALTIME_TRANSCRIPTION_WEBSOCKET_URL: &str =
     "wss://api.openai.com/v1/realtime?intent=transcription";
 const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
-const SOCKET_READ_POLL_TIMEOUT: Duration = Duration::from_millis(2);
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_READY_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 1_048_576;
@@ -80,7 +79,7 @@ impl OpenAiWebSocketTransport {
             let _ = shutdown_socket(socket.get_mut());
             return Err(startup_cancelled_error());
         }
-        configure_read_poll_timeout(socket.get_mut())?;
+        configure_established_socket(socket.get_mut())?;
         Ok(Self {
             socket,
             closed: false,
@@ -204,39 +203,47 @@ impl RealtimeTransport for OpenAiWebSocketTransport {
         if self.closed {
             return Ok(None);
         }
-        loop {
+
+        if let Err(error) = set_socket_nonblocking(self.socket.get_ref(), true) {
+            self.closed = true;
+            return Err(error);
+        }
+        let receive_result = loop {
             match self.socket.read() {
-                Ok(Message::Text(text)) => return Ok(Some(text.as_str().to_string())),
+                Ok(Message::Text(text)) => break Ok(Some(text.as_str().to_string())),
                 Ok(Message::Ping(_) | Message::Pong(_)) => continue,
                 Ok(Message::Close(frame)) => {
                     self.closed = true;
-                    return Err(map_close_frame(frame.as_ref()));
+                    break Err(map_close_frame(frame.as_ref()));
                 }
                 Ok(Message::Binary(_)) => {
-                    return Err(AppError::stt(
+                    break Err(AppError::stt(
                         "OpenAI Realtime returned an unexpected binary WebSocket frame.",
                     ));
                 }
                 Ok(Message::Frame(_)) => continue,
-                Err(WebSocketError::Io(error))
-                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
-                {
-                    return Ok(None);
+                Err(WebSocketError::Io(error)) if error.kind() == ErrorKind::WouldBlock => {
+                    break Ok(None);
                 }
                 Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
                     self.closed = true;
-                    return Err(AppError::stt_network_retryable(
+                    break Err(AppError::stt_network_retryable(
                         "OpenAI Realtime WebSocket connection ended.",
                     ));
                 }
                 Err(error) => {
-                    return Err(map_socket_error(
+                    break Err(map_socket_error(
                         "Failed to read from OpenAI Realtime",
                         error,
                     ));
                 }
             }
+        };
+        if let Err(error) = set_socket_nonblocking(self.socket.get_ref(), false) {
+            self.closed = true;
+            return Err(error);
         }
+        receive_result
     }
 
     fn close(&mut self) -> AppResult<()> {
@@ -306,7 +313,7 @@ fn openai_websocket_request(api_key: &SecretString) -> AppResult<Request> {
         })
 }
 
-fn configure_read_poll_timeout(stream: &mut MaybeTlsStream<TcpStream>) -> AppResult<()> {
+fn configure_established_socket(stream: &mut MaybeTlsStream<TcpStream>) -> AppResult<()> {
     let result = match stream {
         MaybeTlsStream::Plain(tcp) => configure_established_tcp(tcp),
         MaybeTlsStream::Rustls(tls) => configure_established_tcp(&tls.sock),
@@ -323,8 +330,23 @@ fn configure_read_poll_timeout(stream: &mut MaybeTlsStream<TcpStream>) -> AppRes
 
 fn configure_established_tcp(tcp: &TcpStream) -> io::Result<()> {
     tcp.set_nonblocking(false)?;
-    tcp.set_read_timeout(Some(SOCKET_READ_POLL_TIMEOUT))?;
+    tcp.set_read_timeout(None)?;
     tcp.set_write_timeout(Some(SOCKET_WRITE_TIMEOUT))
+}
+
+fn set_socket_nonblocking(stream: &MaybeTlsStream<TcpStream>, nonblocking: bool) -> AppResult<()> {
+    let result = match stream {
+        MaybeTlsStream::Plain(tcp) => tcp.set_nonblocking(nonblocking),
+        MaybeTlsStream::Rustls(tls) => tls.sock.set_nonblocking(nonblocking),
+        _ => Err(io::Error::other(
+            "Unsupported TLS stream for OpenAI Realtime.",
+        )),
+    };
+    result.map_err(|error| {
+        AppError::stt_network_terminal(format!(
+            "Failed to configure nonblocking OpenAI Realtime receive: {error}"
+        ))
+    })
 }
 
 fn shutdown_socket(stream: &MaybeTlsStream<TcpStream>) -> io::Result<()> {

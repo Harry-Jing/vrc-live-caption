@@ -29,6 +29,18 @@ struct QueuedRecognitionSession {
     events: Vec<RecognitionEvent>,
 }
 
+struct SlowEmptyDrainRecognitionSession {
+    generation: u64,
+    stream_id: String,
+    received_samples: Arc<Mutex<usize>>,
+    drain_delay: Duration,
+}
+
+struct CancelOnAppendRecognitionSession {
+    attempt: ConnectionAttemptCancelToken,
+    drain_called: Arc<AtomicBool>,
+}
+
 impl RecognitionSession for QueuedRecognitionSession {
     fn start_unit(&mut self, _unit_id: String, _started_at_ms: u64) -> AppResult<RecognitionEvent> {
         Err(AppError::state(
@@ -46,6 +58,65 @@ impl RecognitionSession for QueuedRecognitionSession {
 
     fn drain_events(&mut self, _received_at_ms: u64) -> AppResult<Vec<RecognitionEvent>> {
         Ok(std::mem::take(&mut self.events))
+    }
+
+    fn stop(&mut self) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+impl RecognitionSession for SlowEmptyDrainRecognitionSession {
+    fn start_unit(&mut self, unit_id: String, started_at_ms: u64) -> AppResult<RecognitionEvent> {
+        Ok(RecognitionEvent::UnitStarted {
+            generation: self.generation,
+            stream_id: self.stream_id.clone(),
+            unit_id,
+            started_at_ms,
+        })
+    }
+
+    fn append_audio(&mut self, audio: RecognitionAudioChunk<'_>) -> AppResult<()> {
+        let mut received_samples = self
+            .received_samples
+            .lock()
+            .map_err(|_| AppError::state("Recognition sample counter lock was poisoned."))?;
+        *received_samples = received_samples.saturating_add(audio.samples.len());
+        Ok(())
+    }
+
+    fn end_input(&mut self) -> AppResult<()> {
+        Ok(())
+    }
+
+    fn drain_events(&mut self, _received_at_ms: u64) -> AppResult<Vec<RecognitionEvent>> {
+        thread::sleep(self.drain_delay);
+        Ok(Vec::new())
+    }
+
+    fn stop(&mut self) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+impl RecognitionSession for CancelOnAppendRecognitionSession {
+    fn start_unit(&mut self, _unit_id: String, _started_at_ms: u64) -> AppResult<RecognitionEvent> {
+        Err(AppError::state(
+            "Cancel-on-append recognition session does not start units.",
+        ))
+    }
+
+    fn append_audio(&mut self, _audio: RecognitionAudioChunk<'_>) -> AppResult<()> {
+        self.attempt.cancel();
+        Ok(())
+    }
+
+    fn end_input(&mut self) -> AppResult<()> {
+        Ok(())
+    }
+
+    fn drain_events(&mut self, _received_at_ms: u64) -> AppResult<Vec<RecognitionEvent>> {
+        self.drain_called.store(true, Ordering::SeqCst);
+        Ok(Vec::new())
     }
 
     fn stop(&mut self) -> AppResult<()> {
@@ -702,6 +773,113 @@ fn a_full_recognition_queue_reports_backpressure_without_disguising_it_as_stop()
     );
     assert!(!generation.is_work_cancelled());
     assert!(attempt.is_cancelled());
+    Ok(())
+}
+
+#[test]
+fn recognition_worker_keeps_up_when_event_drain_is_slower_than_audio_frames() -> AppResult<()> {
+    const FRAME_COUNT: u32 = 128;
+    const FRAME_SAMPLES: usize = 240;
+    const FRAME_INTERVAL: Duration = Duration::from_millis(10);
+    const MAX_CADENCE_LAG: Duration = Duration::from_millis(50);
+
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session)?;
+    let attempt = ConnectionAttemptCancelToken::default();
+    let (sender, receiver) = sync_channel(RECOGNITION_COMMAND_QUEUE_CAPACITY);
+    let received_samples = Arc::new(Mutex::new(0));
+    let worker = spawn_recognition_worker(
+        app.handle().clone(),
+        None,
+        generation.clone(),
+        attempt.clone(),
+        SlowEmptyDrainRecognitionSession {
+            generation: generation.generation_id(),
+            stream_id: generation.stream_id().to_string(),
+            received_samples: Arc::clone(&received_samples),
+            drain_delay: Duration::from_millis(15),
+        },
+        receiver,
+    )?;
+
+    let mut next_frame_at = Instant::now();
+    let send_result = (|| -> AppResult<()> {
+        for frame_index in 0..FRAME_COUNT {
+            let remaining = next_frame_at.saturating_duration_since(Instant::now());
+            if !remaining.is_zero() {
+                thread::sleep(remaining);
+            }
+            let command = if frame_index == 0 {
+                RecognitionCommand::StartUnit {
+                    unit_id: "realtime-audio".to_string(),
+                    started_at_ms: 0,
+                    sample_rate_hz: 24_000,
+                    initial_audio: vec![0.1; FRAME_SAMPLES],
+                }
+            } else {
+                RecognitionCommand::AppendAudio {
+                    sample_rate_hz: 24_000,
+                    samples: vec![0.1; FRAME_SAMPLES],
+                }
+            };
+            send_recognition_command(&attempt, &sender, command)?;
+            next_frame_at += FRAME_INTERVAL;
+            if Instant::now().saturating_duration_since(next_frame_at) > MAX_CADENCE_LAG {
+                next_frame_at = Instant::now() + FRAME_INTERVAL;
+            }
+        }
+        send_recognition_command(&attempt, &sender, RecognitionCommand::EndInput)
+    })();
+    drop(sender);
+    let worker_result = worker
+        .join()
+        .map_err(|_| AppError::runtime("Recognition worker timing test thread panicked."))?;
+    generation.request_stop(None)?;
+
+    send_result?;
+    worker_result?;
+    assert_eq!(
+        *received_samples
+            .lock()
+            .map_err(|_| AppError::state("Recognition sample counter lock was poisoned."))?,
+        FRAME_COUNT as usize * FRAME_SAMPLES
+    );
+    Ok(())
+}
+
+#[test]
+fn recognition_worker_does_not_poll_provider_after_attempt_cancels_mid_batch() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session)?;
+    let attempt = ConnectionAttemptCancelToken::default();
+    let (sender, receiver) = sync_channel(RECOGNITION_COMMAND_QUEUE_CAPACITY);
+    send_recognition_command(
+        &attempt,
+        &sender,
+        RecognitionCommand::AppendAudio {
+            sample_rate_hz: 24_000,
+            samples: vec![0.1; 240],
+        },
+    )?;
+    drop(sender);
+    let drain_called = Arc::new(AtomicBool::new(false));
+
+    run_recognition_worker(
+        app.handle().clone(),
+        None,
+        generation.clone(),
+        attempt.clone(),
+        CancelOnAppendRecognitionSession {
+            attempt,
+            drain_called: Arc::clone(&drain_called),
+        },
+        receiver,
+    )?;
+    generation.request_stop(None)?;
+
+    assert!(!drain_called.load(Ordering::SeqCst));
     Ok(())
 }
 

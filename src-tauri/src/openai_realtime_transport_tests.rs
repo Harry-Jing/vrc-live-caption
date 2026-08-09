@@ -1,17 +1,94 @@
 use super::*;
 use crate::error::{AppResult, ProviderFailureClass, RetryDisposition};
-use std::io::{self, ErrorKind, Read};
+use std::io::{self, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use tungstenite::error::ProtocolError;
-use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+use tungstenite::protocol::{CloseFrame, Role, frame::coding::CloseCode};
 
 #[test]
 fn rustls_crypto_provider_is_available_for_websocket_tls() {
     let _provider = rustls::crypto::ring::default_provider();
     let _builder = rustls::ClientConfig::builder();
+}
+
+#[test]
+fn transport_poll_is_nonblocking_and_preserves_partial_frame_state() -> AppResult<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|error| AppError::state(format!("Failed to bind test WebSocket peer: {error}")))?;
+    let address = listener.local_addr().map_err(|error| {
+        AppError::state(format!("Failed to read test WebSocket address: {error}"))
+    })?;
+    let client = TcpStream::connect(address).map_err(|error| {
+        AppError::state(format!("Failed to connect to test WebSocket peer: {error}"))
+    })?;
+    let (mut server, _) = listener.accept().map_err(|error| {
+        AppError::state(format!("Failed to accept test WebSocket peer: {error}"))
+    })?;
+    client
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|error| {
+            AppError::state(format!("Failed to configure test read timeout: {error}"))
+        })?;
+    let socket = WebSocket::from_raw_socket(
+        MaybeTlsStream::Plain(client),
+        Role::Client,
+        Some(WebSocketConfig::default()),
+    );
+    let mut transport = OpenAiWebSocketTransport {
+        socket,
+        closed: false,
+    };
+
+    let started_at = Instant::now();
+    assert_eq!(transport.try_receive_text()?, None);
+    assert!(
+        started_at.elapsed() < Duration::from_millis(500),
+        "An idle transport poll waited for the blocking socket read timeout."
+    );
+
+    server
+        .write_all(&[0x81, 0x02, b'o'])
+        .map_err(|error| AppError::state(format!("Failed to send a partial frame: {error}")))?;
+    let mut available = [0_u8; 3];
+    let available_bytes = match transport.socket.get_ref() {
+        MaybeTlsStream::Plain(client) => client.peek(&mut available),
+        _ => Err(io::Error::other(
+            "Test transport was unexpectedly encrypted.",
+        )),
+    }
+    .map_err(|error| {
+        AppError::state(format!(
+            "Failed while waiting for the partial test frame: {error}"
+        ))
+    })?;
+    assert!(available_bytes > 0);
+    let partial_started_at = Instant::now();
+    assert_eq!(transport.try_receive_text()?, None);
+    assert!(
+        partial_started_at.elapsed() < Duration::from_millis(500),
+        "A partial-frame poll waited for the blocking socket read timeout."
+    );
+
+    server
+        .write_all(b"k")
+        .map_err(|error| AppError::state(format!("Failed to complete a test frame: {error}")))?;
+    let message_deadline = Instant::now() + Duration::from_secs(1);
+    let message = loop {
+        if let Some(message) = transport.try_receive_text()? {
+            break message;
+        }
+        if Instant::now() >= message_deadline {
+            return Err(AppError::state(
+                "Completed test frame did not become readable before the deadline.",
+            ));
+        }
+        thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(message, "ok");
+    Ok(())
 }
 
 #[test]

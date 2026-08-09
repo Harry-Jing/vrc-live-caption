@@ -52,7 +52,7 @@ use crate::runtime_generation::{ChatboxPublisherBoundary, RuntimeGeneration};
 use crate::segmenter::SpeechSegmenter;
 use secrecy::SecretString;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -60,6 +60,7 @@ use tauri::{AppHandle, Runtime};
 
 const RECEIVE_TIMEOUT: Duration = Duration::from_millis(100);
 const RECOGNITION_COMMAND_QUEUE_CAPACITY: usize = 32;
+const MAX_RECOGNITION_COMMANDS_PER_BATCH: usize = 8;
 const RECOGNITION_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub(crate) const SPEECH_RMS_THRESHOLD: f32 = 0.012;
 const SILENCE_TIMEOUT: Duration = Duration::from_millis(1200);
@@ -143,6 +144,12 @@ enum RecognitionCommand {
         samples: Vec<f32>,
     },
     EndInput,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecognitionCommandProcessOutcome {
+    Continue,
+    Stopped,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1323,33 +1330,50 @@ fn run_recognition_worker<R: Runtime>(
     let work_result = (|| -> AppResult<()> {
         while !generation.is_work_cancelled() && !attempt.is_cancelled() {
             match receiver.recv_timeout(RECOGNITION_EVENT_POLL_INTERVAL) {
-                Ok(RecognitionCommand::StartUnit {
-                    unit_id,
-                    started_at_ms,
-                    sample_rate_hz,
-                    initial_audio,
-                }) => {
-                    let event = recognition.start_unit(unit_id, started_at_ms)?;
-                    match generation.submit_recognition_event(&app, publisher.as_ref(), event)? {
-                        RecognitionEventSubmitOutcome::Stopped => return Ok(()),
-                        RecognitionEventSubmitOutcome::Accepted
-                        | RecognitionEventSubmitOutcome::Ignored => {}
+                Ok(command) => {
+                    if process_recognition_command(
+                        &app,
+                        publisher.as_ref(),
+                        &generation,
+                        &mut recognition,
+                        command,
+                    )? == RecognitionCommandProcessOutcome::Stopped
+                    {
+                        return Ok(());
                     }
-                    recognition.append_audio(RecognitionAudioChunk {
-                        sample_rate_hz,
-                        samples: &initial_audio,
-                    })?;
+
+                    // Capture callbacks can arrive in bursts, especially through WASAPI. Keep
+                    // command delivery FIFO, but amortize one network-event poll across the
+                    // commands already waiting so a slow idle read cannot throttle audio input.
+                    // A separate scheduling bound keeps provider-event checks independent from
+                    // the larger overload-protection capacity of the command queue.
+                    for _ in 1..MAX_RECOGNITION_COMMANDS_PER_BATCH {
+                        if generation.is_work_cancelled() || attempt.is_cancelled() {
+                            break;
+                        }
+
+                        let queued_command = match receiver.try_recv() {
+                            Ok(queued_command) => queued_command,
+                            Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+                        };
+                        if process_recognition_command(
+                            &app,
+                            publisher.as_ref(),
+                            &generation,
+                            &mut recognition,
+                            queued_command,
+                        )? == RecognitionCommandProcessOutcome::Stopped
+                        {
+                            return Ok(());
+                        }
+                    }
                 }
-                Ok(RecognitionCommand::AppendAudio {
-                    sample_rate_hz,
-                    samples,
-                }) => recognition.append_audio(RecognitionAudioChunk {
-                    sample_rate_hz,
-                    samples: &samples,
-                })?,
-                Ok(RecognitionCommand::EndInput) => recognition.end_input()?,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+
+            if generation.is_work_cancelled() || attempt.is_cancelled() {
+                break;
             }
 
             for event in recognition.drain_events(now_ms())? {
@@ -1378,6 +1402,44 @@ fn run_recognition_worker<R: Runtime>(
         (Ok(()), Err(stop_error)) if !generation.is_hard_stop_requested() => Err(stop_error),
         (Ok(()), Err(_)) | (Ok(()), Ok(())) => Ok(()),
     }
+}
+
+fn process_recognition_command<R: Runtime>(
+    app: &AppHandle<R>,
+    publisher: Option<&RuntimeChatboxPublisher>,
+    generation: &RuntimeGeneration,
+    recognition: &mut impl RecognitionSession,
+    command: RecognitionCommand,
+) -> AppResult<RecognitionCommandProcessOutcome> {
+    match command {
+        RecognitionCommand::StartUnit {
+            unit_id,
+            started_at_ms,
+            sample_rate_hz,
+            initial_audio,
+        } => {
+            let event = recognition.start_unit(unit_id, started_at_ms)?;
+            if generation.submit_recognition_event(app, publisher, event)?
+                == RecognitionEventSubmitOutcome::Stopped
+            {
+                return Ok(RecognitionCommandProcessOutcome::Stopped);
+            }
+            recognition.append_audio(RecognitionAudioChunk {
+                sample_rate_hz,
+                samples: &initial_audio,
+            })?;
+        }
+        RecognitionCommand::AppendAudio {
+            sample_rate_hz,
+            samples,
+        } => recognition.append_audio(RecognitionAudioChunk {
+            sample_rate_hz,
+            samples: &samples,
+        })?,
+        RecognitionCommand::EndInput => recognition.end_input()?,
+    }
+
+    Ok(RecognitionCommandProcessOutcome::Continue)
 }
 
 fn emit_chatbox_send_skipped_on_stop<R: Runtime>(app: &AppHandle<R>) {
