@@ -52,25 +52,64 @@ afterEach(() => {
 });
 
 describe("diagnostic report", () => {
-  test("serializes only redacted runtime status and diagnostic events", () => {
-    const report = JSON.parse(
-      serializeDiagnosticReport({
-        appVersion: "0.1.0",
-        diagnostics,
-        generatedAtMs: 1_725_000_001_000,
-        platform: "Windows 11 / WebView2",
-        runtimeStatus,
-      }),
-    ) as Record<string, unknown>;
+  test("projects runtime state through a strict diagnostic metadata allowlist", () => {
+    const sensitiveValues = [
+      "spoken caption text",
+      "sk-secret-value",
+      "/Users/example/private-config.json",
+      "microphone-device-id-123",
+      "https://private-relay.example/v1",
+    ] as const;
+    const runtimeStatusWithSensitiveFields = {
+      ...runtimeStatus,
+      message: sensitiveValues[0],
+      internal: {
+        configPath: sensitiveValues[2],
+        device: { id: sensitiveValues[3] },
+      },
+    } as RuntimeStatusEvent;
+    const diagnosticsWithSensitiveFields = [
+      {
+        ...diagnostics[0],
+        message: sensitiveValues[1],
+        detail: sensitiveValues[4],
+        internal: {
+          caption: sensitiveValues[0],
+          nested: { configPath: sensitiveValues[2] },
+        },
+      } as DiagnosticEvent,
+    ];
+    const serialized = serializeDiagnosticReport({
+      appVersion: "0.1.0",
+      diagnostics: diagnosticsWithSensitiveFields,
+      generatedAtMs: 1_725_000_001_000,
+      platform: "windows",
+      runtimeStatus: runtimeStatusWithSensitiveFields,
+    });
+    const report = JSON.parse(serialized) as Record<string, unknown>;
 
     expect(report).toEqual({
       reportVersion: 1,
       generatedAt: "2024-08-30T06:40:01.000Z",
       appVersion: "0.1.0",
-      platform: "Windows 11 / WebView2",
-      runtimeStatus,
-      diagnostics,
+      platform: "windows",
+      runtimeStatus: {
+        status: "reconnecting",
+        timestampMs: 1_725_000_000_000,
+      },
+      diagnostics: [
+        {
+          category: "stt",
+          severity: "warning",
+          code: "stt.connection_lost",
+          timestampMs: 1_725_000_000_100,
+        },
+      ],
     });
+    for (const sensitiveValue of sensitiveValues) {
+      expect(serialized).not.toContain(sensitiveValue);
+    }
+    expect(serialized).not.toContain("diagnostic-2");
     expect(report).not.toHaveProperty("captions");
     expect(report).not.toHaveProperty("config");
     expect(report).not.toHaveProperty("providerSecrets");
@@ -92,6 +131,9 @@ describe("diagnostic report", () => {
     expect(platformMocks.writeText.mock.calls[0]?.[0]).toContain(
       '"appVersion": "0.1.0"',
     );
+    expect(platformMocks.writeText.mock.calls[0]?.[0]).toContain(
+      '"platform": "windows"',
+    );
   });
 
   test("uses the browser clipboard in preview mode", async () => {
@@ -112,6 +154,9 @@ describe("diagnostic report", () => {
     expect(browserWriteText).toHaveBeenCalledOnce();
     expect(browserWriteText.mock.calls[0]?.[0]).toContain(
       '"appVersion": "preview"',
+    );
+    expect(browserWriteText.mock.calls[0]?.[0]).toContain(
+      '"platform": "unknown"',
     );
   });
 });
