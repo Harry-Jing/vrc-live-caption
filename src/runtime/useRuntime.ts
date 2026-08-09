@@ -56,13 +56,13 @@ function normalizeError(error: unknown) {
 // One busy/error scope per action domain, so a slow settings save cannot
 // disable runtime controls or surface its error on an unrelated page.
 function createActionState() {
-  const pendingCount = ref(0);
+  const inFlightCount = ref(0);
   const error = ref("");
-  const isBusy = computed(() => pendingCount.value > 0);
+  const isBusy = computed(() => inFlightCount.value > 0);
 
   async function run(action: () => Promise<void>) {
     error.value = "";
-    pendingCount.value += 1;
+    inFlightCount.value += 1;
 
     try {
       await action();
@@ -71,7 +71,7 @@ function createActionState() {
       error.value = normalizeError(cause);
       return false;
     } finally {
-      pendingCount.value -= 1;
+      inFlightCount.value -= 1;
     }
   }
 
@@ -97,7 +97,7 @@ export function useRuntime() {
   };
   const runtimeState = shallowRef(createRuntimeState(initialRuntimeStatus));
   const captionSessionState = shallowRef(createCaptionSessionState());
-  const pendingRuntimeCommand = ref<RuntimeCommand | null>(null);
+  const inFlightRuntimeCommand = ref<RuntimeCommand | null>(null);
   const runtimeAction = createActionState();
   const settingsAction = createActionState();
   const secretsAction = createActionState();
@@ -304,7 +304,7 @@ export function useRuntime() {
       return;
     }
 
-    pendingRuntimeCommand.value = command;
+    inFlightRuntimeCommand.value = command;
     let lifecycleCommandAttemptId: number | null = null;
 
     if (command === "start_runtime" || command === "stop_runtime") {
@@ -318,7 +318,7 @@ export function useRuntime() {
       });
 
       if (!commandAccepted) {
-        pendingRuntimeCommand.value = null;
+        inFlightRuntimeCommand.value = null;
         return;
       }
 
@@ -390,8 +390,8 @@ export function useRuntime() {
         }
       }
     } finally {
-      if (pendingRuntimeCommand.value === command) {
-        pendingRuntimeCommand.value = null;
+      if (inFlightRuntimeCommand.value === command) {
+        inFlightRuntimeCommand.value = null;
       }
     }
   }
@@ -585,7 +585,7 @@ export function useRuntime() {
     isSettingsBusy: settingsAction.isBusy,
     loadAudioInputDevices,
     latestAudioLevel: audioInput.latestAudioLevel,
-    pendingRuntimeCommand,
+    inFlightRuntimeCommand,
     pendingSessionChanges,
     probeAudioInput: audioInput.probeAudioInput,
     runCommand,

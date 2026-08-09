@@ -15,7 +15,7 @@ const props = defineProps<{
   errorMessage: string;
   isBusy: boolean;
   isStartBlocked: boolean;
-  pendingCommand: RuntimeCommand | null;
+  inFlightCommand: RuntimeCommand | null;
   runtimeStatus: RuntimeStatusEvent;
 }>();
 
@@ -61,18 +61,18 @@ function run(command: RuntimeCommand) {
         icon="i-lucide-play"
         :label="uiText('runtime.actions.start')"
         :loading="
-          pendingCommand === 'start_runtime' ||
+          inFlightCommand === 'start_runtime' ||
           runtimeStatus.status === 'starting'
         "
         block
         @click="run('start_runtime')"
       />
       <UButton
-        :disabled="pendingCommand === 'stop_runtime' || !canStop"
+        :disabled="inFlightCommand === 'stop_runtime' || !canStop"
         icon="i-lucide-square"
         :label="uiText('runtime.actions.stop')"
         :loading="
-          pendingCommand === 'stop_runtime' ||
+          inFlightCommand === 'stop_runtime' ||
           runtimeStatus.status === 'stopping'
         "
         variant="subtle"
@@ -83,7 +83,7 @@ function run(command: RuntimeCommand) {
         :disabled="isBusy"
         icon="i-lucide-radio"
         :label="uiText('runtime.actions.oscTest')"
-        :loading="pendingCommand === 'send_osc_test_message'"
+        :loading="inFlightCommand === 'send_osc_test_message'"
         variant="subtle"
         block
         @click="run('send_osc_test_message')"

@@ -102,7 +102,7 @@ describe("runtime lifecycle state", () => {
     expect(state.runtimeStatus).toEqual(status("error", 900));
   });
 
-  test("keeps a pending Start ahead of an inactive control snapshot", () => {
+  test("keeps an in-flight Start ahead of an inactive control snapshot", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
       type: "runtimeCommandRequested",
@@ -117,11 +117,11 @@ describe("runtime lifecycle state", () => {
     });
 
     expect(state.runtimeStatus).toEqual(status("starting", 1_000));
-    expect(state.pendingLifecycleCommand?.command).toBe("start_runtime");
+    expect(state.inFlightLifecycleCommand?.command).toBe("start_runtime");
   });
 
   test.each(["starting", "running"] as const)(
-    "keeps the Start attempt pending while control reports %s",
+    "keeps the Start attempt in flight while control reports %s",
     (controlStatus) => {
       let state = createRuntimeState(idle);
       state = reduceRuntimeState(state, {
@@ -137,7 +137,7 @@ describe("runtime lifecycle state", () => {
       });
 
       expect(state.runtimeStatus).toEqual(status(controlStatus, 900));
-      expect(state.pendingLifecycleCommand?.attemptId).toBe(1);
+      expect(state.inFlightLifecycleCommand?.attemptId).toBe(1);
 
       state = reduceRuntimeState(state, {
         type: "runtimeCommandSucceeded",
@@ -146,11 +146,11 @@ describe("runtime lifecycle state", () => {
         timestampMs: 1_010,
       });
 
-      expect(state.pendingLifecycleCommand).toBeNull();
+      expect(state.inFlightLifecycleCommand).toBeNull();
     },
   );
 
-  test("keeps an authoritative Error when the pending Start command fails", () => {
+  test("keeps an authoritative Error when the in-flight Start command fails", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
       type: "runtimeCommandRequested",
@@ -170,7 +170,7 @@ describe("runtime lifecycle state", () => {
     });
 
     expect(state.runtimeStatus).toEqual(status("error", 900));
-    expect(state.pendingLifecycleCommand).toBeNull();
+    expect(state.inFlightLifecycleCommand).toBeNull();
   });
 
   test("keeps a successful Start ahead of an older control revision", () => {
@@ -201,7 +201,7 @@ describe("runtime lifecycle state", () => {
     expect(state.runtimeStatus).toEqual(status("starting", 1_000));
   });
 
-  test("keeps a pending Stop ahead of an active control snapshot", () => {
+  test("keeps an in-flight Stop ahead of an active control snapshot", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
       type: "runtimeControlStatusReceived",
@@ -221,7 +221,7 @@ describe("runtime lifecycle state", () => {
     });
 
     expect(state.runtimeStatus).toEqual(status("stopping", 1_000));
-    expect(state.pendingLifecycleCommand?.command).toBe("stop_runtime");
+    expect(state.inFlightLifecycleCommand?.command).toBe("stop_runtime");
   });
 
   test("lets a newer control revision supersede an acknowledged Stop", () => {

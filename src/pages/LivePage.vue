@@ -24,10 +24,10 @@ const {
   currentSetupConfig,
   diagnostics,
   desiredRuntimePlan,
+  inFlightRuntimeCommand,
   isRuntimeBusy,
   latestAudioLevel,
   pendingSessionChanges,
-  pendingRuntimeCommand,
   runCommand,
   runtimeError,
   runtimeStatus,
@@ -211,9 +211,9 @@ const isStartBlocked = computed(() =>
     <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
       <RuntimeControls
         :error-message="runtimeError"
+        :in-flight-command="inFlightRuntimeCommand"
         :is-busy="isRuntimeBusy"
         :is-start-blocked="isStartBlocked"
-        :pending-command="pendingRuntimeCommand"
         :runtime-status="runtimeStatus"
         @run="runCommand"
       />
