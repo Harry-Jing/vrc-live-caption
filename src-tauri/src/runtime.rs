@@ -43,7 +43,7 @@ use crate::osc::ChatboxOscSender;
 use crate::recognition::{
     RecognitionAudioChunk, RecognitionEndReason, RecognitionEvent, RecognitionSession,
 };
-use crate::reconnect::{ReconnectDecision, ReconnectSupervisor};
+use crate::reconnect::{ReconnectDecision, ReconnectSupervisor, reconnect_jitter_percent};
 use crate::runtime_control::{
     RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
     RuntimeSessionSnapshot,
@@ -55,7 +55,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Runtime};
 
 const RECEIVE_TIMEOUT: Duration = Duration::from_millis(100);
@@ -1206,14 +1206,6 @@ fn run_connected_openai_attempt<R: Runtime, S: RecognitionSession + 'static>(
         (Ok(()), Err(worker_error)) if !generation.is_hard_stop_requested() => Err(worker_error),
         (Ok(()), Err(_)) | (Ok(()), Ok(())) => Ok(()),
     }
-}
-
-fn reconnect_jitter_percent() -> u32 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .subsec_nanos();
-    80 + nanos % 41
 }
 
 fn wait_for_reconnect(generation: &RuntimeGeneration, delay: Duration) -> bool {

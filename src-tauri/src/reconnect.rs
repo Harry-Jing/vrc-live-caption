@@ -1,11 +1,23 @@
 //! Retry policy and connection-epoch bookkeeping for one runtime generation.
 
 use crate::error::{AppError, RetryDisposition};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const BASE_RECONNECT_DELAY_MILLIS: u64 = 500;
+const MAX_RECONNECT_BACKOFF_EXPONENT: u32 = 6;
 const MAX_RECONNECT_DELAY_MILLIS: u64 = 30_000;
+const MIN_RECONNECT_JITTER_PERCENT: u32 = 80;
+const MAX_RECONNECT_JITTER_PERCENT: u32 = 120;
 const BACKOFF_RESET_AFTER_STABLE_CONNECTION: Duration = Duration::from_secs(30);
+
+pub(crate) fn reconnect_jitter_percent() -> u32 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .subsec_nanos();
+    let inclusive_range = MAX_RECONNECT_JITTER_PERCENT - MIN_RECONNECT_JITTER_PERCENT + 1;
+    MIN_RECONNECT_JITTER_PERCENT + nanos % inclusive_range
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReconnectDecision {
@@ -49,12 +61,17 @@ impl ReconnectSupervisor {
         }
 
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
-        let exponent = self.consecutive_failures.saturating_sub(1).min(6);
+        let exponent = self
+            .consecutive_failures
+            .saturating_sub(1)
+            .min(MAX_RECONNECT_BACKOFF_EXPONENT);
         let multiplier = 1_u64 << exponent;
         let base_millis = BASE_RECONNECT_DELAY_MILLIS
             .saturating_mul(multiplier)
             .min(MAX_RECONNECT_DELAY_MILLIS);
-        let jitter_percent = u64::from(jitter_percent.clamp(80, 120));
+        let jitter_percent = u64::from(
+            jitter_percent.clamp(MIN_RECONNECT_JITTER_PERCENT, MAX_RECONNECT_JITTER_PERCENT),
+        );
         let delay_millis = base_millis
             .saturating_mul(jitter_percent)
             .saturating_div(100)

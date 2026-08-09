@@ -3,6 +3,14 @@ use crate::error::{AppError, RetryDisposition};
 use std::time::Duration;
 
 #[test]
+fn generated_jitter_stays_within_the_inclusive_policy_range() {
+    for _ in 0..64 {
+        let jitter_percent = reconnect_jitter_percent();
+        assert!((80..=120).contains(&jitter_percent));
+    }
+}
+
+#[test]
 fn terminal_failures_never_enter_the_reconnect_loop() {
     let mut supervisor = ReconnectSupervisor::default();
 

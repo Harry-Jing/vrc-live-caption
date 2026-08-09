@@ -17,6 +17,8 @@ use std::str::FromStr;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::time::Duration;
 
+const CAPTURE_CHUNK_QUEUE_CAPACITY: usize = 16;
+
 // CPAL treats `None` as an unbounded backend initialization wait. A finite
 // request keeps Start/Stop from deliberately opting into an infinite wait;
 // some platform backends may still be unable to honor it.
@@ -110,7 +112,7 @@ pub(crate) fn open_input_capture(config: &AudioConfig) -> AppResult<AudioCapture
     let channels = usize::from(supported_config.channels());
     let sample_format = supported_config.sample_format();
     let stream_config: StreamConfig = supported_config.into();
-    let (sample_sender, sample_receiver) = sync_channel(16);
+    let (sample_sender, sample_receiver) = sync_channel(CAPTURE_CHUNK_QUEUE_CAPACITY);
     // A full sample queue must never turn into a silently corrupted
     // transcript. The callback latches one gap notification without blocking;
     // runtime treats it as terminal and asks the user to retry.
