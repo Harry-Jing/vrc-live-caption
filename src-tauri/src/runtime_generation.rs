@@ -237,14 +237,14 @@ impl RuntimeGeneration {
         self.work_cancelled.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn is_hard_stopped(&self) -> bool {
+    pub(crate) fn is_hard_stop_requested(&self) -> bool {
         self.hard_stop_requested.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn try_begin_work(&self) -> bool {
+    pub(crate) fn accepts_new_work(&self) -> bool {
         // These loads are the work-submission decision point. If they win the
         // race with Stop, the request is in flight and may finish, but its
         // result still has to pass commit_if_active.
-        !self.is_work_cancelled() && !self.is_hard_stopped()
+        !self.is_work_cancelled() && !self.is_hard_stop_requested()
     }
 }

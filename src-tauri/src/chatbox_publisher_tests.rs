@@ -1331,7 +1331,7 @@ fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<
     });
 
     let stop_entered_deadline = Instant::now() + Duration::from_secs(1);
-    while !generation.is_hard_stopped() {
+    while !generation.is_hard_stop_requested() {
         if Instant::now() >= stop_entered_deadline {
             return Err(AppError::runtime("Stop did not enter request_stop."));
         }

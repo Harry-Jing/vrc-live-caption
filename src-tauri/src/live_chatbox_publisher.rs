@@ -248,7 +248,7 @@ impl LiveChatboxPublisher {
     ) -> AppResult<PublisherSubmitOutcome> {
         let mut state = self.lock_state()?;
         if state.lifecycle != PublisherLifecycle::Running
-            || self.shared.generation.is_hard_stopped()
+            || self.shared.generation.is_hard_stop_requested()
         {
             return Ok(PublisherSubmitOutcome::Closed);
         }

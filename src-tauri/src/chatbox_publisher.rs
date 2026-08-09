@@ -249,7 +249,7 @@ impl CompletedChatboxPublisher {
             CompletedPublisherEvent::Started { unit_id } => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
-                    || self.shared.generation.is_hard_stopped()
+                    || self.shared.generation.is_hard_stop_requested()
                 {
                     return Ok(PublisherSubmitOutcome::Closed);
                 }
@@ -262,7 +262,7 @@ impl CompletedChatboxPublisher {
             CompletedPublisherEvent::Aborted { unit_id } => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
-                    || self.shared.generation.is_hard_stopped()
+                    || self.shared.generation.is_hard_stop_requested()
                 {
                     return Ok(PublisherSubmitOutcome::Closed);
                 }
@@ -375,7 +375,7 @@ impl CompletedChatboxPublisher {
             Err(error) => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
-                    || self.shared.generation.is_hard_stopped()
+                    || self.shared.generation.is_hard_stop_requested()
                 {
                     return Ok(PublisherSubmitOutcome::Closed);
                 }
@@ -393,7 +393,7 @@ impl CompletedChatboxPublisher {
 
         let mut state = self.lock_state()?;
         if state.lifecycle != PublisherLifecycle::Running
-            || self.shared.generation.is_hard_stopped()
+            || self.shared.generation.is_hard_stop_requested()
         {
             return Ok(PublisherSubmitOutcome::Closed);
         }

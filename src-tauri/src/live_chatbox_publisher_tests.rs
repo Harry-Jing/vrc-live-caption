@@ -960,7 +960,7 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
     let stop_generation = generation.clone();
     let stop = thread::spawn(move || stop_generation.request_stop(None));
     let deadline = Instant::now() + Duration::from_secs(1);
-    while !generation.is_hard_stopped() {
+    while !generation.is_hard_stop_requested() {
         if Instant::now() >= deadline {
             return Err(AppError::runtime(
                 "Stop did not establish its hard boundary.",

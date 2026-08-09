@@ -293,7 +293,7 @@ fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResul
 
     let deadline = Instant::now() + Duration::from_secs(1);
     let generation_closed_before_join = loop {
-        if generation.is_hard_stopped() && !generation.commit_if_active(|| {})? {
+        if generation.is_hard_stop_requested() && !generation.commit_if_active(|| {})? {
             break true;
         }
         if Instant::now() >= deadline {
@@ -343,7 +343,7 @@ fn finished_error_handle_is_reaped_before_a_restart_availability_check() -> AppR
         });
     }
 
-    manager.ensure_start_available(app.handle())?;
+    manager.prepare_for_start(app.handle())?;
     let handle = manager
         .handle
         .lock()
@@ -358,9 +358,9 @@ fn stop_invalidates_an_uncommitted_start_epoch() -> AppResult<()> {
     let manager = RuntimeManager::default();
     let expected_stop_epoch = manager.stop_epoch();
 
-    assert!(manager.start_epoch_is_current(expected_stop_epoch));
+    assert!(manager.stop_epoch_unchanged(expected_stop_epoch));
     manager.stop(app.handle())?;
-    assert!(!manager.start_epoch_is_current(expected_stop_epoch));
+    assert!(!manager.stop_epoch_unchanged(expected_stop_epoch));
     Ok(())
 }
 
@@ -582,12 +582,12 @@ fn stop_cancels_work_before_waiting_for_an_app_commit() -> AppResult<()> {
 #[test]
 fn a_full_recognition_queue_reports_backpressure_without_disguising_it_as_stop() -> AppResult<()> {
     let generation = RuntimeGeneration::active();
-    let attempt = ConnectionAttempt::default();
+    let attempt = ConnectionAttemptCancelToken::default();
     let (sender, _receiver) = sync_channel(1);
     send_recognition_command(
         &attempt,
         &sender,
-        RecognitionCommand::Audio {
+        RecognitionCommand::AppendAudio {
             sample_rate_hz: 24_000,
             samples: vec![0.1],
         },
@@ -596,7 +596,7 @@ fn a_full_recognition_queue_reports_backpressure_without_disguising_it_as_stop()
     let error = send_recognition_command(
         &attempt,
         &sender,
-        RecognitionCommand::Audio {
+        RecognitionCommand::AppendAudio {
             sample_rate_hz: 24_000,
             samples: vec![0.2],
         },
@@ -618,14 +618,14 @@ fn a_full_recognition_queue_reports_backpressure_without_disguising_it_as_stop()
 #[test]
 fn a_closed_worker_channel_cancels_only_the_connection_attempt() -> AppResult<()> {
     let generation = RuntimeGeneration::active();
-    let attempt = ConnectionAttempt::default();
+    let attempt = ConnectionAttemptCancelToken::default();
     let (sender, receiver) = sync_channel(1);
     drop(receiver);
 
     send_recognition_command(
         &attempt,
         &sender,
-        RecognitionCommand::Audio {
+        RecognitionCommand::AppendAudio {
             sample_rate_hz: 24_000,
             samples: vec![0.1],
         },
@@ -670,19 +670,19 @@ fn microphone_probe_lease_excludes_runtime_start_until_released() -> AppResult<(
 
     let probe = manager.begin_audio_probe(app.handle())?;
     let start_error = manager
-        .ensure_start_available(app.handle())
+        .prepare_for_start(app.handle())
         .err()
         .ok_or_else(|| AppError::state("Runtime start ignored the active microphone probe."))?;
     assert_eq!(start_error.code(), "runtime.failed");
 
     drop(probe);
-    manager.ensure_start_available(app.handle())?;
+    manager.prepare_for_start(app.handle())?;
     Ok(())
 }
 
 #[test]
 fn one_capture_callback_dispatches_every_segmenter_update_in_order() -> AppResult<()> {
-    let attempt = ConnectionAttempt::default();
+    let attempt = ConnectionAttemptCancelToken::default();
     let (sender, receiver) = sync_channel(4);
     let mut segmenter = SpeechSegmenter::new(10, 0.1, Duration::from_millis(100), 0.3, 0.3, 0.0);
     let updates = segmenter.push_samples(vec![0.21, 0.22, 0.23, 0.24], Instant::now());
@@ -693,7 +693,7 @@ fn one_capture_callback_dispatches_every_segmenter_update_in_order() -> AppResul
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| AppError::state("The first bounded unit was not dispatched."))?
     {
-        RecognitionCommand::Start { initial_audio, .. } => {
+        RecognitionCommand::StartUnit { initial_audio, .. } => {
             assert_eq!(initial_audio, vec![0.21, 0.22, 0.23]);
         }
         _ => return Err(AppError::state("The first bounded unit did not start.")),
@@ -708,7 +708,7 @@ fn one_capture_callback_dispatches_every_segmenter_update_in_order() -> AppResul
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| AppError::state("The callback remainder was not dispatched."))?
     {
-        RecognitionCommand::Start { initial_audio, .. } => {
+        RecognitionCommand::StartUnit { initial_audio, .. } => {
             assert_eq!(initial_audio, vec![0.24]);
         }
         _ => {
@@ -774,7 +774,7 @@ fn runtime_thread_panic_invalidates_generation_and_closes_publisher() -> AppResu
     });
     assert!(panicking_runtime.join().is_err());
 
-    assert!(generation.is_hard_stopped());
+    assert!(generation.is_hard_stop_requested());
     assert!(!generation.commit_if_active(|| {})?);
     publisher.join()?;
     assert_eq!(

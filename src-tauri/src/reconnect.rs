@@ -5,7 +5,7 @@ use std::time::Duration;
 
 const BASE_RECONNECT_DELAY_MILLIS: u64 = 500;
 const MAX_RECONNECT_DELAY_MILLIS: u64 = 30_000;
-const STABLE_CONNECTION_RESET_AFTER: Duration = Duration::from_secs(30);
+const BACKOFF_RESET_AFTER_STABLE_CONNECTION: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReconnectDecision {
@@ -21,7 +21,7 @@ pub(crate) struct ReconnectSupervisor {
 }
 
 impl ReconnectSupervisor {
-    pub(crate) fn begin_connection(&mut self) -> u64 {
+    pub(crate) fn begin_connection_attempt(&mut self) -> u64 {
         self.connection_epoch = self.connection_epoch.saturating_add(1);
         self.connection_epoch
     }
@@ -44,7 +44,7 @@ impl ReconnectSupervisor {
             return ReconnectDecision::Terminal;
         }
 
-        if connected_for.is_some_and(|duration| duration >= STABLE_CONNECTION_RESET_AFTER) {
+        if connected_for.is_some_and(|duration| duration >= BACKOFF_RESET_AFTER_STABLE_CONNECTION) {
             self.consecutive_failures = 0;
         }
 

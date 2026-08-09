@@ -133,13 +133,13 @@ enum RuntimePublisherInit {
 }
 
 enum RecognitionCommand {
-    Start {
+    StartUnit {
         unit_id: String,
         started_at_ms: u64,
         sample_rate_hz: u32,
         initial_audio: Vec<f32>,
     },
-    Audio {
+    AppendAudio {
         sample_rate_hz: u32,
         samples: Vec<f32>,
     },
@@ -147,11 +147,11 @@ enum RecognitionCommand {
 }
 
 #[derive(Clone, Default)]
-struct ConnectionAttempt {
+struct ConnectionAttemptCancelToken {
     cancelled: Arc<AtomicBool>,
 }
 
-impl ConnectionAttempt {
+impl ConnectionAttemptCancelToken {
     fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
     }
@@ -360,7 +360,7 @@ impl RuntimeGeneration {
         match publisher.observe_snapshot(&snapshot) {
             Ok(PublisherSubmitOutcome::Handled) => {}
             Ok(PublisherSubmitOutcome::Closed) => {
-                if !self.is_hard_stopped() {
+                if !self.is_hard_stop_requested() {
                     emit_diagnostic(
                         app,
                         DiagnosticUpdate::info(
@@ -395,11 +395,11 @@ impl RuntimeManager {
         self.stop_epoch.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn start_epoch_is_current(&self, expected_stop_epoch: u64) -> bool {
+    pub(crate) fn stop_epoch_unchanged(&self, expected_stop_epoch: u64) -> bool {
         self.stop_epoch() == expected_stop_epoch
     }
 
-    pub(crate) fn ensure_start_available<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<()> {
+    pub(crate) fn prepare_for_start<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<()> {
         let mut guard = self
             .handle
             .lock()
@@ -475,7 +475,7 @@ impl RuntimeManager {
         // comparison and handle installation are therefore one linearized
         // decision: an earlier Start cannot come back to life after Stop has
         // already returned while Start was resolving slow desired-state I/O.
-        if !self.start_epoch_is_current(expected_stop_epoch) {
+        if !self.stop_epoch_unchanged(expected_stop_epoch) {
             return Ok(RuntimeStartOutcome::SupersededByStop);
         }
 
@@ -489,7 +489,7 @@ impl RuntimeManager {
         }
 
         let generation = RuntimeGeneration::activate(&app, generation_id, caption_session)?;
-        let start_cancelled = || !self.start_epoch_is_current(expected_stop_epoch);
+        let start_cancelled = || !self.stop_epoch_unchanged(expected_stop_epoch);
         let publisher_init = initialize_runtime_publisher(
             &app,
             &config.osc,
@@ -844,7 +844,7 @@ fn supervise_runtime_thread<R: Runtime>(
         }
     };
 
-    let reason = if generation.is_hard_stopped() {
+    let reason = if generation.is_hard_stop_requested() {
         PublisherCloseReason::Stop
     } else {
         PublisherCloseReason::RuntimeError
@@ -858,7 +858,7 @@ fn supervise_runtime_thread<R: Runtime>(
             "runtime stopped with error"
         );
 
-        if generation.is_hard_stopped() {
+        if generation.is_hard_stop_requested() {
             return;
         }
 
@@ -959,18 +959,18 @@ fn run_openai_runtime<R: Runtime>(
     generation: RuntimeGeneration,
     host_resolver: HostResolver,
 ) -> AppResult<()> {
-    if !generation.try_begin_work() {
+    if !generation.accepts_new_work() {
         return Ok(());
     }
 
     let mut reconnect = ReconnectSupervisor::default();
     let mut audio_level_revision = 0_u64;
     loop {
-        if generation.is_work_cancelled() || generation.is_hard_stopped() {
+        if generation.is_work_cancelled() || generation.is_hard_stop_requested() {
             return Ok(());
         }
 
-        let connection_epoch = reconnect.begin_connection();
+        let connection_epoch = reconnect.begin_connection_attempt();
         let context = OpenAiRealtimeSessionContext {
             generation: generation.generation_id(),
             connection_epoch,
@@ -1001,7 +1001,7 @@ fn run_openai_runtime<R: Runtime>(
             Err(error) => (Err(error), None),
         };
 
-        if generation.is_hard_stopped() {
+        if generation.is_hard_stop_requested() {
             return Ok(());
         }
 
@@ -1052,7 +1052,7 @@ fn run_connected_openai_attempt<R: Runtime, S: RecognitionSession + 'static>(
     reconnect: &mut ReconnectSupervisor,
     audio_level_revision: &mut u64,
 ) -> AppResult<()> {
-    if generation.is_hard_stopped() {
+    if generation.is_hard_stop_requested() {
         recognition.stop()?;
         return Ok(());
     }
@@ -1070,7 +1070,7 @@ fn run_connected_openai_attempt<R: Runtime, S: RecognitionSession + 'static>(
             return Err(error);
         }
     };
-    if generation.is_hard_stopped() {
+    if generation.is_hard_stop_requested() {
         recognition.stop()?;
         return Ok(());
     }
@@ -1112,7 +1112,7 @@ fn run_connected_openai_attempt<R: Runtime, S: RecognitionSession + 'static>(
     }
     reconnect.mark_running();
 
-    let attempt = ConnectionAttempt::default();
+    let attempt = ConnectionAttemptCancelToken::default();
     let (recognition_sender, recognition_receiver) =
         sync_channel(RECOGNITION_COMMAND_QUEUE_CAPACITY);
     let recognition_worker = spawn_recognition_worker(
@@ -1181,7 +1181,7 @@ fn run_connected_openai_attempt<R: Runtime, S: RecognitionSession + 'static>(
     let worker_result = recognition_worker
         .join()
         .map_err(|_| AppError::runtime("Recognition worker thread panicked while stopping."))?;
-    if tail_speech_discarded && !generation.is_hard_stopped() {
+    if tail_speech_discarded && !generation.is_hard_stop_requested() {
         emit_diagnostic(
             app,
             DiagnosticUpdate::info(
@@ -1203,7 +1203,7 @@ fn run_connected_openai_attempt<R: Runtime, S: RecognitionSession + 'static>(
             Err(runtime_error)
         }
         (Err(runtime_error), Ok(())) => Err(runtime_error),
-        (Ok(()), Err(worker_error)) if !generation.is_hard_stopped() => Err(worker_error),
+        (Ok(()), Err(worker_error)) if !generation.is_hard_stop_requested() => Err(worker_error),
         (Ok(()), Err(_)) | (Ok(()), Ok(())) => Ok(()),
     }
 }
@@ -1218,7 +1218,7 @@ fn reconnect_jitter_percent() -> u32 {
 
 fn wait_for_reconnect(generation: &RuntimeGeneration, delay: Duration) -> bool {
     let deadline = Instant::now() + delay;
-    while !generation.is_work_cancelled() && !generation.is_hard_stopped() {
+    while !generation.is_work_cancelled() && !generation.is_hard_stop_requested() {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return true;
@@ -1229,7 +1229,7 @@ fn wait_for_reconnect(generation: &RuntimeGeneration, delay: Duration) -> bool {
 }
 
 fn apply_segmenter_updates(
-    attempt: &ConnectionAttempt,
+    attempt: &ConnectionAttemptCancelToken,
     recognition_sender: &SyncSender<RecognitionCommand>,
     sample_rate_hz: u32,
     updates: impl IntoIterator<Item = crate::segmenter::SegmenterUpdate>,
@@ -1241,7 +1241,7 @@ fn apply_segmenter_updates(
 }
 
 fn apply_segmenter_update(
-    attempt: &ConnectionAttempt,
+    attempt: &ConnectionAttemptCancelToken,
     recognition_sender: &SyncSender<RecognitionCommand>,
     sample_rate_hz: u32,
     update: crate::segmenter::SegmenterUpdate,
@@ -1250,7 +1250,7 @@ fn apply_segmenter_update(
         return send_recognition_command(
             attempt,
             recognition_sender,
-            RecognitionCommand::Start {
+            RecognitionCommand::StartUnit {
                 unit_id: next_utterance_id("speech"),
                 started_at_ms: now_ms(),
                 sample_rate_hz,
@@ -1269,7 +1269,7 @@ fn apply_segmenter_update(
         send_recognition_command(
             attempt,
             recognition_sender,
-            RecognitionCommand::Audio {
+            RecognitionCommand::AppendAudio {
                 sample_rate_hz,
                 samples: update.audio,
             },
@@ -1282,7 +1282,7 @@ fn apply_segmenter_update(
 }
 
 fn send_recognition_command(
-    attempt: &ConnectionAttempt,
+    attempt: &ConnectionAttemptCancelToken,
     sender: &SyncSender<RecognitionCommand>,
     command: RecognitionCommand,
 ) -> AppResult<()> {
@@ -1305,7 +1305,7 @@ fn spawn_recognition_worker<R: Runtime, S: RecognitionSession + 'static>(
     app: AppHandle<R>,
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
-    attempt: ConnectionAttempt,
+    attempt: ConnectionAttemptCancelToken,
     recognition: S,
     receiver: Receiver<RecognitionCommand>,
 ) -> AppResult<JoinHandle<AppResult<()>>> {
@@ -1325,14 +1325,14 @@ fn run_recognition_worker<R: Runtime>(
     app: AppHandle<R>,
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
-    attempt: ConnectionAttempt,
+    attempt: ConnectionAttemptCancelToken,
     mut recognition: impl RecognitionSession,
     receiver: Receiver<RecognitionCommand>,
 ) -> AppResult<()> {
     let work_result = (|| -> AppResult<()> {
         while !generation.is_work_cancelled() && !attempt.is_cancelled() {
             match receiver.recv_timeout(RECOGNITION_EVENT_POLL_INTERVAL) {
-                Ok(RecognitionCommand::Start {
+                Ok(RecognitionCommand::StartUnit {
                     unit_id,
                     started_at_ms,
                     sample_rate_hz,
@@ -1347,7 +1347,7 @@ fn run_recognition_worker<R: Runtime>(
                         samples: &initial_audio,
                     })?;
                 }
-                Ok(RecognitionCommand::Audio {
+                Ok(RecognitionCommand::AppendAudio {
                     sample_rate_hz,
                     samples,
                 }) => recognition.append_audio(RecognitionAudioChunk {
@@ -1380,7 +1380,7 @@ fn run_recognition_worker<R: Runtime>(
             Err(work_error)
         }
         (Err(work_error), Ok(())) => Err(work_error),
-        (Ok(()), Err(stop_error)) if !generation.is_hard_stopped() => Err(stop_error),
+        (Ok(()), Err(stop_error)) if !generation.is_hard_stop_requested() => Err(stop_error),
         (Ok(()), Err(_)) | (Ok(()), Ok(())) => Ok(()),
     }
 }
@@ -1408,7 +1408,7 @@ fn submit_completed_chatbox_candidate<R: Runtime>(
     {
         Ok(PublisherSubmitOutcome::Handled) => {}
         Ok(PublisherSubmitOutcome::Closed) => {
-            if generation.is_hard_stopped() {
+            if generation.is_hard_stop_requested() {
                 emit_chatbox_send_skipped_on_stop(app);
             } else {
                 emit_diagnostic(

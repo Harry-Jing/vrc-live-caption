@@ -100,14 +100,14 @@ impl AppState {
             .lock()
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
 
-        if !self.runtime.start_epoch_is_current(expected_stop_epoch) {
+        if !self.runtime.stop_epoch_unchanged(expected_stop_epoch) {
             return self.runtime_control_snapshot();
         }
 
         // Reject an active generation before touching the credential store.
         // A second Start must remain an idempotency error even if the key used
         // by the active session was deleted after that session began.
-        self.runtime.ensure_start_available(app)?;
+        self.runtime.prepare_for_start(app)?;
 
         let (config, config_requires_review, config_revision, credential_revision) = {
             let control = self.lock_control()?;
@@ -310,7 +310,7 @@ impl AppState {
         // it while holding the control lock so either this Error is committed
         // first and Stop overwrites it, or the Stop intent wins and this older
         // Start cannot overwrite Stopping/Stopped afterward.
-        if !self.runtime.start_epoch_is_current(expected_stop_epoch) {
+        if !self.runtime.stop_epoch_unchanged(expected_stop_epoch) {
             return Ok(None);
         }
 
