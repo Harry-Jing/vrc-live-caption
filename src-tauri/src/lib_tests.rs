@@ -120,6 +120,26 @@ fn unsaved_changes_dialog_has_a_narrow_message_permission() {
 }
 
 #[test]
+fn diagnostic_report_has_write_only_clipboard_permissions() {
+    let production_lib = production_lib_source();
+    let desktop_capability = include_str!("../capabilities/default.json");
+
+    assert!(production_lib.contains("tauri_plugin_clipboard_manager::init()"));
+    assert!(desktop_capability.contains("\"core:app:allow-version\""));
+    assert!(desktop_capability.contains("\"clipboard-manager:allow-write-text\""));
+
+    for permission in [
+        "clipboard-manager:default",
+        "clipboard-manager:allow-read-text",
+        "clipboard-manager:allow-read-image",
+        "clipboard-manager:allow-write-image",
+        "clipboard-manager:allow-clear",
+    ] {
+        assert!(!desktop_capability.contains(&format!("\"{permission}\"")));
+    }
+}
+
+#[test]
 #[expect(
     deprecated,
     reason = "Tauri's mock runtime requires one run iteration to execute the production setup hook."

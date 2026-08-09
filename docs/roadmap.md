@@ -170,8 +170,9 @@ recorded no-go defers Live translation without blocking the release.
 
 ## Phase 7: Localization, diagnostics, and headset UX
 
-Status: groundwork started — a typed English frontend catalog exists; the
-locale switch and diagnostic mapping do not.
+Status: groundwork started — a typed English frontend catalog and a copyable,
+redacted diagnostic report exist; the locale switch and diagnostic mapping do
+not.
 
 Goal: make the app operable by English- and Chinese-speaking players.
 
@@ -179,7 +180,6 @@ Goal: make the app operable by English- and Chinese-speaking players.
   from stable codes
   ([ADR 0014](./adr/0014-diagnostic-codes-are-category-detail.md),
   [ADR 0008](./adr/0008-localize-the-ui-in-the-frontend.md));
-- add a copyable, redacted diagnostic report;
 - compare global hotkeys, auto-start with VRChat, and a later overlay, then
   implement the smallest headset-friendly start/stop/error surface.
 

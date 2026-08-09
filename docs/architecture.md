@@ -178,6 +178,12 @@ not UI-facing compatibility contracts. The UI derives listening state from
 caption-session `activeUnits`; recognition failures remain visible through
 diagnostics.
 
+The Diagnostics page can copy a versioned, redacted JSON report containing
+only app metadata, the latest runtime status, and the bounded in-memory
+diagnostic events. Caption text, configuration, and provider-secret status are
+not report inputs. Clipboard access is write-only, and the App does not create
+or retain a report file.
+
 Rust owns one versioned caption-session aggregate,
 `CaptionSessionSnapshotV1`: a monotonic aggregate revision, backend-assigned
 generation and stream identity, active units, and full-text caption snapshots
@@ -195,6 +201,11 @@ and hides stale readings outside Running. A shared JSON fixture pins the Rust
 caption serialization and TypeScript runtime decoder to the same V1 wire
 shape. Admission, ordering, and reload-race handling live in reducers and
 their tests.
+
+A shared IPC manifest pins the five UI-facing Tauri event names and all invoke
+command names in Rust and TypeScript. A separate wire-vocabulary manifest pins
+every closed cross-language enum value and tagged-union discriminator; the
+scenario fixtures continue to pin complete payload shapes.
 
 Caption text never contains presentation placeholders; the UI derives
 listening, translating, degraded, and failure states from lifecycle and

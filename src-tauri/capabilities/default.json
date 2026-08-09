@@ -7,6 +7,8 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "core:app:allow-version",
+    "clipboard-manager:allow-write-text",
     "dialog:allow-message",
     "allow-save-app-config",
     "allow-list-audio-input-devices",

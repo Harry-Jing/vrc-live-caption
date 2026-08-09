@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import EventFeed from "../components/EventFeed.vue";
 import { uiText } from "../i18n/uiText";
+import { copyDiagnosticReport } from "../runtime/diagnosticReport";
 import { formatTime } from "../runtime/format";
 import { useRuntimeContext } from "../runtime/context";
 import {
@@ -9,6 +11,34 @@ import {
 } from "../runtime/presentation";
 
 const { completedCaptions, diagnostics, runtimeStatus } = useRuntimeContext();
+
+const reportCopyState = ref<"idle" | "copying" | "copied" | "failed">("idle");
+const reportCopyLabel = computed(() => {
+  switch (reportCopyState.value) {
+    case "copying":
+      return uiText("diagnostics.report.copying");
+    case "copied":
+      return uiText("diagnostics.report.copied");
+    case "failed":
+      return uiText("diagnostics.report.copyFailed");
+    case "idle":
+      return uiText("diagnostics.report.copy");
+  }
+});
+
+async function copyReport() {
+  reportCopyState.value = "copying";
+  try {
+    await copyDiagnosticReport({
+      diagnostics: diagnostics.value,
+      runtimeStatus: runtimeStatus.value,
+    });
+    reportCopyState.value = "copied";
+  } catch (error) {
+    console.error("Failed to copy the diagnostic report.", error);
+    reportCopyState.value = "failed";
+  }
+}
 </script>
 
 <template>
@@ -25,7 +55,15 @@ const { completedCaptions, diagnostics, runtimeStatus } = useRuntimeContext();
         </h1>
       </div>
 
-      <div class="flex flex-wrap gap-2">
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <UButton
+          color="neutral"
+          :loading="reportCopyState === 'copying'"
+          variant="outline"
+          @click="copyReport"
+        >
+          {{ reportCopyLabel }}
+        </UButton>
         <UBadge
           :color="runtimeStatusColor[runtimeStatus.status]"
           variant="subtle"
@@ -35,6 +73,7 @@ const { completedCaptions, diagnostics, runtimeStatus } = useRuntimeContext();
         <UBadge color="neutral" variant="subtle">
           {{ formatTime(runtimeStatus.timestampMs) }}
         </UBadge>
+        <span class="sr-only" aria-live="polite">{{ reportCopyLabel }}</span>
       </div>
     </header>
 
