@@ -24,7 +24,7 @@ fn status_snapshot_is_updated_before_event_delivery() -> AppResult<()> {
         let _ = snapshot_sender.send(snapshot);
     });
 
-    emit_status(
+    record_and_emit_runtime_status(
         app.handle(),
         RuntimeStatus::Running,
         Some("Listening for microphone speech".to_string()),
@@ -54,7 +54,7 @@ fn authoritative_control_event_precedes_the_legacy_status_event() -> AppResult<(
         let _ = event_sender.send(("status", event.payload().to_string()));
     });
 
-    emit_status(
+    record_and_emit_runtime_status(
         app.handle(),
         RuntimeStatus::Running,
         Some("running".to_string()),

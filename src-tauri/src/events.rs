@@ -235,7 +235,7 @@ pub(crate) enum DiagnosticSeverity {
     Warning,
 }
 
-pub(crate) fn emit_status<R: Runtime>(
+pub(crate) fn record_and_emit_runtime_status<R: Runtime>(
     app: &AppHandle<R>,
     status: RuntimeStatus,
     message: Option<String>,
@@ -264,7 +264,7 @@ pub(crate) fn emit_status<R: Runtime>(
     };
 
     if let Some(snapshot) = snapshot {
-        emit_recorded_status(app, snapshot);
+        emit_runtime_control_and_status(app, snapshot);
     } else {
         emit_event(app, EVENT_RUNTIME_STATUS, event);
     }
@@ -284,7 +284,7 @@ pub(crate) fn emit_caption_session_changed<R: Runtime>(
     emit_event(app, EVENT_CAPTION_SESSION_CHANGED, snapshot);
 }
 
-pub(crate) fn emit_recorded_status<R: Runtime>(
+pub(crate) fn emit_runtime_control_and_status<R: Runtime>(
     app: &AppHandle<R>,
     snapshot: RuntimeControlSnapshot,
 ) {
@@ -355,7 +355,7 @@ pub(crate) fn emit_diagnostic<R: Runtime>(app: &AppHandle<R>, update: Diagnostic
     );
 }
 
-pub(crate) fn next_utterance_id(prefix: &str) -> String {
+pub(crate) fn next_caption_unit_id(prefix: &str) -> String {
     next_event_id(prefix)
 }
 

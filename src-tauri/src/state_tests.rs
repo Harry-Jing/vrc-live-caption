@@ -222,7 +222,7 @@ fn recorded_start_error_publishes_control_before_legacy_status() -> AppResult<()
         .state::<AppState>()
         .record_start_error(&AppError::config("Invalid test configuration."), None)?;
 
-    emit_recorded_status(app.handle(), snapshot);
+    emit_runtime_control_and_status(app.handle(), snapshot);
 
     let (first_kind, first_payload) = event_receiver
         .recv_timeout(Duration::from_secs(1))
@@ -314,7 +314,7 @@ fn osc_test_keeps_using_an_error_sessions_selected_target() -> AppResult<()> {
         control.config.osc.port = 9020;
     }
 
-    let effective = state.osc_config_for_test()?;
+    let effective = state.osc_config_for_test_message()?;
     assert_eq!(effective.host, "192.0.2.10");
     assert_eq!(effective.port, 9010);
     Ok(())

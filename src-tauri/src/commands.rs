@@ -131,7 +131,7 @@ pub(crate) fn get_caption_session_snapshot(
 
 #[tauri::command(async)]
 pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    let osc_config = state.osc_config_for_test()?;
+    let osc_config = state.osc_config_for_test_message()?;
     let chatbox_pacer = state.chatbox_pacer();
     let host_resolver = state.host_resolver();
 

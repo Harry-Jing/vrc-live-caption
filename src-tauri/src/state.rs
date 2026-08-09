@@ -13,7 +13,7 @@ use crate::config::{AppConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, RuntimeStatusEvent, emit_diagnostic,
-    emit_recorded_status,
+    emit_runtime_control_and_status,
 };
 use crate::host_resolver::HostResolver;
 use crate::runtime::{RuntimeManager, RuntimeStartOutcome, RuntimeStartRequest};
@@ -22,7 +22,7 @@ use crate::runtime_control::{
     RuntimeSessionPhase, RuntimeSessionSnapshot, pending_session_changes,
 };
 use crate::secrets::{
-    ProviderSecretStatus, delete_provider_secret, openai_api_key, provider_secret_statuses,
+    ProviderSecretStatus, delete_provider_secret, provider_secret_statuses, resolve_openai_api_key,
     save_provider_secret,
 };
 use std::fs;
@@ -128,7 +128,7 @@ impl AppState {
         if let Err(error) = ensure_runtime_plan_is_startable(&runtime_plan) {
             return self.finish_start_failure(app, error, None, expected_stop_epoch);
         }
-        let resolved = match openai_api_key() {
+        let resolved = match resolve_openai_api_key() {
             Ok(resolved) => resolved,
             Err(error) => {
                 emit_diagnostic(
@@ -349,7 +349,7 @@ impl AppState {
             expected_stop_epoch,
         )? {
             Some(snapshot) => {
-                emit_recorded_status(app, snapshot);
+                emit_runtime_control_and_status(app, snapshot);
                 Err(error)
             }
             None => self.runtime_control_snapshot(),
@@ -374,7 +374,7 @@ impl AppState {
         self.host_resolver.clone()
     }
 
-    pub(crate) fn osc_config_for_test(&self) -> AppResult<crate::config::OscConfig> {
+    pub(crate) fn osc_config_for_test_message(&self) -> AppResult<crate::config::OscConfig> {
         let control = self.lock_control()?;
         Ok(control
             .session

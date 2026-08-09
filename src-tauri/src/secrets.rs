@@ -12,7 +12,7 @@ use serde::Serialize;
 use std::env;
 use zeroize::Zeroizing;
 
-const SECRET_SERVICE: &str = "io.github.harry-jing.vrc-live-caption";
+const KEYRING_SERVICE_ID: &str = "io.github.harry-jing.vrc-live-caption";
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const OPENAI_ACCOUNT: &str = "provider/openai/default/api-key";
 
@@ -101,7 +101,7 @@ pub(crate) fn delete_provider_secret(provider: SttProvider) -> AppResult<()> {
     }
 }
 
-pub(crate) fn openai_api_key() -> AppResult<ResolvedProviderSecret> {
+pub(crate) fn resolve_openai_api_key() -> AppResult<ResolvedProviderSecret> {
     match read_system_secret(OPENAI_ACCOUNT) {
         Ok(Some(secret)) => Ok(resolved_secret(
             secret,
@@ -260,7 +260,7 @@ fn delete_system_secret(_account: &str) -> AppResult<()> {
 fn system_entry(account: &str) -> AppResult<Entry> {
     system_credential_store()
         .map_err(|error| keyring_error("open", error))?
-        .build(SECRET_SERVICE, account, None)
+        .build(KEYRING_SERVICE_ID, account, None)
         .map_err(|error| keyring_error("open", error))
 }
 

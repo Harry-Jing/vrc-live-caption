@@ -32,8 +32,8 @@ use crate::config::{AppConfig, OscConfig};
 use crate::error::{AppError, AppResult};
 use crate::events::{
     AudioLevelEvent, DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, UtteranceEndReason,
-    emit_audio_level, emit_diagnostic, emit_status, emit_utterance_ended, emit_utterance_started,
-    next_utterance_id, now_ms,
+    emit_audio_level, emit_diagnostic, emit_utterance_ended, emit_utterance_started,
+    next_caption_unit_id, now_ms, record_and_emit_runtime_status,
 };
 use crate::host_resolver::HostResolver;
 use crate::live_chatbox_publisher::{LiveChatboxPublisher, LivePublisherReporter};
@@ -611,7 +611,7 @@ impl RuntimeManager {
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
 
         let Some(handle) = guard.take() else {
-            emit_status(
+            record_and_emit_runtime_status(
                 app,
                 RuntimeStatus::Stopped,
                 Some("Runtime is already stopped".to_string()),
@@ -636,7 +636,7 @@ impl RuntimeManager {
                 ),
             );
         }
-        emit_status(
+        record_and_emit_runtime_status(
             app,
             RuntimeStatus::Stopping,
             Some("Stopping runtime and discarding pending speech".to_string()),
@@ -664,11 +664,11 @@ impl RuntimeManager {
 
         if runtime_panicked {
             let error = AppError::runtime("Runtime thread panicked while stopping.");
-            emit_status(app, RuntimeStatus::Error, Some(error.to_string()));
+            record_and_emit_runtime_status(app, RuntimeStatus::Error, Some(error.to_string()));
             return Err(error);
         }
 
-        emit_status(
+        record_and_emit_runtime_status(
             app,
             RuntimeStatus::Stopped,
             Some("Runtime stopped".to_string()),
@@ -826,7 +826,7 @@ fn supervise_runtime_thread<R: Runtime>(
         Err(panic) => {
             finish_runtime_output(app, generation, publisher, PublisherCloseReason::Stop);
             tracing::error!("runtime thread panicked; its generation and Publisher were stopped");
-            emit_status(
+            record_and_emit_runtime_status(
                 app,
                 RuntimeStatus::Error,
                 Some("Runtime thread panicked and was stopped".to_string()),
@@ -862,7 +862,7 @@ fn supervise_runtime_thread<R: Runtime>(
             return;
         }
 
-        emit_status(app, RuntimeStatus::Error, Some(error.to_string()));
+        record_and_emit_runtime_status(app, RuntimeStatus::Error, Some(error.to_string()));
         emit_diagnostic(
             app,
             DiagnosticUpdate::from_error(&error, "Runtime stopped with an error"),
@@ -931,7 +931,7 @@ fn run_runtime<R: Runtime>(
     host_resolver: HostResolver,
 ) -> AppResult<()> {
     let started = generation.commit_if_active(|| {
-        emit_status(
+        record_and_emit_runtime_status(
             &app,
             RuntimeStatus::Starting,
             Some("Starting outgoing caption runtime".to_string()),
@@ -1018,7 +1018,7 @@ fn run_openai_runtime<R: Runtime>(
         generation.abort_active_units_for_reconnect(&app, publisher.as_ref())?;
         let delay_ms = delay.as_millis();
         let reconnecting = generation.commit_if_active(|| {
-            emit_status(
+            record_and_emit_runtime_status(
                 &app,
                 RuntimeStatus::Reconnecting,
                 Some(format!(
@@ -1080,7 +1080,7 @@ fn run_connected_openai_attempt<R: Runtime, S: RecognitionSession + 'static>(
         .map_err(|error| AppError::audio(error.to_string()))?;
     let reconnected = reconnect.is_recovery();
     let running = generation.commit_if_active(|| {
-        emit_status(
+        record_and_emit_runtime_status(
             app,
             RuntimeStatus::Running,
             Some("Listening for microphone speech".to_string()),
@@ -1251,7 +1251,7 @@ fn apply_segmenter_update(
             attempt,
             recognition_sender,
             RecognitionCommand::StartUnit {
-                unit_id: next_utterance_id("speech"),
+                unit_id: next_caption_unit_id("speech"),
                 started_at_ms: now_ms(),
                 sample_rate_hz,
                 initial_audio: update.audio,
