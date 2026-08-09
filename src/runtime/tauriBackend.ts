@@ -18,7 +18,6 @@ import {
   type AppConfig,
   type AudioInputDevice,
   type AudioProbeRequest,
-  type RuntimeBackendCommand,
   type SttProvider,
 } from "./types";
 
@@ -135,8 +134,8 @@ export function createTauriBackend(
       };
     },
 
-    async runCommand(command: RuntimeBackendCommand) {
-      await bridge.invoke(command);
+    async sendOscTestMessage() {
+      await bridge.invoke("send_osc_test_message");
     },
 
     startRuntime() {

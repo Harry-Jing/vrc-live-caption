@@ -11,8 +11,8 @@ import {
 import { createLifecycleCommandQueue } from "./lifecycleCommandQueue";
 import {
   projectRuntimeControlSnapshot,
-  reconcileRuntimeControlSnapshot,
   runtimeStatusNeedsControlReconciliation,
+  selectNewerRuntimeControlSnapshot,
 } from "./runtimeControl";
 import {
   createRuntimeReadinessGate,
@@ -129,7 +129,9 @@ export function useRuntime() {
   const desiredRuntimePlan = computed(
     () => controlView.value.desiredRuntimePlan,
   );
-  const activeRuntimePlan = computed(() => controlView.value.activeRuntimePlan);
+  const sessionRuntimePlan = computed(
+    () => controlView.value.sessionRuntimePlan,
+  );
   const currentSession = computed(() => controlView.value.currentSession);
   const currentSetupConfig = computed(
     () => controlView.value.currentSetupConfig,
@@ -204,7 +206,7 @@ export function useRuntime() {
 
   function storeControlSnapshot(snapshot: RuntimeControlSnapshot) {
     const previous = controlSnapshot.value;
-    const next = reconcileRuntimeControlSnapshot(previous, snapshot);
+    const next = selectNewerRuntimeControlSnapshot(previous, snapshot);
 
     if (next === previous) {
       return false;
@@ -332,7 +334,7 @@ export function useRuntime() {
         if (command === "start_runtime" || command === "stop_runtime") {
           await runLifecycleCommand(command);
         } else {
-          await backend.runCommand(command);
+          await backend.sendOscTestMessage();
         }
       });
 
@@ -567,7 +569,6 @@ export function useRuntime() {
   });
 
   return {
-    activeRuntimePlan,
     audioInputDevices,
     audioProbeError: audioInput.audioProbeError,
     audioProbeResult: audioInput.audioProbeResult,
@@ -594,6 +595,7 @@ export function useRuntime() {
     saveConfig,
     saveProviderSecret,
     secretStatuses,
+    sessionRuntimePlan,
     sessionUploadsMicrophoneAudio,
     secretsError,
     settingsError,

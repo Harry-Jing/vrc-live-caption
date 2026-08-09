@@ -81,7 +81,9 @@ async function handleSaveConfig(nextConfig: AppConfig, onSettled: () => void) {
       :is-audio-probe-running="isAudioProbeRunning"
       :pending-session-changes="pendingSessionChanges"
       :session-phase="currentSession?.phase ?? null"
-      :session-uploads-microphone-audio="activeSessionUploadsMicrophoneAudio"
+      :active-session-uploads-microphone-audio="
+        activeSessionUploadsMicrophoneAudio
+      "
       :secret-statuses="secretStatuses"
       :secrets-error="secretsError"
       :settings-error="settingsError"

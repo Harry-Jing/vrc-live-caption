@@ -173,10 +173,10 @@ export function publicationPlanView(
 }
 
 export function publicationDisplayPlanView(
-  activeRuntimePlan: RuntimePlan | null,
+  sessionRuntimePlan: RuntimePlan | null,
   desiredRuntimePlan: RuntimePlan | null,
 ): PublicationPlanView {
-  return publicationPlanView(activeRuntimePlan ?? desiredRuntimePlan);
+  return publicationPlanView(sessionRuntimePlan ?? desiredRuntimePlan);
 }
 
 export function publicationSettingsView(

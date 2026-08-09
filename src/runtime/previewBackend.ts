@@ -128,7 +128,7 @@ export function createPreviewBackend(): RuntimeBackend {
     timestampMs: Date.now(),
   };
 
-  function eventId(prefix: string) {
+  function nextPreviewEventId(prefix: string) {
     nextEventNumber += 1;
     return `${prefix}-preview-${String(nextEventNumber)}`;
   }
@@ -141,7 +141,7 @@ export function createPreviewBackend(): RuntimeBackend {
 
   function emitStatus(status: RuntimeStatus, message: string) {
     latestStatus = { status, message, timestampMs: Date.now() };
-    publishControl();
+    emitControlSnapshot();
     emit({ type: "status", payload: latestStatus });
   }
 
@@ -154,7 +154,7 @@ export function createPreviewBackend(): RuntimeBackend {
     emit({
       type: "diagnostic",
       payload: {
-        id: eventId("diagnostic"),
+        id: nextPreviewEventId("diagnostic"),
         category,
         severity: "info",
         code,
@@ -165,7 +165,7 @@ export function createPreviewBackend(): RuntimeBackend {
     });
   }
 
-  function publishCaptionSession(
+  function emitCaptionSessionUpdate(
     next: Omit<
       CaptionSessionSnapshotV1,
       "contractVersion" | "snapshotRevision"
@@ -244,11 +244,11 @@ export function createPreviewBackend(): RuntimeBackend {
     return pending;
   }
 
-  function oscConfigForTest() {
+  function selectOscTestConfig() {
     return session?.selected.osc ?? config.osc;
   }
 
-  function publishControl() {
+  function emitControlSnapshot() {
     controlRevision += 1;
     const snapshot = controlSnapshot();
 
@@ -289,7 +289,7 @@ export function createPreviewBackend(): RuntimeBackend {
     };
   }
 
-  function startRuntimeControl(): Promise<RuntimeControlSnapshot> {
+  function startPreviewRuntime(): Promise<RuntimeControlSnapshot> {
     if (isActiveRuntimeStatus(latestStatus.status)) {
       return Promise.reject(
         new Error("The browser preview runtime is already active."),
@@ -307,7 +307,7 @@ export function createPreviewBackend(): RuntimeBackend {
     nextGeneration += 1;
     sessionSecretRevision = secretRevision;
     session = createSession("starting");
-    publishCaptionSession({
+    emitCaptionSessionUpdate({
       active: {
         generation: nextGeneration,
         streamId: `recognition-${String(nextGeneration)}-1`,
@@ -336,7 +336,7 @@ export function createPreviewBackend(): RuntimeBackend {
     return Promise.resolve(controlSnapshot());
   }
 
-  function stopRuntimeControl(): Promise<RuntimeControlSnapshot> {
+  function stopPreviewRuntime(): Promise<RuntimeControlSnapshot> {
     if (latestStatus.status === "idle" || latestStatus.status === "stopped") {
       session = null;
       sessionSecretRevision = null;
@@ -348,7 +348,7 @@ export function createPreviewBackend(): RuntimeBackend {
       session = { ...session, phase: "stopping" };
     }
     emitStatus("stopping", "Stopping browser preview runtime");
-    publishCaptionSession({
+    emitCaptionSessionUpdate({
       active: null,
       activeUnits: [],
       captions: captionSession.captions.filter(
@@ -387,8 +387,8 @@ export function createPreviewBackend(): RuntimeBackend {
       });
     },
 
-    runCommand() {
-      const oscConfig = oscConfigForTest();
+    sendOscTestMessage() {
+      const oscConfig = selectOscTestConfig();
 
       emitDiagnostic(
         "osc",
@@ -400,9 +400,9 @@ export function createPreviewBackend(): RuntimeBackend {
       return Promise.resolve();
     },
 
-    startRuntime: startRuntimeControl,
+    startRuntime: startPreviewRuntime,
 
-    stopRuntime: stopRuntimeControl,
+    stopRuntime: stopPreviewRuntime,
 
     getControlSnapshot() {
       return Promise.resolve(controlSnapshot());
@@ -415,7 +415,7 @@ export function createPreviewBackend(): RuntimeBackend {
     saveConfig(nextConfig: AppConfig) {
       config = structuredClone(nextConfig);
       configRevision += 1;
-      publishControl();
+      emitControlSnapshot();
       return Promise.resolve(controlSnapshot());
     },
 
@@ -457,7 +457,7 @@ export function createPreviewBackend(): RuntimeBackend {
 
       openAiSecretSuffix = trimmed.slice(-4);
       secretRevision += 1;
-      publishControl();
+      emitControlSnapshot();
       return Promise.resolve(controlSnapshot());
     },
 
@@ -465,7 +465,7 @@ export function createPreviewBackend(): RuntimeBackend {
       void provider;
       openAiSecretSuffix = null;
       secretRevision += 1;
-      publishControl();
+      emitControlSnapshot();
 
       return Promise.resolve(controlSnapshot());
     },

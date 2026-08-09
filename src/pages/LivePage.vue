@@ -16,7 +16,6 @@ import {
 } from "../runtime/presentation";
 
 const {
-  activeRuntimePlan,
   audioInputDevices,
   captionPreviewStatus,
   completedCaptions,
@@ -31,6 +30,7 @@ const {
   runCommand,
   runtimeError,
   runtimeStatus,
+  sessionRuntimePlan,
   visibleCaptionText,
 } = useRuntimeContext();
 
@@ -111,7 +111,10 @@ const hasActiveSession = computed(() =>
 );
 
 const currentPublication = computed(() =>
-  publicationDisplayPlanView(activeRuntimePlan.value, desiredRuntimePlan.value),
+  publicationDisplayPlanView(
+    sessionRuntimePlan.value,
+    desiredRuntimePlan.value,
+  ),
 );
 
 const currentPublicationLabel = computed(() => {

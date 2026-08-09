@@ -58,7 +58,7 @@ function createFakeTauriBridge(): TauriBackendBridge {
     captions: [],
   };
 
-  function eventId(prefix: string) {
+  function nextEventId(prefix: string) {
     nextEventNumber += 1;
     return `${prefix}-tauri-${String(nextEventNumber)}`;
   }
@@ -76,7 +76,7 @@ function createFakeTauriBridge(): TauriBackendBridge {
 
   function emitStatus(status: RuntimeStatusEvent["status"], message: string) {
     latestStatus = { status, message, timestampMs: timestamp() };
-    publishControl();
+    emitControlSnapshot();
     emit(RUNTIME_EVENTS.status, latestStatus);
   }
 
@@ -96,12 +96,12 @@ function createFakeTauriBridge(): TauriBackendBridge {
     };
   }
 
-  function publishControl() {
+  function emitControlSnapshot() {
     controlRevision += 1;
     emit(RUNTIME_CONTROL_EVENT, controlSnapshot());
   }
 
-  function publishCaptionSession(
+  function emitCaptionSessionUpdate(
     next: Omit<
       CaptionSessionSnapshotV1,
       "contractVersion" | "snapshotRevision"
@@ -121,7 +121,7 @@ function createFakeTauriBridge(): TauriBackendBridge {
     message: string,
   ) {
     emit(RUNTIME_EVENTS.diagnostic, {
-      id: eventId("diagnostic"),
+      id: nextEventId("diagnostic"),
       category,
       severity: "info",
       code,
@@ -178,7 +178,7 @@ function createFakeTauriBridge(): TauriBackendBridge {
           },
           uploadsMicrophoneAudio: true,
         };
-        publishCaptionSession({
+        emitCaptionSessionUpdate({
           active: {
             generation: nextGeneration,
             streamId: `recognition-${String(nextGeneration)}-1`,
@@ -213,7 +213,7 @@ function createFakeTauriBridge(): TauriBackendBridge {
             session = { ...session, phase: "stopping" };
           }
           emitStatus("stopping", "Stopping runtime");
-          publishCaptionSession({
+          emitCaptionSessionUpdate({
             active: null,
             activeUnits: [],
             captions: captionSession.captions.filter(
@@ -244,7 +244,7 @@ function createFakeTauriBridge(): TauriBackendBridge {
       } else if (command === "save_app_config") {
         config = structuredClone(args?.["config"] as AppConfig);
         configRevision += 1;
-        publishControl();
+        emitControlSnapshot();
         result = controlSnapshot();
       }
 
@@ -351,9 +351,9 @@ describe.each(backendCases)("$name contract", ({ create }) => {
       second.push(event);
     });
 
-    await backend.runCommand("send_osc_test_message");
+    await backend.sendOscTestMessage();
     unsubscribeFirst();
-    await backend.runCommand("send_osc_test_message");
+    await backend.sendOscTestMessage();
     unsubscribeSecond();
 
     expect(first).toHaveLength(1);
@@ -370,9 +370,9 @@ describe.each(backendCases)("$name contract", ({ create }) => {
     const unsubscribeSharedFirst = await backend.listen(sharedListener);
     const unsubscribeSharedSecond = await backend.listen(sharedListener);
 
-    await backend.runCommand("send_osc_test_message");
+    await backend.sendOscTestMessage();
     unsubscribeSharedFirst();
-    await backend.runCommand("send_osc_test_message");
+    await backend.sendOscTestMessage();
     unsubscribeSharedSecond();
 
     expect(shared).toHaveLength(3);

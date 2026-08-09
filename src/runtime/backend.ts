@@ -13,7 +13,6 @@ import type {
   AudioProbeRequest,
   AudioProbeResult,
   CaptionSessionSnapshotV1,
-  RuntimeBackendCommand,
   RuntimeControlSnapshot,
   RuntimeEvent,
   SttProvider,
@@ -27,7 +26,7 @@ export type RuntimeControlListener = (snapshot: RuntimeControlSnapshot) => void;
 export interface RuntimeBackend {
   listen(listener: RuntimeEventListener): Promise<Unsubscribe>;
   listenControl(listener: RuntimeControlListener): Promise<Unsubscribe>;
-  runCommand(command: RuntimeBackendCommand): Promise<void>;
+  sendOscTestMessage(): Promise<void>;
   startRuntime(): Promise<RuntimeControlSnapshot>;
   stopRuntime(): Promise<RuntimeControlSnapshot>;
   getControlSnapshot(): Promise<RuntimeControlSnapshot>;
@@ -49,7 +48,7 @@ function createUnsupportedBackend(): RuntimeBackend {
   return {
     listen: reject,
     listenControl: reject,
-    runCommand: reject,
+    sendOscTestMessage: reject,
     startRuntime: reject,
     stopRuntime: reject,
     getControlSnapshot: reject,

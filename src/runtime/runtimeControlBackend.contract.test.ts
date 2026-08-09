@@ -62,7 +62,7 @@ function createControlBridge(): TauriBackendBridge {
     emit(RUNTIME_CONTROL_EVENT, structuredClone(snapshot));
   }
 
-  function publishCaptionSession(
+  function emitCaptionSessionUpdate(
     next: Omit<
       CaptionSessionSnapshotV1,
       "contractVersion" | "snapshotRevision"
@@ -164,7 +164,7 @@ function createControlBridge(): TauriBackendBridge {
             uploadsMicrophoneAudio: true,
           },
         };
-        publishCaptionSession({
+        emitCaptionSessionUpdate({
           active: { generation: 1, streamId: "recognition-1-1" },
           activeUnits: [],
           captions: captionSession.captions,
@@ -183,7 +183,7 @@ function createControlBridge(): TauriBackendBridge {
           session: null,
           pendingChanges: [],
         };
-        publishCaptionSession({
+        emitCaptionSessionUpdate({
           active: null,
           activeUnits: [],
           captions: captionSession.captions.filter(
@@ -266,9 +266,9 @@ test("PreviewBackend OSC Test uses the session target until Stop", async () => {
       ...initialConfig,
       osc: { enabled: true, host: "192.0.2.30", port: 9012 },
     });
-    await backend.runCommand("send_osc_test_message");
+    await backend.sendOscTestMessage();
     await backend.stopRuntime();
-    await backend.runCommand("send_osc_test_message");
+    await backend.sendOscTestMessage();
   } finally {
     unsubscribe();
   }

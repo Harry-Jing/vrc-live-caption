@@ -46,7 +46,7 @@ const props = defineProps<{
   isAudioProbeRunning: boolean;
   pendingSessionChanges: readonly RuntimePendingChange[];
   sessionPhase: RuntimeSessionPhase | null;
-  sessionUploadsMicrophoneAudio: boolean;
+  activeSessionUploadsMicrophoneAudio: boolean;
   secretStatuses: Partial<Record<SttProvider, ProviderSecretStatus>>;
   secretsError: string;
   settingsError: string;
@@ -172,7 +172,7 @@ const pendingSessionChangesDescription = computed(() => {
 
 const removeOpenAiSecretDescription = computed(() =>
   uiText(
-    props.sessionUploadsMicrophoneAudio
+    props.activeSessionUploadsMicrophoneAudio
       ? "settings.credentials.openai.removeDialog.activeSessionDescription"
       : "settings.credentials.openai.removeDialog.description",
   ),

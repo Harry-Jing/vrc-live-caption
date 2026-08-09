@@ -162,7 +162,7 @@ function mountRuntimeHarness() {
       controlListener = listener;
       return Promise.resolve(() => undefined);
     },
-    runCommand: () => Promise.resolve(),
+    sendOscTestMessage: () => Promise.resolve(),
     startRuntime,
     stopRuntime() {
       currentControl = stoppedControl;
@@ -205,7 +205,7 @@ function mountRuntimeHarness() {
     restartedControl,
     runtime,
     startRuntime,
-    publishControl(snapshot: RuntimeControlSnapshot) {
+    emitControlSnapshot(snapshot: RuntimeControlSnapshot) {
       currentControl = snapshot;
       controlListener(snapshot);
     },
@@ -257,7 +257,7 @@ test("reopens caption admission when Running arrives before Start resolves", asy
     });
 
     harness.setCaption(harness.restartedCaption);
-    harness.publishControl(harness.restartedControl);
+    harness.emitControlSnapshot(harness.restartedControl);
     expect(harness.runtime.runtimeStatus.value.status).toBe("running");
 
     harness.pendingStart.resolve(harness.restartedControl);
@@ -296,7 +296,7 @@ test("keeps an authoritative Error visible when Start rejects", async () => {
         phase: "error",
       },
     };
-    harness.publishControl(errorControl);
+    harness.emitControlSnapshot(errorControl);
     expect(harness.runtime.runtimeStatus.value.status).toBe("error");
 
     harness.pendingStart.reject(new Error("Start IPC rejected"));

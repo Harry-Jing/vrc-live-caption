@@ -140,10 +140,6 @@ export type RuntimeLifecycleCommand = Extract<
   RuntimeCommand,
   "start_runtime" | "stop_runtime"
 >;
-export type RuntimeBackendCommand = Exclude<
-  RuntimeCommand,
-  RuntimeLifecycleCommand
->;
 
 export const RUNTIME_EVENTS = {
   status: "runtime-status",

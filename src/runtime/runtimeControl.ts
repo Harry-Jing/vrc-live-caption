@@ -12,7 +12,7 @@ import type {
 export type RuntimeControlProjection = Readonly<{
   config: AppConfig | null;
   desiredRuntimePlan: RuntimePlan | null;
-  activeRuntimePlan: RuntimePlan | null;
+  sessionRuntimePlan: RuntimePlan | null;
   currentSession: RuntimeSession | null;
   currentSetupConfig: AppConfig | null;
   pendingSessionChanges: readonly RuntimePendingChange[];
@@ -20,7 +20,7 @@ export type RuntimeControlProjection = Readonly<{
   secretStatuses: Partial<Record<SttProvider, ProviderSecretStatus>>;
 }>;
 
-export function reconcileRuntimeControlSnapshot(
+export function selectNewerRuntimeControlSnapshot(
   current: RuntimeControlSnapshot | null,
   incoming: RuntimeControlSnapshot,
 ): RuntimeControlSnapshot {
@@ -59,7 +59,7 @@ export function projectRuntimeControlSnapshot(
     return {
       config: null,
       desiredRuntimePlan: null,
-      activeRuntimePlan: null,
+      sessionRuntimePlan: null,
       currentSession: null,
       currentSetupConfig: null,
       pendingSessionChanges: [],
@@ -81,7 +81,7 @@ export function projectRuntimeControlSnapshot(
   return {
     config: snapshot.desired.config,
     desiredRuntimePlan: snapshot.desired.runtimePlan,
-    activeRuntimePlan: snapshot.session?.runtimePlan ?? null,
+    sessionRuntimePlan: snapshot.session?.runtimePlan ?? null,
     currentSession: snapshot.session,
     currentSetupConfig,
     pendingSessionChanges: snapshot.pendingChanges,

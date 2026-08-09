@@ -20,7 +20,7 @@ export function createRuntimeReadinessGate(
   let current = INITIAL_RUNTIME_READINESS;
   let attemptInFlight: Promise<boolean> | null = null;
 
-  function publish(snapshot: RuntimeReadinessSnapshot) {
+  function setSnapshot(snapshot: RuntimeReadinessSnapshot) {
     current = snapshot;
     listener(snapshot);
   }
@@ -30,7 +30,7 @@ export function createRuntimeReadinessGate(
       return;
     }
 
-    publish({ ready: true, isBusy: false, error: "" });
+    setSnapshot({ ready: true, isBusy: false, error: "" });
   }
 
   function ensure(attempt: () => Promise<void>): Promise<boolean> {
@@ -42,7 +42,7 @@ export function createRuntimeReadinessGate(
       return attemptInFlight;
     }
 
-    publish({ ...current, isBusy: true });
+    setSnapshot({ ...current, isBusy: true });
 
     let attemptResult: Promise<void>;
 
@@ -65,7 +65,7 @@ export function createRuntimeReadinessGate(
             return true;
           }
 
-          publish({
+          setSnapshot({
             ready: false,
             isBusy: false,
             error: normalizeError(error),

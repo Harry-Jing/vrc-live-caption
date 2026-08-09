@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
 import {
   projectRuntimeControlSnapshot,
-  reconcileRuntimeControlSnapshot,
   runtimeStatusNeedsControlReconciliation,
+  selectNewerRuntimeControlSnapshot,
 } from "./runtimeControl";
 import { previewRuntimePlan } from "./previewBackend";
 import {
@@ -92,7 +92,7 @@ test("projects desired settings separately from the immutable active session", (
     ],
   };
 
-  const accepted = reconcileRuntimeControlSnapshot(null, snapshot);
+  const accepted = selectNewerRuntimeControlSnapshot(null, snapshot);
   const projection = projectRuntimeControlSnapshot(accepted);
 
   expect(projection.config).toEqual(desiredConfig);
@@ -109,7 +109,7 @@ test("projects desired settings separately from the immutable active session", (
   });
   expect(projection.currentSession).toBe(snapshot.session);
   expect(projection.desiredRuntimePlan).toBe(snapshot.desired.runtimePlan);
-  expect(projection.activeRuntimePlan).toBe(snapshot.session?.runtimePlan);
+  expect(projection.sessionRuntimePlan).toBe(snapshot.session?.runtimePlan);
   expect(projection.pendingSessionChanges).toEqual([
     "microphone",
     "recognition",
@@ -140,8 +140,8 @@ test("ignores duplicate and older authoritative control snapshots", () => {
     runtime: { status: "stopped", timestampMs: 70 },
   } satisfies RuntimeControlSnapshot;
 
-  expect(reconcileRuntimeControlSnapshot(current, current)).toBe(current);
-  expect(reconcileRuntimeControlSnapshot(current, stale)).toBe(current);
+  expect(selectNewerRuntimeControlSnapshot(current, current)).toBe(current);
+  expect(selectNewerRuntimeControlSnapshot(current, stale)).toBe(current);
 });
 
 test("accepts a newer snapshot even when its display timestamp is lower", () => {
@@ -164,14 +164,14 @@ test("accepts a newer snapshot even when its display timestamp is lower", () => 
     runtime: { status: "error", timestampMs: 20 },
   } satisfies RuntimeControlSnapshot;
 
-  const accepted = reconcileRuntimeControlSnapshot(current, newer);
+  const accepted = selectNewerRuntimeControlSnapshot(current, newer);
   const projection = projectRuntimeControlSnapshot(accepted);
 
   expect(accepted).toBe(newer);
   expect(accepted.runtime).toEqual({ status: "error", timestampMs: 20 });
   expect(projection.currentSession).toBeNull();
   expect(projection.desiredRuntimePlan).toBe(newer.desired.runtimePlan);
-  expect(projection.activeRuntimePlan).toBeNull();
+  expect(projection.sessionRuntimePlan).toBeNull();
   expect(projection.currentSetupConfig).toBe(desiredConfig);
   expect(projection.sessionUploadsMicrophoneAudio).toBe(false);
 });
