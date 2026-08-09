@@ -34,6 +34,26 @@ fn build_manifest_commands() -> AppResult<Vec<String>> {
         .collect())
 }
 
+fn declared_ui_facing_events() -> AppResult<Vec<String>> {
+    let internal_events = [EVENT_UTTERANCE_STARTED, EVENT_UTTERANCE_ENDED];
+
+    include_str!("events.rs")
+        .lines()
+        .filter(|line| line.trim_start().starts_with("const EVENT_"))
+        .map(|line| {
+            line.trim()
+                .split_once(": &str = \"")
+                .and_then(|(_, value)| value.strip_suffix("\";"))
+                .map(str::to_owned)
+                .ok_or_else(|| AppError::state("Tauri event declaration must remain discoverable"))
+        })
+        .filter_map(|event| match event {
+            Ok(event) if internal_events.contains(&event.as_str()) => None,
+            event => Some(event),
+        })
+        .collect()
+}
+
 #[test]
 fn tauri_ipc_names_match_the_shared_contract() -> AppResult<()> {
     let manifest = serde_json::from_str::<serde_json::Value>(include_str!(
@@ -48,6 +68,23 @@ fn tauri_ipc_names_match_the_shared_contract() -> AppResult<()> {
         "diagnostic": EVENT_DIAGNOSTIC,
     });
     assert_eq!(manifest.get("events"), Some(&expected_events));
+
+    let mut expected_event_names = manifest
+        .get("events")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| AppError::config("Tauri IPC contract must define event names"))?
+        .values()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| AppError::config("Tauri event names must be strings"))
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    let mut declared_event_names = declared_ui_facing_events()?;
+    expected_event_names.sort();
+    declared_event_names.sort();
+    assert_eq!(declared_event_names, expected_event_names);
 
     let mut expected_commands = manifest
         .get("commands")

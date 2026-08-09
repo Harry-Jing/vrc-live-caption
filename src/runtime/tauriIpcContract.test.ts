@@ -4,7 +4,12 @@ import { TAURI_COMMANDS } from "./tauriBackend";
 import { RUNTIME_CONTROL_EVENT, RUNTIME_EVENTS } from "./types";
 
 test("Tauri event and command names match the shared IPC manifest", () => {
-  expect(JSON.parse(tauriIpcFixture) as unknown).toEqual({
+  const manifest = JSON.parse(tauriIpcFixture) as {
+    events: Record<string, string>;
+    commands: typeof TAURI_COMMANDS;
+  };
+
+  expect(manifest).toEqual({
     events: {
       runtimeStatus: RUNTIME_EVENTS.status,
       runtimeControlChanged: RUNTIME_CONTROL_EVENT,
@@ -14,4 +19,10 @@ test("Tauri event and command names match the shared IPC manifest", () => {
     },
     commands: TAURI_COMMANDS,
   });
+
+  const declaredUiEventNames = [
+    ...Object.values(RUNTIME_EVENTS),
+    RUNTIME_CONTROL_EVENT,
+  ].sort();
+  expect(Object.values(manifest.events).sort()).toEqual(declaredUiEventNames);
 });
