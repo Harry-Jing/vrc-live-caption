@@ -25,6 +25,34 @@ fn scripted_context(
     }
 }
 
+struct QueuedRecognitionSession {
+    events: Vec<RecognitionEvent>,
+}
+
+impl RecognitionSession for QueuedRecognitionSession {
+    fn start_unit(&mut self, _unit_id: String, _started_at_ms: u64) -> AppResult<RecognitionEvent> {
+        Err(AppError::state(
+            "Queued recognition test session cannot start input units.",
+        ))
+    }
+
+    fn append_audio(&mut self, _audio: RecognitionAudioChunk<'_>) -> AppResult<()> {
+        Ok(())
+    }
+
+    fn end_input(&mut self) -> AppResult<()> {
+        Ok(())
+    }
+
+    fn drain_events(&mut self, _received_at_ms: u64) -> AppResult<Vec<RecognitionEvent>> {
+        Ok(std::mem::take(&mut self.events))
+    }
+
+    fn stop(&mut self) -> AppResult<()> {
+        Ok(())
+    }
+}
+
 #[test]
 fn recognition_events_fan_out_to_the_aggregate_and_completed_publisher() -> AppResult<()> {
     let app = tauri::test::mock_app();
@@ -46,7 +74,10 @@ fn recognition_events_fan_out_to_the_aggregate_and_completed_publisher() -> AppR
     );
 
     for event in events {
-        assert!(generation.submit_recognition_event(app.handle(), Some(&publisher), event)?);
+        assert_eq!(
+            generation.submit_recognition_event(app.handle(), Some(&publisher), event)?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
     }
 
     let snapshot = caption_session.snapshot()?;
@@ -89,7 +120,10 @@ fn accepted_recognition_aggregate_fans_out_to_the_live_publisher() -> AppResult<
     );
 
     for event in events {
-        assert!(generation.submit_recognition_event(app.handle(), Some(&publisher), event)?);
+        assert_eq!(
+            generation.submit_recognition_event(app.handle(), Some(&publisher), event)?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
     }
 
     assert_eq!(
@@ -124,16 +158,37 @@ fn fan_out_rejects_out_of_order_duplicate_stopped_and_old_generation_events() ->
         ScriptedText::new("revision three completed", 230),
     );
 
-    assert!(first.submit_recognition_event(app.handle(), None, events[0].clone())?);
-    assert!(first.submit_recognition_event(app.handle(), None, events[2].clone())?);
-    assert!(!first.submit_recognition_event(app.handle(), None, events[1].clone())?);
-    assert!(first.submit_recognition_event(app.handle(), None, events[3].clone())?);
-    assert!(!first.submit_recognition_event(app.handle(), None, events[3].clone())?);
+    assert_eq!(
+        first.submit_recognition_event(app.handle(), None, events[0].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+    assert_eq!(
+        first.submit_recognition_event(app.handle(), None, events[2].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+    assert_eq!(
+        first.submit_recognition_event(app.handle(), None, events[1].clone())?,
+        RecognitionEventSubmitOutcome::Ignored
+    );
+    assert_eq!(
+        first.submit_recognition_event(app.handle(), None, events[3].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+    assert_eq!(
+        first.submit_recognition_event(app.handle(), None, events[3].clone())?,
+        RecognitionEventSubmitOutcome::Ignored
+    );
     first.request_stop(None)?;
-    assert!(!first.submit_recognition_event(app.handle(), None, events[2].clone())?);
+    assert_eq!(
+        first.submit_recognition_event(app.handle(), None, events[2].clone())?,
+        RecognitionEventSubmitOutcome::Stopped
+    );
 
     let second = RuntimeGeneration::activate(app.handle(), 2, caption_session.clone())?;
-    assert!(!second.submit_recognition_event(app.handle(), None, events[3].clone())?);
+    assert_eq!(
+        second.submit_recognition_event(app.handle(), None, events[3].clone())?,
+        RecognitionEventSubmitOutcome::Ignored
+    );
     assert!(
         caption_session
             .snapshot()?
@@ -152,16 +207,19 @@ fn reconnect_boundary_aborts_active_units_without_closing_the_generation() -> Ap
     let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
 
     for unit_id in ["pending-one", "pending-two"] {
-        assert!(generation.submit_recognition_event(
-            app.handle(),
-            None,
-            RecognitionEvent::UnitStarted {
-                generation: generation.generation_id(),
-                stream_id: generation.stream_id().to_string(),
-                unit_id: unit_id.to_string(),
-                started_at_ms: 100,
-            },
-        )?);
+        assert_eq!(
+            generation.submit_recognition_event(
+                app.handle(),
+                None,
+                RecognitionEvent::UnitStarted {
+                    generation: generation.generation_id(),
+                    stream_id: generation.stream_id().to_string(),
+                    unit_id: unit_id.to_string(),
+                    started_at_ms: 100,
+                },
+            )?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
     }
 
     generation.abort_active_units_for_reconnect(app.handle(), None)?;
@@ -207,21 +265,27 @@ fn unit_ended_events_close_the_app_unit_and_completed_typing_activity() -> AppRe
         ))
         .script_ended(unit_id.clone(), 400, reason);
 
-        assert!(generation.submit_recognition_event(
-            app.handle(),
-            Some(&publisher),
-            events[0].clone(),
-        )?);
+        assert_eq!(
+            generation.submit_recognition_event(
+                app.handle(),
+                Some(&publisher),
+                events[0].clone(),
+            )?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
         assert!(
             typing_receiver
                 .recv_timeout(Duration::from_secs(1))
                 .map_err(|_| AppError::runtime("Typing indicator did not turn on."))?
         );
-        assert!(generation.submit_recognition_event(
-            app.handle(),
-            Some(&publisher),
-            events[1].clone(),
-        )?);
+        assert_eq!(
+            generation.submit_recognition_event(
+                app.handle(),
+                Some(&publisher),
+                events[1].clone(),
+            )?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
 
         let ended = receive_json_event(&ended_receiver, "utterance-ended")?;
         assert_eq!(ended["utteranceId"], unit_id);
@@ -389,7 +453,6 @@ fn stop_supersedes_a_start_blocked_in_osc_hostname_resolution() -> AppResult<()>
     config.osc.host = "blocked.test".to_string();
     let expected_stop_epoch = manager.stop_epoch();
     let request = RuntimeStartRequest {
-        runtime_plan: plan_runtime(&config),
         config,
         chatbox_pacer: ChatboxPacer::default(),
         caption_session: CaptionSessionStore::default(),
@@ -521,16 +584,43 @@ fn stop_cancels_an_installed_runtime_hostname_wait_before_joining() -> AppResult
 }
 
 #[test]
-fn runtime_rejects_a_plan_that_does_not_match_the_selected_model() -> AppResult<()> {
+fn runtime_start_fails_closed_when_its_derived_plan_is_incompatible() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let manager = RuntimeManager::default();
     let mut config = AppConfig::default();
-    let stale_plan = plan_runtime(&config);
-    config.stt.model = OpenAiTranscriptionModel::GptLiveTranscribe;
+    config.publication.mode = crate::config::PublicationMode::Live;
+    let request = RuntimeStartRequest {
+        config,
+        chatbox_pacer: ChatboxPacer::default(),
+        caption_session: CaptionSessionStore::default(),
+        host_resolver: HostResolver::default(),
+        generation_id: 1,
+        config_revision: 1,
+        openai_api_key: SecretString::from("test-key".to_string()),
+        credential: RuntimeCredentialSnapshot {
+            provider: SttProvider::OpenAi,
+            storage: ProviderSecretStorage::Environment,
+            display_suffix: None,
+            revision: 1,
+        },
+        expected_stop_epoch: manager.stop_epoch(),
+    };
 
-    let error = resolve_runtime_publication_policy(&config, &stale_plan)
+    let error = manager
+        .start(app.handle().clone(), request, |_| Ok(()))
         .err()
-        .ok_or_else(|| AppError::state("Mismatched runtime plan unexpectedly started."))?;
+        .ok_or_else(|| {
+            AppError::state("Incompatible runtime configuration unexpectedly started.")
+        })?;
     assert_eq!(error.code(), "config.invalid");
-    assert!(error.to_string().contains("did not match"));
+    assert!(error.to_string().contains("publication.mode_unsupported"));
+    assert!(
+        manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?
+            .is_none()
+    );
     Ok(())
 }
 
@@ -612,6 +702,66 @@ fn a_full_recognition_queue_reports_backpressure_without_disguising_it_as_stop()
     );
     assert!(!generation.is_work_cancelled());
     assert!(attempt.is_cancelled());
+    Ok(())
+}
+
+#[test]
+fn ignored_recognition_event_does_not_stop_the_worker_before_a_later_event() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
+    let events = ScriptedRecognitionAdapter::new(scripted_context(
+        &generation,
+        OpenAiTranscriptionModel::GptLiveTranscribe,
+    ))
+    .script_unit(
+        "ordered-unit",
+        100,
+        &[
+            ScriptedText::new("stale revision", 110),
+            ScriptedText::new("current revision", 120),
+        ],
+        ScriptedText::new("completed after stale revision", 130),
+    );
+    assert_eq!(
+        generation.submit_recognition_event(app.handle(), None, events[0].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+    assert_eq!(
+        generation.submit_recognition_event(app.handle(), None, events[2].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+
+    let (sender, receiver) = sync_channel(1);
+    sender
+        .send(RecognitionCommand::AppendAudio {
+            sample_rate_hz: 24_000,
+            samples: vec![0.1],
+        })
+        .map_err(|_| AppError::state("Could not prime the recognition worker test queue."))?;
+    drop(sender);
+
+    run_recognition_worker(
+        app.handle().clone(),
+        None,
+        generation.clone(),
+        ConnectionAttemptCancelToken::default(),
+        QueuedRecognitionSession {
+            events: vec![events[1].clone(), events[3].clone()],
+        },
+        receiver,
+    )?;
+
+    let snapshot = caption_session.snapshot()?;
+    assert_eq!(snapshot.captions.len(), 1);
+    assert_eq!(snapshot.captions[0].revision, 3);
+    assert_eq!(snapshot.captions[0].text, "completed after stale revision");
+    assert_eq!(
+        snapshot.captions[0].state,
+        crate::caption_session::CaptionState::Completed
+    );
+
+    generation.request_stop(None)?;
     Ok(())
 }
 
@@ -804,18 +954,24 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
         OpenAiTranscriptionModel::GptTranscribe,
     ))
     .script_unit("old", 100, &[], ScriptedText::new("late old caption", 200));
-    assert!(first.submit_recognition_event(
-        app.handle(),
-        Some(&first_publisher),
-        first_events[0].clone(),
-    )?);
+    assert_eq!(
+        first.submit_recognition_event(
+            app.handle(),
+            Some(&first_publisher),
+            first_events[0].clone(),
+        )?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
     first.request_stop(Some(&first_publisher))?;
     first_publisher.join()?;
-    assert!(!first.submit_recognition_event(
-        app.handle(),
-        Some(&first_publisher),
-        first_events[1].clone(),
-    )?);
+    assert_eq!(
+        first.submit_recognition_event(
+            app.handle(),
+            Some(&first_publisher),
+            first_events[1].clone(),
+        )?,
+        RecognitionEventSubmitOutcome::Stopped
+    );
 
     let second = RuntimeGeneration::activate(app.handle(), 2, caption_session.clone())?;
     let (second_publisher, second_text_receiver) = runtime_test_publisher(second.clone(), None)?;
@@ -830,7 +986,10 @@ fn stopped_generation_cannot_publish_while_a_new_generation_can() -> AppResult<(
         ScriptedText::new("current caption", 400),
     );
     for event in second_events {
-        assert!(second.submit_recognition_event(app.handle(), Some(&second_publisher), event,)?);
+        assert_eq!(
+            second.submit_recognition_event(app.handle(), Some(&second_publisher), event)?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
     }
 
     assert!(matches!(

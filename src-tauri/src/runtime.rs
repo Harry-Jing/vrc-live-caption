@@ -103,7 +103,6 @@ impl Drop for AudioProbeLease<'_> {
 
 pub(crate) struct RuntimeStartRequest {
     pub(crate) config: AppConfig,
-    pub(crate) runtime_plan: RuntimePlanSnapshot,
     pub(crate) chatbox_pacer: ChatboxPacer,
     pub(crate) caption_session: CaptionSessionStore,
     pub(crate) host_resolver: HostResolver,
@@ -146,6 +145,13 @@ enum RecognitionCommand {
     EndInput,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecognitionEventSubmitOutcome {
+    Accepted,
+    Ignored,
+    Stopped,
+}
+
 #[derive(Clone, Default)]
 struct ConnectionAttemptCancelToken {
     cancelled: Arc<AtomicBool>,
@@ -179,15 +185,8 @@ fn publisher_failure_message<'a>(
 }
 
 fn resolve_runtime_publication_policy(
-    config: &AppConfig,
     runtime_plan: &RuntimePlanSnapshot,
 ) -> AppResult<ResolvedPublicationPolicy> {
-    if runtime_plan != &plan_runtime(config) {
-        return Err(AppError::config(
-            "Runtime plan did not match the selected backend configuration.",
-        ));
-    }
-
     runtime_plan.publication.resolved_policy().ok_or_else(|| {
         AppError::config(format!(
             "The selected recognition path and publication mode are incompatible ({}).",
@@ -205,13 +204,13 @@ impl RuntimeGeneration {
         app: &AppHandle<R>,
         publisher: Option<&RuntimeChatboxPublisher>,
         event: RecognitionEvent,
-    ) -> AppResult<bool> {
+    ) -> AppResult<RecognitionEventSubmitOutcome> {
         let mut submit_result = None;
         let committed = self.commit_if_active(|| {
             submit_result = Some(self.submit_recognition_event_at_boundary(app, publisher, event));
         })?;
         if !committed {
-            return Ok(false);
+            return Ok(RecognitionEventSubmitOutcome::Stopped);
         }
 
         submit_result.ok_or_else(|| {
@@ -224,7 +223,7 @@ impl RuntimeGeneration {
         app: &AppHandle<R>,
         publisher: Option<&RuntimeChatboxPublisher>,
         event: RecognitionEvent,
-    ) -> AppResult<bool> {
+    ) -> AppResult<RecognitionEventSubmitOutcome> {
         match event {
             RecognitionEvent::UnitStarted {
                 generation,
@@ -239,7 +238,7 @@ impl RuntimeGeneration {
                     started_at_ms,
                 )?
                 else {
-                    return Ok(false);
+                    return Ok(RecognitionEventSubmitOutcome::Ignored);
                 };
                 self.report_accepted_snapshot(app, publisher, snapshot);
                 emit_utterance_started(app, generation, stream_id, unit_id.clone(), started_at_ms);
@@ -269,7 +268,7 @@ impl RuntimeGeneration {
                 let Some(snapshot) =
                     self.end_caption_unit_without_caption(generation, &stream_id, &unit_id)?
                 else {
-                    return Ok(false);
+                    return Ok(RecognitionEventSubmitOutcome::Ignored);
                 };
                 self.report_accepted_snapshot(app, publisher, snapshot);
                 emit_utterance_ended(
@@ -306,7 +305,7 @@ impl RuntimeGeneration {
                 let text = caption.text.clone();
                 let is_completed = caption.state == crate::caption_session::CaptionState::Completed;
                 let Some(snapshot) = self.accept_caption(caption)? else {
-                    return Ok(false);
+                    return Ok(RecognitionEventSubmitOutcome::Ignored);
                 };
                 self.report_accepted_snapshot(app, publisher, snapshot);
 
@@ -316,7 +315,7 @@ impl RuntimeGeneration {
             }
         }
 
-        Ok(true)
+        Ok(RecognitionEventSubmitOutcome::Accepted)
     }
 
     fn abort_active_units_for_reconnect<R: Runtime>(
@@ -326,7 +325,7 @@ impl RuntimeGeneration {
     ) -> AppResult<()> {
         let snapshot = self.caption_snapshot()?;
         for active_unit in snapshot.active_units {
-            let _accepted = self.submit_recognition_event(
+            let _submit_outcome = self.submit_recognition_event(
                 app,
                 publisher,
                 RecognitionEvent::UnitEnded {
@@ -452,7 +451,6 @@ impl RuntimeManager {
     {
         let RuntimeStartRequest {
             config,
-            runtime_plan,
             chatbox_pacer,
             caption_session,
             host_resolver,
@@ -463,7 +461,8 @@ impl RuntimeManager {
             expected_stop_epoch,
         } = request;
         config.validate()?;
-        let publication_policy = resolve_runtime_publication_policy(&config, &runtime_plan)?;
+        let runtime_plan = plan_runtime(&config);
+        let publication_policy = resolve_runtime_publication_policy(&runtime_plan)?;
 
         let mut guard = self
             .handle
@@ -1331,8 +1330,10 @@ fn run_recognition_worker<R: Runtime>(
                     initial_audio,
                 }) => {
                     let event = recognition.start_unit(unit_id, started_at_ms)?;
-                    if !generation.submit_recognition_event(&app, publisher.as_ref(), event)? {
-                        return Ok(());
+                    match generation.submit_recognition_event(&app, publisher.as_ref(), event)? {
+                        RecognitionEventSubmitOutcome::Stopped => return Ok(()),
+                        RecognitionEventSubmitOutcome::Accepted
+                        | RecognitionEventSubmitOutcome::Ignored => {}
                     }
                     recognition.append_audio(RecognitionAudioChunk {
                         sample_rate_hz,
@@ -1352,8 +1353,10 @@ fn run_recognition_worker<R: Runtime>(
             }
 
             for event in recognition.drain_events(now_ms())? {
-                if !generation.submit_recognition_event(&app, publisher.as_ref(), event)? {
-                    return Ok(());
+                match generation.submit_recognition_event(&app, publisher.as_ref(), event)? {
+                    RecognitionEventSubmitOutcome::Stopped => return Ok(()),
+                    RecognitionEventSubmitOutcome::Accepted
+                    | RecognitionEventSubmitOutcome::Ignored => {}
                 }
             }
         }

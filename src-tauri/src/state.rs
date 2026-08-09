@@ -160,7 +160,6 @@ impl AppState {
             app.clone(),
             RuntimeStartRequest {
                 config,
-                runtime_plan,
                 chatbox_pacer: self.chatbox_pacer(),
                 caption_session: self.caption_session_store(),
                 host_resolver: self.host_resolver(),
