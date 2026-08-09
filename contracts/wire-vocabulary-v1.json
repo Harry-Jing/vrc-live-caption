@@ -1,0 +1,47 @@
+{
+  "runtimeStatuses": [
+    "idle",
+    "starting",
+    "running",
+    "reconnecting",
+    "stopping",
+    "stopped",
+    "error"
+  ],
+  "sttProviders": ["openai"],
+  "openAiTranscriptionModels": ["gpt-transcribe", "gpt-live-transcribe"],
+  "providerSecretStorages": ["systemCredentialStore", "environment"],
+  "diagnosticCategories": ["config", "runtime", "audio", "stt", "osc"],
+  "diagnosticSeverities": ["info", "warning", "error"],
+  "captionLanes": ["source", "translation"],
+  "captionStates": ["ongoing", "completed"],
+  "publicationModes": ["completed", "live"],
+  "recognitionPaths": ["openAiGptTranscribe", "openAiGptLiveTranscribe"],
+  "recognitionInputShapes": ["continuousAudioFrames"],
+  "boundaryOwners": ["application"],
+  "captionUnitBehaviors": ["unitBased"],
+  "laneUpdateBehaviors": ["completedOnly", "ongoingAndCompleted"],
+  "revisionBehaviors": ["appendOnly", "revisableFullSnapshot"],
+  "resolvedPublicationPolicies": ["completed", "liveUnit"],
+  "publicationPlanStates": ["ready", "incompatible"],
+  "publicationIncompatibilityReasons": [
+    "noLanesSelected",
+    "laneUnavailable",
+    "modeUnsupported"
+  ],
+  "runtimePendingChanges": [
+    "microphone",
+    "recognition",
+    "credential",
+    "chatboxOutput",
+    "publication"
+  ],
+  "runtimeSessionPhases": [
+    "starting",
+    "running",
+    "reconnecting",
+    "stopping",
+    "error"
+  ],
+  "runtimeChatboxStates": ["disabled", "ready", "unavailable"]
+}

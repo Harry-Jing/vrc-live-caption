@@ -7,10 +7,14 @@ import {
   LANE_UPDATE_BEHAVIORS,
   OPENAI_TRANSCRIPTION_MODELS,
   PROVIDER_SECRET_STORAGES,
+  PUBLICATION_INCOMPATIBILITY_REASONS,
   PUBLICATION_MODES,
+  PUBLICATION_PLAN_STATES,
   RECOGNITION_INPUT_SHAPES,
   RECOGNITION_PATHS,
+  RESOLVED_PUBLICATION_POLICIES,
   REVISION_BEHAVIORS,
+  RUNTIME_CHATBOX_STATES,
   RUNTIME_PENDING_CHANGES,
   RUNTIME_SESSION_PHASES,
   RUNTIME_STATUSES,
@@ -247,7 +251,11 @@ function decodeResolvedPolicy(
   path: string,
 ): ResolvedPublicationPolicy {
   const tagged = record(value, path);
-  const policy = string(tagged["policy"], `${path}.policy`);
+  const policy = literal(
+    tagged["policy"],
+    `${path}.policy`,
+    RESOLVED_PUBLICATION_POLICIES,
+  );
 
   switch (policy) {
     case "completed": {
@@ -265,11 +273,6 @@ function decodeResolvedPolicy(
         ),
       };
     }
-    default:
-      throw new RuntimeControlContractError(
-        `${path}.policy`,
-        "expected one of completed, liveUnit",
-      );
   }
 }
 
@@ -292,107 +295,116 @@ function decodePublicationPlan(
   expectedMode: PublicationMode,
 ): PublicationPlan {
   const tagged = record(value, path);
-  const state = string(tagged["state"], `${path}.state`);
-
-  if (state === "ready") {
-    const input = exactRecord(value, path, [
-      "state",
-      "mode",
-      "policy",
-      "selectedLanes",
-    ]);
-    const mode = literal<PublicationMode>(
-      input["mode"],
-      `${path}.mode`,
-      PUBLICATION_MODES,
-    );
-    const policy = decodeResolvedPolicy(input["policy"], `${path}.policy`);
-    assertPlanMatchesMode(mode, expectedMode, `${path}.mode`);
-    if (
-      (mode === "completed" && policy.policy !== "completed") ||
-      (mode === "live" && policy.policy === "completed")
-    ) {
-      throw new RuntimeControlContractError(
-        `${path}.policy`,
-        `policy does not implement ${mode} mode`,
-      );
-    }
-
-    return {
-      state,
-      mode,
-      policy,
-      selectedLanes: decodeCaptionLanes(
-        input["selectedLanes"],
-        `${path}.selectedLanes`,
-      ),
-    };
-  }
-
-  if (state === "incompatible") {
-    const input = exactRecord(value, path, [
-      "state",
-      "requestedMode",
-      "selectedLanes",
-      "reason",
-      "supportedModes",
-    ]);
-    const requestedMode = literal<PublicationMode>(
-      input["requestedMode"],
-      `${path}.requestedMode`,
-      PUBLICATION_MODES,
-    );
-    assertPlanMatchesMode(requestedMode, expectedMode, `${path}.requestedMode`);
-    const reasonPath = `${path}.reason`;
-    const taggedReason = record(input["reason"], reasonPath);
-    const reason = string(taggedReason["reason"], `${reasonPath}.reason`);
-    const decodedReason = (() => {
-      if (reason === "noLanesSelected") {
-        exactRecord(input["reason"], reasonPath, ["reason"]);
-        return { reason } as const;
-      }
-      if (reason === "laneUnavailable" || reason === "modeUnsupported") {
-        const decoded = exactRecord(input["reason"], reasonPath, [
-          "reason",
-          "lanes",
-        ]);
-        return {
-          reason,
-          lanes: decodeCaptionLanes(decoded["lanes"], `${reasonPath}.lanes`),
-        } as const;
-      }
-
-      throw new RuntimeControlContractError(
-        `${reasonPath}.reason`,
-        "expected one of noLanesSelected, laneUnavailable, modeUnsupported",
-      );
-    })();
-
-    return {
-      state,
-      requestedMode,
-      selectedLanes: decodeCaptionLanes(
-        input["selectedLanes"],
-        `${path}.selectedLanes`,
-      ),
-      reason: decodedReason,
-      supportedModes: array(
-        input["supportedModes"],
-        `${path}.supportedModes`,
-      ).map((mode, index) =>
-        literal<PublicationMode>(
-          mode,
-          `${path}.supportedModes[${String(index)}]`,
-          PUBLICATION_MODES,
-        ),
-      ),
-    };
-  }
-
-  throw new RuntimeControlContractError(
+  const state = literal(
+    tagged["state"],
     `${path}.state`,
-    "expected one of ready, incompatible",
+    PUBLICATION_PLAN_STATES,
   );
+
+  switch (state) {
+    case "ready": {
+      const input = exactRecord(value, path, [
+        "state",
+        "mode",
+        "policy",
+        "selectedLanes",
+      ]);
+      const mode = literal<PublicationMode>(
+        input["mode"],
+        `${path}.mode`,
+        PUBLICATION_MODES,
+      );
+      const policy = decodeResolvedPolicy(input["policy"], `${path}.policy`);
+      assertPlanMatchesMode(mode, expectedMode, `${path}.mode`);
+      if (
+        (mode === "completed" && policy.policy !== "completed") ||
+        (mode === "live" && policy.policy === "completed")
+      ) {
+        throw new RuntimeControlContractError(
+          `${path}.policy`,
+          `policy does not implement ${mode} mode`,
+        );
+      }
+
+      return {
+        state,
+        mode,
+        policy,
+        selectedLanes: decodeCaptionLanes(
+          input["selectedLanes"],
+          `${path}.selectedLanes`,
+        ),
+      };
+    }
+    case "incompatible": {
+      const input = exactRecord(value, path, [
+        "state",
+        "requestedMode",
+        "selectedLanes",
+        "reason",
+        "supportedModes",
+      ]);
+      const requestedMode = literal<PublicationMode>(
+        input["requestedMode"],
+        `${path}.requestedMode`,
+        PUBLICATION_MODES,
+      );
+      assertPlanMatchesMode(
+        requestedMode,
+        expectedMode,
+        `${path}.requestedMode`,
+      );
+      const reasonPath = `${path}.reason`;
+      const taggedReason = record(input["reason"], reasonPath);
+      const reason = literal(
+        taggedReason["reason"],
+        `${reasonPath}.reason`,
+        PUBLICATION_INCOMPATIBILITY_REASONS,
+      );
+      const decodedReason = (() => {
+        switch (reason) {
+          case "noLanesSelected": {
+            exactRecord(input["reason"], reasonPath, ["reason"]);
+            return { reason } as const;
+          }
+          case "laneUnavailable":
+          case "modeUnsupported": {
+            const decoded = exactRecord(input["reason"], reasonPath, [
+              "reason",
+              "lanes",
+            ]);
+            return {
+              reason,
+              lanes: decodeCaptionLanes(
+                decoded["lanes"],
+                `${reasonPath}.lanes`,
+              ),
+            } as const;
+          }
+        }
+      })();
+
+      return {
+        state,
+        requestedMode,
+        selectedLanes: decodeCaptionLanes(
+          input["selectedLanes"],
+          `${path}.selectedLanes`,
+        ),
+        reason: decodedReason,
+        supportedModes: array(
+          input["supportedModes"],
+          `${path}.supportedModes`,
+        ).map((mode, index) =>
+          literal<PublicationMode>(
+            mode,
+            `${path}.supportedModes[${String(index)}]`,
+            PUBLICATION_MODES,
+          ),
+        ),
+      };
+    }
+  }
 }
 
 function decodeRuntimePlan(
@@ -510,7 +522,11 @@ function decodeRuntimeChatbox(
   path: string,
 ): RuntimeSessionChatbox {
   const tagged = record(value, path);
-  const state = string(tagged["state"], `${path}.state`);
+  const state = literal(
+    tagged["state"],
+    `${path}.state`,
+    RUNTIME_CHATBOX_STATES,
+  );
   const fields =
     state === "unavailable"
       ? ["state", "host", "port", "reasonCode"]
@@ -519,22 +535,18 @@ function decodeRuntimeChatbox(
   const host = string(input["host"], `${path}.host`);
   const port = safeInteger(input["port"], `${path}.port`, 0, 65_535);
 
-  if (state === "disabled" || state === "ready") {
-    return { state, host, port };
+  switch (state) {
+    case "disabled":
+    case "ready":
+      return { state, host, port };
+    case "unavailable":
+      return {
+        state,
+        host,
+        port,
+        reasonCode: string(input["reasonCode"], `${path}.reasonCode`),
+      };
   }
-  if (state === "unavailable") {
-    return {
-      state,
-      host,
-      port,
-      reasonCode: string(input["reasonCode"], `${path}.reasonCode`),
-    };
-  }
-
-  throw new RuntimeControlContractError(
-    `${path}.state`,
-    "expected one of disabled, ready, unavailable",
-  );
 }
 
 function decodeRuntimeSession(value: unknown, path: string): RuntimeSession {

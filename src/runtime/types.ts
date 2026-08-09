@@ -61,6 +61,13 @@ export const REVISION_BEHAVIORS = [
   "revisableFullSnapshot",
 ] as const;
 export type RevisionBehavior = (typeof REVISION_BEHAVIORS)[number];
+export const RESOLVED_PUBLICATION_POLICIES = ["completed", "liveUnit"] as const;
+export const PUBLICATION_PLAN_STATES = ["ready", "incompatible"] as const;
+export const PUBLICATION_INCOMPATIBILITY_REASONS = [
+  "noLanesSelected",
+  "laneUnavailable",
+  "modeUnsupported",
+] as const;
 
 export type RecognitionCapabilityProfile = Readonly<{
   path: RecognitionPath;
@@ -230,6 +237,11 @@ export const RUNTIME_SESSION_PHASES = [
   "error",
 ] as const;
 export type RuntimeSessionPhase = (typeof RUNTIME_SESSION_PHASES)[number];
+export const RUNTIME_CHATBOX_STATES = [
+  "disabled",
+  "ready",
+  "unavailable",
+] as const;
 
 export type RuntimeSessionCredential = {
   provider: SttProvider;

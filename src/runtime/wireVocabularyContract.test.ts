@@ -1,0 +1,51 @@
+import { expect, test } from "vitest";
+import wireVocabularyFixture from "../../contracts/wire-vocabulary-v1.json?raw";
+import {
+  BOUNDARY_OWNERS,
+  CAPTION_LANES,
+  CAPTION_STATES,
+  CAPTION_UNIT_BEHAVIORS,
+  DIAGNOSTIC_CATEGORIES,
+  DIAGNOSTIC_SEVERITIES,
+  LANE_UPDATE_BEHAVIORS,
+  OPENAI_TRANSCRIPTION_MODELS,
+  PROVIDER_SECRET_STORAGES,
+  PUBLICATION_INCOMPATIBILITY_REASONS,
+  PUBLICATION_MODES,
+  PUBLICATION_PLAN_STATES,
+  RECOGNITION_INPUT_SHAPES,
+  RECOGNITION_PATHS,
+  RESOLVED_PUBLICATION_POLICIES,
+  REVISION_BEHAVIORS,
+  RUNTIME_CHATBOX_STATES,
+  RUNTIME_PENDING_CHANGES,
+  RUNTIME_SESSION_PHASES,
+  RUNTIME_STATUSES,
+  STT_PROVIDERS,
+} from "./types";
+
+test("closed frontend wire values match the shared vocabulary", () => {
+  expect(JSON.parse(wireVocabularyFixture) as unknown).toEqual({
+    runtimeStatuses: RUNTIME_STATUSES,
+    sttProviders: STT_PROVIDERS,
+    openAiTranscriptionModels: OPENAI_TRANSCRIPTION_MODELS,
+    providerSecretStorages: PROVIDER_SECRET_STORAGES,
+    diagnosticCategories: DIAGNOSTIC_CATEGORIES,
+    diagnosticSeverities: DIAGNOSTIC_SEVERITIES,
+    captionLanes: CAPTION_LANES,
+    captionStates: CAPTION_STATES,
+    publicationModes: PUBLICATION_MODES,
+    recognitionPaths: RECOGNITION_PATHS,
+    recognitionInputShapes: RECOGNITION_INPUT_SHAPES,
+    boundaryOwners: BOUNDARY_OWNERS,
+    captionUnitBehaviors: CAPTION_UNIT_BEHAVIORS,
+    laneUpdateBehaviors: LANE_UPDATE_BEHAVIORS,
+    revisionBehaviors: REVISION_BEHAVIORS,
+    resolvedPublicationPolicies: RESOLVED_PUBLICATION_POLICIES,
+    publicationPlanStates: PUBLICATION_PLAN_STATES,
+    publicationIncompatibilityReasons: PUBLICATION_INCOMPATIBILITY_REASONS,
+    runtimePendingChanges: RUNTIME_PENDING_CHANGES,
+    runtimeSessionPhases: RUNTIME_SESSION_PHASES,
+    runtimeChatboxStates: RUNTIME_CHATBOX_STATES,
+  });
+});

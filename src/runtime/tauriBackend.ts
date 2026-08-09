@@ -39,6 +39,19 @@ const defaultBridge: TauriBackendBridge = {
   invoke,
 };
 
+export const TAURI_COMMANDS = {
+  saveAppConfig: "save_app_config",
+  listAudioInputDevices: "list_audio_input_devices",
+  probeAudioInput: "probe_audio_input",
+  startRuntime: "start_runtime",
+  stopRuntime: "stop_runtime",
+  getRuntimeControlSnapshot: "get_runtime_control_snapshot",
+  getCaptionSessionSnapshot: "get_caption_session_snapshot",
+  sendOscTestMessage: "send_osc_test_message",
+  saveProviderSecret: "save_provider_secret",
+  deleteProviderSecret: "delete_provider_secret",
+} as const;
+
 export function createTauriBackend(
   bridge: TauriBackendBridge = defaultBridge,
 ): RuntimeBackend {
@@ -135,56 +148,59 @@ export function createTauriBackend(
     },
 
     async sendOscTestMessage() {
-      await bridge.invoke("send_osc_test_message");
+      await bridge.invoke(TAURI_COMMANDS.sendOscTestMessage);
     },
 
     startRuntime() {
-      return invokeControlSnapshot("start_runtime");
+      return invokeControlSnapshot(TAURI_COMMANDS.startRuntime);
     },
 
     stopRuntime() {
-      return invokeControlSnapshot("stop_runtime");
+      return invokeControlSnapshot(TAURI_COMMANDS.stopRuntime);
     },
 
     getControlSnapshot() {
-      return invokeControlSnapshot("get_runtime_control_snapshot");
+      return invokeControlSnapshot(TAURI_COMMANDS.getRuntimeControlSnapshot);
     },
 
     async getCaptionSessionSnapshot() {
       const payload = await bridge.invoke<unknown>(
-        "get_caption_session_snapshot",
+        TAURI_COMMANDS.getCaptionSessionSnapshot,
       );
 
       return decodeCaptionSessionSnapshotV1(payload);
     },
 
     saveConfig(config: AppConfig) {
-      return invokeControlSnapshot("save_app_config", {
+      return invokeControlSnapshot(TAURI_COMMANDS.saveAppConfig, {
         config,
       });
     },
 
     listAudioInputDevices() {
-      return bridge.invoke<AudioInputDevice[]>("list_audio_input_devices");
+      return bridge.invoke<AudioInputDevice[]>(
+        TAURI_COMMANDS.listAudioInputDevices,
+      );
     },
 
     async probeAudioInput(request: AudioProbeRequest) {
-      const payload = await bridge.invoke<unknown>("probe_audio_input", {
-        request,
-      });
+      const payload = await bridge.invoke<unknown>(
+        TAURI_COMMANDS.probeAudioInput,
+        { request },
+      );
 
       return decodeAudioProbeResult(payload);
     },
 
     saveProviderSecret(provider: SttProvider, secret: string) {
-      return invokeControlSnapshot("save_provider_secret", {
+      return invokeControlSnapshot(TAURI_COMMANDS.saveProviderSecret, {
         provider,
         secret,
       });
     },
 
     deleteProviderSecret(provider: SttProvider) {
-      return invokeControlSnapshot("delete_provider_secret", {
+      return invokeControlSnapshot(TAURI_COMMANDS.deleteProviderSecret, {
         provider,
       });
     },
