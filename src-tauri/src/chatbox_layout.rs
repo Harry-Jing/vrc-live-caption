@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use unicode_linebreak::{BreakOpportunity, linebreaks};
 use unicode_segmentation::UnicodeSegmentation;
 
-const CHATBOX_MAX_UTF16_UNITS: usize = 144;
+pub(crate) const CHATBOX_MAX_UTF16_UNITS: usize = 144;
 const CHATBOX_MAX_VISIBLE_LINES: usize = 9;
 const FONT_UNITS_PER_EM: u32 = 1_000;
 const FONT_SIZE_PX: u32 = 18;

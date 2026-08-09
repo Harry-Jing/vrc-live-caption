@@ -97,8 +97,8 @@ fn silence_and_an_incomplete_window_use_a_finite_floor() -> AppResult<()> {
     )?;
 
     for result in [silence, partial] {
-        assert_eq!(result.rms_dbfs, DBFS_FLOOR);
-        assert_eq!(result.peak_dbfs, DBFS_FLOOR);
+        assert_eq!(result.rms_dbfs, TELEMETRY_DBFS_FLOOR);
+        assert_eq!(result.peak_dbfs, TELEMETRY_DBFS_FLOOR);
         assert!(result.rms_dbfs.is_finite());
         assert!(result.peak_dbfs.is_finite());
         assert!(!result.clipping);
@@ -179,8 +179,8 @@ fn a_probe_with_only_receive_timeouts_returns_finite_floor_values() -> AppResult
         ),
     )?;
 
-    assert_eq!(result.rms_dbfs, DBFS_FLOOR);
-    assert_eq!(result.peak_dbfs, DBFS_FLOOR);
+    assert_eq!(result.rms_dbfs, TELEMETRY_DBFS_FLOOR);
+    assert_eq!(result.peak_dbfs, TELEMETRY_DBFS_FLOOR);
     assert!(result.rms_dbfs.is_finite());
     assert!(result.peak_dbfs.is_finite());
     assert!(!result.clipping);

@@ -53,8 +53,8 @@ fn silence_uses_a_finite_serializable_dbfs_floor() -> Result<(), AudioLevelConfi
     let readings = meter.push_samples(&vec![0.0; 4_800]);
 
     assert_eq!(readings.len(), 1);
-    assert_eq!(readings[0].rms_dbfs, DBFS_FLOOR);
-    assert_eq!(readings[0].peak_dbfs, DBFS_FLOOR);
+    assert_eq!(readings[0].rms_dbfs, TELEMETRY_DBFS_FLOOR);
+    assert_eq!(readings[0].peak_dbfs, TELEMETRY_DBFS_FLOOR);
     assert!(readings[0].rms_dbfs.is_finite());
     assert!(readings[0].peak_dbfs.is_finite());
     assert!(!readings[0].clipping);

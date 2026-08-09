@@ -8,7 +8,7 @@ use std::error::Error;
 use std::fmt;
 
 const LEVEL_WINDOW_MILLIS: u64 = 100;
-pub(crate) const DBFS_FLOOR: f32 = -120.0;
+pub(crate) const TELEMETRY_DBFS_FLOOR: f32 = -120.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AudioLevelReading {
@@ -136,9 +136,9 @@ impl AudioLevelMeter {
 
 fn amplitude_to_dbfs(amplitude: f32) -> f32 {
     if amplitude <= 0.0 {
-        return DBFS_FLOOR;
+        return TELEMETRY_DBFS_FLOOR;
     }
-    (20.0 * amplitude.log10()).max(DBFS_FLOOR)
+    (20.0 * amplitude.log10()).max(TELEMETRY_DBFS_FLOOR)
 }
 
 #[cfg(test)]

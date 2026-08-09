@@ -1,7 +1,7 @@
 //! Short, local-only microphone probe that returns scalar level statistics.
 
 use crate::audio::{open_input_capture, receive_audio};
-use crate::audio_level::{AudioLevelMeter, DBFS_FLOOR};
+use crate::audio_level::{AudioLevelMeter, TELEMETRY_DBFS_FLOOR};
 use crate::config::AudioConfig;
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
@@ -83,8 +83,8 @@ where
     let deadline = started_at.checked_add(duration).ok_or_else(|| {
         AppError::audio("Microphone probe duration exceeded the monotonic clock range.")
     })?;
-    let mut rms_dbfs = DBFS_FLOOR;
-    let mut peak_dbfs = DBFS_FLOOR;
+    let mut rms_dbfs = TELEMETRY_DBFS_FLOOR;
+    let mut peak_dbfs = TELEMETRY_DBFS_FLOOR;
     let mut clipping = false;
     let mut gate_open = false;
 

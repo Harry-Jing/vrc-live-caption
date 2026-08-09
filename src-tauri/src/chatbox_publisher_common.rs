@@ -4,7 +4,7 @@
 //! concrete publishers. This module contains only vocabulary and worker
 //! mechanics whose behavior is identical for Completed and Live publication.
 
-use crate::chatbox_layout::ChatboxLayoutError;
+use crate::chatbox_layout::{CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError};
 use crate::error::{AppError, AppResult};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -99,7 +99,7 @@ impl PublisherWorkerJoin {
 pub(crate) fn describe_layout_error(error: ChatboxLayoutError) -> String {
     match error {
         ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units } => format!(
-            "One grapheme requires {utf16_units} UTF-16 units, exceeding the 144-unit Chatbox input budget."
+            "One grapheme requires {utf16_units} UTF-16 units, exceeding the {CHATBOX_MAX_UTF16_UNITS}-unit Chatbox input budget."
         ),
     }
 }

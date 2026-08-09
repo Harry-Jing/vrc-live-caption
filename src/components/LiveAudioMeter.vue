@@ -10,8 +10,8 @@ const props = defineProps<{
   sessionPhase: RuntimeSessionPhase | null;
 }>();
 
-const DBFS_FLOOR = -96;
-const DBFS_CEILING = 0;
+const METER_SCALE_MIN_DBFS = -96;
+const METER_SCALE_MAX_DBFS = 0;
 
 const isActiveSession = computed(() =>
   isActiveRuntimeSessionPhase(props.sessionPhase),
@@ -30,15 +30,21 @@ const currentLevel = computed(() => {
 });
 
 function clampDbfs(value: number) {
-  return Math.min(DBFS_CEILING, Math.max(DBFS_FLOOR, value));
+  return Math.min(METER_SCALE_MAX_DBFS, Math.max(METER_SCALE_MIN_DBFS, value));
 }
 
 function meterPercent(value: number) {
-  return ((clampDbfs(value) - DBFS_FLOOR) / (DBFS_CEILING - DBFS_FLOOR)) * 100;
+  return (
+    ((clampDbfs(value) - METER_SCALE_MIN_DBFS) /
+      (METER_SCALE_MAX_DBFS - METER_SCALE_MIN_DBFS)) *
+    100
+  );
 }
 
 const rmsDbfs = computed(() =>
-  currentLevel.value ? clampDbfs(currentLevel.value.rmsDbfs) : DBFS_FLOOR,
+  currentLevel.value
+    ? clampDbfs(currentLevel.value.rmsDbfs)
+    : METER_SCALE_MIN_DBFS,
 );
 const rmsWidth = computed(() => `${String(meterPercent(rmsDbfs.value))}%`);
 const peakPosition = computed(() =>
@@ -124,8 +130,8 @@ const accessibleValue = computed(() =>
     <div v-else class="grid gap-2">
       <div
         :aria-label="uiText('live.microphoneMeter.accessibleLabel')"
-        aria-valuemax="0"
-        aria-valuemin="-96"
+        :aria-valuemax="METER_SCALE_MAX_DBFS"
+        :aria-valuemin="METER_SCALE_MIN_DBFS"
         :aria-valuenow="rmsDbfs"
         :aria-valuetext="accessibleValue"
         class="relative h-3 overflow-hidden rounded-full bg-default"
