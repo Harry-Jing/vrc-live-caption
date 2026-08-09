@@ -11,6 +11,5 @@ of the automated format checks.
 - [adr/](./adr/): accepted decisions, one per file, with their reasons
 - [research/](./research/): factual notes and measured behavior —
   [VRChat Chatbox reference](./research/vrchat-chatbox-reference.md),
-  [OpenAI Realtime transcription options](./research/openai-speech-streaming-options.md),
   [local inference notes](./research/local-inference-notes.md), and the
   [Tauri frontend build command](./research/tauri-frontend-build-command.md)

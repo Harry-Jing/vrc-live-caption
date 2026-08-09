@@ -108,9 +108,8 @@ events by `item_id` and receive expected-language hints through `languages[]`.
 Hints never masquerade as detected language. An `item_id` never becomes a
 UI-facing or output-sink identity. `gpt-transcribe` does not produce a
 fabricated ongoing snapshot while the committed item is being recognized.
-These protocol facts are recorded in
-[research/openai-speech-streaming-options.md](./research/openai-speech-streaming-options.md)
-and the decision is [ADR 0024](./adr/0024-use-openai-realtime-transcription.md).
+The release decision is
+[ADR 0024](./adr/0024-use-openai-realtime-transcription.md).
 
 There is deliberately no generic WebSocket abstraction. Connection setup,
 authentication, system-proxy tunneling, JSON encoding, 24 kHz PCM conversion,
