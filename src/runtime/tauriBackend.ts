@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { decodeAudioLevelEvent, decodeAudioProbeResult } from "./audioContract";
-import { decodeCaptionSessionSnapshotV1 } from "./captionSession";
+import { decodeCaptionSessionSnapshotV1 } from "./captionSessionContract";
 import { decodeRuntimeControlSnapshotV3 } from "./runtimeControlContract";
 import {
   decodeDiagnosticEvent,
