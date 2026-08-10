@@ -4,14 +4,86 @@ use crate::chatbox_transport::{ChatboxSendReceipt, ChatboxTransport};
 use crate::config::{OpenAiTranscriptionModel, SttProvider};
 use crate::host_resolver::{HostResolutionError, HostResolver};
 use crate::live_chatbox_publisher::LivePublisherDiagnostic;
+use crate::recognition::{
+    RecognitionDriver, RecognitionDriverIo, RecognitionGenerationScope, RecognitionModule,
+};
 use crate::recognition_fakes::{
     ScriptedRecognitionAdapter, ScriptedRecognitionContext, ScriptedText,
 };
 use crate::secrets::ProviderSecretStorage;
 use secrecy::SecretString;
 use std::io;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 use tauri::Listener;
+
+struct ReconnectAfterCaptureOpensDriver {
+    capture_opened: mpsc::Receiver<()>,
+    pause_acknowledged: mpsc::SyncSender<()>,
+}
+
+struct TerminalAfterCaptureOpensDriver {
+    capture_opened: mpsc::Receiver<()>,
+}
+
+impl RecognitionDriver for TerminalAfterCaptureOpensDriver {
+    fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
+        io.ready(false)?;
+        self.capture_opened
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|error| {
+                AppError::state(format!("Runtime test capture did not open: {error}"))
+            })?;
+        io.emit_event(RecognitionEvent::UnitStarted {
+            generation: io.scope().generation,
+            stream_id: io.scope().stream_id.clone(),
+            unit_id: "terminal-active-unit".to_string(),
+            started_at_ms: 321,
+        })?;
+        Err(AppError::stt_provider(
+            crate::error::ProviderFailureClass::Authentication,
+            "The recognition provider rejected the configured credential.",
+        ))
+    }
+}
+
+impl RecognitionDriver for ReconnectAfterCaptureOpensDriver {
+    fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
+        io.ready(false)?;
+        self.capture_opened
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|error| {
+                AppError::state(format!("Runtime test capture did not open: {error}"))
+            })?;
+        io.reconnecting(7, 1, Duration::from_millis(10))?;
+        self.pause_acknowledged
+            .send(())
+            .map_err(|_| AppError::state("Runtime test dropped its capture-pause receiver."))?;
+        io.wait_until_stopped()
+    }
+}
+
+struct DropAwareRecognitionCapture {
+    dropped: Arc<AtomicBool>,
+}
+
+impl RecognitionCapture for DropAwareRecognitionCapture {
+    fn sample_rate(&self) -> u32 {
+        16_000
+    }
+
+    fn receive(&self, _timeout: Duration) -> AppResult<Option<Vec<f32>>> {
+        Ok(None)
+    }
+}
+
+impl Drop for DropAwareRecognitionCapture {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
 
 fn scripted_context(
     generation: &RuntimeGeneration,
@@ -22,105 +94,6 @@ fn scripted_context(
         stream_id: generation.stream_id().to_string(),
         language: Some("en".to_string()),
         model: model.as_str().to_string(),
-    }
-}
-
-struct QueuedRecognitionSession {
-    events: Vec<RecognitionEvent>,
-}
-
-struct SlowEmptyDrainRecognitionSession {
-    generation: u64,
-    stream_id: String,
-    received_samples: Arc<Mutex<usize>>,
-    drain_delay: Duration,
-}
-
-struct CancelOnAppendRecognitionSession {
-    attempt: ConnectionAttemptCancelToken,
-    drain_called: Arc<AtomicBool>,
-}
-
-impl RecognitionSession for QueuedRecognitionSession {
-    fn start_unit(&mut self, _unit_id: String, _started_at_ms: u64) -> AppResult<RecognitionEvent> {
-        Err(AppError::state(
-            "Queued recognition test session cannot start input units.",
-        ))
-    }
-
-    fn append_audio(&mut self, _audio: RecognitionAudioChunk<'_>) -> AppResult<()> {
-        Ok(())
-    }
-
-    fn end_input(&mut self) -> AppResult<()> {
-        Ok(())
-    }
-
-    fn drain_events(&mut self, _received_at_ms: u64) -> AppResult<Vec<RecognitionEvent>> {
-        Ok(std::mem::take(&mut self.events))
-    }
-
-    fn stop(&mut self) -> AppResult<()> {
-        Ok(())
-    }
-}
-
-impl RecognitionSession for SlowEmptyDrainRecognitionSession {
-    fn start_unit(&mut self, unit_id: String, started_at_ms: u64) -> AppResult<RecognitionEvent> {
-        Ok(RecognitionEvent::UnitStarted {
-            generation: self.generation,
-            stream_id: self.stream_id.clone(),
-            unit_id,
-            started_at_ms,
-        })
-    }
-
-    fn append_audio(&mut self, audio: RecognitionAudioChunk<'_>) -> AppResult<()> {
-        let mut received_samples = self
-            .received_samples
-            .lock()
-            .map_err(|_| AppError::state("Recognition sample counter lock was poisoned."))?;
-        *received_samples = received_samples.saturating_add(audio.samples.len());
-        Ok(())
-    }
-
-    fn end_input(&mut self) -> AppResult<()> {
-        Ok(())
-    }
-
-    fn drain_events(&mut self, _received_at_ms: u64) -> AppResult<Vec<RecognitionEvent>> {
-        thread::sleep(self.drain_delay);
-        Ok(Vec::new())
-    }
-
-    fn stop(&mut self) -> AppResult<()> {
-        Ok(())
-    }
-}
-
-impl RecognitionSession for CancelOnAppendRecognitionSession {
-    fn start_unit(&mut self, _unit_id: String, _started_at_ms: u64) -> AppResult<RecognitionEvent> {
-        Err(AppError::state(
-            "Cancel-on-append recognition session does not start units.",
-        ))
-    }
-
-    fn append_audio(&mut self, _audio: RecognitionAudioChunk<'_>) -> AppResult<()> {
-        self.attempt.cancel();
-        Ok(())
-    }
-
-    fn end_input(&mut self) -> AppResult<()> {
-        Ok(())
-    }
-
-    fn drain_events(&mut self, _received_at_ms: u64) -> AppResult<Vec<RecognitionEvent>> {
-        self.drain_called.store(true, Ordering::SeqCst);
-        Ok(Vec::new())
-    }
-
-    fn stop(&mut self) -> AppResult<()> {
-        Ok(())
     }
 }
 
@@ -298,6 +271,132 @@ fn reconnect_boundary_aborts_active_units_without_closing_the_generation() -> Ap
     assert!(caption_session.snapshot()?.active_units.is_empty());
     assert!(generation.commit_if_active(|| {})?);
     assert!(!generation.is_work_cancelled());
+    Ok(())
+}
+
+#[test]
+fn coordinator_drops_capture_before_acknowledging_reconnect() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session)?;
+    let (capture_opened, opened) = mpsc::sync_channel(1);
+    let (pause_acknowledged, acknowledged) = mpsc::sync_channel(1);
+    let module = RecognitionModule::with_audio_budget(
+        Duration::from_millis(100),
+        1,
+        ReconnectAfterCaptureOpensDriver {
+            capture_opened: opened,
+            pause_acknowledged,
+        },
+    )?;
+    let mut recognition = module.start(RecognitionGenerationScope {
+        generation: generation.generation_id(),
+        stream_id: generation.stream_id().to_string(),
+    })?;
+    let capture_dropped = Arc::new(AtomicBool::new(false));
+    let opened_capture_dropped = Arc::clone(&capture_dropped);
+    let open_capture = move |_config: &crate::config::AudioConfig| {
+        capture_opened.send(()).map_err(|_| {
+            AppError::state("Runtime test recognition owner stopped before capture opened.")
+        })?;
+        Ok(Box::new(DropAwareRecognitionCapture {
+            dropped: Arc::clone(&opened_capture_dropped),
+        }) as Box<dyn RecognitionCapture>)
+    };
+
+    let stop_generation = generation.clone();
+    let observed_capture_drop = Arc::clone(&capture_dropped);
+    let stopper = thread::spawn(move || -> AppResult<()> {
+        acknowledged
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|error| {
+                AppError::state(format!("Reconnect pause was not acknowledged: {error}"))
+            })?;
+        if !observed_capture_drop.load(Ordering::SeqCst) {
+            return Err(AppError::state(
+                "Reconnect was acknowledged before microphone capture was dropped.",
+            ));
+        }
+        stop_generation.request_stop(None)
+    });
+
+    coordinate_running_recognition_with_capture(
+        app.handle(),
+        &AppConfig::default(),
+        None,
+        &generation,
+        &mut recognition,
+        &open_capture,
+    )?;
+    stopper
+        .join()
+        .map_err(|_| AppError::runtime("Runtime test stopper thread panicked."))??;
+    recognition.stop()?;
+    assert!(capture_dropped.load(Ordering::SeqCst));
+    Ok(())
+}
+
+#[test]
+fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let caption_session = CaptionSessionStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
+    let capture_dropped = Arc::new(AtomicBool::new(false));
+    let observed_capture_drop = Arc::clone(&capture_dropped);
+    let (ended_sender, ended_receiver) = mpsc::channel();
+    app.listen("utterance-ended", move |event| {
+        let _ = ended_sender.send((
+            observed_capture_drop.load(Ordering::SeqCst),
+            event.payload().to_string(),
+        ));
+    });
+    let (capture_opened, opened) = mpsc::sync_channel(1);
+    let module = RecognitionModule::with_audio_budget(
+        Duration::from_millis(100),
+        1,
+        TerminalAfterCaptureOpensDriver {
+            capture_opened: opened,
+        },
+    )?;
+    let mut recognition = module.start(RecognitionGenerationScope {
+        generation: generation.generation_id(),
+        stream_id: generation.stream_id().to_string(),
+    })?;
+    let opened_capture_dropped = Arc::clone(&capture_dropped);
+    let open_capture = move |_config: &crate::config::AudioConfig| {
+        capture_opened.send(()).map_err(|_| {
+            AppError::state("Runtime test recognition owner stopped before capture opened.")
+        })?;
+        Ok(Box::new(DropAwareRecognitionCapture {
+            dropped: Arc::clone(&opened_capture_dropped),
+        }) as Box<dyn RecognitionCapture>)
+    };
+
+    let error = match coordinate_running_recognition_with_capture(
+        app.handle(),
+        &AppConfig::default(),
+        None,
+        &generation,
+        &mut recognition,
+        &open_capture,
+    ) {
+        Err(error) => error,
+        Ok(()) => {
+            return Err(AppError::state(
+                "Terminal recognition error did not cross the coordinator boundary.",
+            ));
+        }
+    };
+    assert_eq!(error.code(), "stt.provider_authentication_failed");
+    assert!(capture_dropped.load(Ordering::SeqCst));
+    assert!(caption_session.snapshot()?.active_units.is_empty());
+    let (capture_was_dropped, ended_payload) = ended_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::state("Terminal active unit did not emit utterance-ended."))?;
+    assert!(capture_was_dropped);
+    assert!(ended_payload.contains("sttFailed"));
+    recognition.stop()?;
+    generation.request_stop(None)?;
     Ok(())
 }
 
@@ -741,257 +840,6 @@ fn stop_cancels_work_before_waiting_for_an_app_commit() -> AppResult<()> {
 }
 
 #[test]
-fn a_full_recognition_queue_reports_backpressure_without_disguising_it_as_stop() -> AppResult<()> {
-    let generation = RuntimeGeneration::active();
-    let attempt = ConnectionAttemptCancelToken::default();
-    let (sender, _receiver) = sync_channel(1);
-    send_recognition_command(
-        &attempt,
-        &sender,
-        RecognitionCommand::AppendAudio {
-            sample_rate_hz: 24_000,
-            samples: vec![0.1],
-        },
-    )?;
-
-    let error = send_recognition_command(
-        &attempt,
-        &sender,
-        RecognitionCommand::AppendAudio {
-            sample_rate_hz: 24_000,
-            samples: vec![0.2],
-        },
-    )
-    .err()
-    .ok_or_else(|| AppError::state("A full recognition queue silently accepted audio."))?;
-
-    assert_eq!(error.code(), "stt.backpressure");
-    assert!(
-        error
-            .to_string()
-            .contains("the session stopped instead of silently dropping audio")
-    );
-    assert!(!generation.is_work_cancelled());
-    assert!(attempt.is_cancelled());
-    Ok(())
-}
-
-#[test]
-fn recognition_worker_keeps_up_when_event_drain_is_slower_than_audio_frames() -> AppResult<()> {
-    const FRAME_COUNT: u32 = 128;
-    const FRAME_SAMPLES: usize = 240;
-    const FRAME_INTERVAL: Duration = Duration::from_millis(10);
-    const MAX_CADENCE_LAG: Duration = Duration::from_millis(50);
-
-    let app = tauri::test::mock_app();
-    let caption_session = CaptionSessionStore::default();
-    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session)?;
-    let attempt = ConnectionAttemptCancelToken::default();
-    let (sender, receiver) = sync_channel(RECOGNITION_COMMAND_QUEUE_CAPACITY);
-    let received_samples = Arc::new(Mutex::new(0));
-    let worker = spawn_recognition_worker(
-        app.handle().clone(),
-        None,
-        generation.clone(),
-        attempt.clone(),
-        SlowEmptyDrainRecognitionSession {
-            generation: generation.generation_id(),
-            stream_id: generation.stream_id().to_string(),
-            received_samples: Arc::clone(&received_samples),
-            drain_delay: Duration::from_millis(15),
-        },
-        receiver,
-    )?;
-
-    let mut next_frame_at = Instant::now();
-    let send_result = (|| -> AppResult<()> {
-        for frame_index in 0..FRAME_COUNT {
-            let remaining = next_frame_at.saturating_duration_since(Instant::now());
-            if !remaining.is_zero() {
-                thread::sleep(remaining);
-            }
-            let command = if frame_index == 0 {
-                RecognitionCommand::StartUnit {
-                    unit_id: "realtime-audio".to_string(),
-                    started_at_ms: 0,
-                    sample_rate_hz: 24_000,
-                    initial_audio: vec![0.1; FRAME_SAMPLES],
-                }
-            } else {
-                RecognitionCommand::AppendAudio {
-                    sample_rate_hz: 24_000,
-                    samples: vec![0.1; FRAME_SAMPLES],
-                }
-            };
-            send_recognition_command(&attempt, &sender, command)?;
-            next_frame_at += FRAME_INTERVAL;
-            if Instant::now().saturating_duration_since(next_frame_at) > MAX_CADENCE_LAG {
-                next_frame_at = Instant::now() + FRAME_INTERVAL;
-            }
-        }
-        send_recognition_command(&attempt, &sender, RecognitionCommand::EndInput)
-    })();
-    drop(sender);
-    let worker_result = worker
-        .join()
-        .map_err(|_| AppError::runtime("Recognition worker timing test thread panicked."))?;
-    generation.request_stop(None)?;
-
-    send_result?;
-    worker_result?;
-    assert_eq!(
-        *received_samples
-            .lock()
-            .map_err(|_| AppError::state("Recognition sample counter lock was poisoned."))?,
-        FRAME_COUNT as usize * FRAME_SAMPLES
-    );
-    Ok(())
-}
-
-#[test]
-fn recognition_worker_does_not_poll_provider_after_attempt_cancels_mid_batch() -> AppResult<()> {
-    let app = tauri::test::mock_app();
-    let caption_session = CaptionSessionStore::default();
-    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session)?;
-    let attempt = ConnectionAttemptCancelToken::default();
-    let (sender, receiver) = sync_channel(RECOGNITION_COMMAND_QUEUE_CAPACITY);
-    send_recognition_command(
-        &attempt,
-        &sender,
-        RecognitionCommand::AppendAudio {
-            sample_rate_hz: 24_000,
-            samples: vec![0.1; 240],
-        },
-    )?;
-    drop(sender);
-    let drain_called = Arc::new(AtomicBool::new(false));
-
-    run_recognition_worker(
-        app.handle().clone(),
-        None,
-        generation.clone(),
-        attempt.clone(),
-        CancelOnAppendRecognitionSession {
-            attempt,
-            drain_called: Arc::clone(&drain_called),
-        },
-        receiver,
-    )?;
-    generation.request_stop(None)?;
-
-    assert!(!drain_called.load(Ordering::SeqCst));
-    Ok(())
-}
-
-#[test]
-fn ignored_recognition_event_does_not_stop_the_worker_before_a_later_event() -> AppResult<()> {
-    let app = tauri::test::mock_app();
-    let caption_session = CaptionSessionStore::default();
-    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
-    let events = ScriptedRecognitionAdapter::new(scripted_context(
-        &generation,
-        OpenAiTranscriptionModel::GptLiveTranscribe,
-    ))
-    .script_unit(
-        "ordered-unit",
-        100,
-        &[
-            ScriptedText::new("stale revision", 110),
-            ScriptedText::new("current revision", 120),
-        ],
-        ScriptedText::new("completed after stale revision", 130),
-    );
-    assert_eq!(
-        generation.submit_recognition_event(app.handle(), None, events[0].clone())?,
-        RecognitionEventSubmitOutcome::Accepted
-    );
-    assert_eq!(
-        generation.submit_recognition_event(app.handle(), None, events[2].clone())?,
-        RecognitionEventSubmitOutcome::Accepted
-    );
-
-    let (sender, receiver) = sync_channel(1);
-    sender
-        .send(RecognitionCommand::AppendAudio {
-            sample_rate_hz: 24_000,
-            samples: vec![0.1],
-        })
-        .map_err(|_| AppError::state("Could not prime the recognition worker test queue."))?;
-    drop(sender);
-
-    run_recognition_worker(
-        app.handle().clone(),
-        None,
-        generation.clone(),
-        ConnectionAttemptCancelToken::default(),
-        QueuedRecognitionSession {
-            events: vec![events[1].clone(), events[3].clone()],
-        },
-        receiver,
-    )?;
-
-    let snapshot = caption_session.snapshot()?;
-    assert_eq!(snapshot.captions.len(), 1);
-    assert_eq!(snapshot.captions[0].revision, 3);
-    assert_eq!(snapshot.captions[0].text, "completed after stale revision");
-    assert_eq!(
-        snapshot.captions[0].state,
-        crate::caption_session::CaptionState::Completed
-    );
-
-    generation.request_stop(None)?;
-    Ok(())
-}
-
-#[test]
-fn a_closed_worker_channel_cancels_only_the_connection_attempt() -> AppResult<()> {
-    let generation = RuntimeGeneration::active();
-    let attempt = ConnectionAttemptCancelToken::default();
-    let (sender, receiver) = sync_channel(1);
-    drop(receiver);
-
-    send_recognition_command(
-        &attempt,
-        &sender,
-        RecognitionCommand::AppendAudio {
-            sample_rate_hz: 24_000,
-            samples: vec![0.1],
-        },
-    )?;
-
-    assert!(attempt.is_cancelled());
-    assert!(!generation.is_work_cancelled());
-    assert!(generation.commit_if_active(|| {})?);
-    Ok(())
-}
-
-#[test]
-fn runtime_stop_interrupts_reconnect_backoff() -> AppResult<()> {
-    let generation = RuntimeGeneration::active();
-    let waiter_generation = generation.clone();
-    let (result_sender, result_receiver) = mpsc::sync_channel(1);
-    let waiter = thread::spawn(move || {
-        let _ = result_sender.send(wait_for_reconnect(
-            &waiter_generation,
-            Duration::from_secs(5),
-        ));
-    });
-
-    thread::sleep(Duration::from_millis(20));
-    generation.cancel_work();
-
-    assert!(
-        !result_receiver
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| AppError::runtime("Reconnect backoff ignored runtime cancellation."))?
-    );
-    waiter
-        .join()
-        .map_err(|_| AppError::runtime("Reconnect backoff test thread panicked."))?;
-    Ok(())
-}
-
-#[test]
 fn microphone_probe_lease_excludes_runtime_start_until_released() -> AppResult<()> {
     let app = tauri::test::mock_app();
     let manager = RuntimeManager::default();
@@ -1005,81 +853,6 @@ fn microphone_probe_lease_excludes_runtime_start_until_released() -> AppResult<(
 
     drop(probe);
     manager.prepare_for_start(app.handle())?;
-    Ok(())
-}
-
-#[test]
-fn production_segmenter_ends_an_announced_unit_after_1_2_seconds_without_input() {
-    let started_at = Instant::now();
-    let mut segmenter = new_recognition_segmenter(1_000);
-    let started = segmenter.push_samples(vec![0.02; 1_000], started_at);
-
-    assert!(started.iter().any(|update| update.speech_started));
-    assert!(
-        !segmenter
-            .tick(started_at + Duration::from_millis(1_199))
-            .speech_ended
-    );
-    assert!(
-        segmenter
-            .tick(started_at + Duration::from_millis(1_200))
-            .speech_ended
-    );
-}
-
-#[test]
-fn production_segmenter_hard_splits_continuous_speech_at_30_seconds() {
-    let started_at = Instant::now();
-    let mut segmenter = new_recognition_segmenter(1_000);
-
-    let before_boundary = segmenter.push_samples(vec![0.02; 29_990], started_at);
-    assert!(before_boundary.iter().any(|update| update.speech_started));
-    assert!(before_boundary.iter().all(|update| !update.speech_ended));
-
-    let boundary = segmenter.push_samples(vec![0.02; 10], started_at + Duration::from_millis(10));
-    assert_eq!(boundary.len(), 1);
-    assert_eq!(boundary[0].audio.len(), 10);
-    assert!(boundary[0].speech_ended);
-}
-
-#[test]
-fn one_capture_callback_dispatches_every_segmenter_update_in_order() -> AppResult<()> {
-    let attempt = ConnectionAttemptCancelToken::default();
-    let (sender, receiver) = sync_channel(4);
-    let mut segmenter = SpeechSegmenter::new(10, 0.1, Duration::from_millis(100), 0.3, 0.3, 0.0);
-    let updates = segmenter.push_samples(vec![0.21, 0.22, 0.23, 0.24], Instant::now());
-
-    apply_segmenter_updates(&attempt, &sender, segmenter.sample_rate(), updates)?;
-
-    match receiver
-        .recv_timeout(Duration::from_secs(1))
-        .map_err(|_| AppError::state("The first bounded unit was not dispatched."))?
-    {
-        RecognitionCommand::StartUnit { initial_audio, .. } => {
-            assert_eq!(initial_audio, vec![0.21, 0.22, 0.23]);
-        }
-        _ => return Err(AppError::state("The first bounded unit did not start.")),
-    }
-    assert!(matches!(
-        receiver
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| AppError::state("The first bounded unit did not end."))?,
-        RecognitionCommand::EndInput
-    ));
-    match receiver
-        .recv_timeout(Duration::from_secs(1))
-        .map_err(|_| AppError::state("The callback remainder was not dispatched."))?
-    {
-        RecognitionCommand::StartUnit { initial_audio, .. } => {
-            assert_eq!(initial_audio, vec![0.24]);
-        }
-        _ => {
-            return Err(AppError::state(
-                "The callback remainder did not start the next unit.",
-            ));
-        }
-    }
-    assert!(receiver.try_recv().is_err());
     Ok(())
 }
 

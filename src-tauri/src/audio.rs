@@ -35,7 +35,7 @@ pub(crate) struct AudioInputDevice {
 pub(crate) struct AudioCapture {
     pub(crate) receiver: AudioCaptureReceiver,
     pub(crate) sample_rate: u32,
-    pub(crate) stream: Stream,
+    _stream: Stream,
 }
 
 pub(crate) struct AudioCaptureReceiver {
@@ -149,7 +149,7 @@ pub(crate) fn open_input_capture(config: &AudioConfig) -> AppResult<AudioCapture
             notifications: notification_receiver,
         },
         sample_rate,
-        stream,
+        _stream: stream,
     })
 }
 

@@ -6,6 +6,7 @@
 //! would freeze the window for that duration.
 
 use crate::audio::{AudioInputDevice, list_input_devices};
+use crate::audio_level::SPEECH_RMS_THRESHOLD;
 use crate::audio_probe::{
     AudioProbeRequest, AudioProbeResult, probe_audio_input as run_audio_probe,
 };
@@ -16,7 +17,6 @@ use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, emit_runtime_control_changed,
 };
 use crate::osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
-use crate::runtime::SPEECH_RMS_THRESHOLD;
 use crate::runtime_control::RuntimeControlSnapshot;
 use crate::state::AppState;
 use tauri::{AppHandle, State};

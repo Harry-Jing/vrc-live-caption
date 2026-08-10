@@ -8,6 +8,7 @@ use std::error::Error;
 use std::fmt;
 
 const LEVEL_WINDOW_MILLIS: u64 = 100;
+pub(crate) const SPEECH_RMS_THRESHOLD: f32 = 0.012;
 pub(crate) const TELEMETRY_DBFS_FLOOR: f32 = -120.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]

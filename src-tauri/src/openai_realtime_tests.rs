@@ -2,7 +2,7 @@ use super::*;
 use crate::caption_session::{CaptionSnapshotV1, CaptionState};
 use crate::error::{AppError, AppResult, ProviderFailureClass, RetryDisposition};
 use crate::recognition::{
-    RecognitionAudioChunk, RecognitionEndReason, RecognitionEvent, RecognitionSession,
+    RecognitionAttemptAudioChunk, RecognitionAttemptSession, RecognitionEndReason, RecognitionEvent,
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -194,7 +194,7 @@ fn session_with_manual_clock(
 }
 
 fn start_unit(
-    session: &mut impl RecognitionSession,
+    session: &mut impl RecognitionAttemptSession,
     unit_id: &str,
     started_at_ms: u64,
 ) -> AppResult<()> {
@@ -319,7 +319,7 @@ fn append_encodes_mono_pcm16_at_24k_then_commit_is_a_separate_event() -> AppResu
     let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
     start_unit(&mut session, "unit-a", 100)?;
 
-    session.append_audio(RecognitionAudioChunk {
+    session.append_audio(RecognitionAttemptAudioChunk {
         sample_rate_hz: 24_000,
         samples: &[0.0, 1.0, -1.0],
     })?;

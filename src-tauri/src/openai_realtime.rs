@@ -9,7 +9,7 @@ use crate::caption_session::{CaptionLane, CaptionSnapshotV1, CaptionState};
 use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppError, AppResult, ProviderFailureClass};
 use crate::recognition::{
-    RecognitionAudioChunk, RecognitionEndReason, RecognitionEvent, RecognitionSession,
+    RecognitionAttemptAudioChunk, RecognitionAttemptSession, RecognitionEndReason, RecognitionEvent,
 };
 use crate::recognition_audio::{REALTIME_PCM_SAMPLE_RATE_HZ, RealtimePcm16Encoder};
 use base64::Engine as _;
@@ -705,7 +705,7 @@ impl<T: RealtimeTransport> OpenAiRealtimeSession<T> {
     }
 }
 
-impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
+impl<T: RealtimeTransport> RecognitionAttemptSession for OpenAiRealtimeSession<T> {
     fn start_unit(&mut self, unit_id: String, started_at_ms: u64) -> AppResult<RecognitionEvent> {
         self.ensure_not_stopped()?;
         if self.active_sequence.is_some() {
@@ -755,7 +755,7 @@ impl<T: RealtimeTransport> RecognitionSession for OpenAiRealtimeSession<T> {
         })
     }
 
-    fn append_audio(&mut self, audio: RecognitionAudioChunk<'_>) -> AppResult<()> {
+    fn append_audio(&mut self, audio: RecognitionAttemptAudioChunk<'_>) -> AppResult<()> {
         self.ensure_not_stopped()?;
         if self.active_sequence.is_none() {
             return Err(AppError::stt(

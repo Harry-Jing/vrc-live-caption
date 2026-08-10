@@ -11,7 +11,7 @@ use crate::openai_realtime::{
     OpenAiRealtimeSession, OpenAiRealtimeSessionContext, ProviderError, RealtimeTransport,
     openai_provider_failure,
 };
-use crate::recognition::RecognitionSession;
+use crate::recognition::RecognitionAttemptSession;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use std::io::{self, ErrorKind};
@@ -24,20 +24,25 @@ use tungstenite::handshake::{HandshakeError, MidHandshake, client::ClientHandsha
 use tungstenite::protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{
-    ClientRequestBuilder, Error as WebSocketError, Message, WebSocket, client_tls_with_config,
+    ClientRequestBuilder, Connector, Error as WebSocketError, Message, WebSocket,
+    client_tls_with_config,
 };
 
 mod system_proxy;
+#[path = "openai_realtime_tls_pump.rs"]
+mod tls_pump;
+
+use tls_pump::{OpenAiTlsPump, split_established_tls};
 
 const HANDSHAKE_IO_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const OPENAI_REALTIME_TRANSCRIPTION_WEBSOCKET_URL: &str =
     "wss://api.openai.com/v1/realtime?intent=transcription";
-const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_READY_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 1_048_576;
 const MAX_WEBSOCKET_WRITE_BUFFER_BYTES: usize = 2_097_152;
+const MAX_WEBSOCKET_CONTROL_FRAMES_PER_POLL: usize = 8;
 
 type OpenAiSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 type OpenAiHandshakeError = HandshakeError<ClientHandshake<MaybeTlsStream<TcpStream>>>;
@@ -45,7 +50,14 @@ type OpenAiMidHandshake = MidHandshake<ClientHandshake<MaybeTlsStream<TcpStream>
 
 pub(crate) struct OpenAiWebSocketTransport {
     socket: OpenAiSocket,
-    closed: bool,
+    tls_pump: Option<OpenAiTlsPump>,
+    state: OpenAiWebSocketState,
+}
+
+enum OpenAiWebSocketState {
+    Open,
+    PeerClosePending(AppError),
+    Closed,
 }
 
 impl OpenAiWebSocketTransport {
@@ -79,11 +91,57 @@ impl OpenAiWebSocketTransport {
             let _ = shutdown_socket(socket.get_mut());
             return Err(startup_cancelled_error());
         }
+        Self::from_established_socket(socket)
+    }
+
+    fn from_established_socket(mut socket: OpenAiSocket) -> AppResult<Self> {
         configure_established_socket(socket.get_mut())?;
+        let tls_pump = split_established_tls(&mut socket)?;
         Ok(Self {
             socket,
-            closed: false,
+            tls_pump,
+            state: OpenAiWebSocketState::Open,
         })
+    }
+
+    fn drive_tls(&mut self) -> AppResult<()> {
+        if let Some(tls_pump) = self.tls_pump.as_mut() {
+            tls_pump.drive()?;
+        }
+        Ok(())
+    }
+
+    fn note_websocket_write(&mut self) {
+        if let Some(tls_pump) = self.tls_pump.as_mut() {
+            tls_pump.note_websocket_write();
+        }
+    }
+
+    fn flush_outbound(&mut self, context: &'static str) -> AppResult<bool> {
+        self.drive_tls()?;
+        self.note_websocket_write();
+        let websocket_flushed = match self.socket.flush() {
+            Ok(()) => true,
+            Err(WebSocketError::Io(error)) if error.kind() == ErrorKind::WouldBlock => false,
+            Err(error) => return Err(map_socket_error(context, error)),
+        };
+        self.drive_tls()?;
+        Ok(websocket_flushed
+            && self
+                .tls_pump
+                .as_ref()
+                .is_none_or(OpenAiTlsPump::outbound_idle))
+    }
+
+    fn finish_peer_close(&mut self) -> AppResult<Option<String>> {
+        let OpenAiWebSocketState::PeerClosePending(error) =
+            std::mem::replace(&mut self.state, OpenAiWebSocketState::Closed)
+        else {
+            return Err(AppError::state(
+                "OpenAI Realtime transport entered an invalid Close state.",
+            ));
+        };
+        Err(error)
     }
 }
 
@@ -93,6 +151,24 @@ fn open_websocket_until(
     websocket_config: WebSocketConfig,
     deadline: Instant,
     is_cancelled: &dyn Fn() -> bool,
+) -> AppResult<OpenAiSocket> {
+    open_websocket_until_with_connector(
+        request,
+        tcp,
+        websocket_config,
+        deadline,
+        is_cancelled,
+        None,
+    )
+}
+
+fn open_websocket_until_with_connector(
+    request: Request,
+    tcp: TcpStream,
+    websocket_config: WebSocketConfig,
+    deadline: Instant,
+    is_cancelled: &dyn Fn() -> bool,
+    connector: Option<Connector>,
 ) -> AppResult<OpenAiSocket> {
     if is_cancelled() {
         let _ = tcp.shutdown(Shutdown::Both);
@@ -108,7 +184,7 @@ fn open_websocket_until(
         ))
     })?;
 
-    let mut result = client_tls_with_config(request, tcp, Some(websocket_config), None);
+    let mut result = client_tls_with_config(request, tcp, Some(websocket_config), connector);
     loop {
         match result {
             Ok((socket, _response)) => {
@@ -189,69 +265,117 @@ fn startup_cancelled_error() -> AppError {
 
 impl RealtimeTransport for OpenAiWebSocketTransport {
     fn send_text(&mut self, message: String) -> AppResult<()> {
-        if self.closed {
-            return Err(AppError::stt_network_retryable(
-                "OpenAI Realtime WebSocket is already closed.",
-            ));
+        match &self.state {
+            OpenAiWebSocketState::Open => {}
+            OpenAiWebSocketState::PeerClosePending(_) => {
+                return Err(AppError::stt_network_retryable(
+                    "OpenAI Realtime WebSocket is closing.",
+                ));
+            }
+            OpenAiWebSocketState::Closed => {
+                return Err(AppError::stt_network_retryable(
+                    "OpenAI Realtime WebSocket is already closed.",
+                ));
+            }
         }
-        self.socket.send(Message::text(message)).map_err(|error| {
-            map_socket_error("Failed to send an OpenAI Realtime client event", error)
-        })
+        self.drive_tls()?;
+        self.note_websocket_write();
+        let accepted = match self.socket.send(Message::text(message)) {
+            Ok(()) => true,
+            Err(WebSocketError::Io(error)) if error.kind() == ErrorKind::WouldBlock => {
+                // Tungstenite retains the partially written frame in its bounded
+                // write buffer. A later write, read, or flush continues that
+                // frame; resending this logical event would duplicate it.
+                true
+            }
+            Err(error) => {
+                return Err(map_socket_error(
+                    "Failed to send an OpenAI Realtime client event",
+                    error,
+                ));
+            }
+        };
+        if accepted {
+            self.drive_tls()?;
+        }
+        Ok(())
     }
 
     fn try_receive_text(&mut self) -> AppResult<Option<String>> {
-        if self.closed {
+        if matches!(&self.state, OpenAiWebSocketState::Closed) {
             return Ok(None);
         }
 
-        if let Err(error) = set_socket_nonblocking(self.socket.get_ref(), true) {
-            self.closed = true;
-            return Err(error);
+        let outbound_flushed =
+            self.flush_outbound("Failed to flush pending OpenAI Realtime client events")?;
+        if matches!(&self.state, OpenAiWebSocketState::PeerClosePending(_)) {
+            if outbound_flushed {
+                return self.finish_peer_close();
+            }
+            return Ok(None);
         }
-        let receive_result = loop {
+
+        let mut control_frames = 0;
+        loop {
             match self.socket.read() {
-                Ok(Message::Text(text)) => break Ok(Some(text.as_str().to_string())),
-                Ok(Message::Ping(_) | Message::Pong(_)) => continue,
+                Ok(Message::Text(text)) => return Ok(Some(text.as_str().to_string())),
+                Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => {
+                    control_frames += 1;
+                    if control_frames >= MAX_WEBSOCKET_CONTROL_FRAMES_PER_POLL {
+                        let _ = self.flush_outbound(
+                            "Failed to flush an OpenAI Realtime control response",
+                        )?;
+                        return Ok(None);
+                    }
+                }
                 Ok(Message::Close(frame)) => {
-                    self.closed = true;
-                    break Err(map_close_frame(frame.as_ref()));
+                    self.state =
+                        OpenAiWebSocketState::PeerClosePending(map_close_frame(frame.as_ref()));
+                    if self
+                        .flush_outbound("Failed to acknowledge the OpenAI Realtime peer Close")?
+                    {
+                        return self.finish_peer_close();
+                    }
+                    return Ok(None);
                 }
                 Ok(Message::Binary(_)) => {
-                    break Err(AppError::stt(
+                    return Err(AppError::stt(
                         "OpenAI Realtime returned an unexpected binary WebSocket frame.",
                     ));
                 }
-                Ok(Message::Frame(_)) => continue,
                 Err(WebSocketError::Io(error)) if error.kind() == ErrorKind::WouldBlock => {
-                    break Ok(None);
+                    self.drive_tls()?;
+                    return Ok(None);
                 }
                 Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
-                    self.closed = true;
-                    break Err(AppError::stt_network_retryable(
+                    self.state = OpenAiWebSocketState::Closed;
+                    return Err(AppError::stt_network_retryable(
                         "OpenAI Realtime WebSocket connection ended.",
                     ));
                 }
                 Err(error) => {
-                    break Err(map_socket_error(
+                    return Err(map_socket_error(
                         "Failed to read from OpenAI Realtime",
                         error,
                     ));
                 }
             }
-        };
-        if let Err(error) = set_socket_nonblocking(self.socket.get_ref(), false) {
-            self.closed = true;
-            return Err(error);
         }
-        receive_result
     }
 
     fn close(&mut self) -> AppResult<()> {
-        if self.closed {
+        if matches!(&self.state, OpenAiWebSocketState::Closed) {
             return Ok(());
         }
-        self.closed = true;
-        shutdown_socket(self.socket.get_mut()).map_err(|error| {
+        self.state = OpenAiWebSocketState::Closed;
+        let shutdown_result = if let Some(tls_pump) = self.tls_pump.as_ref() {
+            let result = tls_pump.shutdown();
+            let _ = shutdown_socket(self.socket.get_mut());
+            result
+        } else {
+            shutdown_socket(self.socket.get_mut())
+        };
+        shutdown_result.map_err(|error| {
             AppError::stt_network_terminal(format!(
                 "Failed to shut down the OpenAI Realtime socket: {error}"
             ))
@@ -329,24 +453,9 @@ fn configure_established_socket(stream: &mut MaybeTlsStream<TcpStream>) -> AppRe
 }
 
 fn configure_established_tcp(tcp: &TcpStream) -> io::Result<()> {
-    tcp.set_nonblocking(false)?;
     tcp.set_read_timeout(None)?;
-    tcp.set_write_timeout(Some(SOCKET_WRITE_TIMEOUT))
-}
-
-fn set_socket_nonblocking(stream: &MaybeTlsStream<TcpStream>, nonblocking: bool) -> AppResult<()> {
-    let result = match stream {
-        MaybeTlsStream::Plain(tcp) => tcp.set_nonblocking(nonblocking),
-        MaybeTlsStream::Rustls(tls) => tls.sock.set_nonblocking(nonblocking),
-        _ => Err(io::Error::other(
-            "Unsupported TLS stream for OpenAI Realtime.",
-        )),
-    };
-    result.map_err(|error| {
-        AppError::stt_network_terminal(format!(
-            "Failed to configure nonblocking OpenAI Realtime receive: {error}"
-        ))
-    })
+    tcp.set_write_timeout(None)?;
+    tcp.set_nonblocking(true)
 }
 
 fn shutdown_socket(stream: &MaybeTlsStream<TcpStream>) -> io::Result<()> {
@@ -412,6 +521,9 @@ fn map_socket_error(context: &str, error: WebSocketError) -> AppError {
         WebSocketError::Protocol(ProtocolError::ResetWithoutClosingHandshake) => {
             AppError::stt_network_retryable(format!("{context}: {error}"))
         }
+        WebSocketError::WriteBufferFull(_) => AppError::stt_backpressure(
+            "The OpenAI Realtime WebSocket write buffer filled; the session stopped instead of dropping or duplicating client events.",
+        ),
         WebSocketError::Io(_) | WebSocketError::Tls(_) | WebSocketError::Url(_) => {
             AppError::stt_network_terminal(format!("{context}: {error}"))
         }
