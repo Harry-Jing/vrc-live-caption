@@ -10,7 +10,7 @@ use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, record_and_emit_runtime_status,
 };
 use crate::host_resolver::HostResolver;
-use crate::runtime_control::RuntimeStatus;
+use crate::runtime_control::{RuntimeStatus, RuntimeStatusRecorder};
 use secrecy::SecretString;
 use tauri::{AppHandle, Runtime};
 
@@ -21,15 +21,18 @@ pub(super) fn run_runtime_thread<R: Runtime>(
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
     host_resolver: HostResolver,
+    status_recorder: RuntimeStatusRecorder,
 ) {
     let error_generation = generation.clone();
     let cleanup_publisher = publisher.clone();
     let runtime_app = app.clone();
+    let runtime_status_recorder = status_recorder.clone();
 
     supervise_runtime_thread(
         &app,
         &error_generation,
         cleanup_publisher.as_ref(),
+        &status_recorder,
         move || {
             run_runtime(
                 runtime_app,
@@ -38,6 +41,7 @@ pub(super) fn run_runtime_thread<R: Runtime>(
                 publisher,
                 generation,
                 host_resolver,
+                runtime_status_recorder,
             )
         },
     );
@@ -47,6 +51,7 @@ fn supervise_runtime_thread<R: Runtime>(
     app: &AppHandle<R>,
     generation: &RuntimeGeneration,
     publisher: Option<&RuntimeChatboxPublisher>,
+    status_recorder: &RuntimeStatusRecorder,
     run: impl FnOnce() -> AppResult<()>,
 ) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
@@ -57,6 +62,7 @@ fn supervise_runtime_thread<R: Runtime>(
             tracing::error!("runtime thread panicked; its generation and Publisher were stopped");
             record_and_emit_runtime_status(
                 app,
+                status_recorder,
                 RuntimeStatus::Error,
                 Some("Runtime thread panicked and was stopped".to_string()),
             );
@@ -91,7 +97,12 @@ fn supervise_runtime_thread<R: Runtime>(
             return;
         }
 
-        record_and_emit_runtime_status(app, RuntimeStatus::Error, Some(error.to_string()));
+        record_and_emit_runtime_status(
+            app,
+            status_recorder,
+            RuntimeStatus::Error,
+            Some(error.to_string()),
+        );
         emit_diagnostic(
             app,
             DiagnosticUpdate::from_error(&error, "Runtime stopped with an error"),

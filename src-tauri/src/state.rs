@@ -54,6 +54,7 @@ impl Default for AppState {
 
 impl AppState {
     pub(crate) fn start_runtime(&self, app: &AppHandle) -> AppResult<RuntimeControlSnapshot> {
+        let status_recorder = self.runtime_status_recorder();
         // Capture before waiting on desired-state I/O. Any later Stop changes
         // the epoch, so this invocation cannot install a runtime after Stop
         // returned while Start was blocked on config or credential work.
@@ -123,6 +124,7 @@ impl AppState {
                 config_revision,
                 openai_api_key: resolved.secret,
                 credential,
+                status_recorder,
                 expected_stop_epoch,
             },
             |session| self.control.install_starting_session(session),
@@ -144,7 +146,8 @@ impl AppState {
     ) -> AppResult<RuntimeControlSnapshot> {
         // Deliberately do not hold the control-state lock while RuntimeManager
         // joins: the worker may emit its final status through that short lock.
-        self.runtime.stop(app)?;
+        let status_recorder = self.runtime_status_recorder();
+        self.runtime.stop(app, &status_recorder)?;
         self.runtime_control_snapshot()
     }
 

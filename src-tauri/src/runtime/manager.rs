@@ -15,7 +15,7 @@ use crate::events::{
 use crate::host_resolver::HostResolver;
 use crate::runtime_control::{
     RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
-    RuntimeSessionSnapshot, RuntimeStatus,
+    RuntimeSessionSnapshot, RuntimeStatus, RuntimeStatusRecorder,
 };
 use secrecy::SecretString;
 use std::sync::Mutex;
@@ -48,6 +48,7 @@ pub(crate) struct RuntimeStartRequest {
     pub(crate) config_revision: u64,
     pub(crate) openai_api_key: SecretString,
     pub(crate) credential: RuntimeCredentialSnapshot,
+    pub(crate) status_recorder: RuntimeStatusRecorder,
     pub(crate) expected_stop_epoch: u64,
 }
 
@@ -156,6 +157,7 @@ impl RuntimeManager {
             config_revision,
             openai_api_key,
             credential,
+            status_recorder,
             expected_stop_epoch,
         } = request;
         config.validate()?;
@@ -271,6 +273,7 @@ impl RuntimeManager {
                     thread_publisher,
                     thread_generation,
                     host_resolver,
+                    status_recorder,
                 )
             })
             .map_err(|error| AppError::runtime(format!("Failed to start runtime thread: {error}")));
@@ -294,7 +297,11 @@ impl RuntimeManager {
         Ok(RuntimeStartOutcome::Started)
     }
 
-    pub(crate) fn stop<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<()> {
+    pub(crate) fn stop<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        status_recorder: &RuntimeStatusRecorder,
+    ) -> AppResult<()> {
         // Publish the stop intent before waiting for the handle. A Start that
         // has not committed its handle yet observes the changed epoch and
         // aborts; a Start already inside the handle lock is stopped below.
@@ -310,6 +317,7 @@ impl RuntimeManager {
         let Some(handle) = guard.take() else {
             record_and_emit_runtime_status(
                 app,
+                status_recorder,
                 RuntimeStatus::Stopped,
                 Some("Runtime is already stopped".to_string()),
             );
@@ -335,6 +343,7 @@ impl RuntimeManager {
         }
         record_and_emit_runtime_status(
             app,
+            status_recorder,
             RuntimeStatus::Stopping,
             Some("Stopping runtime and discarding pending speech".to_string()),
         );
@@ -361,12 +370,18 @@ impl RuntimeManager {
 
         if runtime_panicked {
             let error = AppError::runtime("Runtime thread panicked while stopping.");
-            record_and_emit_runtime_status(app, RuntimeStatus::Error, Some(error.to_string()));
+            record_and_emit_runtime_status(
+                app,
+                status_recorder,
+                RuntimeStatus::Error,
+                Some(error.to_string()),
+            );
             return Err(error);
         }
 
         record_and_emit_runtime_status(
             app,
+            status_recorder,
             RuntimeStatus::Stopped,
             Some("Runtime stopped".to_string()),
         );

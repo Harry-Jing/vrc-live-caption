@@ -4,6 +4,7 @@ use crate::recognition::{
     RecognitionDriver, RecognitionDriverIo, RecognitionEvent, RecognitionGenerationScope,
     RecognitionModule,
 };
+use crate::runtime_control::RuntimeControlStore;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -79,6 +80,8 @@ impl Drop for DropAwareRecognitionCapture {
 #[test]
 fn coordinator_drops_capture_before_acknowledging_reconnect() -> AppResult<()> {
     let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
     let caption_session = CaptionSessionStore::default();
     let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session)?;
     let (capture_opened, opened) = mpsc::sync_channel(1);
@@ -128,6 +131,7 @@ fn coordinator_drops_capture_before_acknowledging_reconnect() -> AppResult<()> {
         None,
         &generation,
         &mut recognition,
+        &status_recorder,
         &open_capture,
     )?;
     stopper
@@ -135,12 +139,18 @@ fn coordinator_drops_capture_before_acknowledging_reconnect() -> AppResult<()> {
         .map_err(|_| AppError::runtime("Runtime test stopper thread panicked."))??;
     recognition.stop()?;
     assert!(capture_dropped.load(Ordering::SeqCst));
+    assert_eq!(
+        control.snapshot()?.runtime.status,
+        RuntimeStatus::Reconnecting
+    );
     Ok(())
 }
 
 #[test]
 fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<()> {
     let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
     let caption_session = CaptionSessionStore::default();
     let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
     let capture_dropped = Arc::new(AtomicBool::new(false));
@@ -180,6 +190,7 @@ fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<(
         None,
         &generation,
         &mut recognition,
+        &status_recorder,
         &open_capture,
     ) {
         Err(error) => error,
@@ -199,5 +210,6 @@ fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<(
     assert!(ended_payload.contains("sttFailed"));
     recognition.stop()?;
     generation.request_stop(None)?;
+    assert_eq!(control.snapshot()?.runtime.status, RuntimeStatus::Running);
     Ok(())
 }

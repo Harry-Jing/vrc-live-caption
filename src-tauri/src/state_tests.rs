@@ -50,7 +50,7 @@ fn stop_epoch_prevents_a_late_start_error_from_overwriting_stopped() -> AppResul
     let state = app.state::<AppState>();
     let expected_stop_epoch = state.runtime.stop_epoch();
 
-    state.runtime.stop(app.handle())?;
+    state.stop_runtime(app.handle())?;
     let recorded = state.record_start_error_if_current(
         &AppError::runtime("Late failure from a cancelled Start."),
         None,

@@ -1,5 +1,6 @@
 use super::*;
 use crate::error::{AppResult, ProviderFailureClass};
+use crate::runtime_control::RuntimeControlStore;
 use tauri::Listener;
 
 fn registered_tauri_commands() -> AppResult<Vec<String>> {
@@ -111,28 +112,25 @@ fn tauri_ipc_names_match_the_shared_contract() -> AppResult<()> {
 
 #[test]
 fn status_snapshot_is_updated_before_event_delivery() -> AppResult<()> {
-    let app = tauri::test::mock_builder()
-        .manage(AppState::default())
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
-    let listener_handle = app.handle().clone();
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let recorder = control.status_recorder();
+    let listener_control = control.clone();
     let (snapshot_sender, snapshot_receiver) = std::sync::mpsc::channel();
 
     app.listen(EVENT_RUNTIME_STATUS, move |_| {
-        let snapshot = listener_handle
-            .state::<AppState>()
-            .runtime_control_snapshot()
-            .and_then(|control| {
-                let status = control.runtime;
-                serde_json::to_value(status).map_err(|error| {
-                    AppError::runtime(format!("Failed to serialize status snapshot: {error}"))
-                })
-            });
+        let snapshot = listener_control.snapshot().and_then(|control| {
+            let status = control.runtime;
+            serde_json::to_value(status).map_err(|error| {
+                AppError::runtime(format!("Failed to serialize status snapshot: {error}"))
+            })
+        });
         let _ = snapshot_sender.send(snapshot);
     });
 
     record_and_emit_runtime_status(
         app.handle(),
+        &recorder,
         RuntimeStatus::Running,
         Some("Listening for microphone speech".to_string()),
     );
@@ -148,10 +146,9 @@ fn status_snapshot_is_updated_before_event_delivery() -> AppResult<()> {
 
 #[test]
 fn authoritative_control_event_precedes_the_legacy_status_event() -> AppResult<()> {
-    let app = tauri::test::mock_builder()
-        .manage(AppState::default())
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let recorder = control.status_recorder();
     let (event_sender, event_receiver) = std::sync::mpsc::channel();
     let control_sender = event_sender.clone();
     app.listen(EVENT_RUNTIME_CONTROL_CHANGED, move |event| {
@@ -163,6 +160,7 @@ fn authoritative_control_event_precedes_the_legacy_status_event() -> AppResult<(
 
     record_and_emit_runtime_status(
         app.handle(),
+        &recorder,
         RuntimeStatus::Running,
         Some("running".to_string()),
     );

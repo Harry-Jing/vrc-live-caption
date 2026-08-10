@@ -239,3 +239,56 @@ fn retryable_failure_pauses_capture_before_opening_a_fresh_attempt() -> AppResul
     assert!(probe.stopped);
     Ok(())
 }
+
+#[test]
+fn stop_interrupts_the_reconnect_backoff() -> AppResult<()> {
+    let probe = Arc::new(Mutex::new(SessionProbe::default()));
+    let driver = OpenAiRecognitionDriver::new(RecordingAttemptFactory {
+        probe: Arc::clone(&probe),
+        fail_first_drain: true,
+    });
+    let module = RecognitionModule::with_audio_budget(Duration::from_millis(500), 8, driver)?;
+    let mut running = module.start(RecognitionGenerationScope {
+        generation: 12,
+        stream_id: "recognition-12-1".to_string(),
+    })?;
+
+    assert!(matches!(
+        running.signals.recv_timeout(TEST_TIMEOUT),
+        Ok(RecognitionSignal::Ready { .. })
+    ));
+    running
+        .try_submit(OwnedRecognitionAudioFrame {
+            sequence: 1,
+            captured_at_ms: 789,
+            sample_rate_hz: 16_000,
+            samples: vec![0.25; 160].into_boxed_slice(),
+        })
+        .map_err(|error| AppError::state(format!("Test audio was rejected: {error:?}")))?;
+
+    let (pause_epoch, delay) = match running.signals.recv_timeout(TEST_TIMEOUT) {
+        Ok(RecognitionSignal::Reconnecting {
+            epoch, delay_ms, ..
+        }) => (epoch, Duration::from_millis(delay_ms)),
+        signal => {
+            return Err(AppError::state(format!(
+                "Expected reconnect signal, received {signal:?}."
+            )));
+        }
+    };
+    running.acknowledge_capture_paused(pause_epoch)?;
+
+    let stop_started = Instant::now();
+    running.stop()?;
+
+    assert!(
+        stop_started.elapsed() < delay,
+        "Stop waited for the advertised reconnect backoff of {delay:?}."
+    );
+    let probe = probe
+        .lock()
+        .map_err(|_| AppError::state("OpenAI driver test probe lock was poisoned."))?;
+    assert_eq!(probe.connect_attempts, 1);
+    assert!(probe.stopped);
+    Ok(())
+}

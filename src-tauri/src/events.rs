@@ -17,12 +17,13 @@
 
 use crate::caption_session::CaptionSessionSnapshotV1;
 use crate::error::AppError;
-use crate::runtime_control::{RuntimeControlSnapshot, RuntimeStatus, RuntimeStatusEvent};
-use crate::state::AppState;
+use crate::runtime_control::{
+    RuntimeControlSnapshot, RuntimeStatus, RuntimeStatusEvent, RuntimeStatusRecorder,
+};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Runtime};
 
 const EVENT_RUNTIME_STATUS: &str = "runtime-status";
 const EVENT_RUNTIME_CONTROL_CHANGED: &str = "runtime-control-changed";
@@ -202,6 +203,7 @@ pub(crate) enum DiagnosticSeverity {
 
 pub(crate) fn record_and_emit_runtime_status<R: Runtime>(
     app: &AppHandle<R>,
+    recorder: &RuntimeStatusRecorder,
     status: RuntimeStatus,
     message: Option<String>,
 ) {
@@ -210,20 +212,14 @@ pub(crate) fn record_and_emit_runtime_status<R: Runtime>(
     // Update the pull-side snapshot before best-effort delivery. If the
     // webview is reloading and misses this emit, its next status query still
     // observes the lifecycle transition.
-    let snapshot = match app.try_state::<AppState>() {
-        Some(state) => match state.runtime_status_recorder().record(event.clone()) {
-            Ok(snapshot) => Some(snapshot),
-            Err(error) => {
-                tracing::warn!(
-                    code = error.code(),
-                    error_message = %error,
-                    "failed to update authoritative runtime control status"
-                );
-                None
-            }
-        },
-        None => {
-            tracing::warn!("runtime status emitted before app state was managed");
+    let snapshot = match recorder.record(event.clone()) {
+        Ok(snapshot) => Some(snapshot),
+        Err(error) => {
+            tracing::warn!(
+                code = error.code(),
+                error_message = %error,
+                "failed to update authoritative runtime control status"
+            );
             None
         }
     };

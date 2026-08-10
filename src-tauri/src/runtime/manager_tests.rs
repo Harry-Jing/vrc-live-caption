@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::SttProvider;
 use crate::host_resolver::{HostResolutionError, HostResolver};
+use crate::runtime_control::RuntimeControlStore;
 use crate::secrets::ProviderSecretStorage;
 use secrecy::SecretString;
 use std::io;
@@ -12,6 +13,8 @@ use tauri::Listener;
 #[test]
 fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResult<()> {
     let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
     let generation = RuntimeGeneration::active();
     let manager = Arc::new(RuntimeManager::default());
     let (worker_ready_sender, worker_ready_receiver) = std::sync::mpsc::channel();
@@ -38,18 +41,22 @@ fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResul
 
     let stop_manager = Arc::clone(&manager);
     let stop_app = app.handle().clone();
+    let stop_status_recorder = status_recorder.clone();
     let (stop_started_sender, stop_started_receiver) = std::sync::mpsc::channel();
     let stop = thread::spawn(move || {
         let _ = stop_started_sender.send(());
-        stop_manager.stop(&stop_app)
+        stop_manager.stop(&stop_app, &stop_status_recorder)
     });
     stop_started_receiver
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| AppError::runtime("Runtime stop test thread did not start."))?;
 
     let deadline = Instant::now() + Duration::from_secs(1);
-    let generation_closed_before_join = loop {
-        if generation.is_hard_stop_requested() && !generation.commit_if_active(|| {})? {
+    let stopping_before_join = loop {
+        if generation.is_hard_stop_requested()
+            && !generation.commit_if_active(|| {})?
+            && control.snapshot()?.runtime.status == RuntimeStatus::Stopping
+        {
             break true;
         }
         if Instant::now() >= deadline {
@@ -63,7 +70,39 @@ fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResul
         .map_err(|_| AppError::runtime("Could not release the runtime test worker."))?;
     stop.join()
         .map_err(|_| AppError::runtime("Runtime stop test thread panicked."))??;
-    assert!(generation_closed_before_join);
+    assert!(stopping_before_join);
+    assert_eq!(control.snapshot()?.runtime.status, RuntimeStatus::Stopped);
+    Ok(())
+}
+
+#[test]
+fn stop_records_error_when_the_runtime_thread_panicked() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
+    let manager = RuntimeManager::default();
+    let join_handle = thread::spawn(|| {
+        std::panic::resume_unwind(Box::new("panic runtime worker for Stop coverage"));
+    });
+    {
+        let mut handle = manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
+        *handle = Some(RuntimeHandle {
+            generation: RuntimeGeneration::active(),
+            publisher: None,
+            join_handle,
+        });
+    }
+
+    let error = manager
+        .stop(app.handle(), &status_recorder)
+        .err()
+        .ok_or_else(|| AppError::state("Stop ignored a panicked runtime thread."))?;
+
+    assert_eq!(error.code(), "runtime.failed");
+    assert_eq!(control.snapshot()?.runtime.status, RuntimeStatus::Error);
     Ok(())
 }
 
@@ -111,18 +150,28 @@ fn finished_error_handle_is_reaped_before_a_restart_availability_check() -> AppR
 #[test]
 fn stop_invalidates_an_uncommitted_start_epoch() -> AppResult<()> {
     let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
     let manager = RuntimeManager::default();
     let expected_stop_epoch = manager.stop_epoch();
 
     assert!(manager.stop_epoch_unchanged(expected_stop_epoch));
-    manager.stop(app.handle())?;
+    manager.stop(app.handle(), &status_recorder)?;
     assert!(!manager.stop_epoch_unchanged(expected_stop_epoch));
+    let snapshot = control.snapshot()?;
+    assert_eq!(snapshot.runtime.status, RuntimeStatus::Stopped);
+    assert_eq!(
+        snapshot.runtime.message.as_deref(),
+        Some("Runtime is already stopped")
+    );
     Ok(())
 }
 
 #[test]
 fn stop_supersedes_a_start_blocked_in_osc_hostname_resolution() -> AppResult<()> {
     let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
     let (diagnostic_sender, diagnostic_receiver) = mpsc::channel();
     app.listen("diagnostic-event", move |event| {
         let _ = diagnostic_sender.send(event.payload().to_string());
@@ -158,6 +207,7 @@ fn stop_supersedes_a_start_blocked_in_osc_hostname_resolution() -> AppResult<()>
             display_suffix: None,
             revision: 1,
         },
+        status_recorder: status_recorder.clone(),
         expected_stop_epoch,
     };
     let start_manager = Arc::clone(&manager);
@@ -169,9 +219,10 @@ fn stop_supersedes_a_start_blocked_in_osc_hostname_resolution() -> AppResult<()>
 
     let stop_manager = Arc::clone(&manager);
     let stop_app = app.handle().clone();
+    let stop_status_recorder = status_recorder.clone();
     let (stop_result_sender, stop_result_receiver) = mpsc::sync_channel(1);
     let stop = thread::spawn(move || {
-        let _ = stop_result_sender.send(stop_manager.stop(&stop_app));
+        let _ = stop_result_sender.send(stop_manager.stop(&stop_app, &stop_status_recorder));
     });
     let stop_result = stop_result_receiver
         .recv_timeout(Duration::from_secs(2))
@@ -207,6 +258,8 @@ fn stop_supersedes_a_start_blocked_in_osc_hostname_resolution() -> AppResult<()>
 #[test]
 fn stop_cancels_an_installed_runtime_hostname_wait_before_joining() -> AppResult<()> {
     let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
     let manager = Arc::new(RuntimeManager::default());
     let generation = RuntimeGeneration::active();
     let worker_generation = generation.clone();
@@ -250,9 +303,10 @@ fn stop_cancels_an_installed_runtime_hostname_wait_before_joining() -> AppResult
 
     let stop_manager = Arc::clone(&manager);
     let stop_app = app.handle().clone();
+    let stop_status_recorder = status_recorder.clone();
     let (stop_result_sender, stop_result_receiver) = mpsc::sync_channel(1);
     let stop = thread::spawn(move || {
-        let _ = stop_result_sender.send(stop_manager.stop(&stop_app));
+        let _ = stop_result_sender.send(stop_manager.stop(&stop_app, &stop_status_recorder));
     });
     let stop_result = stop_result_receiver
         .recv_timeout(Duration::from_secs(2))
@@ -295,6 +349,7 @@ fn runtime_start_fails_closed_when_its_derived_plan_is_incompatible() -> AppResu
             display_suffix: None,
             revision: 1,
         },
+        status_recorder: RuntimeControlStore::default().status_recorder(),
         expected_stop_epoch: manager.stop_epoch(),
     };
 

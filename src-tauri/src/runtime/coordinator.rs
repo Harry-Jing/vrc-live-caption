@@ -17,7 +17,7 @@ use crate::recognition::{
     OwnedRecognitionAudioFrame, RecognitionSignal, RecognitionSubmitError, RunningRecognition,
     openai_recognition_module,
 };
-use crate::runtime_control::RuntimeStatus;
+use crate::runtime_control::{RuntimeStatus, RuntimeStatusRecorder};
 use secrecy::SecretString;
 use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 use std::time::Duration;
@@ -32,10 +32,12 @@ pub(super) fn run_runtime<R: Runtime>(
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
     host_resolver: HostResolver,
+    status_recorder: RuntimeStatusRecorder,
 ) -> AppResult<()> {
     let started = generation.commit_if_active(|| {
         record_and_emit_runtime_status(
             &app,
+            &status_recorder,
             RuntimeStatus::Starting,
             Some("Starting outgoing caption runtime".to_string()),
         );
@@ -51,6 +53,7 @@ pub(super) fn run_runtime<R: Runtime>(
         publisher,
         generation,
         host_resolver,
+        &status_recorder,
     )
 }
 
@@ -61,6 +64,7 @@ fn run_openai_runtime<R: Runtime>(
     publisher: Option<RuntimeChatboxPublisher>,
     generation: RuntimeGeneration,
     host_resolver: HostResolver,
+    status_recorder: &RuntimeStatusRecorder,
 ) -> AppResult<()> {
     if !generation.accepts_new_work() {
         return Ok(());
@@ -82,6 +86,7 @@ fn run_openai_runtime<R: Runtime>(
         publisher.as_ref(),
         &generation,
         &mut recognition,
+        status_recorder,
     );
     let stop_result = recognition.stop();
 
@@ -142,6 +147,7 @@ struct RecognitionCoordinator<'context, R: Runtime> {
     config: &'context AppConfig,
     publisher: Option<&'context RuntimeChatboxPublisher>,
     generation: &'context RuntimeGeneration,
+    status_recorder: &'context RuntimeStatusRecorder,
     open_capture:
         &'context dyn Fn(&crate::config::AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
 }
@@ -152,6 +158,7 @@ fn coordinate_running_recognition<R: Runtime>(
     publisher: Option<&RuntimeChatboxPublisher>,
     generation: &RuntimeGeneration,
     recognition: &mut RunningRecognition,
+    status_recorder: &RuntimeStatusRecorder,
 ) -> AppResult<()> {
     coordinate_running_recognition_with_capture(
         app,
@@ -159,6 +166,7 @@ fn coordinate_running_recognition<R: Runtime>(
         publisher,
         generation,
         recognition,
+        status_recorder,
         &open_recognition_capture,
     )
 }
@@ -169,6 +177,7 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
     publisher: Option<&RuntimeChatboxPublisher>,
     generation: &RuntimeGeneration,
     recognition: &mut RunningRecognition,
+    status_recorder: &RuntimeStatusRecorder,
     open_capture: &dyn Fn(&crate::config::AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
 ) -> AppResult<()> {
     let mut active_capture = None;
@@ -179,6 +188,7 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
         config,
         publisher,
         generation,
+        status_recorder,
         open_capture,
     };
 
@@ -310,6 +320,7 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
         let config = self.config;
         let publisher = self.publisher;
         let generation = self.generation;
+        let status_recorder = self.status_recorder;
         let open_capture = self.open_capture;
 
         match signal {
@@ -342,6 +353,7 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
                 let running = generation.commit_if_active(|| {
                     record_and_emit_runtime_status(
                         app,
+                        status_recorder,
                         RuntimeStatus::Running,
                         Some("Listening for microphone speech".to_string()),
                     );
@@ -386,6 +398,7 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
                 let reconnecting = generation.commit_if_active(|| {
                     record_and_emit_runtime_status(
                         app,
+                        status_recorder,
                         RuntimeStatus::Reconnecting,
                         Some(format!(
                             "Recognition connection interrupted; retry {attempt} in {delay_ms} ms"
