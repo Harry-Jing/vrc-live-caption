@@ -1,10 +1,10 @@
+use super::super::pacer::Clock;
 use super::*;
 use crate::capability_planner::ResolvedPublicationPolicy;
 use crate::caption_session::{
     CaptionActiveUnitV1, CaptionLane, CaptionSessionActiveV1, CaptionSessionStore,
     CaptionSnapshotV1, CaptionState,
 };
-use crate::chatbox_pacer::Clock;
 use std::collections::HashSet;
 use std::sync::Condvar;
 

@@ -21,14 +21,12 @@ use crate::audio::{open_input_capture, receive_audio};
 use crate::audio_level::{AudioLevelMeter, SPEECH_RMS_THRESHOLD};
 use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
-use crate::chatbox_diagnostics::{completed_publisher_diagnostic, live_publisher_diagnostic};
-use crate::chatbox_pacer::ChatboxPacer;
-use crate::chatbox_publication::RuntimeChatboxPublisher;
-use crate::chatbox_publisher::{
-    CompletedChatboxPublisher, CompletedPublisherEvent, PublisherReporter,
+use crate::chatbox::{
+    ChatboxOscSender, ChatboxPacer, ChatboxTransport, CompletedChatboxPublisher,
+    CompletedPublisherEvent, LiveChatboxPublisher, LivePublisherReporter, PublisherCloseReason,
+    PublisherReporter, PublisherSubmitOutcome, RuntimeChatboxPublisher,
+    completed_publisher_diagnostic, live_publisher_diagnostic,
 };
-use crate::chatbox_publisher_common::{PublisherCloseReason, PublisherSubmitOutcome};
-use crate::chatbox_transport::ChatboxTransport;
 use crate::config::{AppConfig, OscConfig};
 use crate::error::{AppError, AppResult};
 use crate::events::{
@@ -37,8 +35,6 @@ use crate::events::{
     record_and_emit_runtime_status,
 };
 use crate::host_resolver::HostResolver;
-use crate::live_chatbox_publisher::{LiveChatboxPublisher, LivePublisherReporter};
-use crate::osc::ChatboxOscSender;
 use crate::recognition::{
     OwnedRecognitionAudioFrame, RecognitionEndReason, RecognitionEvent, RecognitionSignal,
     RecognitionSubmitError, RunningRecognition, openai_recognition_module,

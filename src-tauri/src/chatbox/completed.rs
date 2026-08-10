@@ -6,13 +6,13 @@
 //! diagnostics. No producer waits for a Chatbox pacing opportunity or network
 //! operation.
 
-use crate::chatbox_layout::paginate_completed;
-use crate::chatbox_pacer::{ChatboxAttemptPermit, ChatboxPacer};
-use crate::chatbox_publisher_common::{
+use super::common::{
     PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
     TYPING_REASSERT_INTERVAL, describe_layout_error,
 };
-use crate::chatbox_transport::ChatboxTransport;
+use super::layout::paginate_completed;
+use super::pacer::{ChatboxAttemptPermit, ChatboxPacer};
+use super::transport::ChatboxTransport;
 use crate::error::{AppError, AppResult};
 use crate::runtime_generation::RuntimeGeneration;
 use std::collections::{HashSet, VecDeque};
@@ -942,5 +942,5 @@ fn refresh_typing_desired(state: &mut PublisherState) {
 }
 
 #[cfg(test)]
-#[path = "chatbox_publisher_tests.rs"]
+#[path = "completed_tests.rs"]
 mod tests;

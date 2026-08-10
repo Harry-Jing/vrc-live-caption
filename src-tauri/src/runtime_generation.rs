@@ -5,7 +5,7 @@
 //! responsible for mapping recognition events to concrete publisher inputs.
 
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore, CaptionSnapshotV1};
-use crate::chatbox_publisher_common::PublisherCloseReason;
+use crate::chatbox::PublisherCloseReason;
 use crate::error::{AppError, AppResult};
 use crate::events::emit_caption_session_changed;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -8,7 +8,7 @@
 
 use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
-use crate::chatbox_pacer::ChatboxPacer;
+use crate::chatbox::ChatboxPacer;
 use crate::config::{AppConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{

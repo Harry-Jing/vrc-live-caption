@@ -1,5 +1,5 @@
+use super::super::pacer::{ChatboxPacer, Clock};
 use super::*;
-use crate::chatbox_pacer::{ChatboxPacer, Clock};
 use crate::host_resolver::HostResolver;
 use rosc::decoder;
 use std::collections::VecDeque;

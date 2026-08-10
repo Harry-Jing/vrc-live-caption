@@ -1,9 +1,9 @@
 use super::*;
-use crate::chatbox_publisher::PublisherDiagnostic;
-use crate::chatbox_transport::{ChatboxSendReceipt, ChatboxTransport};
+use crate::chatbox::{
+    ChatboxSendReceipt, ChatboxTransport, LivePublisherDiagnostic, PublisherDiagnostic,
+};
 use crate::config::{OpenAiTranscriptionModel, SttProvider};
 use crate::host_resolver::{HostResolutionError, HostResolver};
-use crate::live_chatbox_publisher::LivePublisherDiagnostic;
 use crate::recognition::{
     RecognitionDriver, RecognitionDriverIo, RecognitionGenerationScope, RecognitionModule,
     ScriptedRecognitionAdapter, ScriptedRecognitionContext, ScriptedText,

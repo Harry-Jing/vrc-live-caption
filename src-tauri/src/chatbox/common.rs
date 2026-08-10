@@ -4,7 +4,7 @@
 //! concrete publishers. This module contains only vocabulary and worker
 //! mechanics whose behavior is identical for Completed and Live publication.
 
-use crate::chatbox_layout::{CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError};
+use super::layout::{CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError};
 use crate::error::{AppError, AppResult};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;

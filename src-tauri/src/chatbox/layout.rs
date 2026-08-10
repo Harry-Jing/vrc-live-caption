@@ -584,5 +584,5 @@ fn is_explicit_line_break(grapheme: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "chatbox_layout_tests.rs"]
+#[path = "layout_tests.rs"]
 mod tests;

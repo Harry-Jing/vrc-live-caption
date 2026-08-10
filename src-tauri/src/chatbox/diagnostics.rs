@@ -4,10 +4,10 @@
 //! Tauri event contract. This module translates those facts into the stable
 //! diagnostic vocabulary consumed by the runtime UI.
 
-use crate::chatbox_publisher::PublisherDiagnostic;
-use crate::chatbox_publisher_common::PublisherCloseReason;
+use super::common::PublisherCloseReason;
+use super::completed::PublisherDiagnostic;
+use super::live::LivePublisherDiagnostic;
 use crate::events::{DiagnosticCategory, DiagnosticUpdate};
-use crate::live_chatbox_publisher::LivePublisherDiagnostic;
 
 pub(crate) fn completed_publisher_diagnostic(diagnostic: PublisherDiagnostic) -> DiagnosticUpdate {
     match diagnostic {

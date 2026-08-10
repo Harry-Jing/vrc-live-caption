@@ -6,12 +6,30 @@
 //! handled no-op; each concrete publisher remains the sole owner of its worker
 //! state and publication behavior.
 
+mod common;
+mod completed;
+mod diagnostics;
+mod layout;
+mod live;
+mod osc;
+mod pacer;
+mod transport;
+
+pub(crate) use common::{PublisherCloseReason, PublisherSubmitOutcome};
+pub(crate) use completed::{CompletedChatboxPublisher, CompletedPublisherEvent, PublisherReporter};
+pub(crate) use diagnostics::{completed_publisher_diagnostic, live_publisher_diagnostic};
+pub(crate) use live::{LiveChatboxPublisher, LivePublisherReporter};
+pub(crate) use osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
+pub(crate) use pacer::ChatboxPacer;
+pub(crate) use transport::{ChatboxSendReceipt, ChatboxTransport};
+
 use crate::caption_session::CaptionSessionSnapshotV1;
-use crate::chatbox_publisher::{CompletedChatboxPublisher, CompletedPublisherEvent};
-use crate::chatbox_publisher_common::{PublisherCloseReason, PublisherSubmitOutcome};
 use crate::error::AppResult;
-use crate::live_chatbox_publisher::LiveChatboxPublisher;
 use crate::runtime_generation::ChatboxPublisherBoundary;
+#[cfg(test)]
+pub(crate) use completed::PublisherDiagnostic;
+#[cfg(test)]
+pub(crate) use live::LivePublisherDiagnostic;
 
 #[derive(Clone)]
 pub(crate) enum RuntimeChatboxPublisher {
@@ -70,5 +88,5 @@ impl ChatboxPublisherBoundary for CompletedChatboxPublisher {
 }
 
 #[cfg(test)]
-#[path = "chatbox_publication_tests.rs"]
+#[path = "chatbox/chatbox_tests.rs"]
 mod tests;

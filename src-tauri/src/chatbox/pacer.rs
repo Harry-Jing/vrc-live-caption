@@ -128,5 +128,5 @@ impl ChatboxAttemptPermit<'_> {
 }
 
 #[cfg(test)]
-#[path = "chatbox_pacer_tests.rs"]
+#[path = "pacer_tests.rs"]
 mod tests;

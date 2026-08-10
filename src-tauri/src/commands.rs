@@ -11,12 +11,14 @@ use crate::audio_probe::{
     AudioProbeRequest, AudioProbeResult, probe_audio_input as run_audio_probe,
 };
 use crate::caption_session::CaptionSessionSnapshotV1;
+use crate::chatbox::{
+    ChatboxOscSender, ChatboxSendReceipt, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE,
+};
 use crate::config::{AppConfig, SttProvider};
 use crate::error::AppResult;
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, emit_runtime_control_changed,
 };
-use crate::osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
 use crate::runtime_control::RuntimeControlSnapshot;
 use crate::state::AppState;
 use tauri::{AppHandle, State};
@@ -135,12 +137,15 @@ pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) 
     let chatbox_pacer = state.chatbox_pacer();
     let host_resolver = state.host_resolver();
 
-    match ChatboxOscSender::new(&osc_config, &host_resolver, &|| false).and_then(|sender| {
-        chatbox_pacer
-            .wait_for_turn(None)?
-            .ok_or_else(|| crate::error::AppError::state("OSC Test pacing was cancelled."))?
-            .attempt(|| sender.send_text(OSC_TEST_MESSAGE))
-    }) {
+    let send_result: AppResult<ChatboxSendReceipt> =
+        ChatboxOscSender::new(&osc_config, &host_resolver, &|| false).and_then(|sender| {
+            chatbox_pacer
+                .wait_for_turn(None)?
+                .ok_or_else(|| crate::error::AppError::state("OSC Test pacing was cancelled."))?
+                .attempt(|| sender.send_text(OSC_TEST_MESSAGE))
+        });
+
+    match send_result {
         Ok(result) => {
             tracing::info!(
                 target = result.target,

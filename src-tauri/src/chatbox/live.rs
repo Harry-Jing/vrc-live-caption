@@ -5,17 +5,17 @@
 //! revisions. One worker owns observation timing, process-wide pacing, OSC
 //! attempts, and the Stop cleanup; producers only replace in-memory state.
 
+use super::common::{
+    PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
+    TYPING_REASSERT_INTERVAL, describe_layout_error,
+};
+use super::layout::render_live_viewport;
+use super::pacer::ChatboxPacer;
+use super::transport::{ChatboxSendReceipt, ChatboxTransport};
 use crate::capability_planner::ResolvedPublicationPolicy;
 use crate::caption_session::{
     CaptionLane, CaptionSessionSnapshotV1, CaptionSnapshotV1, CaptionState,
 };
-use crate::chatbox_layout::render_live_viewport;
-use crate::chatbox_pacer::ChatboxPacer;
-use crate::chatbox_publisher_common::{
-    PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
-    TYPING_REASSERT_INTERVAL, describe_layout_error,
-};
-use crate::chatbox_transport::{ChatboxSendReceipt, ChatboxTransport};
 use crate::error::{AppError, AppResult};
 use crate::runtime_generation::RuntimeGeneration;
 use std::collections::{HashMap, VecDeque};
@@ -852,5 +852,5 @@ fn compose_recent_source(captions: &[&CaptionSnapshotV1]) -> String {
 }
 
 #[cfg(test)]
-#[path = "live_chatbox_publisher_tests.rs"]
+#[path = "live_tests.rs"]
 mod tests;
