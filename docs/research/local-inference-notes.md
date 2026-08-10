@@ -226,19 +226,31 @@ user selects a model component
 ## Worker Supervision
 
 ```text
-Rust runtime
+runtime coordinator
+  -> start active Recognition Module
+  -> submit continuous owned mono audio
+local recognition driver
   -> start worker
   -> health check
   -> load one model on one effective backend
   -> create bounded or streaming recognition session
-  -> exchange bounded audio/snapshot messages
+  -> exchange bounded audio/snapshot IPC
+  -> emit normalized caption and lifecycle signals
   -> stop, unload, and report health
 ```
 
-- all audio and IPC queues are bounded;
+- runtime uses the same active Recognition Interface as the cloud path; worker
+  commands, resampling windows, model-native frames, and backend state stay
+  inside the local driver
+  ([ADR 0026](../adr/0026-recognition-modules-own-attempt-execution.md));
+- audio admission is bounded by represented duration plus a frame safety
+  ceiling; IPC queues are independently bounded for the selected runtime and
+  model;
 - capture never waits for inference;
-- if streaming inference falls far behind, report the audio gap rather than
-  replaying very old captions;
+- queued audio carries the active attempt epoch; after a worker crash or
+  retirement it is discarded and can never enter a replacement attempt;
+- if streaming inference falls far behind, fail or report an explicit audio
+  gap according to the selected path rather than replaying very old captions;
 - model load errors, missing DLLs, GPU memory exhaustion, worker crashes, and
   unsupported combinations have separate diagnostic codes;
 - user-facing errors have concise summaries and expandable/copyable technical

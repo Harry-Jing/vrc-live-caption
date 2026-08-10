@@ -19,7 +19,7 @@ accepted target architecture. Implementation status lives in
 ```text
 Audio Sources
   -> capture / provider-independent audio
-  -> RecognitionSession Adapter
+  -> Active Recognition Module
   -> Normalized Caption Snapshots
   -> Optional Translation
   -> Publication Policy
@@ -50,26 +50,46 @@ every translation to wait behind STT.
 - Runtime failures are categorized, visible, and never silently change
   provider, model, backend, publication mode, or content selection.
 
-## Recognition session seam
+## Active recognition seam
 
-**Current implementation.** The recognition Module presents one deep
-`RecognitionSession` Interface to the runtime:
+**Current implementation.** Runtime sees one deep, provider-neutral active
+Recognition Interface:
 
 ```text
-capture
-  -> RecognitionSession: provider-independent audio and lifecycle controls
-       -> OpenAI Adapter: Realtime WebSocket protocol
-       -> future Local Adapter: out-of-process worker protocol
-  -> normalized lifecycle, caption snapshots, and categorized errors
+runtime coordinator
+  -> start immutable generation scope and selected Recognition Module
+  -> try-submit continuous owned mono audio (bounded, non-blocking)
+  <- Ready / Reconnecting / normalized caption and unit signals
+  -> acknowledge capture retirement / hard Stop out of band
+
+Recognition Module
+  -> current OpenAI driver: unitization + attempts + Realtime protocol owner
+  -> future Local driver: model lifecycle + out-of-process worker protocol
 ```
 
-The Interface accepts an immutable, already-planned session selection,
-provider-independent mono audio frames with their source format, input-end, and
-Stop. It emits unit-started and unit-ended lifecycle events, zero or more
+The Interface accepts an immutable, already-planned selection and continuous
+provider-independent mono frames with capture sequence and timestamp. Runtime
+does not manufacture input-end, commit, item, or inference-window commands.
+The Module emits unit-started and unit-ended lifecycle events, zero or more
 ongoing full-text snapshots, at most one completed full-text snapshot per
 caption unit, and categorized recoverable or terminal errors. It does not
-expose a URL, JSON event, audio-buffer commit, provider item identifier, or
-worker message.
+expose a URL, JSON event, provider item identifier, worker message, resampling
+window, or model-native tensor.
+
+One owner executes the selected Module for a runtime generation. Its input is
+bounded by represented audio duration plus a frame-count safety ceiling rather
+than capture callback count. An admitted frame carries an attempt epoch and an
+RAII budget permit. At reconnect, admission closes and advances before queued
+audio is discarded; runtime drops microphone capture and acknowledges that
+exact retirement before a fresh attempt can become Ready. A racing old frame
+therefore cannot be consumed by the new attempt. Stop is a separate wake path
+that does not wait behind audio, connect, protocol, backoff, or future model
+loading work ([ADR 0026](./adr/0026-recognition-modules-own-attempt-execution.md)).
+
+Normalized signals preserve order in one bounded queue. Revisions of the same
+ongoing caption coalesce latest-wins, while lifecycle control keeps reserved
+capacity. Exhausting audio or durable-signal capacity fails visibly instead of
+silently losing speech or a completed unit.
 
 These invariants hold on both sides of the seam:
 
@@ -114,10 +134,12 @@ The release decision is
 There is deliberately no generic WebSocket abstraction. Connection setup,
 authentication, system-proxy tunneling, JSON encoding, 24 kHz PCM conversion,
 append/commit sequencing, `item_id` bookkeeping, session-failure policy, and
-OpenAI error decoding are hidden implementation of the OpenAI Module. The
-recognition Module depends only on the semantic Interface. A future local
-Adapter instead hides worker startup, model loading, frame transport, and
-crash mapping.
+OpenAI error decoding are hidden implementation of the OpenAI Module. Its
+Network Owner permanently uses non-blocking established I/O and independently
+advances bounded TLS reads, TLS writes, WebSocket data, Ping/Pong, Close, and
+partial records. Audio submission never performs a fake-timeout socket read.
+A future Local driver instead hides worker startup, model loading, bounded IPC,
+frame transport, and crash mapping behind the same semantic Interface.
 
 Capabilities belong to the complete provider path — provider, endpoint or
 session mode, model, runtime, backend, and relevant configuration:
@@ -137,8 +159,8 @@ removed selection preserves the request and reports the supported alternatives
 ([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)).
 
 The implementation has no REST/WAV recognition fallback, legacy OpenAI model
-compatibility, or production Mock provider. Scripted RecognitionSession
-Adapters remain test-only and are selected by dependency injection rather than
+compatibility, or production Mock provider. Scripted recognition Adapters
+remain test-only and are selected by dependency injection rather than
 configuration.
 
 Transport libraries are replaceable OpenAI-Module dependencies, not
@@ -230,11 +252,12 @@ Start validates configuration, credentials, audio devices, and the requested
 plan before capture begins. An incompatible combination is explained with
 explicit alternatives, never adjusted silently. A safe per-unit provider,
 translation, or OSC failure emits a diagnostic and may leave the session
-running. A classified transient recognition failure closes capture, retires
-and joins the old connection, ends unconfirmed units, and enters visible
-`reconnecting` backoff within the same generation. A fresh connection starts
-with no audio replay. A terminal session-level failure moves the runtime to an
-explicit error state
+running. A classified transient recognition failure first closes audio
+admission. The coordinator then drops capture, ends unconfirmed units, and
+acknowledges the retired attempt; only then may the Recognition Module enter
+visible `reconnecting` backoff and open a fresh attempt in the same generation.
+The fresh attempt starts with no audio replay. A terminal session-level failure
+moves the runtime to an explicit error state
 ([ADR 0025](./adr/0025-reconnect-within-one-runtime-generation.md)).
 
 While Running, the backend derives fixed-window RMS/peak, gate, and clipping
@@ -317,9 +340,13 @@ model and one effective backend are loaded per recognition session; the
 backend preference and effective-backend rules are
 [ADR 0021](./adr/0021-users-choose-the-local-backend.md). A worker crash
 stops the session and waits for an explicit user decision. The local worker
-Adapter implements the same `RecognitionSession` Interface as OpenAI while
-keeping worker messages, native-runtime types, and model-specific streaming
-state behind that seam. Candidate models and backend facts are in
+driver implements the same active Recognition Interface as OpenAI: runtime
+still submits continuous owned mono frames and consumes normalized signals.
+The driver owns its audio-duration/IPC budgets, resampling or model windows,
+model loading, worker messages, native-runtime types, and model-specific
+streaming state. A worker crash closes admission and ends the generation; it
+does not silently restart on CPU or switch to cloud. Candidate models and
+backend facts are in
 [research/local-inference-notes.md](./research/local-inference-notes.md).
 
 ## Incoming caption boundary

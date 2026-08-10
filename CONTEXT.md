@@ -18,6 +18,12 @@ connection can never re-enter the generation after that connection is retired.
 _Avoid_: Provider session or connection attempt, when the Start-to-Stop
 lifetime is intended
 
+**Recognition attempt**:
+One replaceable execution lifetime inside a runtime generation, backed by one
+cloud connection or one local worker session. Retiring an attempt discards its
+unconfirmed audio and output without ending the runtime generation.
+_Avoid_: Runtime generation, provider session
+
 **Caption unit**:
 An application-correlated span of speech and text. A concrete adapter decides
 how the unit ends: local VAD, provider endpointing, an application hard limit,

@@ -41,6 +41,10 @@ right group below; do not renumber existing ADRs.
   the UI resynchronizes from revisioned snapshots
 - [0014 — Diagnostic codes are category.detail](./0014-diagnostic-codes-are-category-detail.md):
   stable codes; prose is fallback only
+- [0025 — Reconnect transient recognition failures within one runtime generation](./0025-reconnect-within-one-runtime-generation.md):
+  fresh attempts, visible backoff, and no ambiguous audio replay
+- [0026 — Recognition Modules own attempt execution](./0026-recognition-modules-own-attempt-execution.md):
+  continuous audio outside; unitization, attempts, and I/O inside
 
 ## Chatbox output
 

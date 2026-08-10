@@ -76,13 +76,25 @@ Implemented:
 - the backend-owned catalog contains exactly the two release paths and their
   publication capabilities; legacy models and incompatible timing are rejected
   without migration or fallback;
-- the runtime uses one provider-independent `RecognitionSession` Interface;
-  scripted deterministic Adapters are test-only;
+- the runtime uses one provider-independent active Recognition Interface:
+  continuous owned mono audio enters a generation-scoped Module, while speech
+  units, provider attempts, reconnect policy, and protocol/worker commands stay
+  behind it; scripted deterministic Adapters are test-only
+  ([ADR 0026](./adr/0026-recognition-modules-own-attempt-execution.md));
+- bounded audio admission is measured in represented audio duration with an
+  independent frame safety ceiling; attempt epochs, RAII budget permits, exact
+  capture-retirement acknowledgements, and out-of-band Stop prevent queued or
+  racing audio from crossing a reconnect boundary;
 - the OpenAI Module owns authenticated Realtime WebSocket setup, system-proxy
   routing, 24 kHz PCM conversion, append/commit, `item_id` correlation,
   full-snapshot normalization, detected-language handling, and explicit Stop;
-- ordering, item failure, terminal session errors, bounded audio/protocol
-  queues, a 30-second post-commit completion deadline, visible per-item
+- the OpenAI Network Owner drives established TLS and WebSocket reads, writes,
+  partial records, Ping/Pong, Close, and pending output independently with
+  permanent non-blocking socket I/O; microphone throughput is not paced by a
+  platform-specific read-timeout approximation;
+- ordering, item failure, terminal session errors, bounded audio/protocol and
+  normalized-signal queues, coalesced ongoing revisions with reserved lifecycle
+  capacity, a 30-second post-commit completion deadline, visible per-item
   diagnostics, authentication/status diagnostics, and late events after Stop
   are deterministic under tests;
 - provider-authored error text is discarded at the Adapter boundary; stable
@@ -201,8 +213,8 @@ silent cloud fallback
 - define a narrow Rust worker protocol with bounded queues, health checks,
   and crash isolation;
 - implement sherpa-onnx plus SenseVoiceSmall on CPU as the first bounded local
-  worker Adapter behind the same `RecognitionSession` Interface used by
-  OpenAI ([research](./research/local-inference-notes.md));
+  driver behind the same active Recognition Interface used by OpenAI
+  ([research](./research/local-inference-notes.md));
 - record an English/Chinese/mixed-speech, latency, and resource baseline with
   VRChat running;
 - add distinct diagnostics for missing files, incompatible runtime, load
@@ -222,7 +234,7 @@ Goal: complete the local backend choice and add real local Live candidates
 - package and validate the CUDA runtime path; preserve the preference when a
   model lacks CUDA support;
 - implement Streaming Paraformer and Streaming Zipformer as independent local
-  Live Adapters behind the same `RecognitionSession` Interface;
+  Live drivers behind the same active Recognition Interface;
 - bring every model/runtime pack through the Phase 8 distribution,
   verification, and removal flow;
 - benchmark accuracy, mixed-language speech, latency, resources, and VRChat

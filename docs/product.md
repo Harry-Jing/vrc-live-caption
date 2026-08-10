@@ -21,7 +21,8 @@ The implemented path today:
 
 ```text
 microphone
-  -> application-owned speech units
+  -> continuous mono audio into the active Recognition Module
+  -> application-owned speech units inside the selected path
   -> gpt-transcribe or gpt-live-transcribe over Realtime WebSocket
   -> normalized Completed or Live captions, as supported
   -> App and VRChat Chatbox output

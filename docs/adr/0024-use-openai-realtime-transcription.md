@@ -43,11 +43,12 @@ immutable until Stop. A transient failure may replace the provider connection
 under [ADR 0025](./0025-reconnect-within-one-runtime-generation.md), but the
 runtime does not combine or switch models.
 
-The general recognition Module owns a provider-independent
-`RecognitionSession` Interface: session lifecycle and audio enter; normalized
-ongoing or completed full-text snapshots, lifecycle signals, and categorized
-errors leave. Provider endpoint names, JSON events, commits, and identifiers do
-not cross this seam.
+The general recognition Module owns a provider-independent active Interface:
+continuous audio and lifecycle control enter; normalized ongoing or completed
+full-text snapshots, lifecycle signals, and categorized errors leave. Provider
+endpoint names, JSON events, commits, and identifiers do not cross this seam.
+ADR 0026 later sharpened ownership of unitization, attempts, admission, and I/O
+without changing the two selected OpenAI paths.
 
 The OpenAI Module implements that Interface with behavior-specific Adapters.
 It hides 24 kHz PCM append/commit operations, reconciles interleaved events by
@@ -71,8 +72,8 @@ provider. Deterministic scripted Adapters remain test-only. A failure is
 surfaced instead of changing model, timing, or provider; explicitly transient
 failures may reconnect the same selection within the current generation.
 
-Future local recognizers implement the same `RecognitionSession` Interface
-through a local-worker Adapter. They do not emulate the OpenAI wire protocol
+Future local recognizers implement the same active Recognition Interface
+through a local-worker driver. They do not emulate the OpenAI wire protocol
 and never fall back to OpenAI silently.
 
 ## Consequences
