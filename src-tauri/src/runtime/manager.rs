@@ -10,13 +10,12 @@ use crate::chatbox::{ChatboxPacer, PublisherCloseReason, RuntimeChatboxPublisher
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, emit_diagnostic,
-    record_and_emit_runtime_status,
+    DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, record_and_emit_runtime_status,
 };
 use crate::host_resolver::HostResolver;
 use crate::runtime_control::{
     RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
-    RuntimeSessionSnapshot,
+    RuntimeSessionSnapshot, RuntimeStatus,
 };
 use secrecy::SecretString;
 use std::sync::Mutex;

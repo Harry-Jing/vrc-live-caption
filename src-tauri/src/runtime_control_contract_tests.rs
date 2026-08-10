@@ -7,7 +7,7 @@ use crate::capability_planner::{
 use crate::caption_session::{CaptionLane, CaptionState};
 use crate::config::{AppConfig, OpenAiTranscriptionModel, PublicationMode, SttProvider};
 use crate::error::{AppError, AppResult};
-use crate::events::{DiagnosticCategory, DiagnosticSeverity, RuntimeStatus};
+use crate::events::{DiagnosticCategory, DiagnosticSeverity};
 use crate::secrets::{ProviderSecretStatus, ProviderSecretStorage};
 
 macro_rules! exhaustive_values {

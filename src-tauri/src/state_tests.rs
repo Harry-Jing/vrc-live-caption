@@ -1,8 +1,9 @@
 use super::*;
 use crate::capability_planner::plan_runtime;
-use crate::runtime_control::{RuntimeChatboxSnapshot, RuntimeSelectedConfig};
-use crate::secrets::ProviderSecretStorage;
-use std::sync::{Arc, Barrier};
+use crate::runtime_control::{
+    RuntimeChatboxSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase, RuntimeSessionSnapshot,
+    RuntimeStatus, RuntimeStatusEvent,
+};
 use std::thread;
 use std::time::Duration;
 use tauri::{Listener, Manager};
@@ -37,147 +38,6 @@ fn removed_config_requires_an_explicit_review_before_start() -> AppResult<()> {
     assert_eq!(error.code(), "config.invalid");
     assert!(error.to_string().contains("Review and save"));
     ensure_config_was_reviewed(false)?;
-    Ok(())
-}
-
-#[test]
-fn runtime_control_snapshot_has_a_versioned_authoritative_shape() -> AppResult<()> {
-    let state = AppState::default();
-    let snapshot = state.runtime_control_snapshot()?;
-    let value = serde_json::to_value(snapshot)
-        .map_err(|error| AppError::state(format!("Failed to serialize snapshot: {error}")))?;
-
-    assert_eq!(value["contractVersion"], serde_json::json!(3));
-    assert_eq!(value["revision"], serde_json::json!(0));
-    assert_eq!(value["desired"]["revision"], serde_json::json!(0));
-    assert_eq!(
-        value["desired"]["config"]["schemaVersion"],
-        serde_json::json!(3)
-    );
-    assert_eq!(
-        value["desired"]["runtimePlan"]["publication"]["state"],
-        serde_json::json!("ready")
-    );
-    assert!(value["session"].is_null());
-    assert_eq!(value["pendingChanges"], serde_json::json!([]));
-
-    Ok(())
-}
-
-#[test]
-fn snapshot_reads_the_cached_desired_secret_status() -> AppResult<()> {
-    let state = AppState::default();
-    {
-        let mut control = state.lock_control()?;
-        control.provider_secrets = vec![ProviderSecretStatus {
-            provider: "openai".to_string(),
-            configured: true,
-            storage: Some(ProviderSecretStorage::Environment),
-            display_suffix: Some("test".to_string()),
-            error: None,
-        }];
-    }
-
-    let snapshot = state.runtime_control_snapshot()?;
-    assert_eq!(
-        snapshot.desired.provider_secrets[0]
-            .display_suffix
-            .as_deref(),
-        Some("test")
-    );
-    Ok(())
-}
-
-#[test]
-fn snapshot_reads_cannot_mix_a_revision_with_another_config() -> AppResult<()> {
-    let state = Arc::new(AppState::default());
-    let barrier = Arc::new(Barrier::new(2));
-    let writer_state = Arc::clone(&state);
-    let writer_barrier = Arc::clone(&barrier);
-    let writer = thread::spawn(move || -> AppResult<()> {
-        writer_barrier.wait();
-        for revision in 1..=2_000_u64 {
-            let mut control = writer_state.lock_control()?;
-            control.revision = revision;
-            control.config_revision = revision;
-            control.config.stt.languages = vec![format!("revision-{revision}")];
-        }
-        Ok(())
-    });
-
-    barrier.wait();
-    for _ in 0..2_000 {
-        let snapshot = state.runtime_control_snapshot()?;
-        if snapshot.revision > 0 {
-            assert_eq!(snapshot.desired.revision, snapshot.revision);
-            assert_eq!(
-                snapshot.desired.config.stt.languages,
-                vec![format!("revision-{}", snapshot.revision)]
-            );
-        }
-    }
-
-    writer
-        .join()
-        .map_err(|_| AppError::runtime("Snapshot writer test thread panicked."))??;
-    Ok(())
-}
-
-#[test]
-fn runtime_error_preserves_the_effective_session_but_stopped_clears_it() -> AppResult<()> {
-    let state = AppState::default();
-    let selected = AppConfig::default();
-    state.install_starting_session(session_snapshot(&selected, 7))?;
-
-    let error_snapshot = state.record_runtime_status(RuntimeStatusEvent::new(
-        RuntimeStatus::Error,
-        Some("test failure".to_string()),
-    ))?;
-    assert_eq!(
-        error_snapshot.session.as_ref().map(|session| session.phase),
-        Some(RuntimeSessionPhase::Error)
-    );
-
-    let stopped_snapshot = state.record_runtime_status(RuntimeStatusEvent::new(
-        RuntimeStatus::Stopped,
-        Some("stopped".to_string()),
-    ))?;
-    assert!(stopped_snapshot.session.is_none());
-    Ok(())
-}
-
-#[test]
-fn reconnecting_status_keeps_the_effective_session_active() -> AppResult<()> {
-    let state = AppState::default();
-    let selected = AppConfig::default();
-    state.install_starting_session(session_snapshot(&selected, 8))?;
-
-    let snapshot = state.record_runtime_status(RuntimeStatusEvent::new(
-        RuntimeStatus::Reconnecting,
-        Some("Reconnecting speech recognition".to_string()),
-    ))?;
-
-    assert_eq!(snapshot.runtime.status, RuntimeStatus::Reconnecting);
-    assert_eq!(
-        snapshot.session.as_ref().map(|session| session.phase),
-        Some(RuntimeSessionPhase::Reconnecting)
-    );
-    Ok(())
-}
-
-#[test]
-fn failed_new_start_clears_an_old_error_session() -> AppResult<()> {
-    let state = AppState::default();
-    let selected = AppConfig::default();
-    let mut old_session = session_snapshot(&selected, 11);
-    old_session.phase = RuntimeSessionPhase::Error;
-    state.install_starting_session(old_session)?;
-
-    let snapshot =
-        state.record_start_error(&AppError::secret("OpenAI API key is missing."), None)?;
-
-    assert_eq!(snapshot.runtime.status, RuntimeStatus::Error);
-    assert!(snapshot.session.is_none());
     Ok(())
 }
 
@@ -282,45 +142,6 @@ fn gpt_live_transcribe_live_publication_passes_runtime_preflight() -> AppResult<
 }
 
 #[test]
-fn thread_spawn_failure_preserves_the_session_it_already_installed() -> AppResult<()> {
-    let state = AppState::default();
-    let selected = AppConfig::default();
-    state.install_starting_session(session_snapshot(&selected, 12))?;
-
-    let snapshot = state.record_start_error(
-        &AppError::runtime("Runtime thread could not start."),
-        Some(12),
-    )?;
-
-    assert_eq!(
-        snapshot.session.as_ref().map(|session| session.phase),
-        Some(RuntimeSessionPhase::Error)
-    );
-    Ok(())
-}
-
-#[test]
-fn osc_test_keeps_using_an_error_sessions_selected_target() -> AppResult<()> {
-    let state = AppState::default();
-    let mut selected = AppConfig::default();
-    selected.osc.host = "192.0.2.10".to_string();
-    selected.osc.port = 9010;
-    let mut session = session_snapshot(&selected, 4);
-    session.phase = RuntimeSessionPhase::Error;
-    state.install_starting_session(session)?;
-    {
-        let mut control = state.lock_control()?;
-        control.config.osc.host = "198.51.100.20".to_string();
-        control.config.osc.port = 9020;
-    }
-
-    let effective = state.osc_config_for_test_message()?;
-    assert_eq!(effective.host, "192.0.2.10");
-    assert_eq!(effective.port, 9010);
-    Ok(())
-}
-
-#[test]
 fn stop_does_not_hold_the_control_lock_while_status_events_clear_session() -> AppResult<()> {
     let app = tauri::test::mock_builder()
         .manage(AppState::default())
@@ -328,11 +149,15 @@ fn stop_does_not_hold_the_control_lock_while_status_events_clear_session() -> Ap
         .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
     let state = app.state::<AppState>();
     let selected = AppConfig::default();
-    state.install_starting_session(session_snapshot(&selected, 5))?;
-    state.record_runtime_status(RuntimeStatusEvent::new(
-        RuntimeStatus::Running,
-        Some("running".to_string()),
-    ))?;
+    state
+        .control
+        .install_starting_session(session_snapshot(&selected, 5))?;
+    state
+        .runtime_status_recorder()
+        .record(RuntimeStatusEvent::new(
+            RuntimeStatus::Running,
+            Some("running".to_string()),
+        ))?;
 
     let stop_handle = app.handle().clone();
     let (sender, receiver) = std::sync::mpsc::channel();

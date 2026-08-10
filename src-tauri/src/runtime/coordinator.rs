@@ -9,14 +9,15 @@ use crate::chatbox::RuntimeChatboxPublisher;
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::events::{
-    AudioLevelEvent, DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, emit_audio_level,
-    emit_diagnostic, now_ms, record_and_emit_runtime_status,
+    AudioLevelEvent, DiagnosticCategory, DiagnosticUpdate, emit_audio_level, emit_diagnostic,
+    now_ms, record_and_emit_runtime_status,
 };
 use crate::host_resolver::HostResolver;
 use crate::recognition::{
     OwnedRecognitionAudioFrame, RecognitionSignal, RecognitionSubmitError, RunningRecognition,
     openai_recognition_module,
 };
+use crate::runtime_control::RuntimeStatus;
 use secrecy::SecretString;
 use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 use std::time::Duration;

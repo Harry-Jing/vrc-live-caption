@@ -17,7 +17,7 @@
 
 use crate::caption_session::CaptionSessionSnapshotV1;
 use crate::error::AppError;
-use crate::runtime_control::RuntimeControlSnapshot;
+use crate::runtime_control::{RuntimeControlSnapshot, RuntimeStatus, RuntimeStatusEvent};
 use crate::state::AppState;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,41 +33,6 @@ const EVENT_AUDIO_LEVEL: &str = "audio-level";
 const EVENT_DIAGNOSTIC: &str = "diagnostic-event";
 
 static NEXT_EVENT_ID: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct RuntimeStatusEvent {
-    pub(crate) status: RuntimeStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) message: Option<String>,
-    pub(crate) timestamp_ms: u64,
-}
-
-impl RuntimeStatusEvent {
-    pub(crate) fn idle() -> Self {
-        Self::new(RuntimeStatus::Idle, Some("Runtime is idle".to_string()))
-    }
-
-    pub(crate) fn new(status: RuntimeStatus, message: Option<String>) -> Self {
-        Self {
-            status,
-            message,
-            timestamp_ms: now_ms(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum RuntimeStatus {
-    Idle,
-    Starting,
-    Running,
-    Reconnecting,
-    Stopping,
-    Stopped,
-    Error,
-}
 
 /// Start of a confirmed utterance. Emitted before any caption text exists, so
 /// caption snapshots never carry placeholder text such as a listening
@@ -246,7 +211,7 @@ pub(crate) fn record_and_emit_runtime_status<R: Runtime>(
     // webview is reloading and misses this emit, its next status query still
     // observes the lifecycle transition.
     let snapshot = match app.try_state::<AppState>() {
-        Some(state) => match state.record_runtime_status(event.clone()) {
+        Some(state) => match state.runtime_status_recorder().record(event.clone()) {
             Ok(snapshot) => Some(snapshot),
             Err(error) => {
                 tracing::warn!(

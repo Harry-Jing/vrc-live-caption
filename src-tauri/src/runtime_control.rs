@@ -1,12 +1,49 @@
-//! Authoritative saved-settings and effective-runtime-session contract.
+//! Authoritative desired settings and effective runtime-session state.
 
-use crate::capability_planner::RuntimePlanSnapshot;
+use crate::capability_planner::{RuntimePlanSnapshot, plan_runtime};
 use crate::config::{AppConfig, AudioConfig, OscConfig, PublicationConfig, SttConfig, SttProvider};
-use crate::events::RuntimeStatusEvent;
+use crate::error::{AppError, AppResult};
 use crate::secrets::{ProviderSecretStatus, ProviderSecretStorage};
 use serde::Serialize;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 3;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeStatusEvent {
+    pub(crate) status: RuntimeStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) message: Option<String>,
+    pub(crate) timestamp_ms: u64,
+}
+
+impl RuntimeStatusEvent {
+    pub(crate) fn idle() -> Self {
+        Self::new(RuntimeStatus::Idle, Some("Runtime is idle".to_string()))
+    }
+
+    pub(crate) fn new(status: RuntimeStatus, message: Option<String>) -> Self {
+        Self {
+            status,
+            message,
+            timestamp_ms: runtime_status_now_ms(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum RuntimeStatus {
+    Idle,
+    Starting,
+    Running,
+    Reconnecting,
+    Stopping,
+    Stopped,
+    Error,
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,7 +146,7 @@ pub(crate) enum PendingSessionChange {
     Publication,
 }
 
-pub(crate) fn pending_session_changes(
+fn pending_session_changes(
     desired: &AppConfig,
     selected: &RuntimeSelectedConfig,
     desired_credential_revision: u64,
@@ -136,60 +173,300 @@ pub(crate) fn pending_session_changes(
     changes
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::AppConfig;
+/// Cloneable authority for every field in [`RuntimeControlSnapshot`].
+///
+/// The inner state is intentionally private so revisions and their associated
+/// values can only be observed or changed atomically through domain-specific
+/// operations.
+#[derive(Clone)]
+pub(crate) struct RuntimeControlStore {
+    inner: Arc<Mutex<RuntimeControlState>>,
+}
 
-    #[test]
-    fn ui_only_desired_change_does_not_require_session_restart() {
-        let selected = RuntimeSelectedConfig::from(&AppConfig::default());
-        let mut desired = AppConfig::default();
-        desired.ui.show_partial = false;
+struct RuntimeControlState {
+    revision: u64,
+    config_revision: u64,
+    credential_revision: u64,
+    next_generation: u64,
+    config: AppConfig,
+    config_requires_review: bool,
+    provider_secrets: Vec<ProviderSecretStatus>,
+    runtime: RuntimeStatusEvent,
+    session: Option<RuntimeSessionSnapshot>,
+}
 
-        assert!(pending_session_changes(&desired, &selected, 0, 0).is_empty());
-    }
-
-    #[test]
-    fn publication_change_requires_a_new_session_without_becoming_an_osc_change() {
-        let selected = RuntimeSelectedConfig::from(&AppConfig::default());
-        let mut desired = AppConfig::default();
-        desired.publication.mode = crate::config::PublicationMode::Live;
-
-        assert_eq!(
-            pending_session_changes(&desired, &selected, 0, 0),
-            vec![PendingSessionChange::Publication]
-        );
-    }
-
-    #[test]
-    fn openai_credential_change_requires_a_new_session() {
-        let active = AppConfig::default();
-        let selected = RuntimeSelectedConfig::from(&active);
-
-        assert_eq!(
-            pending_session_changes(&active, &selected, 2, 1),
-            vec![PendingSessionChange::Credential]
-        );
-    }
-
-    #[test]
-    fn chatbox_snapshot_uses_the_shared_host_and_port_wire_names() {
-        let value = serde_json::to_value(RuntimeChatboxSnapshot::Unavailable {
-            host: "127.0.0.1".to_string(),
-            port: 9000,
-            reason_code: "osc.bind_failed".to_string(),
-        })
-        .unwrap_or_else(|error| serde_json::json!({ "serializationError": error.to_string() }));
-
-        assert_eq!(value["state"], "unavailable");
-        assert_eq!(value["host"], "127.0.0.1");
-        assert_eq!(value["port"], 9000);
-        assert_eq!(value["reasonCode"], "osc.bind_failed");
-        assert!(value.get("requestedHost").is_none());
-        assert!(value.get("requestedPort").is_none());
+impl Default for RuntimeControlState {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            config_revision: 0,
+            credential_revision: 0,
+            next_generation: 0,
+            config: AppConfig::default(),
+            config_requires_review: false,
+            provider_secrets: Vec::new(),
+            runtime: RuntimeStatusEvent::idle(),
+            session: None,
+        }
     }
 }
+
+impl Default for RuntimeControlStore {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(RuntimeControlState::default())),
+        }
+    }
+}
+
+/// The lifecycle-only capability handed to runtime event recording.
+///
+/// It can advance status and the corresponding session phase, but cannot
+/// mutate desired settings, credentials, generations, or start selections.
+#[derive(Clone)]
+pub(crate) struct RuntimeStatusRecorder {
+    inner: Arc<Mutex<RuntimeControlState>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct RuntimeStartSelection {
+    pub(crate) config: AppConfig,
+    pub(crate) config_requires_review: bool,
+    pub(crate) config_revision: u64,
+    pub(crate) credential_revision: u64,
+}
+
+impl RuntimeControlStore {
+    pub(crate) fn snapshot(&self) -> AppResult<RuntimeControlSnapshot> {
+        let control = self.lock()?;
+        Ok(Self::snapshot_from(&control))
+    }
+
+    pub(crate) fn start_selection(&self) -> AppResult<RuntimeStartSelection> {
+        let control = self.lock()?;
+        Ok(RuntimeStartSelection {
+            config: control.config.clone(),
+            config_requires_review: control.config_requires_review,
+            config_revision: control.config_revision,
+            credential_revision: control.credential_revision,
+        })
+    }
+
+    pub(crate) fn allocate_generation(&self) -> AppResult<u64> {
+        let mut control = self.lock()?;
+        control.next_generation = control.next_generation.saturating_add(1);
+        Ok(control.next_generation)
+    }
+
+    pub(crate) fn install_starting_session(
+        &self,
+        session: RuntimeSessionSnapshot,
+    ) -> AppResult<()> {
+        let mut control = self.lock()?;
+        control.runtime = RuntimeStatusEvent::new(
+            RuntimeStatus::Starting,
+            Some("Starting outgoing caption runtime".to_string()),
+        );
+        control.session = Some(session);
+        Self::advance_revision(&mut control);
+        Ok(())
+    }
+
+    pub(crate) fn record_start_error_if_current(
+        &self,
+        error: &AppError,
+        installed_generation: Option<u64>,
+        is_current: impl FnOnce() -> bool,
+    ) -> AppResult<Option<RuntimeControlSnapshot>> {
+        let mut control = self.lock()?;
+
+        // Evaluate the Stop epoch while holding the control lock. Therefore
+        // either Error is committed first and Stop overwrites it, or Stop's
+        // intent wins and the older Start cannot overwrite it afterward.
+        if !is_current() {
+            return Ok(None);
+        }
+
+        Ok(Some(Self::apply_start_error(
+            &mut control,
+            error,
+            installed_generation,
+        )))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_start_error(
+        &self,
+        error: &AppError,
+        installed_generation: Option<u64>,
+    ) -> AppResult<RuntimeControlSnapshot> {
+        let mut control = self.lock()?;
+        Ok(Self::apply_start_error(
+            &mut control,
+            error,
+            installed_generation,
+        ))
+    }
+
+    pub(crate) fn effective_osc_config(&self) -> AppResult<OscConfig> {
+        let control = self.lock()?;
+        Ok(control
+            .session
+            .as_ref()
+            .map(|session| session.selected.osc.clone())
+            .unwrap_or_else(|| control.config.osc.clone()))
+    }
+
+    pub(crate) fn replace_loaded_config(
+        &self,
+        config: AppConfig,
+        config_requires_review: bool,
+        provider_secrets: Vec<ProviderSecretStatus>,
+    ) -> AppResult<()> {
+        let mut control = self.lock()?;
+        control.config = config;
+        control.config_requires_review = config_requires_review;
+        control.provider_secrets = provider_secrets;
+        control.config_revision = control.config_revision.saturating_add(1);
+        Self::advance_revision(&mut control);
+        Ok(())
+    }
+
+    pub(crate) fn replace_saved_config(
+        &self,
+        config: AppConfig,
+    ) -> AppResult<RuntimeControlSnapshot> {
+        let mut control = self.lock()?;
+        control.config = config;
+        control.config_requires_review = false;
+        control.config_revision = control.config_revision.saturating_add(1);
+        Self::advance_revision(&mut control);
+        Ok(Self::snapshot_from(&control))
+    }
+
+    pub(crate) fn replace_provider_secret_statuses(
+        &self,
+        provider_secrets: Vec<ProviderSecretStatus>,
+    ) -> AppResult<RuntimeControlSnapshot> {
+        let mut control = self.lock()?;
+        control.credential_revision = control.credential_revision.saturating_add(1);
+        control.provider_secrets = provider_secrets;
+        Self::advance_revision(&mut control);
+        Ok(Self::snapshot_from(&control))
+    }
+
+    pub(crate) fn status_recorder(&self) -> RuntimeStatusRecorder {
+        RuntimeStatusRecorder {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
+    fn lock(&self) -> AppResult<std::sync::MutexGuard<'_, RuntimeControlState>> {
+        self.inner
+            .lock()
+            .map_err(|_| AppError::state("Runtime control state lock was poisoned."))
+    }
+
+    fn snapshot_from(control: &RuntimeControlState) -> RuntimeControlSnapshot {
+        let pending_changes = control
+            .session
+            .as_ref()
+            .map(|session| {
+                pending_session_changes(
+                    &control.config,
+                    &session.selected,
+                    control.credential_revision,
+                    session
+                        .credential
+                        .as_ref()
+                        .map(|credential| credential.revision)
+                        .unwrap_or(0),
+                )
+            })
+            .unwrap_or_default();
+
+        RuntimeControlSnapshot {
+            contract_version: RUNTIME_CONTROL_CONTRACT_VERSION,
+            revision: control.revision,
+            runtime: control.runtime.clone(),
+            desired: RuntimeDesiredSnapshot {
+                revision: control.config_revision,
+                config: control.config.clone(),
+                runtime_plan: plan_runtime(&control.config),
+                provider_secrets: control.provider_secrets.clone(),
+            },
+            session: control.session.clone(),
+            pending_changes,
+        }
+    }
+
+    fn apply_start_error(
+        control: &mut RuntimeControlState,
+        error: &AppError,
+        installed_generation: Option<u64>,
+    ) -> RuntimeControlSnapshot {
+        control.runtime = RuntimeStatusEvent::new(RuntimeStatus::Error, Some(error.to_string()));
+        if control.session.as_ref().map(|session| session.generation) == installed_generation {
+            Self::set_session_phase(control, RuntimeSessionPhase::Error);
+        } else {
+            control.session = None;
+        }
+        Self::advance_revision(control);
+        Self::snapshot_from(control)
+    }
+
+    fn set_session_phase(control: &mut RuntimeControlState, phase: RuntimeSessionPhase) {
+        if let Some(session) = control.session.as_mut() {
+            session.phase = phase;
+        }
+    }
+
+    fn advance_revision(control: &mut RuntimeControlState) {
+        control.revision = control.revision.saturating_add(1);
+    }
+}
+
+impl RuntimeStatusRecorder {
+    pub(crate) fn record(&self, status: RuntimeStatusEvent) -> AppResult<RuntimeControlSnapshot> {
+        let mut control = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::state("Runtime control state lock was poisoned."))?;
+        control.runtime = status.clone();
+        match status.status {
+            RuntimeStatus::Idle | RuntimeStatus::Stopped => control.session = None,
+            RuntimeStatus::Starting => {
+                RuntimeControlStore::set_session_phase(&mut control, RuntimeSessionPhase::Starting);
+            }
+            RuntimeStatus::Running => {
+                RuntimeControlStore::set_session_phase(&mut control, RuntimeSessionPhase::Running);
+            }
+            RuntimeStatus::Reconnecting => RuntimeControlStore::set_session_phase(
+                &mut control,
+                RuntimeSessionPhase::Reconnecting,
+            ),
+            RuntimeStatus::Stopping => {
+                RuntimeControlStore::set_session_phase(&mut control, RuntimeSessionPhase::Stopping);
+            }
+            RuntimeStatus::Error => {
+                RuntimeControlStore::set_session_phase(&mut control, RuntimeSessionPhase::Error);
+            }
+        }
+        RuntimeControlStore::advance_revision(&mut control);
+        Ok(RuntimeControlStore::snapshot_from(&control))
+    }
+}
+
+fn runtime_status_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis() as u64
+}
+
+#[cfg(test)]
+#[path = "runtime_control_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "runtime_control_contract_tests.rs"]

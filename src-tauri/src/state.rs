@@ -12,28 +12,23 @@ use crate::chatbox::ChatboxPacer;
 use crate::config::{AppConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, RuntimeStatusEvent, emit_diagnostic,
-    emit_runtime_control_and_status,
+    DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, emit_runtime_control_and_status,
 };
 use crate::host_resolver::HostResolver;
 use crate::runtime::{RuntimeManager, RuntimeStartOutcome, RuntimeStartRequest};
 use crate::runtime_control::{
-    RUNTIME_CONTROL_CONTRACT_VERSION, RuntimeControlSnapshot, RuntimeDesiredSnapshot,
-    RuntimeSessionPhase, RuntimeSessionSnapshot, pending_session_changes,
+    RuntimeControlSnapshot, RuntimeControlStore, RuntimeCredentialSnapshot, RuntimeStartSelection,
+    RuntimeStatusRecorder,
 };
 use crate::saved_settings::{self, SavedSettingsLoad};
 use crate::secrets::{
-    ProviderSecretStatus, delete_provider_secret, provider_secret_statuses, resolve_openai_api_key,
-    save_provider_secret,
+    delete_provider_secret, provider_secret_statuses, resolve_openai_api_key, save_provider_secret,
 };
 use std::sync::Mutex;
 use tauri::{AppHandle, Runtime};
 
 pub(crate) struct AppState {
-    // The only authority for every frontend-visible control field. A snapshot
-    // is cloned entirely under this one short lock, which prevents revisions
-    // from being paired with state from another instant.
-    control: Mutex<RuntimeControlState>,
+    control: RuntimeControlStore,
     // Serializes desired-state mutations with Start's configuration and
     // credential capture. Stop never waits for this gate: file or credential
     // store I/O must not delay the hard generation boundary.
@@ -44,38 +39,10 @@ pub(crate) struct AppState {
     pub(crate) runtime: RuntimeManager,
 }
 
-struct RuntimeControlState {
-    revision: u64,
-    config_revision: u64,
-    credential_revision: u64,
-    next_generation: u64,
-    config: AppConfig,
-    config_requires_review: bool,
-    provider_secrets: Vec<ProviderSecretStatus>,
-    runtime: RuntimeStatusEvent,
-    session: Option<RuntimeSessionSnapshot>,
-}
-
-impl Default for RuntimeControlState {
-    fn default() -> Self {
-        Self {
-            revision: 0,
-            config_revision: 0,
-            credential_revision: 0,
-            next_generation: 0,
-            config: AppConfig::default(),
-            config_requires_review: false,
-            provider_secrets: Vec::new(),
-            runtime: RuntimeStatusEvent::idle(),
-            session: None,
-        }
-    }
-}
-
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            control: Mutex::new(RuntimeControlState::default()),
+            control: RuntimeControlStore::default(),
             desired_state_gate: Mutex::new(()),
             chatbox_pacer: ChatboxPacer::default(),
             caption_session: CaptionSessionStore::default(),
@@ -105,15 +72,12 @@ impl AppState {
         // by the active session was deleted after that session began.
         self.runtime.prepare_for_start(app)?;
 
-        let (config, config_requires_review, config_revision, credential_revision) = {
-            let control = self.lock_control()?;
-            (
-                control.config.clone(),
-                control.config_requires_review,
-                control.config_revision,
-                control.credential_revision,
-            )
-        };
+        let RuntimeStartSelection {
+            config,
+            config_requires_review,
+            config_revision,
+            credential_revision,
+        } = self.control.start_selection()?;
         if let Err(error) = ensure_config_was_reviewed(config_requires_review) {
             return self.finish_start_failure(app, error, None, expected_stop_epoch);
         }
@@ -139,18 +103,14 @@ impl AppState {
                 return self.finish_start_failure(app, error, None, expected_stop_epoch);
             }
         };
-        let credential = crate::runtime_control::RuntimeCredentialSnapshot {
+        let credential = RuntimeCredentialSnapshot {
             provider: SttProvider::OpenAi,
             storage: resolved.storage,
             display_suffix: resolved.display_suffix,
             revision: credential_revision,
         };
 
-        let generation = {
-            let mut control = self.lock_control()?;
-            control.next_generation = control.next_generation.saturating_add(1);
-            control.next_generation
-        };
+        let generation = self.control.allocate_generation()?;
 
         let start_result = self.runtime.start(
             app.clone(),
@@ -165,7 +125,7 @@ impl AppState {
                 credential,
                 expected_stop_epoch,
             },
-            |session| self.install_starting_session(session),
+            |session| self.control.install_starting_session(session),
         );
 
         match start_result {
@@ -189,8 +149,7 @@ impl AppState {
     }
 
     pub(crate) fn runtime_control_snapshot(&self) -> AppResult<RuntimeControlSnapshot> {
-        let control = self.lock_control()?;
-        Ok(Self::snapshot_from(&control))
+        self.control.snapshot()
     }
 
     pub(crate) fn caption_session_snapshot(&self) -> AppResult<CaptionSessionSnapshotV1> {
@@ -201,82 +160,8 @@ impl AppState {
         self.caption_session.clone()
     }
 
-    pub(crate) fn record_runtime_status(
-        &self,
-        status: RuntimeStatusEvent,
-    ) -> AppResult<RuntimeControlSnapshot> {
-        let mut control = self.lock_control()?;
-        control.runtime = status.clone();
-        match status.status {
-            RuntimeStatus::Idle | RuntimeStatus::Stopped => control.session = None,
-            RuntimeStatus::Starting => {
-                Self::set_session_phase(&mut control, RuntimeSessionPhase::Starting)
-            }
-            RuntimeStatus::Running => {
-                Self::set_session_phase(&mut control, RuntimeSessionPhase::Running)
-            }
-            RuntimeStatus::Reconnecting => {
-                Self::set_session_phase(&mut control, RuntimeSessionPhase::Reconnecting)
-            }
-            RuntimeStatus::Stopping => {
-                Self::set_session_phase(&mut control, RuntimeSessionPhase::Stopping)
-            }
-            RuntimeStatus::Error => {
-                Self::set_session_phase(&mut control, RuntimeSessionPhase::Error)
-            }
-        }
-        Self::advance_revision(&mut control);
-        Ok(Self::snapshot_from(&control))
-    }
-
-    fn lock_control(&self) -> AppResult<std::sync::MutexGuard<'_, RuntimeControlState>> {
-        self.control
-            .lock()
-            .map_err(|_| AppError::state("Runtime control state lock was poisoned."))
-    }
-
-    fn snapshot_from(control: &RuntimeControlState) -> RuntimeControlSnapshot {
-        let pending_changes = control
-            .session
-            .as_ref()
-            .map(|session| {
-                pending_session_changes(
-                    &control.config,
-                    &session.selected,
-                    control.credential_revision,
-                    session
-                        .credential
-                        .as_ref()
-                        .map(|credential| credential.revision)
-                        .unwrap_or(0),
-                )
-            })
-            .unwrap_or_default();
-
-        RuntimeControlSnapshot {
-            contract_version: RUNTIME_CONTROL_CONTRACT_VERSION,
-            revision: control.revision,
-            runtime: control.runtime.clone(),
-            desired: RuntimeDesiredSnapshot {
-                revision: control.config_revision,
-                config: control.config.clone(),
-                runtime_plan: plan_runtime(&control.config),
-                provider_secrets: control.provider_secrets.clone(),
-            },
-            session: control.session.clone(),
-            pending_changes,
-        }
-    }
-
-    fn install_starting_session(&self, session: RuntimeSessionSnapshot) -> AppResult<()> {
-        let mut control = self.lock_control()?;
-        control.runtime = RuntimeStatusEvent::new(
-            RuntimeStatus::Starting,
-            Some("Starting outgoing caption runtime".to_string()),
-        );
-        control.session = Some(session);
-        Self::advance_revision(&mut control);
-        Ok(())
+    pub(crate) fn runtime_status_recorder(&self) -> RuntimeStatusRecorder {
+        self.control.status_recorder()
     }
 
     #[cfg(test)]
@@ -285,12 +170,7 @@ impl AppState {
         error: &AppError,
         installed_generation: Option<u64>,
     ) -> AppResult<RuntimeControlSnapshot> {
-        let mut control = self.lock_control()?;
-        Ok(Self::apply_start_error(
-            &mut control,
-            error,
-            installed_generation,
-        ))
+        self.control.record_start_error(error, installed_generation)
     }
 
     fn record_start_error_if_current(
@@ -299,36 +179,10 @@ impl AppState {
         installed_generation: Option<u64>,
         expected_stop_epoch: u64,
     ) -> AppResult<Option<RuntimeControlSnapshot>> {
-        let mut control = self.lock_control()?;
-
-        // Stop advances the epoch before it waits for the runtime handle. Read
-        // it while holding the control lock so either this Error is committed
-        // first and Stop overwrites it, or the Stop intent wins and this older
-        // Start cannot overwrite Stopping/Stopped afterward.
-        if !self.runtime.stop_epoch_unchanged(expected_stop_epoch) {
-            return Ok(None);
-        }
-
-        Ok(Some(Self::apply_start_error(
-            &mut control,
-            error,
-            installed_generation,
-        )))
-    }
-
-    fn apply_start_error(
-        control: &mut RuntimeControlState,
-        error: &AppError,
-        installed_generation: Option<u64>,
-    ) -> RuntimeControlSnapshot {
-        control.runtime = RuntimeStatusEvent::new(RuntimeStatus::Error, Some(error.to_string()));
-        if control.session.as_ref().map(|session| session.generation) == installed_generation {
-            Self::set_session_phase(control, RuntimeSessionPhase::Error);
-        } else {
-            control.session = None;
-        }
-        Self::advance_revision(control);
-        Self::snapshot_from(control)
+        self.control
+            .record_start_error_if_current(error, installed_generation, || {
+                self.runtime.stop_epoch_unchanged(expected_stop_epoch)
+            })
     }
 
     fn finish_start_failure<R: Runtime>(
@@ -351,16 +205,6 @@ impl AppState {
         }
     }
 
-    fn set_session_phase(control: &mut RuntimeControlState, phase: RuntimeSessionPhase) {
-        if let Some(session) = control.session.as_mut() {
-            session.phase = phase;
-        }
-    }
-
-    fn advance_revision(control: &mut RuntimeControlState) {
-        control.revision = control.revision.saturating_add(1);
-    }
-
     pub(crate) fn chatbox_pacer(&self) -> ChatboxPacer {
         self.chatbox_pacer.clone()
     }
@@ -370,12 +214,7 @@ impl AppState {
     }
 
     pub(crate) fn osc_config_for_test_message(&self) -> AppResult<crate::config::OscConfig> {
-        let control = self.lock_control()?;
-        Ok(control
-            .session
-            .as_ref()
-            .map(|session| session.selected.osc.clone())
-            .unwrap_or_else(|| control.config.osc.clone()))
+        self.control.effective_osc_config()
     }
 
     pub(crate) fn load_config<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<AppConfig> {
@@ -418,13 +257,11 @@ impl AppState {
             }
         };
 
-        let provider_secrets = provider_secret_statuses();
-        let mut control = self.lock_control()?;
-        control.config = config.clone();
-        control.config_requires_review = config_requires_review;
-        control.provider_secrets = provider_secrets;
-        control.config_revision = control.config_revision.saturating_add(1);
-        Self::advance_revision(&mut control);
+        self.control.replace_loaded_config(
+            config.clone(),
+            config_requires_review,
+            provider_secret_statuses(),
+        )?;
 
         Ok(config)
     }
@@ -440,12 +277,7 @@ impl AppState {
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
         saved_settings::save(app, &config)?;
 
-        let mut control = self.lock_control()?;
-        control.config = config;
-        control.config_requires_review = false;
-        control.config_revision = control.config_revision.saturating_add(1);
-        Self::advance_revision(&mut control);
-        Ok(Self::snapshot_from(&control))
+        self.control.replace_saved_config(config)
     }
 
     pub(crate) fn save_provider_secret(
@@ -458,12 +290,8 @@ impl AppState {
             .lock()
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
         save_provider_secret(provider, secret)?;
-        let statuses = provider_secret_statuses();
-        let mut control = self.lock_control()?;
-        control.credential_revision = control.credential_revision.saturating_add(1);
-        control.provider_secrets = statuses;
-        Self::advance_revision(&mut control);
-        Ok(Self::snapshot_from(&control))
+        self.control
+            .replace_provider_secret_statuses(provider_secret_statuses())
     }
 
     pub(crate) fn delete_provider_secret(
@@ -475,12 +303,8 @@ impl AppState {
             .lock()
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
         delete_provider_secret(provider)?;
-        let statuses = provider_secret_statuses();
-        let mut control = self.lock_control()?;
-        control.credential_revision = control.credential_revision.saturating_add(1);
-        control.provider_secrets = statuses;
-        Self::advance_revision(&mut control);
-        Ok(Self::snapshot_from(&control))
+        self.control
+            .replace_provider_secret_statuses(provider_secret_statuses())
     }
 }
 

@@ -7,10 +7,10 @@ use crate::chatbox::{PublisherCloseReason, RuntimeChatboxPublisher};
 use crate::config::AppConfig;
 use crate::error::AppResult;
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, RuntimeStatus, emit_diagnostic,
-    record_and_emit_runtime_status,
+    DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, record_and_emit_runtime_status,
 };
 use crate::host_resolver::HostResolver;
+use crate::runtime_control::RuntimeStatus;
 use secrecy::SecretString;
 use tauri::{AppHandle, Runtime};
 
