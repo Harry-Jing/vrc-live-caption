@@ -6,9 +6,10 @@
 //! secrets may be resolved transiently for Start, but are never stored in state
 //! or in a frontend-facing snapshot.
 
+use crate::audio::{AudioProbeRequest, AudioProbeResult, probe_audio_input as run_audio_probe};
 use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
-use crate::chatbox::ChatboxPacer;
+use crate::chatbox::{ChatboxOscSender, ChatboxPacer, ChatboxSendReceipt, OSC_TEST_MESSAGE};
 use crate::config::{AppConfig, SttProvider};
 use crate::error::{AppError, AppResult};
 use crate::events::{
@@ -27,7 +28,7 @@ use crate::secrets::{
 use std::sync::Mutex;
 use tauri::{AppHandle, Runtime};
 
-pub(crate) struct AppState {
+pub(super) struct AppState {
     control: RuntimeControlStore,
     // Serializes desired-state mutations with Start's configuration and
     // credential capture. Stop never waits for this gate: file or credential
@@ -36,7 +37,7 @@ pub(crate) struct AppState {
     chatbox_pacer: ChatboxPacer,
     caption_session: CaptionSessionStore,
     host_resolver: HostResolver,
-    pub(crate) runtime: RuntimeManager,
+    runtime: RuntimeManager,
 }
 
 impl Default for AppState {
@@ -53,7 +54,7 @@ impl Default for AppState {
 }
 
 impl AppState {
-    pub(crate) fn start_runtime(&self, app: &AppHandle) -> AppResult<RuntimeControlSnapshot> {
+    pub(super) fn start_runtime(&self, app: &AppHandle) -> AppResult<RuntimeControlSnapshot> {
         let status_recorder = self.runtime_status_recorder();
         // Capture before waiting on desired-state I/O. Any later Stop changes
         // the epoch, so this invocation cannot install a runtime after Stop
@@ -117,9 +118,9 @@ impl AppState {
             app.clone(),
             RuntimeStartRequest {
                 config,
-                chatbox_pacer: self.chatbox_pacer(),
-                caption_session: self.caption_session_store(),
-                host_resolver: self.host_resolver(),
+                chatbox_pacer: self.chatbox_pacer.clone(),
+                caption_session: self.caption_session.clone(),
+                host_resolver: self.host_resolver.clone(),
                 generation_id: generation,
                 config_revision,
                 openai_api_key: resolved.secret,
@@ -140,7 +141,7 @@ impl AppState {
         }
     }
 
-    pub(crate) fn stop_runtime<R: Runtime>(
+    pub(super) fn stop_runtime<R: Runtime>(
         &self,
         app: &AppHandle<R>,
     ) -> AppResult<RuntimeControlSnapshot> {
@@ -151,19 +152,56 @@ impl AppState {
         self.runtime_control_snapshot()
     }
 
-    pub(crate) fn runtime_control_snapshot(&self) -> AppResult<RuntimeControlSnapshot> {
+    pub(super) fn runtime_control_snapshot(&self) -> AppResult<RuntimeControlSnapshot> {
         self.control.snapshot()
     }
 
-    pub(crate) fn caption_session_snapshot(&self) -> AppResult<CaptionSessionSnapshotV1> {
+    pub(super) fn caption_session_snapshot(&self) -> AppResult<CaptionSessionSnapshotV1> {
         self.caption_session.snapshot()
     }
 
-    pub(crate) fn caption_session_store(&self) -> CaptionSessionStore {
-        self.caption_session.clone()
+    pub(super) fn probe_audio_input<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        request: &AudioProbeRequest,
+    ) -> AppResult<AudioProbeResult> {
+        let _probe_lease = self.runtime.begin_audio_probe(app)?;
+        match run_audio_probe(request) {
+            Ok(result) => {
+                emit_diagnostic(
+                    app,
+                    DiagnosticUpdate::info(
+                        DiagnosticCategory::Audio,
+                        "audio.probe_completed",
+                        "Microphone test completed",
+                        format!(
+                            "Observed local microphone levels for {} ms at {} Hz; no audio left the app.",
+                            result.duration_ms, result.sample_rate
+                        ),
+                    ),
+                );
+                Ok(result)
+            }
+            Err(error) => {
+                emit_diagnostic(
+                    app,
+                    DiagnosticUpdate::from_error(&error, "Microphone test failed"),
+                );
+                Err(error)
+            }
+        }
     }
 
-    pub(crate) fn runtime_status_recorder(&self) -> RuntimeStatusRecorder {
+    pub(super) fn send_osc_test_message(&self) -> AppResult<ChatboxSendReceipt> {
+        let osc_config = self.control.effective_osc_config()?;
+        let sender = ChatboxOscSender::new(&osc_config, &self.host_resolver, &|| false)?;
+        self.chatbox_pacer
+            .wait_for_turn(None)?
+            .ok_or_else(|| AppError::state("OSC Test pacing was cancelled."))?
+            .attempt(|| sender.send_text(OSC_TEST_MESSAGE))
+    }
+
+    fn runtime_status_recorder(&self) -> RuntimeStatusRecorder {
         self.control.status_recorder()
     }
 
@@ -208,19 +246,7 @@ impl AppState {
         }
     }
 
-    pub(crate) fn chatbox_pacer(&self) -> ChatboxPacer {
-        self.chatbox_pacer.clone()
-    }
-
-    pub(crate) fn host_resolver(&self) -> HostResolver {
-        self.host_resolver.clone()
-    }
-
-    pub(crate) fn osc_config_for_test_message(&self) -> AppResult<crate::config::OscConfig> {
-        self.control.effective_osc_config()
-    }
-
-    pub(crate) fn load_config<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<AppConfig> {
+    pub(super) fn load_config<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<AppConfig> {
         let _operation = self
             .desired_state_gate
             .lock()
@@ -269,7 +295,7 @@ impl AppState {
         Ok(config)
     }
 
-    pub(crate) fn save_config(
+    pub(super) fn save_config(
         &self,
         app: &AppHandle,
         config: AppConfig,
@@ -283,7 +309,7 @@ impl AppState {
         self.control.replace_saved_config(config)
     }
 
-    pub(crate) fn save_provider_secret(
+    pub(super) fn save_provider_secret(
         &self,
         provider: SttProvider,
         secret: String,
@@ -297,7 +323,7 @@ impl AppState {
             .replace_provider_secret_statuses(provider_secret_statuses())
     }
 
-    pub(crate) fn delete_provider_secret(
+    pub(super) fn delete_provider_secret(
         &self,
         provider: SttProvider,
     ) -> AppResult<RuntimeControlSnapshot> {

@@ -2,8 +2,8 @@ mod audio;
 mod capability_planner;
 mod caption_session;
 mod chatbox;
-mod commands;
 mod config;
+mod desktop;
 mod error;
 mod events;
 mod host_resolver;
@@ -12,20 +12,6 @@ mod runtime;
 mod runtime_control;
 mod saved_settings;
 mod secrets;
-mod state;
-
-use tauri::Manager;
-
-fn configure_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
-    builder
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_dialog::init())
-        .manage(state::AppState::default())
-        .setup(|app| {
-            app.state::<state::AppState>().load_config(app.handle())?;
-            Ok(())
-        })
-}
 
 #[expect(
     clippy::expect_used,
@@ -34,32 +20,14 @@ fn configure_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bu
 pub fn run() {
     let _ = tracing_subscriber::fmt().with_target(false).try_init();
 
-    configure_builder(tauri::Builder::default())
-        .invoke_handler(tauri::generate_handler![
-            commands::save_app_config,
-            commands::list_audio_input_devices,
-            commands::probe_audio_input,
-            commands::start_runtime,
-            commands::stop_runtime,
-            commands::get_runtime_control_snapshot,
-            commands::get_caption_session_snapshot,
-            commands::send_osc_test_message,
-            commands::save_provider_secret,
-            commands::delete_provider_secret
-        ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            // Stop the runtime explicitly on exit so the microphone is
-            // released and the STT worker joins before the process dies. The
-            // runtime must never rely on event-emit failures to learn that
-            // the app is closing.
-            if matches!(event, tauri::RunEvent::Exit)
-                && let Err(error) = app.state::<state::AppState>().stop_runtime(app)
-            {
-                tracing::warn!(error_message = %error, "failed to stop runtime on exit");
-            }
-        });
+    desktop::install(
+        tauri::Builder::default()
+            .plugin(tauri_plugin_clipboard_manager::init())
+            .plugin(tauri_plugin_dialog::init()),
+    )
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(desktop::handle_run_event);
 }
 
 #[cfg(test)]

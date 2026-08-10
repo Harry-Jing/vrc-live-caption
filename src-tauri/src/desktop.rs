@@ -1,29 +1,63 @@
-//! Tauri commands exposed to the frontend.
+//! Concrete Tauri desktop shell.
 //!
-//! Every command is `#[tauri::command(async)]` so it runs off the main thread:
-//! these handlers block on file I/O, the OS credential store, audio device
-//! enumeration, UDP sends, or runtime thread joins, and a plain sync command
-//! would freeze the window for that duration.
+//! This module owns the managed application state, startup configuration load,
+//! command registration, command adapters, and process-exit cleanup. The crate
+//! root installs this shell without learning its handlers or state layout.
+//! Handlers stay asynchronous because their file, credential, audio, network,
+//! and runtime-join work must never block Tauri's main thread.
 
-use crate::audio::{
-    AudioInputDevice, AudioProbeRequest, AudioProbeResult, list_input_devices,
-    probe_audio_input as run_audio_probe,
-};
+mod state;
+
+use crate::audio::{AudioInputDevice, AudioProbeRequest, AudioProbeResult, list_input_devices};
 use crate::caption_session::CaptionSessionSnapshotV1;
-use crate::chatbox::{
-    ChatboxOscSender, ChatboxSendReceipt, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE,
-};
+use crate::chatbox::OSC_CHATBOX_INPUT_ADDRESS;
 use crate::config::{AppConfig, SttProvider};
 use crate::error::AppResult;
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, emit_runtime_control_changed,
 };
 use crate::runtime_control::RuntimeControlSnapshot;
-use crate::state::AppState;
-use tauri::{AppHandle, State};
+use state::AppState;
+use tauri::{AppHandle, Manager, Runtime, State};
+
+// Tauri's command wrappers are Wry-bound, while setup tests use MockRuntime.
+// Keep only the managed-state portion generic so tests execute the production
+// setup hook without widening the desktop facade's production interface.
+fn manage_state<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder.manage(AppState::default()).setup(|app| {
+        app.state::<AppState>().load_config(app.handle())?;
+        Ok(())
+    })
+}
+
+pub(super) fn install(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    manage_state(builder).invoke_handler(tauri::generate_handler![
+        save_app_config,
+        list_audio_input_devices,
+        probe_audio_input,
+        start_runtime,
+        stop_runtime,
+        get_runtime_control_snapshot,
+        get_caption_session_snapshot,
+        send_osc_test_message,
+        save_provider_secret,
+        delete_provider_secret
+    ])
+}
+
+pub(super) fn handle_run_event<R: Runtime>(app: &AppHandle<R>, event: tauri::RunEvent) {
+    // Stop explicitly so the microphone is released and the STT worker joins
+    // before the process dies. Runtime correctness never depends on an event
+    // emit reaching a webview that is already being torn down.
+    if matches!(event, tauri::RunEvent::Exit)
+        && let Err(error) = app.state::<AppState>().stop_runtime(app)
+    {
+        tracing::warn!(error_message = %error, "failed to stop runtime on exit");
+    }
+}
 
 #[tauri::command(async)]
-pub(crate) fn save_app_config(
+fn save_app_config(
     app: AppHandle,
     state: State<'_, AppState>,
     config: AppConfig,
@@ -45,7 +79,7 @@ pub(crate) fn save_app_config(
 }
 
 #[tauri::command(async)]
-pub(crate) fn list_audio_input_devices(app: AppHandle) -> AppResult<Vec<AudioInputDevice>> {
+fn list_audio_input_devices(app: AppHandle) -> AppResult<Vec<AudioInputDevice>> {
     let devices = list_input_devices()?;
 
     emit_diagnostic(
@@ -62,43 +96,16 @@ pub(crate) fn list_audio_input_devices(app: AppHandle) -> AppResult<Vec<AudioInp
 }
 
 #[tauri::command(async)]
-pub(crate) fn probe_audio_input(
+fn probe_audio_input(
     app: AppHandle,
     state: State<'_, AppState>,
     request: AudioProbeRequest,
 ) -> AppResult<AudioProbeResult> {
-    let _probe_lease = state.runtime.begin_audio_probe(&app)?;
-    match run_audio_probe(&request) {
-        Ok(result) => {
-            emit_diagnostic(
-                &app,
-                DiagnosticUpdate::info(
-                    DiagnosticCategory::Audio,
-                    "audio.probe_completed",
-                    "Microphone test completed",
-                    format!(
-                        "Observed local microphone levels for {} ms at {} Hz; no audio left the app.",
-                        result.duration_ms, result.sample_rate
-                    ),
-                ),
-            );
-            Ok(result)
-        }
-        Err(error) => {
-            emit_diagnostic(
-                &app,
-                DiagnosticUpdate::from_error(&error, "Microphone test failed"),
-            );
-            Err(error)
-        }
-    }
+    state.probe_audio_input(&app, &request)
 }
 
 #[tauri::command(async)]
-pub(crate) fn start_runtime(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> AppResult<RuntimeControlSnapshot> {
+fn start_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<RuntimeControlSnapshot> {
     tracing::info!("starting outgoing caption runtime");
     let snapshot = state.start_runtime(&app)?;
     emit_runtime_control_changed(&app, snapshot.clone());
@@ -106,10 +113,7 @@ pub(crate) fn start_runtime(
 }
 
 #[tauri::command(async)]
-pub(crate) fn stop_runtime(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> AppResult<RuntimeControlSnapshot> {
+fn stop_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<RuntimeControlSnapshot> {
     tracing::info!("stopping outgoing caption runtime");
     let snapshot = state.stop_runtime(&app)?;
     emit_runtime_control_changed(&app, snapshot.clone());
@@ -117,34 +121,18 @@ pub(crate) fn stop_runtime(
 }
 
 #[tauri::command(async)]
-pub(crate) fn get_runtime_control_snapshot(
-    state: State<'_, AppState>,
-) -> AppResult<RuntimeControlSnapshot> {
+fn get_runtime_control_snapshot(state: State<'_, AppState>) -> AppResult<RuntimeControlSnapshot> {
     state.runtime_control_snapshot()
 }
 
 #[tauri::command(async)]
-pub(crate) fn get_caption_session_snapshot(
-    state: State<'_, AppState>,
-) -> AppResult<CaptionSessionSnapshotV1> {
+fn get_caption_session_snapshot(state: State<'_, AppState>) -> AppResult<CaptionSessionSnapshotV1> {
     state.caption_session_snapshot()
 }
 
 #[tauri::command(async)]
-pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    let osc_config = state.osc_config_for_test_message()?;
-    let chatbox_pacer = state.chatbox_pacer();
-    let host_resolver = state.host_resolver();
-
-    let send_result: AppResult<ChatboxSendReceipt> =
-        ChatboxOscSender::new(&osc_config, &host_resolver, &|| false).and_then(|sender| {
-            chatbox_pacer
-                .wait_for_turn(None)?
-                .ok_or_else(|| crate::error::AppError::state("OSC Test pacing was cancelled."))?
-                .attempt(|| sender.send_text(OSC_TEST_MESSAGE))
-        });
-
-    match send_result {
+fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    match state.send_osc_test_message() {
         Ok(result) => {
             tracing::info!(
                 target = result.target,
@@ -185,7 +173,7 @@ pub(crate) fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) 
 }
 
 #[tauri::command(async)]
-pub(crate) fn save_provider_secret(
+fn save_provider_secret(
     app: AppHandle,
     state: State<'_, AppState>,
     provider: SttProvider,
@@ -208,7 +196,7 @@ pub(crate) fn save_provider_secret(
 }
 
 #[tauri::command(async)]
-pub(crate) fn delete_provider_secret(
+fn delete_provider_secret(
     app: AppHandle,
     state: State<'_, AppState>,
     provider: SttProvider,
@@ -228,3 +216,7 @@ pub(crate) fn delete_provider_secret(
 
     Ok(snapshot)
 }
+
+#[cfg(test)]
+#[path = "desktop_tests.rs"]
+mod tests;

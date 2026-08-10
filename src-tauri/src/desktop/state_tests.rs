@@ -30,6 +30,87 @@ fn default_config_passes_validation() -> AppResult<()> {
 }
 
 #[test]
+fn audio_probe_lease_remains_active_while_failure_diagnostic_is_emitted() -> AppResult<()> {
+    let app = tauri::test::mock_builder()
+        .manage(AppState::default())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
+    let listener_handle = app.handle().clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.listen("diagnostic-event", move |event| {
+        let state = listener_handle.state::<AppState>();
+        let lease_was_still_active = state.runtime.begin_audio_probe(&listener_handle).is_err();
+        let _ = sender.send((event.payload().to_string(), lease_was_still_active));
+    });
+
+    let request = AudioProbeRequest {
+        input_device_id: None,
+        duration_ms: 0,
+    };
+    let Err(error) = app
+        .state::<AppState>()
+        .probe_audio_input(app.handle(), &request)
+    else {
+        return Err(AppError::state(
+            "Invalid microphone probe duration unexpectedly succeeded.",
+        ));
+    };
+    let (payload, lease_was_still_active) = receiver
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::runtime("Microphone probe diagnostic was not delivered."))?;
+    let diagnostic = serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
+        AppError::runtime(format!(
+            "Failed to parse microphone probe diagnostic: {error}"
+        ))
+    })?;
+
+    assert_eq!(error.code(), "audio.failed");
+    assert_eq!(diagnostic["code"], "audio.failed");
+    assert!(
+        lease_was_still_active,
+        "microphone probe lease was released before its failure diagnostic"
+    );
+
+    let state = app.state::<AppState>();
+    let released_lease = state.runtime.begin_audio_probe(app.handle())?;
+    drop(released_lease);
+    Ok(())
+}
+
+#[test]
+fn rejected_audio_probe_lease_does_not_emit_a_failure_diagnostic() -> AppResult<()> {
+    let app = tauri::test::mock_builder()
+        .manage(AppState::default())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
+    let state = app.state::<AppState>();
+    let active_lease = state.runtime.begin_audio_probe(app.handle())?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.listen("diagnostic-event", move |event| {
+        let _ = sender.send(event.payload().to_string());
+    });
+
+    let request = AudioProbeRequest {
+        input_device_id: None,
+        duration_ms: 0,
+    };
+    let Err(error) = state.probe_audio_input(app.handle(), &request) else {
+        return Err(AppError::state(
+            "Concurrent microphone probe unexpectedly acquired a second lease.",
+        ));
+    };
+
+    assert_eq!(error.code(), "runtime.failed");
+    assert!(error.to_string().contains("already running"));
+    assert!(
+        receiver.recv_timeout(Duration::from_millis(100)).is_err(),
+        "lease rejection emitted a persistent microphone failure diagnostic"
+    );
+    drop(active_lease);
+    Ok(())
+}
+
+#[test]
 fn removed_config_requires_an_explicit_review_before_start() -> AppResult<()> {
     let error = ensure_config_was_reviewed(true)
         .err()

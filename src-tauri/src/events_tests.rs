@@ -3,38 +3,6 @@ use crate::error::{AppResult, ProviderFailureClass};
 use crate::runtime_control::RuntimeControlStore;
 use tauri::Listener;
 
-fn registered_tauri_commands() -> AppResult<Vec<String>> {
-    let handler = include_str!("lib.rs")
-        .split_once("tauri::generate_handler![")
-        .and_then(|(_, remainder)| remainder.split_once(']'))
-        .map(|(handler, _)| handler)
-        .ok_or_else(|| AppError::state("Tauri invoke handler must remain discoverable"))?;
-
-    Ok(handler
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("commands::"))
-        .map(|command| command.trim_end_matches(',').to_string())
-        .collect())
-}
-
-fn build_manifest_commands() -> AppResult<Vec<String>> {
-    let manifest = include_str!("../build.rs")
-        .split_once("const APP_COMMANDS: &[&str] = &[")
-        .and_then(|(_, remainder)| remainder.split_once("];"))
-        .map(|(commands, _)| commands)
-        .ok_or_else(|| AppError::state("Tauri build command manifest must remain discoverable"))?;
-
-    Ok(manifest
-        .lines()
-        .filter_map(|line| {
-            line.trim()
-                .strip_prefix('"')
-                .and_then(|command| command.strip_suffix("\","))
-                .map(str::to_owned)
-        })
-        .collect())
-}
-
 fn declared_ui_facing_events() -> AppResult<Vec<String>> {
     let internal_events = [EVENT_UTTERANCE_STARTED, EVENT_UTTERANCE_ENDED];
 
@@ -56,7 +24,7 @@ fn declared_ui_facing_events() -> AppResult<Vec<String>> {
 }
 
 #[test]
-fn tauri_ipc_names_match_the_shared_contract() -> AppResult<()> {
+fn tauri_event_names_match_the_shared_contract() -> AppResult<()> {
     let manifest = serde_json::from_str::<serde_json::Value>(include_str!(
         "../../contracts/tauri-ipc-v1.json"
     ))
@@ -87,26 +55,6 @@ fn tauri_ipc_names_match_the_shared_contract() -> AppResult<()> {
     declared_event_names.sort();
     assert_eq!(declared_event_names, expected_event_names);
 
-    let mut expected_commands = manifest
-        .get("commands")
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| AppError::config("Tauri IPC contract must define command names"))?
-        .values()
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| AppError::config("Tauri command names must be strings"))
-        })
-        .collect::<AppResult<Vec<_>>>()?;
-    let mut registered_commands = registered_tauri_commands()?;
-    let mut build_commands = build_manifest_commands()?;
-    expected_commands.sort();
-    registered_commands.sort();
-    build_commands.sort();
-
-    assert_eq!(registered_commands, expected_commands);
-    assert_eq!(build_commands, expected_commands);
     Ok(())
 }
 

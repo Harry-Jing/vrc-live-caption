@@ -1,4 +1,4 @@
-// Keep this ACL manifest in sync with the invoke handler in src/lib.rs.
+// Keep this ACL manifest in sync with the invoke handler in src/desktop.rs.
 const APP_COMMANDS: &[&str] = &[
     "save_app_config",
     "list_audio_input_devices",
