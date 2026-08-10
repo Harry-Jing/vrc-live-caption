@@ -17,7 +17,9 @@
 //! in flight, so runtime commands must run off the main thread
 //! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
 
-use crate::audio::{AudioLevelMeter, SPEECH_RMS_THRESHOLD, open_input_capture, receive_audio};
+use crate::audio::{
+    AudioLevelMeter, AudioLevelReading, open_input_capture, speech_gate_level_meter,
+};
 use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
 use crate::chatbox::{
@@ -970,15 +972,15 @@ trait RecognitionCapture {
     fn receive(&self, timeout: Duration) -> AppResult<Option<Vec<f32>>>;
 }
 
-struct CpalRecognitionCapture(crate::audio::AudioCapture);
+struct MicrophoneRecognitionCapture(crate::audio::AudioCapture);
 
-impl RecognitionCapture for CpalRecognitionCapture {
+impl RecognitionCapture for MicrophoneRecognitionCapture {
     fn sample_rate(&self) -> u32 {
-        self.0.sample_rate
+        self.0.sample_rate()
     }
 
     fn receive(&self, timeout: Duration) -> AppResult<Option<Vec<f32>>> {
-        receive_audio(&self.0.receiver, timeout)
+        self.0.receive(timeout)
     }
 }
 
@@ -986,7 +988,7 @@ fn open_recognition_capture(
     config: &crate::config::AudioConfig,
 ) -> AppResult<Box<dyn RecognitionCapture>> {
     open_input_capture(config)
-        .map(CpalRecognitionCapture)
+        .map(MicrophoneRecognitionCapture)
         .map(|capture| Box::new(capture) as Box<dyn RecognitionCapture>)
 }
 
@@ -1096,7 +1098,8 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
             drop(active_capture.take());
             continue;
         }
-        for reading in active.audio_level.push_samples(&samples) {
+        let level_readings: Vec<AudioLevelReading> = active.audio_level.push_samples(&samples);
+        for reading in level_readings {
             let next_revision = audio_level_revision.saturating_add(1);
             let accepted = generation.commit_if_active(|| {
                 emit_audio_level(
@@ -1191,8 +1194,7 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
 
                 let capture = open_capture(&config.audio)?;
                 let sample_rate = capture.sample_rate();
-                let audio_level = AudioLevelMeter::new(sample_rate, SPEECH_RMS_THRESHOLD)
-                    .map_err(|error| AppError::audio(error.to_string()))?;
+                let audio_level = speech_gate_level_meter(sample_rate)?;
                 if !recognition.is_accepting_audio() {
                     drop(capture);
                     return Ok(RecognitionCoordinatorFlow::Continue);

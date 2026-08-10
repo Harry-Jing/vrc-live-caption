@@ -1,6 +1,6 @@
 //! Short, local-only microphone probe that returns scalar level statistics.
 
-use super::capture::{open_input_capture, receive_audio};
+use super::capture::open_input_capture;
 use super::level::{AudioLevelMeter, TELEMETRY_DBFS_FLOOR};
 use crate::config::AudioConfig;
 use crate::error::{AppError, AppResult};
@@ -47,7 +47,7 @@ pub(crate) struct AudioProbeResult {
 /// Opens the configured microphone for one short local observation and closes
 /// it before returning. Only scalar statistics cross this interface; captured
 /// PCM is consumed in memory and never returned or persisted.
-pub(crate) fn probe_audio_input(
+pub(super) fn probe_audio_input(
     request: &AudioProbeRequest,
     gate_rms_threshold: f32,
 ) -> AppResult<AudioProbeResult> {
@@ -57,10 +57,10 @@ pub(crate) fn probe_audio_input(
     };
     let capture = open_input_capture(&config)?;
     collect_probe_with(
-        capture.sample_rate,
+        capture.sample_rate(),
         gate_rms_threshold,
         duration,
-        |timeout| receive_audio(&capture.receiver, timeout),
+        |timeout| capture.receive(timeout),
         Instant::now,
     )
 }

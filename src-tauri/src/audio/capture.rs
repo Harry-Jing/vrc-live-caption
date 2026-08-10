@@ -33,12 +33,22 @@ pub(crate) struct AudioInputDevice {
 }
 
 pub(crate) struct AudioCapture {
-    pub(crate) receiver: AudioCaptureReceiver,
-    pub(crate) sample_rate: u32,
+    receiver: AudioCaptureReceiver,
+    sample_rate: u32,
     _stream: Stream,
 }
 
-pub(crate) struct AudioCaptureReceiver {
+impl AudioCapture {
+    pub(crate) fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub(crate) fn receive(&self, timeout: Duration) -> AppResult<Option<Vec<f32>>> {
+        receive_audio(&self.receiver, timeout)
+    }
+}
+
+struct AudioCaptureReceiver {
     samples: Receiver<Vec<f32>>,
     dropped_frames: Receiver<()>,
     fatal_errors: Receiver<CpalError>,
@@ -178,7 +188,7 @@ fn input_stream_builder(sample_format: SampleFormat) -> AppResult<InputStreamBui
     }
 }
 
-pub(crate) fn receive_audio(
+fn receive_audio(
     receiver: &AudioCaptureReceiver,
     timeout: Duration,
 ) -> AppResult<Option<Vec<f32>>> {

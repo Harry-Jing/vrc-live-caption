@@ -3,13 +3,12 @@
 //! The meter accepts mono PCM samples and emits only scalar statistics. Audio
 //! never crosses this module's output boundary.
 
+use super::SPEECH_ANALYSIS_FRAME_MILLIS;
 use std::error::Error;
 use std::fmt;
 
-pub(crate) const VAD_ANALYSIS_FRAME_MILLIS: u64 = 10;
 const LEVEL_WINDOW_MILLIS: u64 = 100;
-pub(crate) const SPEECH_RMS_THRESHOLD: f32 = 0.012;
-pub(crate) const TELEMETRY_DBFS_FLOOR: f32 = -120.0;
+pub(super) const TELEMETRY_DBFS_FLOOR: f32 = -120.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AudioLevelReading {
@@ -20,7 +19,7 @@ pub(crate) struct AudioLevelReading {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AudioLevelConfigError {
+pub(super) enum AudioLevelConfigError {
     ZeroSampleRate,
     InvalidGateThreshold,
 }
@@ -53,7 +52,7 @@ pub(crate) struct AudioLevelMeter {
 }
 
 impl AudioLevelMeter {
-    pub(crate) fn new(
+    pub(super) fn new(
         sample_rate_hz: u32,
         gate_rms_threshold: f32,
     ) -> Result<Self, AudioLevelConfigError> {
@@ -68,7 +67,7 @@ impl AudioLevelMeter {
         let window_samples = (u64::from(sample_rate_hz) * LEVEL_WINDOW_MILLIS)
             .div_ceil(1_000)
             .max(1) as usize;
-        let gate_frame_samples = (u64::from(sample_rate_hz) * VAD_ANALYSIS_FRAME_MILLIS)
+        let gate_frame_samples = (u64::from(sample_rate_hz) * SPEECH_ANALYSIS_FRAME_MILLIS)
             .div_ceil(1_000)
             .max(1) as usize;
         Ok(Self {

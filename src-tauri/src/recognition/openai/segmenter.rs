@@ -4,7 +4,7 @@
 //! is accepted, the buffered pre-roll and every later frame are released
 //! immediately so a streaming recognizer can emit text before the unit ends.
 
-use crate::audio::VAD_ANALYSIS_FRAME_MILLIS;
+use crate::audio::SPEECH_ANALYSIS_FRAME_MILLIS;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -59,7 +59,7 @@ impl SpeechSegmenter {
         let max_samples = ((sample_rate as f32 * max_segment_seconds) as usize).max(1);
         let max_preroll_samples = (sample_rate as f32 * preroll_seconds) as usize;
         let silence_timeout_samples = samples_for_duration(sample_rate, silence_timeout);
-        let analysis_frame_samples = (u64::from(sample_rate) * VAD_ANALYSIS_FRAME_MILLIS)
+        let analysis_frame_samples = (u64::from(sample_rate) * SPEECH_ANALYSIS_FRAME_MILLIS)
             .div_ceil(1_000)
             .max(1) as usize;
 

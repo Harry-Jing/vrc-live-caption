@@ -6,8 +6,8 @@
 //! would freeze the window for that duration.
 
 use crate::audio::{
-    AudioInputDevice, AudioProbeRequest, AudioProbeResult, SPEECH_RMS_THRESHOLD,
-    list_input_devices, probe_audio_input as run_audio_probe,
+    AudioInputDevice, AudioProbeRequest, AudioProbeResult, list_input_devices,
+    probe_audio_input as run_audio_probe,
 };
 use crate::caption_session::CaptionSessionSnapshotV1;
 use crate::chatbox::{
@@ -68,7 +68,7 @@ pub(crate) fn probe_audio_input(
     request: AudioProbeRequest,
 ) -> AppResult<AudioProbeResult> {
     let _probe_lease = state.runtime.begin_audio_probe(&app)?;
-    match run_audio_probe(&request, SPEECH_RMS_THRESHOLD) {
+    match run_audio_probe(&request) {
         Ok(result) => {
             emit_diagnostic(
                 &app,
