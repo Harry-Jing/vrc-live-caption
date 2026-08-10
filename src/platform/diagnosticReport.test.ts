@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { DiagnosticEvent, RuntimeStatusEvent } from "./types";
+import type { DiagnosticEvent, RuntimeStatusEvent } from "../runtime/types";
 import {
   copyDiagnosticReport,
   serializeDiagnosticReport,

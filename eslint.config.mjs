@@ -13,6 +13,126 @@ configureVueProject({
   rootDir: import.meta.dirname,
 });
 
+const restrictedImports = {
+  tauri: {
+    group: ["@tauri-apps/*", "@tauri-apps/**"],
+    message:
+      "Tauri APIs must stay behind src/platform/. Use a platform interface instead.",
+  },
+  runtimeAdapters: {
+    regex: "(^|/)((platform/)?tauri|preview)(/|$)",
+    message:
+      "Runtime adapter implementations are internal. Use the runtime composition interface instead.",
+  },
+  tauriAdapter: {
+    regex: "(^|/)(platform/)?tauri(/|$)",
+    message: "The Tauri runtime adapter is internal to platform composition.",
+  },
+  runtimeFacade: {
+    regex: "(^|/)platform/runtimeBackend(\\.[cm]?[jt]sx?)?$",
+    message: "Only useRuntime may create the runtime backend.",
+  },
+  runtimeComposition: {
+    regex: "(^|/)(runtime/backend|platform/runtimeBackend)(\\.[cm]?[jt]sx?)?$",
+    message:
+      "Runtime composition is internal. Use useRuntime or the runtime context instead.",
+  },
+  wire: {
+    regex: "(^|/)runtime/wire(?:/|$)",
+    message:
+      "Wire contracts are internal to runtime adapters. Use typed runtime modules or the runtime context instead.",
+  },
+};
+
+const restrictedImportSyntax = {
+  tauri: [
+    {
+      selector: "ImportExpression[source.value=/^@tauri-apps(?:\\/|$)/]",
+      message:
+        "Tauri APIs must stay behind src/platform/. Use a platform interface instead.",
+    },
+    {
+      selector:
+        "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/^@tauri-apps(?:\\/|$)/]",
+      message:
+        "Tauri APIs must stay behind src/platform/. Use a platform interface instead.",
+    },
+  ],
+  runtimeAdapters: [
+    {
+      selector:
+        "ImportExpression[source.value=/(?:^|\\/)(?:(?:platform\\/)?tauri|preview)(?:\\/|$)/]",
+      message:
+        "Runtime adapter implementations are internal. Use the runtime composition interface instead.",
+    },
+    {
+      selector:
+        "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)(?:(?:platform\\/)?tauri|preview)(?:\\/|$)/]",
+      message:
+        "Runtime adapter implementations are internal. Use the runtime composition interface instead.",
+    },
+  ],
+  tauriAdapter: [
+    {
+      selector:
+        "ImportExpression[source.value=/(?:^|\\/)(?:platform\\/)?tauri(?:\\/|$)/]",
+      message: "The Tauri runtime adapter is internal to platform composition.",
+    },
+    {
+      selector:
+        "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)(?:platform\\/)?tauri(?:\\/|$)/]",
+      message: "The Tauri runtime adapter is internal to platform composition.",
+    },
+  ],
+  runtimeFacade: [
+    {
+      selector:
+        "ImportExpression[source.value=/(?:^|\\/)platform\\/runtimeBackend(?:\\.[cm]?[jt]sx?)?$/]",
+      message: "Only useRuntime may create the runtime backend.",
+    },
+    {
+      selector:
+        "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)platform\\/runtimeBackend(?:\\.[cm]?[jt]sx?)?$/]",
+      message: "Only useRuntime may create the runtime backend.",
+    },
+  ],
+  runtimeComposition: [
+    {
+      selector:
+        "ImportExpression[source.value=/(?:^|\\/)(?:runtime\\/backend|platform\\/runtimeBackend)(?:\\.[cm]?[jt]sx?)?$/]",
+      message:
+        "Runtime composition is internal. Use useRuntime or the runtime context instead.",
+    },
+    {
+      selector:
+        "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)(?:runtime\\/backend|platform\\/runtimeBackend)(?:\\.[cm]?[jt]sx?)?$/]",
+      message:
+        "Runtime composition is internal. Use useRuntime or the runtime context instead.",
+    },
+  ],
+  wire: [
+    {
+      selector:
+        "ImportExpression[source.value=/(?:^|\\/)runtime\\/wire(?:\\/|$)/]",
+      message:
+        "Wire contracts are internal to runtime adapters. Use typed runtime modules or the runtime context instead.",
+    },
+    {
+      selector:
+        "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)runtime\\/wire(?:\\/|$)/]",
+      message:
+        "Wire contracts are internal to runtime adapters. Use typed runtime modules or the runtime context instead.",
+    },
+  ],
+};
+
+const stableToastCopyRestriction = {
+  selector:
+    "CallExpression[callee.object.name='toast'][callee.property.name='add'] > ObjectExpression > Property[key.name=/^(title|description)$/] > Literal",
+  message:
+    "Toast copy must be resolved through uiText so it has a stable message key.",
+};
+
 export default defineConfigWithVueTs(
   {
     name: "app/files-to-lint",
@@ -91,77 +211,139 @@ export default defineConfigWithVueTs(
   },
 
   {
-    name: "app/layer-boundaries",
-    files: ["src/**/*.{vue,ts}", "tests/eslint/**/*.mjs"],
-    ignores: ["src/runtime/**"],
+    name: "app/runtime-adapter-seam",
+    files: ["src/runtime/**/*.{vue,ts}"],
+    ignores: ["src/runtime/useRuntime.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
         {
           patterns: [
-            {
-              group: ["@tauri-apps/*", "@tauri-apps/**"],
-              message:
-                "Tauri APIs must stay behind src/runtime/. Use the runtime context instead.",
-            },
-            {
-              regex:
-                "(^|/)runtime/(backend|tauriBackend|previewBackend)(\\.[cm]?[jt]sx?)?$",
-              message:
-                "Backend implementations are internal to src/runtime/. Use useRuntime or the runtime context instead.",
-            },
-            {
-              regex: "(^|/)runtime/wire(?:/|$)",
-              message:
-                "Wire contracts are internal to runtime adapters. Use typed runtime modules or the runtime context instead.",
-            },
+            restrictedImports.tauri,
+            restrictedImports.runtimeAdapters,
+            restrictedImports.runtimeFacade,
           ],
         },
       ],
       "no-restricted-syntax": [
         "error",
+        ...restrictedImportSyntax.tauri,
+        ...restrictedImportSyntax.runtimeAdapters,
+        ...restrictedImportSyntax.runtimeFacade,
+      ],
+    },
+  },
+
+  {
+    name: "app/runtime-boundary-fixtures",
+    files: ["tests/eslint/runtime/**/*.mjs"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
         {
-          selector: "ImportExpression[source.value=/^@tauri-apps(?:\\/|$)/]",
-          message:
-            "Tauri APIs must stay behind src/runtime/. Use the runtime context instead.",
-        },
-        {
-          selector:
-            "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/^@tauri-apps(?:\\/|$)/]",
-          message:
-            "Tauri APIs must stay behind src/runtime/. Use the runtime context instead.",
-        },
-        {
-          selector:
-            "ImportExpression[source.value=/(?:^|\\/)runtime\\/(?:backend|tauriBackend|previewBackend)(?:\\.[cm]?[jt]sx?)?$/]",
-          message:
-            "Backend implementations are internal to src/runtime/. Use useRuntime or the runtime context instead.",
-        },
-        {
-          selector:
-            "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)runtime\\/(?:backend|tauriBackend|previewBackend)(?:\\.[cm]?[jt]sx?)?$/]",
-          message:
-            "Backend implementations are internal to src/runtime/. Use useRuntime or the runtime context instead.",
-        },
-        {
-          selector:
-            "ImportExpression[source.value=/(?:^|\\/)runtime\\/wire(?:\\/|$)/]",
-          message:
-            "Wire contracts are internal to runtime adapters. Use typed runtime modules or the runtime context instead.",
-        },
-        {
-          selector:
-            "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)runtime\\/wire(?:\\/|$)/]",
-          message:
-            "Wire contracts are internal to runtime adapters. Use typed runtime modules or the runtime context instead.",
-        },
-        {
-          selector:
-            "CallExpression[callee.object.name='toast'][callee.property.name='add'] > ObjectExpression > Property[key.name=/^(title|description)$/] > Literal",
-          message:
-            "Toast copy must be resolved through uiText so it has a stable message key.",
+          patterns: [
+            restrictedImports.tauri,
+            restrictedImports.runtimeAdapters,
+            restrictedImports.runtimeFacade,
+          ],
         },
       ],
+      "no-restricted-syntax": [
+        "error",
+        ...restrictedImportSyntax.tauri,
+        ...restrictedImportSyntax.runtimeAdapters,
+        ...restrictedImportSyntax.runtimeFacade,
+        stableToastCopyRestriction,
+      ],
+    },
+  },
+
+  {
+    name: "app/runtime-composition-entry",
+    files: ["src/runtime/useRuntime.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            restrictedImports.tauri,
+            restrictedImports.runtimeAdapters,
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        ...restrictedImportSyntax.tauri,
+        ...restrictedImportSyntax.runtimeAdapters,
+      ],
+    },
+  },
+
+  {
+    name: "app/preview-adapter-seam",
+    files: ["src/preview/**/*.{vue,ts}", "tests/eslint/preview/**/*.mjs"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            restrictedImports.tauri,
+            restrictedImports.tauriAdapter,
+            restrictedImports.runtimeFacade,
+            restrictedImports.wire,
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        ...restrictedImportSyntax.tauri,
+        ...restrictedImportSyntax.tauriAdapter,
+        ...restrictedImportSyntax.runtimeFacade,
+        ...restrictedImportSyntax.wire,
+        stableToastCopyRestriction,
+      ],
+    },
+  },
+
+  {
+    name: "app/ui-runtime-seams",
+    files: ["src/**/*.{vue,ts}", "tests/eslint/*.mjs"],
+    ignores: [
+      "src/runtime/**",
+      "src/platform/**",
+      "src/preview/**",
+      "tests/eslint/runtime/**",
+      "tests/eslint/preview/**",
+      "tests/eslint/platform/**",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            restrictedImports.tauri,
+            restrictedImports.runtimeAdapters,
+            restrictedImports.runtimeComposition,
+            restrictedImports.wire,
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        ...restrictedImportSyntax.tauri,
+        ...restrictedImportSyntax.runtimeAdapters,
+        ...restrictedImportSyntax.runtimeComposition,
+        ...restrictedImportSyntax.wire,
+        stableToastCopyRestriction,
+      ],
+    },
+  },
+
+  {
+    name: "app/platform-adapters",
+    files: ["src/platform/**/*.{vue,ts}", "tests/eslint/platform/**/*.mjs"],
+    rules: {
+      "no-restricted-syntax": ["error", stableToastCopyRestriction],
     },
   },
 

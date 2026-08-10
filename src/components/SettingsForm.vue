@@ -11,7 +11,7 @@ import {
 import { onBeforeRouteLeave } from "vue-router";
 import MicrophoneProbeControl from "./MicrophoneProbeControl.vue";
 import { uiText } from "../i18n/uiText";
-import { requestConfirmation } from "../runtime/confirmation";
+import { requestConfirmation } from "../platform/confirmation";
 import { isActiveRuntimeSessionPhase } from "../runtime/lifecycle";
 import {
   publicationModeDescriptionMessageKey,

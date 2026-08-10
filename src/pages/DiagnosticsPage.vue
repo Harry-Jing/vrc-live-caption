@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import EventFeed from "../components/EventFeed.vue";
 import { uiText } from "../i18n/uiText";
-import { copyDiagnosticReport } from "../runtime/diagnosticReport";
+import { copyDiagnosticReport } from "../platform/diagnosticReport";
 import { formatTime } from "../runtime/format";
 import { useRuntimeContext } from "../runtime/context";
 import {

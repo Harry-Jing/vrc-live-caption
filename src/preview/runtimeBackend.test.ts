@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { previewRuntimePlan } from "./previewBackend";
+import { previewRuntimePlan } from "./runtimeBackend";
 import {
   APP_CONFIG_SCHEMA_VERSION,
   type AppConfig,
   type OpenAiTranscriptionModel,
   type PublicationMode,
-} from "./types";
+} from "../runtime/types";
 
 function config(
   model: OpenAiTranscriptionModel,

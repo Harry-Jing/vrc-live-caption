@@ -16,7 +16,7 @@ const backendHarness: { current: RuntimeBackend | undefined } = vi.hoisted(
   () => ({ current: undefined }),
 );
 
-vi.mock("./backend", () => ({
+vi.mock("../platform/runtimeBackend", () => ({
   createRuntimeBackend: () => backendHarness.current,
 }));
 

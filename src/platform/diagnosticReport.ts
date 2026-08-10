@@ -1,7 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import type { DiagnosticEvent, RuntimeStatusEvent } from "./types";
+import type { DiagnosticEvent, RuntimeStatusEvent } from "../runtime/types";
 
 const DIAGNOSTIC_REPORT_VERSION = 1;
 

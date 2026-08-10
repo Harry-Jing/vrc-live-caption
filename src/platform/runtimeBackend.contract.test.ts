@@ -1,8 +1,17 @@
 import { describe, expect, test } from "vitest";
-import type { RuntimeBackend } from "./backend";
-import { createPreviewBackend, previewRuntimePlan } from "./previewBackend";
-import { createTauriBackend, type TauriBackendBridge } from "./tauriBackend";
-import { RUNTIME_CONTROL_EVENT, RUNTIME_EVENTS } from "./wire/tauriIpc";
+import {
+  createPreviewBackend,
+  previewRuntimePlan,
+} from "../preview/runtimeBackend";
+import type { RuntimeBackend } from "../runtime/backend";
+import {
+  RUNTIME_CONTROL_EVENT,
+  RUNTIME_EVENTS,
+} from "../runtime/wire/tauriIpc";
+import {
+  createTauriBackend,
+  type TauriBackendBridge,
+} from "./tauri/runtimeBackend";
 import {
   APP_CONFIG_SCHEMA_VERSION,
   type AppConfig,
@@ -13,7 +22,7 @@ import {
   type RuntimeEvent,
   type RuntimeSession,
   type RuntimeStatusEvent,
-} from "./types";
+} from "../runtime/types";
 
 const fakeInitialConfig: AppConfig = {
   schemaVersion: APP_CONFIG_SCHEMA_VERSION,

@@ -1,6 +1,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { uiText } from "../i18n/uiText";
-import { createRuntimeBackend, type Unsubscribe } from "./backend";
+import { createRuntimeBackend } from "../platform/runtimeBackend";
+import type { Unsubscribe } from "./backend";
 import { useAudioInput } from "./useAudioInput";
 import {
   createCaptionSessionState,

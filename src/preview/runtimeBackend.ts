@@ -3,8 +3,8 @@
 // Simulated activity is delivered through the same event handlers as the real
 // backend, so preview mode exercises the actual caption state machine.
 
-import type { RuntimeBackend, RuntimeEventListener } from "./backend";
-import { isActiveRuntimeStatus } from "./lifecycle";
+import type { RuntimeBackend, RuntimeEventListener } from "../runtime/backend";
+import { isActiveRuntimeStatus } from "../runtime/lifecycle";
 import {
   APP_CONFIG_SCHEMA_VERSION,
   type AppConfig,
@@ -17,7 +17,7 @@ import {
   type RuntimeStatus,
   type RuntimeStatusEvent,
   type SttProvider,
-} from "./types";
+} from "../runtime/types";
 
 const PREVIEW_DEFAULT_CONFIG: AppConfig = {
   schemaVersion: APP_CONFIG_SCHEMA_VERSION,

@@ -3,29 +3,29 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   decodeAudioLevelEvent,
   decodeAudioProbeResult,
-} from "./wire/audioContract";
-import { decodeCaptionSessionSnapshotV1 } from "./wire/captionSessionContract";
-import { decodeRuntimeControlSnapshotV3 } from "./wire/runtimeControlContract";
+} from "../../runtime/wire/audioContract";
+import { decodeCaptionSessionSnapshotV1 } from "../../runtime/wire/captionSessionContract";
+import { decodeRuntimeControlSnapshotV3 } from "../../runtime/wire/runtimeControlContract";
 import {
   decodeDiagnosticEvent,
   decodeRuntimeStatusEvent,
-} from "./wire/runtimeEventContract";
+} from "../../runtime/wire/runtimeEventContract";
 import {
   RUNTIME_CONTROL_EVENT,
   RUNTIME_EVENTS,
   TAURI_COMMANDS,
-} from "./wire/tauriIpc";
+} from "../../runtime/wire/tauriIpc";
 import type {
   RuntimeBackend,
   RuntimeEventListener,
   Unsubscribe,
-} from "./backend";
+} from "../../runtime/backend";
 import type {
   AppConfig,
   AudioInputDevice,
   AudioProbeRequest,
   SttProvider,
-} from "./types";
+} from "../../runtime/types";
 
 export type TauriBackendBridge = Readonly<{
   listen: (

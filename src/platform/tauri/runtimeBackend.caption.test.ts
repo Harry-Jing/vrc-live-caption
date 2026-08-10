@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import captionSessionFixture from "../../contracts/caption-session-snapshot-v1.json?raw";
-import { createTauriBackend, type TauriBackendBridge } from "./tauriBackend";
+import captionSessionFixture from "../../../contracts/caption-session-snapshot-v1.json?raw";
+import { createTauriBackend, type TauriBackendBridge } from "./runtimeBackend";
 
 test("TauriBackend decodes the authoritative caption-session pull", async () => {
   const payload = JSON.parse(captionSessionFixture) as unknown;

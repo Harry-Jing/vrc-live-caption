@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
-import { createTauriBackend, type TauriBackendBridge } from "./tauriBackend";
-import type { AudioLevelEvent } from "./types";
-import { RUNTIME_EVENTS } from "./wire/tauriIpc";
+import type { AudioLevelEvent } from "../../runtime/types";
+import { RUNTIME_EVENTS } from "../../runtime/wire/tauriIpc";
+import { createTauriBackend, type TauriBackendBridge } from "./runtimeBackend";
 
 test("TauriBackend decodes realtime audio levels before delivery", async () => {
   let deliverAudioLevel:

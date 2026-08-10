@@ -4,11 +4,11 @@ import {
   runtimeStatusNeedsControlReconciliation,
   selectNewerRuntimeControlSnapshot,
 } from "./runtimeControl";
-import { previewRuntimePlan } from "./previewBackend";
 import {
   APP_CONFIG_SCHEMA_VERSION,
   type AppConfig,
   type RuntimeControlSnapshot,
+  type RuntimePlan,
 } from "./types";
 
 const desiredConfig: AppConfig = {
@@ -23,7 +23,48 @@ const desiredConfig: AppConfig = {
   publication: { mode: "live" },
   ui: { showPartial: false },
 };
-const desiredRuntimePlan = previewRuntimePlan(desiredConfig);
+const desiredRuntimePlan: RuntimePlan = {
+  recognition: {
+    path: "openAiGptLiveTranscribe",
+    inputShape: "continuousAudioFrames",
+    boundaryOwner: "application",
+    unitBehavior: "unitBased",
+    lanes: [
+      {
+        lane: "source",
+        updates: "ongoingAndCompleted",
+        revisions: "revisableFullSnapshot",
+      },
+    ],
+  },
+  publication: {
+    state: "ready",
+    mode: "live",
+    policy: { policy: "liveUnit", observationWindowMs: 1_000 },
+    selectedLanes: ["source"],
+  },
+};
+const sessionRuntimePlan: RuntimePlan = {
+  recognition: {
+    path: "openAiGptTranscribe",
+    inputShape: "continuousAudioFrames",
+    boundaryOwner: "application",
+    unitBehavior: "unitBased",
+    lanes: [
+      {
+        lane: "source",
+        updates: "completedOnly",
+        revisions: "appendOnly",
+      },
+    ],
+  },
+  publication: {
+    state: "ready",
+    mode: "completed",
+    policy: { policy: "completed" },
+    selectedLanes: ["source"],
+  },
+};
 
 test("projects desired settings separately from the immutable active session", () => {
   const snapshot: RuntimeControlSnapshot = {
@@ -62,15 +103,7 @@ test("projects desired settings separately from the immutable active session", (
         osc: { enabled: true, host: "127.0.0.1", port: 9000 },
         publication: { mode: "completed" },
       },
-      runtimePlan: previewRuntimePlan({
-        ...desiredConfig,
-        stt: {
-          provider: "openai",
-          languages: ["en"],
-          model: "gpt-transcribe",
-        },
-        publication: { mode: "completed" },
-      }),
+      runtimePlan: sessionRuntimePlan,
       credential: {
         provider: "openai",
         storage: "systemCredentialStore",
