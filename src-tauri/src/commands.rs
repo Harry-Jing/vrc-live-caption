@@ -5,10 +5,9 @@
 //! enumeration, UDP sends, or runtime thread joins, and a plain sync command
 //! would freeze the window for that duration.
 
-use crate::audio::{AudioInputDevice, list_input_devices};
-use crate::audio_level::SPEECH_RMS_THRESHOLD;
-use crate::audio_probe::{
-    AudioProbeRequest, AudioProbeResult, probe_audio_input as run_audio_probe,
+use crate::audio::{
+    AudioInputDevice, AudioProbeRequest, AudioProbeResult, SPEECH_RMS_THRESHOLD,
+    list_input_devices, probe_audio_input as run_audio_probe,
 };
 use crate::caption_session::CaptionSessionSnapshotV1;
 use crate::chatbox::{

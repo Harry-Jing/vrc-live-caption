@@ -1,7 +1,7 @@
 //! Short, local-only microphone probe that returns scalar level statistics.
 
-use crate::audio::{open_input_capture, receive_audio};
-use crate::audio_level::{AudioLevelMeter, TELEMETRY_DBFS_FLOOR};
+use super::capture::{open_input_capture, receive_audio};
+use super::level::{AudioLevelMeter, TELEMETRY_DBFS_FLOOR};
 use crate::config::AudioConfig;
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
@@ -117,5 +117,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "audio_probe_tests.rs"]
+#[path = "probe_tests.rs"]
 mod tests;

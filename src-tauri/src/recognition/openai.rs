@@ -19,7 +19,7 @@ use super::{
     OwnedRecognitionAudioFrame, RecognitionDriver, RecognitionDriverInput, RecognitionDriverIo,
     RecognitionModule,
 };
-use crate::audio_level::SPEECH_RMS_THRESHOLD;
+use crate::audio::SPEECH_RMS_THRESHOLD;
 use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppError, AppResult};
 use crate::events::{next_caption_unit_id, now_ms};

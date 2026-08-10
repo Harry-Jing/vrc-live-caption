@@ -143,5 +143,5 @@ fn amplitude_to_dbfs(amplitude: f32) -> f32 {
 }
 
 #[cfg(test)]
-#[path = "audio_level_tests.rs"]
+#[path = "level_tests.rs"]
 mod tests;

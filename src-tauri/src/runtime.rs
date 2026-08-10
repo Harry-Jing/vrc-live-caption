@@ -17,8 +17,7 @@
 //! in flight, so runtime commands must run off the main thread
 //! (`#[tauri::command(async)]`) to keep the window responsive during that wait.
 
-use crate::audio::{open_input_capture, receive_audio};
-use crate::audio_level::{AudioLevelMeter, SPEECH_RMS_THRESHOLD};
+use crate::audio::{AudioLevelMeter, SPEECH_RMS_THRESHOLD, open_input_capture, receive_audio};
 use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
 use crate::chatbox::{

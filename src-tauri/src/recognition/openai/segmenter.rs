@@ -4,7 +4,7 @@
 //! is accepted, the buffered pre-roll and every later frame are released
 //! immediately so a streaming recognizer can emit text before the unit ends.
 
-use crate::audio_level::VAD_ANALYSIS_FRAME_MILLIS;
+use crate::audio::VAD_ANALYSIS_FRAME_MILLIS;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
