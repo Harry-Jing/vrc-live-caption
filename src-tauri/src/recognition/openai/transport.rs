@@ -4,13 +4,13 @@
 //! contains the replaceable network dependency, system-proxy tunnel, and
 //! API-key handshake. Tests never contact an external network.
 
-use crate::config::OpenAiTranscriptionModel;
-use crate::error::{AppError, AppResult, ProviderFailureClass};
-use crate::host_resolver::HostResolver;
-use crate::openai_realtime::{
+use super::realtime::{
     OpenAiRealtimeSession, OpenAiRealtimeSessionContext, ProviderError, RealtimeTransport,
     openai_provider_failure,
 };
+use crate::config::OpenAiTranscriptionModel;
+use crate::error::{AppError, AppResult, ProviderFailureClass};
+use crate::host_resolver::HostResolver;
 use crate::recognition::RecognitionAttemptSession;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
@@ -29,7 +29,6 @@ use tungstenite::{
 };
 
 mod system_proxy;
-#[path = "openai_realtime_tls_pump.rs"]
 mod tls_pump;
 
 use tls_pump::{OpenAiTlsPump, split_established_tls};
@@ -549,5 +548,5 @@ fn is_transient_io_error(kind: ErrorKind) -> bool {
 }
 
 #[cfg(test)]
-#[path = "openai_realtime_transport_tests.rs"]
+#[path = "transport_tests.rs"]
 mod tests;

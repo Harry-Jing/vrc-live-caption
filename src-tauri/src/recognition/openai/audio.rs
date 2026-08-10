@@ -128,5 +128,5 @@ fn push_pcm16(output: &mut Vec<u8>, sample: f32) {
 }
 
 #[cfg(test)]
-#[path = "recognition_audio_tests.rs"]
+#[path = "audio_tests.rs"]
 mod tests;

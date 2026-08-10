@@ -3,10 +3,10 @@
 //! The meter accepts mono PCM samples and emits only scalar statistics. Audio
 //! never crosses this module's output boundary.
 
-use crate::segmenter::VAD_ANALYSIS_FRAME_MILLIS;
 use std::error::Error;
 use std::fmt;
 
+pub(crate) const VAD_ANALYSIS_FRAME_MILLIS: u64 = 10;
 const LEVEL_WINDOW_MILLIS: u64 = 100;
 pub(crate) const SPEECH_RMS_THRESHOLD: f32 = 0.012;
 pub(crate) const TELEMETRY_DBFS_FLOOR: f32 = -120.0;

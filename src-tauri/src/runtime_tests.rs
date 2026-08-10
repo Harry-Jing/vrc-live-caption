@@ -6,8 +6,6 @@ use crate::host_resolver::{HostResolutionError, HostResolver};
 use crate::live_chatbox_publisher::LivePublisherDiagnostic;
 use crate::recognition::{
     RecognitionDriver, RecognitionDriverIo, RecognitionGenerationScope, RecognitionModule,
-};
-use crate::recognition_fakes::{
     ScriptedRecognitionAdapter, ScriptedRecognitionContext, ScriptedText,
 };
 use crate::secrets::ProviderSecretStorage;

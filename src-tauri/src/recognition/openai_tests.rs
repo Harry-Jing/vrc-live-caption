@@ -1,6 +1,6 @@
+use super::realtime::OpenAiRealtimeSessionContext;
 use super::*;
 use crate::error::{AppError, AppResult};
-use crate::openai_realtime::OpenAiRealtimeSessionContext;
 use crate::recognition::{
     OwnedRecognitionAudioFrame, RecognitionAttemptAudioChunk, RecognitionAttemptSession,
     RecognitionEvent, RecognitionGenerationScope, RecognitionModule, RecognitionSignal,

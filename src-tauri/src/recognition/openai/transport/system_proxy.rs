@@ -131,11 +131,9 @@ fn normalized_no_proxy(value: &str) -> String {
 }
 
 #[cfg(any(target_os = "macos", test))]
-#[path = "system_proxy/macos.rs"]
 mod macos;
 
 #[cfg(any(target_os = "windows", test))]
-#[path = "system_proxy/windows.rs"]
 mod windows;
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]

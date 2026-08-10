@@ -38,11 +38,10 @@ use crate::events::{
 };
 use crate::host_resolver::HostResolver;
 use crate::live_chatbox_publisher::{LiveChatboxPublisher, LivePublisherReporter};
-use crate::openai_active_recognition::openai_recognition_module;
 use crate::osc::ChatboxOscSender;
 use crate::recognition::{
     OwnedRecognitionAudioFrame, RecognitionEndReason, RecognitionEvent, RecognitionSignal,
-    RecognitionSubmitError, RunningRecognition,
+    RecognitionSubmitError, RunningRecognition, openai_recognition_module,
 };
 use crate::runtime_control::{
     RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,

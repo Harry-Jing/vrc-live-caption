@@ -4,10 +4,9 @@
 //! is accepted, the buffered pre-roll and every later frame are released
 //! immediately so a streaming recognizer can emit text before the unit ends.
 
+use crate::audio_level::VAD_ANALYSIS_FRAME_MILLIS;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-
-pub(crate) const VAD_ANALYSIS_FRAME_MILLIS: u64 = 10;
 
 pub(crate) struct SpeechSegmenter {
     sample_rate: u32,

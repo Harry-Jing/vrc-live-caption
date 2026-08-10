@@ -5,13 +5,13 @@
 //! ordering, and the hard Stop fence. Runtime only supplies a WebSocket
 //! transport and consumes normalized `RecognitionEvent`s.
 
+use super::audio::{REALTIME_PCM_SAMPLE_RATE_HZ, RealtimePcm16Encoder};
 use crate::caption_session::{CaptionLane, CaptionSnapshotV1, CaptionState};
 use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppError, AppResult, ProviderFailureClass};
 use crate::recognition::{
     RecognitionAttemptAudioChunk, RecognitionAttemptSession, RecognitionEndReason, RecognitionEvent,
 };
-use crate::recognition_audio::{REALTIME_PCM_SAMPLE_RATE_HZ, RealtimePcm16Encoder};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Deserialize;
@@ -1022,5 +1022,5 @@ fn single_detected_language(languages: Vec<String>) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "openai_realtime_tests.rs"]
+#[path = "realtime_tests.rs"]
 mod tests;

@@ -3,20 +3,25 @@
 //! This Module owns application speech boundaries, connection attempts, and
 //! reconnect policy behind the provider-neutral active Recognition Interface.
 
+mod audio;
+mod realtime;
+mod reconnect;
+mod segmenter;
+mod transport;
+
+use self::realtime::{OpenAiRealtimeSession, OpenAiRealtimeSessionContext};
+use self::reconnect::{ReconnectDecision, ReconnectSupervisor, reconnect_jitter_percent};
+use self::segmenter::{SegmenterUpdate, SpeechSegmenter};
+use self::transport::{OpenAiWebSocketTransport, connect_openai_realtime_session};
+use super::{
+    OwnedRecognitionAudioFrame, RecognitionAttemptAudioChunk, RecognitionAttemptSession,
+    RecognitionDriver, RecognitionDriverInput, RecognitionDriverIo, RecognitionModule,
+};
 use crate::audio_level::SPEECH_RMS_THRESHOLD;
 use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppError, AppResult};
 use crate::events::{next_caption_unit_id, now_ms};
 use crate::host_resolver::HostResolver;
-use crate::openai_realtime::OpenAiRealtimeSession;
-use crate::openai_realtime::OpenAiRealtimeSessionContext;
-use crate::openai_realtime_transport::{OpenAiWebSocketTransport, connect_openai_realtime_session};
-use crate::recognition::{
-    OwnedRecognitionAudioFrame, RecognitionAttemptAudioChunk, RecognitionAttemptSession,
-    RecognitionDriver, RecognitionDriverInput, RecognitionDriverIo, RecognitionModule,
-};
-use crate::reconnect::{ReconnectDecision, ReconnectSupervisor, reconnect_jitter_percent};
-use crate::segmenter::{SegmenterUpdate, SpeechSegmenter};
 use secrecy::SecretString;
 use std::time::{Duration, Instant};
 
@@ -295,5 +300,5 @@ fn combine_work_and_stop(work: AppResult<()>, stop: AppResult<()>) -> AppResult<
 }
 
 #[cfg(test)]
-#[path = "openai_active_recognition_tests.rs"]
+#[path = "openai_tests.rs"]
 mod tests;

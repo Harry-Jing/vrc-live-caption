@@ -16,20 +16,12 @@ mod error;
 mod events;
 mod host_resolver;
 mod live_chatbox_publisher;
-mod openai_active_recognition;
-mod openai_realtime;
-mod openai_realtime_transport;
 mod osc;
 mod recognition;
-mod recognition_audio;
-#[cfg(test)]
-mod recognition_fakes;
-mod reconnect;
 mod runtime;
 mod runtime_control;
 mod runtime_generation;
 mod secrets;
-mod segmenter;
 mod state;
 
 use tauri::Manager;

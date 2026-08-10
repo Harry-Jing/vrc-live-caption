@@ -1,8 +1,8 @@
+use super::super::realtime::{OpenAiRealtimeSession, OpenAiRealtimeSessionContext};
+use super::super::{OpenAiRecognitionAttemptFactory, OpenAiRecognitionDriver};
 use super::*;
 use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppResult, ProviderFailureClass, RetryDisposition};
-use crate::openai_active_recognition::{OpenAiRecognitionAttemptFactory, OpenAiRecognitionDriver};
-use crate::openai_realtime::{OpenAiRealtimeSession, OpenAiRealtimeSessionContext};
 use crate::recognition::{
     OwnedRecognitionAudioFrame, RecognitionAttemptSession, RecognitionGenerationScope,
     RecognitionModule, RecognitionSignal,

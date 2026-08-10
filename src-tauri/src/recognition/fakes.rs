@@ -123,5 +123,5 @@ fn revision_for_index(index: usize) -> u64 {
 }
 
 #[cfg(test)]
-#[path = "recognition_fakes_tests.rs"]
+#[path = "fakes_tests.rs"]
 mod tests;

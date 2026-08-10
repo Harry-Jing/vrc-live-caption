@@ -4,6 +4,10 @@
 //! consumes normalized signals. Concrete drivers own speech boundaries,
 //! attempts, transport or worker I/O, reconnect, and hard-stop cleanup.
 
+#[cfg(test)]
+mod fakes;
+mod openai;
+
 use crate::caption_session::{CaptionSnapshotV1, CaptionState};
 use crate::error::{AppError, AppResult};
 use std::collections::VecDeque;
@@ -12,6 +16,10 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+#[cfg(test)]
+pub(crate) use fakes::{ScriptedRecognitionAdapter, ScriptedRecognitionContext, ScriptedText};
+pub(crate) use openai::openai_recognition_module;
 
 const RECOGNITION_SIGNAL_QUEUE_CAPACITY: usize = 128;
 const RECOGNITION_SIGNAL_CONTROL_RESERVE: usize = 8;
@@ -828,5 +836,5 @@ pub(crate) trait RecognitionAttemptSession: Send {
 }
 
 #[cfg(test)]
-#[path = "recognition_tests.rs"]
+#[path = "recognition/recognition_tests.rs"]
 mod tests;
