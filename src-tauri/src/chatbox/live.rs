@@ -17,7 +17,7 @@ use crate::caption_session::{
     CaptionLane, CaptionSessionSnapshotV1, CaptionSnapshotV1, CaptionState,
 };
 use crate::error::{AppError, AppResult};
-use crate::runtime_generation::RuntimeGeneration;
+use crate::runtime::RuntimeGeneration;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};

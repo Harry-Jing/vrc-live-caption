@@ -7,7 +7,7 @@ use crate::caption_session::{
     CaptionState,
 };
 use crate::error::AppError;
-use crate::runtime_generation::RuntimeGeneration;
+use crate::runtime::RuntimeGeneration;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
