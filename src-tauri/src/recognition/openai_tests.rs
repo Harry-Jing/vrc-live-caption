@@ -1,9 +1,10 @@
+use super::attempt::{RecognitionAttemptAudioChunk, RecognitionAttemptSession};
 use super::realtime::OpenAiRealtimeSessionContext;
 use super::*;
 use crate::error::{AppError, AppResult};
 use crate::recognition::{
-    OwnedRecognitionAudioFrame, RecognitionAttemptAudioChunk, RecognitionAttemptSession,
-    RecognitionEvent, RecognitionGenerationScope, RecognitionModule, RecognitionSignal,
+    OwnedRecognitionAudioFrame, RecognitionEvent, RecognitionGenerationScope, RecognitionModule,
+    RecognitionSignal,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

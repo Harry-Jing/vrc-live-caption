@@ -1,9 +1,8 @@
+use super::super::attempt::{RecognitionAttemptAudioChunk, RecognitionAttemptSession};
 use super::*;
 use crate::caption_session::{CaptionSnapshotV1, CaptionState};
 use crate::error::{AppError, AppResult, ProviderFailureClass, RetryDisposition};
-use crate::recognition::{
-    RecognitionAttemptAudioChunk, RecognitionAttemptSession, RecognitionEndReason, RecognitionEvent,
-};
+use crate::recognition::{RecognitionEndReason, RecognitionEvent};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::io::{self, Write};

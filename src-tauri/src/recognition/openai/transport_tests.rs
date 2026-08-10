@@ -1,11 +1,11 @@
+use super::super::attempt::RecognitionAttemptSession;
 use super::super::realtime::{OpenAiRealtimeSession, OpenAiRealtimeSessionContext};
 use super::super::{OpenAiRecognitionAttemptFactory, OpenAiRecognitionDriver};
 use super::*;
 use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppResult, ProviderFailureClass, RetryDisposition};
 use crate::recognition::{
-    OwnedRecognitionAudioFrame, RecognitionAttemptSession, RecognitionGenerationScope,
-    RecognitionModule, RecognitionSignal,
+    OwnedRecognitionAudioFrame, RecognitionGenerationScope, RecognitionModule, RecognitionSignal,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;

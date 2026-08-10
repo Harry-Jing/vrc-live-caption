@@ -3,19 +3,21 @@
 //! This Module owns application speech boundaries, connection attempts, and
 //! reconnect policy behind the provider-neutral active Recognition Interface.
 
+mod attempt;
 mod audio;
 mod realtime;
 mod reconnect;
 mod segmenter;
 mod transport;
 
+use self::attempt::{RecognitionAttemptAudioChunk, RecognitionAttemptSession};
 use self::realtime::{OpenAiRealtimeSession, OpenAiRealtimeSessionContext};
 use self::reconnect::{ReconnectDecision, ReconnectSupervisor, reconnect_jitter_percent};
 use self::segmenter::{SegmenterUpdate, SpeechSegmenter};
 use self::transport::{OpenAiWebSocketTransport, connect_openai_realtime_session};
 use super::{
-    OwnedRecognitionAudioFrame, RecognitionAttemptAudioChunk, RecognitionAttemptSession,
-    RecognitionDriver, RecognitionDriverInput, RecognitionDriverIo, RecognitionModule,
+    OwnedRecognitionAudioFrame, RecognitionDriver, RecognitionDriverInput, RecognitionDriverIo,
+    RecognitionModule,
 };
 use crate::audio_level::SPEECH_RMS_THRESHOLD;
 use crate::config::OpenAiTranscriptionModel;
@@ -77,7 +79,7 @@ impl OpenAiRecognitionAttemptFactory for OpenAiRecognitionAttempts {
     }
 }
 
-pub(crate) trait OpenAiRecognitionAttemptFactory: Send + 'static {
+trait OpenAiRecognitionAttemptFactory: Send + 'static {
     type Session: RecognitionAttemptSession;
 
     fn connect(
@@ -87,12 +89,12 @@ pub(crate) trait OpenAiRecognitionAttemptFactory: Send + 'static {
     ) -> AppResult<Self::Session>;
 }
 
-pub(crate) struct OpenAiRecognitionDriver<F> {
+struct OpenAiRecognitionDriver<F> {
     attempts: F,
 }
 
 impl<F> OpenAiRecognitionDriver<F> {
-    pub(crate) fn new(attempts: F) -> Self {
+    fn new(attempts: F) -> Self {
         Self { attempts }
     }
 }

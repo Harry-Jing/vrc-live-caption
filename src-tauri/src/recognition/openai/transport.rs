@@ -4,6 +4,7 @@
 //! contains the replaceable network dependency, system-proxy tunnel, and
 //! API-key handshake. Tests never contact an external network.
 
+use super::attempt::RecognitionAttemptSession;
 use super::realtime::{
     OpenAiRealtimeSession, OpenAiRealtimeSessionContext, ProviderError, RealtimeTransport,
     openai_provider_failure,
@@ -11,7 +12,6 @@ use super::realtime::{
 use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppError, AppResult, ProviderFailureClass};
 use crate::host_resolver::HostResolver;
-use crate::recognition::RecognitionAttemptSession;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use std::io::{self, ErrorKind};
