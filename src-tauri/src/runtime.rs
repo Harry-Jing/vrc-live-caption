@@ -34,8 +34,6 @@ use supervisor::run_runtime_thread;
 use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::CaptionSessionStore;
 use crate::chatbox::{ChatboxPacer, PublisherCloseReason, RuntimeChatboxPublisher};
-#[cfg(test)]
-use crate::chatbox::{completed_publisher_diagnostic, live_publisher_diagnostic};
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::events::{

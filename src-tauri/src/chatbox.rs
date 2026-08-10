@@ -26,10 +26,6 @@ pub(crate) use transport::{ChatboxSendReceipt, ChatboxTransport};
 use crate::caption_session::CaptionSessionSnapshotV1;
 use crate::error::AppResult;
 use crate::runtime::ChatboxPublisherBoundary;
-#[cfg(test)]
-pub(crate) use completed::PublisherDiagnostic;
-#[cfg(test)]
-pub(crate) use live::LivePublisherDiagnostic;
 
 #[derive(Clone)]
 pub(crate) enum RuntimeChatboxPublisher {

@@ -193,3 +193,7 @@ pub(crate) fn live_publisher_diagnostic(diagnostic: LivePublisherDiagnostic) -> 
         ),
     }
 }
+
+#[cfg(test)]
+#[path = "diagnostics_tests.rs"]
+mod tests;
