@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import captionSessionFixture from "../../contracts/caption-session-snapshot-v1.json?raw";
+import captionSessionFixture from "../../../contracts/caption-session-snapshot-v1.json?raw";
 import {
   CaptionContractError,
   decodeCaptionSessionSnapshotV1,

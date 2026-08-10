@@ -6,7 +6,7 @@ import {
   type CaptionSessionSnapshotV1,
   type CaptionSnapshotV1,
   type CaptionState,
-} from "./types";
+} from "../types";
 
 export class CaptionContractError extends Error {
   constructor(path: string, expectation: string) {

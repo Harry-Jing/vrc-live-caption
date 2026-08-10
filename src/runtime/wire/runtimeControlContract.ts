@@ -44,7 +44,7 @@ import {
   type RuntimeStatus,
   type RuntimeStatusEvent,
   type SttProvider,
-} from "./types";
+} from "../types";
 
 export class RuntimeControlContractError extends Error {
   constructor(path: string, expectation: string) {

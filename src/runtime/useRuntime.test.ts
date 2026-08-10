@@ -7,8 +7,8 @@ import type {
   RuntimeControlListener,
   RuntimeEventListener,
 } from "./backend";
-import { decodeCaptionSessionSnapshotV1 } from "./captionSessionContract";
-import { decodeRuntimeControlSnapshotV3 } from "./runtimeControlContract";
+import { decodeCaptionSessionSnapshotV1 } from "./wire/captionSessionContract";
+import { decodeRuntimeControlSnapshotV3 } from "./wire/runtimeControlContract";
 import type { CaptionSessionSnapshotV1, RuntimeControlSnapshot } from "./types";
 import { useRuntime } from "./useRuntime";
 

@@ -8,7 +8,7 @@ import {
   type DiagnosticSeverity,
   type RuntimeStatus,
   type RuntimeStatusEvent,
-} from "./types";
+} from "../types";
 
 export class RuntimeEventContractError extends Error {
   constructor(path: string, expectation: string) {

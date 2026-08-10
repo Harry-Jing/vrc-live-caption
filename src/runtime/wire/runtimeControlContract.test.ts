@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import runtimeControlFixture from "../../contracts/runtime-control-snapshot-v3.json?raw";
+import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v3.json?raw";
 import {
   RuntimeControlContractError,
   decodeRuntimeControlSnapshotV3,

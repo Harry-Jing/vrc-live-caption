@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import wireVocabularyFixture from "../../contracts/wire-vocabulary-v1.json?raw";
+import wireVocabularyFixture from "../../../contracts/wire-vocabulary-v1.json?raw";
 import {
   BOUNDARY_OWNERS,
   CAPTION_LANES,
@@ -22,7 +22,7 @@ import {
   RUNTIME_SESSION_PHASES,
   RUNTIME_STATUSES,
   STT_PROVIDERS,
-} from "./types";
+} from "../types";
 
 test("closed frontend wire values match the shared vocabulary", () => {
   expect(JSON.parse(wireVocabularyFixture) as unknown).toEqual({

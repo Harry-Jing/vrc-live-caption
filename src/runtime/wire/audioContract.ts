@@ -1,5 +1,5 @@
 import { createDecoders } from "./contractDecoding";
-import type { AudioLevelEvent, AudioProbeResult } from "./types";
+import type { AudioLevelEvent, AudioProbeResult } from "../types";
 
 export class AudioContractError extends Error {
   constructor(path: string, expectation: string) {

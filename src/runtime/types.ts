@@ -148,15 +148,6 @@ export type RuntimeLifecycleCommand = Extract<
   "start_runtime" | "stop_runtime"
 >;
 
-export const RUNTIME_EVENTS = {
-  status: "runtime-status",
-  audioLevel: "audio-level",
-  captionSessionChanged: "caption-session-changed",
-  diagnostic: "diagnostic-event",
-} as const;
-
-export const RUNTIME_CONTROL_EVENT = "runtime-control-changed" as const;
-
 export const APP_CONFIG_SCHEMA_VERSION = 3 as const;
 
 export type AppConfig = {

@@ -110,6 +110,11 @@ export default defineConfigWithVueTs(
               message:
                 "Backend implementations are internal to src/runtime/. Use useRuntime or the runtime context instead.",
             },
+            {
+              regex: "(^|/)runtime/wire(?:/|$)",
+              message:
+                "Wire contracts are internal to runtime adapters. Use typed runtime modules or the runtime context instead.",
+            },
           ],
         },
       ],
@@ -137,6 +142,18 @@ export default defineConfigWithVueTs(
             "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)runtime\\/(?:backend|tauriBackend|previewBackend)(?:\\.[cm]?[jt]sx?)?$/]",
           message:
             "Backend implementations are internal to src/runtime/. Use useRuntime or the runtime context instead.",
+        },
+        {
+          selector:
+            "ImportExpression[source.value=/(?:^|\\/)runtime\\/wire(?:\\/|$)/]",
+          message:
+            "Wire contracts are internal to runtime adapters. Use typed runtime modules or the runtime context instead.",
+        },
+        {
+          selector:
+            "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)runtime\\/wire(?:\\/|$)/]",
+          message:
+            "Wire contracts are internal to runtime adapters. Use typed runtime modules or the runtime context instead.",
         },
         {
           selector:

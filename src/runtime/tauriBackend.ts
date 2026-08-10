@@ -1,24 +1,30 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { decodeAudioLevelEvent, decodeAudioProbeResult } from "./audioContract";
-import { decodeCaptionSessionSnapshotV1 } from "./captionSessionContract";
-import { decodeRuntimeControlSnapshotV3 } from "./runtimeControlContract";
+import {
+  decodeAudioLevelEvent,
+  decodeAudioProbeResult,
+} from "./wire/audioContract";
+import { decodeCaptionSessionSnapshotV1 } from "./wire/captionSessionContract";
+import { decodeRuntimeControlSnapshotV3 } from "./wire/runtimeControlContract";
 import {
   decodeDiagnosticEvent,
   decodeRuntimeStatusEvent,
-} from "./runtimeEventContract";
+} from "./wire/runtimeEventContract";
+import {
+  RUNTIME_CONTROL_EVENT,
+  RUNTIME_EVENTS,
+  TAURI_COMMANDS,
+} from "./wire/tauriIpc";
 import type {
   RuntimeBackend,
   RuntimeEventListener,
   Unsubscribe,
 } from "./backend";
-import {
-  RUNTIME_EVENTS,
-  RUNTIME_CONTROL_EVENT,
-  type AppConfig,
-  type AudioInputDevice,
-  type AudioProbeRequest,
-  type SttProvider,
+import type {
+  AppConfig,
+  AudioInputDevice,
+  AudioProbeRequest,
+  SttProvider,
 } from "./types";
 
 export type TauriBackendBridge = Readonly<{
@@ -38,19 +44,6 @@ const defaultBridge: TauriBackendBridge = {
   },
   invoke,
 };
-
-export const TAURI_COMMANDS = {
-  saveAppConfig: "save_app_config",
-  listAudioInputDevices: "list_audio_input_devices",
-  probeAudioInput: "probe_audio_input",
-  startRuntime: "start_runtime",
-  stopRuntime: "stop_runtime",
-  getRuntimeControlSnapshot: "get_runtime_control_snapshot",
-  getCaptionSessionSnapshot: "get_caption_session_snapshot",
-  sendOscTestMessage: "send_osc_test_message",
-  saveProviderSecret: "save_provider_secret",
-  deleteProviderSecret: "delete_provider_secret",
-} as const;
 
 export function createTauriBackend(
   bridge: TauriBackendBridge = defaultBridge,

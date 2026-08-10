@@ -5,7 +5,7 @@ import {
   reduceCaptionSessionState,
   selectCaptionSessionView,
 } from "./captionSession";
-import { decodeCaptionSessionSnapshotV1 } from "./captionSessionContract";
+import { decodeCaptionSessionSnapshotV1 } from "./wire/captionSessionContract";
 
 describe("caption session state", () => {
   test("keeps a newer pushed aggregate when an older reload pull arrives", () => {

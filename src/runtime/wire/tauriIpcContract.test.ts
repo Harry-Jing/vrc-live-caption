@@ -1,7 +1,10 @@
 import { expect, test } from "vitest";
-import tauriIpcFixture from "../../contracts/tauri-ipc-v1.json?raw";
-import { TAURI_COMMANDS } from "./tauriBackend";
-import { RUNTIME_CONTROL_EVENT, RUNTIME_EVENTS } from "./types";
+import tauriIpcFixture from "../../../contracts/tauri-ipc-v1.json?raw";
+import {
+  RUNTIME_CONTROL_EVENT,
+  RUNTIME_EVENTS,
+  TAURI_COMMANDS,
+} from "./tauriIpc";
 
 test("Tauri event and command names match the shared IPC manifest", () => {
   const manifest = JSON.parse(tauriIpcFixture) as {
