@@ -63,8 +63,7 @@ test-only rather than a product provider.
 
 ## Phase 4: OpenAI Realtime recognition cutover
 
-Status: implementation and authenticated adapter smoke complete; Windows/VRChat
-validation pending.
+Status: complete.
 
 Goal: replace the bounded OpenAI implementation with the complete release
 recognition surface: `gpt-transcribe` for Completed, and
@@ -122,18 +121,15 @@ Implemented:
   and otherwise-unused direct HTTP/WAV dependencies are removed with no
   fallback branch.
 
-Remaining before exit:
+Validation record (2026-08-10): the maintainer completed the Phase 4 native
+Windows/VRChat exit matrix with a real microphone. Representative successful
+scenarios included long uninterrupted speech and mixed English/Chinese speech;
+no release-blocking issue was observed.
 
-- validate the native system-proxy route and cancellation/Stop behavior on the
-  Windows Tier 1 path; and
-- run short, long uninterrupted, English, Chinese, mixed-language, network
-  interruption, and Stop scenarios with VRChat active; record latency,
-  revision/correction, and resource measurements.
-
-Exit: only the two catalog paths can start an OpenAI recognition session; the
-capability matrix is enforced; no REST/WAV, legacy-model, production-Mock, or
-silent fallback path remains; both models pass contract tests and recorded
-Windows/VRChat protocol validation.
+Exit met: only the two catalog paths can start an OpenAI recognition session;
+the capability matrix is enforced; no REST/WAV, legacy-model, production-Mock,
+or silent fallback path remains; both models pass contract tests and native
+Windows/VRChat validation.
 
 ## Phase 5: Completed translation
 

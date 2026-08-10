@@ -29,10 +29,11 @@ microphone
 ```
 
 This implementation has deterministic protocol and runtime coverage, and both
-OpenAI models have passed an authenticated production-adapter smoke. It is not
-yet a completed Phase 4 product path: the Windows/VRChat and real-microphone
-paths still need validation. Implementation status and what comes next live in
-[roadmap.md](./roadmap.md).
+OpenAI models have passed an authenticated production-adapter smoke. The
+maintainer has also completed native Windows/VRChat and real-microphone
+validation, including long uninterrupted speech and mixed English/Chinese
+speech, with no release-blocking issue observed. Phase 4 is complete;
+implementation status and what comes next live in [roadmap.md](./roadmap.md).
 
 ## User choices
 
