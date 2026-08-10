@@ -10,6 +10,7 @@ mod host_resolver;
 mod recognition;
 mod runtime;
 mod runtime_control;
+mod saved_settings;
 mod secrets;
 mod state;
 

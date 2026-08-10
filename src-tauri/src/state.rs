@@ -1,10 +1,10 @@
 //! Tauri-managed application state.
 //!
 //! Holds the in-memory copy of the non-secret app config plus the runtime
-//! manager. Config reads and writes go through this module so the persisted
-//! `config.json` and the in-memory copy cannot drift apart. Plaintext secrets
-//! may be resolved transiently for Start, but are never stored in state or in
-//! a frontend-facing snapshot.
+//! manager. Saved-setting and credential operations are serialized with Start
+//! here so their persisted and in-memory views cannot drift apart. Plaintext
+//! secrets may be resolved transiently for Start, but are never stored in state
+//! or in a frontend-facing snapshot.
 
 use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
@@ -21,17 +21,13 @@ use crate::runtime_control::{
     RUNTIME_CONTROL_CONTRACT_VERSION, RuntimeControlSnapshot, RuntimeDesiredSnapshot,
     RuntimeSessionPhase, RuntimeSessionSnapshot, pending_session_changes,
 };
+use crate::saved_settings::{self, SavedSettingsLoad};
 use crate::secrets::{
     ProviderSecretStatus, delete_provider_secret, provider_secret_statuses, resolve_openai_api_key,
     save_provider_secret,
 };
-use std::fs;
-use std::io::ErrorKind;
-use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, Runtime};
-
-const CONFIG_FILE_NAME: &str = "config.json";
+use tauri::{AppHandle, Runtime};
 
 pub(crate) struct AppState {
     // The only authority for every frontend-visible control field. A snapshot
@@ -387,44 +383,38 @@ impl AppState {
             .desired_state_gate
             .lock()
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
-        let path = config_path(app)?;
-        let (config, config_requires_review) = match fs::read_to_string(&path) {
+        let (config, config_requires_review) = match saved_settings::load(app)? {
             // A corrupt or invalid config file must not lock the user out of
             // the Settings page (the form only renders with a loaded config),
             // so fall back to defaults and report it; the next save replaces
             // the broken file.
-            Ok(contents) => match parse_valid_config(&contents) {
-                Ok(config) => (config, false),
-                Err(error) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error_message = %error,
-                        "config file is unusable; defaults loaded"
-                    );
+            SavedSettingsLoad::Ready(config) => (config, false),
+            SavedSettingsLoad::DefaultsRequireReview {
+                config,
+                path,
+                error,
+            } => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error_message = %error,
+                    "config file is unusable; defaults loaded"
+                );
 
-                    emit_diagnostic(
-                        app,
-                        DiagnosticUpdate::error(
-                            DiagnosticCategory::Config,
-                            "config.defaults_loaded",
-                            "Saved settings could not be loaded",
-                            format!(
-                                "The settings file at {} is unusable: {error} Default settings \
-                                 are in use; saving settings replaces the file.",
-                                path.display()
-                            ),
+                emit_diagnostic(
+                    app,
+                    DiagnosticUpdate::error(
+                        DiagnosticCategory::Config,
+                        "config.defaults_loaded",
+                        "Saved settings could not be loaded",
+                        format!(
+                            "The settings file at {} is unusable: {error} Default settings are in \
+                             use; saving settings replaces the file.",
+                            path.display()
                         ),
-                    );
+                    ),
+                );
 
-                    (AppConfig::default(), true)
-                }
-            },
-            Err(error) if error.kind() == ErrorKind::NotFound => (AppConfig::default(), false),
-            Err(error) => {
-                return Err(AppError::config_io(format!(
-                    "Failed to read app config at {}: {error}",
-                    path.display()
-                )));
+                (config, true)
             }
         };
 
@@ -448,39 +438,7 @@ impl AppState {
             .desired_state_gate
             .lock()
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
-        config.validate()?;
-        let path = config_path(app)?;
-        let parent = path
-            .parent()
-            .ok_or_else(|| AppError::config_io("App config path has no parent directory."))?;
-
-        fs::create_dir_all(parent).map_err(|error| {
-            AppError::config_io(format!(
-                "Failed to create app config directory at {}: {error}",
-                parent.display()
-            ))
-        })?;
-
-        let contents = serde_json::to_string_pretty(&config)
-            .map_err(|error| AppError::config_io(format!("Failed to serialize config: {error}")))?;
-
-        // Write-then-rename keeps the existing config intact if the app dies
-        // mid-write; a torn config.json would otherwise hit load_config's
-        // defaults fallback and silently shelve the user's settings.
-        let temp_path = path.with_extension("json.tmp");
-
-        fs::write(&temp_path, contents).map_err(|error| {
-            AppError::config_io(format!(
-                "Failed to write app config at {}: {error}",
-                temp_path.display()
-            ))
-        })?;
-        fs::rename(&temp_path, &path).map_err(|error| {
-            AppError::config_io(format!(
-                "Failed to replace app config at {}: {error}",
-                path.display()
-            ))
-        })?;
+        saved_settings::save(app, &config)?;
 
         let mut control = self.lock_control()?;
         control.config = config;
@@ -548,35 +506,6 @@ fn ensure_config_was_reviewed(config_requires_review: bool) -> AppResult<()> {
     } else {
         Ok(())
     }
-}
-
-fn config_path<R: Runtime>(app: &AppHandle<R>) -> AppResult<PathBuf> {
-    app.path()
-        .app_config_dir()
-        .map(|directory| directory.join(CONFIG_FILE_NAME))
-        .map_err(|error| {
-            AppError::config_io(format!("Failed to resolve app config directory: {error}"))
-        })
-}
-
-fn parse_valid_config(contents: &str) -> AppResult<AppConfig> {
-    let mut value = serde_json::from_str::<serde_json::Value>(contents)
-        .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?;
-    if let Some(osc) = value
-        .get_mut("osc")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        // This pacing knob was removed by ADR 0015. Ignoring only this known
-        // field preserves unrelated settings without restoring a configurable
-        // rate or weakening strict model/config decoding.
-        osc.remove("minIntervalMs");
-    }
-    let config = serde_json::from_value::<AppConfig>(value)
-        .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?;
-
-    config.validate()?;
-
-    Ok(config)
 }
 
 #[cfg(test)]
