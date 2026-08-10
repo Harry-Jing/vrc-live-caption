@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
-import type { RuntimeBackend } from "./backend";
-import type { AudioLevelEvent } from "./types";
-import { useAudioInput } from "./useAudioInput";
+import type { RuntimeBackend } from "../backend";
+import type { AudioLevelEvent } from "../types";
+import { createAudioInputState } from "./audioInput";
 
 function level(
   generation: number,
@@ -23,7 +23,7 @@ test("keeps the newest realtime audio level by generation and revision", () => {
   const backend: Pick<RuntimeBackend, "probeAudioInput"> = {
     probeAudioInput: vi.fn(),
   };
-  const audio = useAudioInput(backend);
+  const audio = createAudioInputState(backend);
 
   audio.acceptAudioLevel(level(3, 2, -24));
   audio.acceptAudioLevel(level(3, 1, -40));
@@ -47,7 +47,7 @@ test("tracks an offline microphone probe from pending to result", async () => {
   const backend: Pick<RuntimeBackend, "probeAudioInput"> = {
     probeAudioInput: vi.fn(() => pendingProbe),
   };
-  const audio = useAudioInput(backend);
+  const audio = createAudioInputState(backend);
   const request = { inputDeviceId: "usb-headset", durationMs: 3_000 };
   const expected = {
     sampleRate: 48_000,
@@ -73,7 +73,7 @@ test("keeps an offline microphone probe failure in its own action state", async 
   const backend: Pick<RuntimeBackend, "probeAudioInput"> = {
     probeAudioInput: vi.fn(() => Promise.reject(new Error("Microphone busy"))),
   };
-  const audio = useAudioInput(backend);
+  const audio = createAudioInputState(backend);
 
   await expect(
     audio.probeAudioInput({ inputDeviceId: null, durationMs: 2_000 }),
@@ -92,7 +92,7 @@ test("uses localized fallback copy for a non-error probe rejection", async () =>
       return Promise.reject();
     }),
   };
-  const audio = useAudioInput(backend);
+  const audio = createAudioInputState(backend);
 
   await expect(
     audio.probeAudioInput({ inputDeviceId: null, durationMs: 2_000 }),

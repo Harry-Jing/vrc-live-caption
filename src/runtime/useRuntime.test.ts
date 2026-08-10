@@ -152,15 +152,17 @@ function mountRuntimeHarness() {
   };
   let currentControl = initialControl;
   let currentCaption: CaptionSessionSnapshotV1 = initialCaption;
+  const unsubscribeEvents = vi.fn();
+  const unsubscribeControl = vi.fn();
   const startRuntime = vi.fn(() => pendingStart.promise);
   const backend: RuntimeBackend = {
     listen(listener) {
       eventListener = listener;
-      return Promise.resolve(() => undefined);
+      return Promise.resolve(unsubscribeEvents);
     },
     listenControl(listener) {
       controlListener = listener;
-      return Promise.resolve(() => undefined);
+      return Promise.resolve(unsubscribeControl);
     },
     sendOscTestMessage: () => Promise.resolve(),
     startRuntime,
@@ -205,6 +207,8 @@ function mountRuntimeHarness() {
     restartedControl,
     runtime,
     startRuntime,
+    unsubscribeControl,
+    unsubscribeEvents,
     emitControlSnapshot(snapshot: RuntimeControlSnapshot) {
       currentControl = snapshot;
       controlListener(snapshot);
@@ -217,6 +221,65 @@ function mountRuntimeHarness() {
     },
   };
 }
+
+test("keeps the public runtime composable surface stable", async () => {
+  const harness = mountRuntimeHarness();
+
+  try {
+    await vi.waitFor(() => {
+      expect(harness.runtime.runtimeStatus.value.status).toBe("running");
+    });
+
+    expect(Object.keys(harness.runtime).sort()).toEqual([
+      "audioInputDevices",
+      "audioProbeError",
+      "audioProbeResult",
+      "captionPreviewStatus",
+      "completedCaptions",
+      "config",
+      "currentSession",
+      "currentSetupConfig",
+      "deleteProviderSecret",
+      "desiredRuntimePlan",
+      "diagnostics",
+      "inFlightRuntimeCommand",
+      "isAudioProbeRunning",
+      "isRuntimeBusy",
+      "isSecretsBusy",
+      "isSettingsBusy",
+      "latestAudioLevel",
+      "loadAudioInputDevices",
+      "pendingSessionChanges",
+      "probeAudioInput",
+      "runCommand",
+      "runtimeError",
+      "runtimeStatus",
+      "saveConfig",
+      "saveProviderSecret",
+      "secretStatuses",
+      "secretsError",
+      "sessionRuntimePlan",
+      "sessionUploadsMicrophoneAudio",
+      "settingsError",
+      "visibleCaptionText",
+    ]);
+  } finally {
+    harness.app.unmount();
+  }
+});
+
+test("connects on mount and disposes subscriptions on unmount", async () => {
+  const harness = mountRuntimeHarness();
+
+  await vi.waitFor(() => {
+    expect(harness.runtime.runtimeStatus.value.status).toBe("running");
+  });
+
+  harness.app.unmount();
+
+  expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
+  expect(harness.unsubscribeControl).toHaveBeenCalledOnce();
+});
 
 test("routes realtime audio levels outside the lifecycle reducer", async () => {
   const harness = mountRuntimeHarness();

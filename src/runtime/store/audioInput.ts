@@ -1,11 +1,11 @@
 import { ref, shallowRef } from "vue";
-import { uiText } from "../i18n/uiText";
-import type { RuntimeBackend } from "./backend";
+import { uiText } from "../../i18n/uiText";
+import type { RuntimeBackend } from "../backend";
 import type {
   AudioLevelEvent,
   AudioProbeRequest,
   AudioProbeResult,
-} from "./types";
+} from "../types";
 
 type AudioInputBackend = Pick<RuntimeBackend, "probeAudioInput">;
 
@@ -19,7 +19,7 @@ function probeErrorMessage(cause: unknown) {
   return uiText("settings.microphoneTest.unknownError");
 }
 
-export function useAudioInput(backend: AudioInputBackend) {
+export function createAudioInputState(backend: AudioInputBackend) {
   const latestAudioLevel = shallowRef<AudioLevelEvent | null>(null);
   const audioProbeResult = shallowRef<AudioProbeResult | null>(null);
   const audioProbeError = ref("");
