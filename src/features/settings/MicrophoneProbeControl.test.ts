@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { renderComponent } from "../test/componentHarness";
+import { renderComponent } from "../../test/componentHarness";
 import MicrophoneProbeControl from "./MicrophoneProbeControl.vue";
 
 const baseProps = {

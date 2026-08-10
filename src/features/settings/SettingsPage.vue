@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { useToast } from "@nuxt/ui/composables";
 import { computed } from "vue";
-import SettingsForm from "../components/SettingsForm.vue";
-import { uiText } from "../i18n/uiText";
-import { useRuntimeContext } from "../runtime/context";
-import type { AppConfig } from "../runtime/types";
+import SettingsForm from "./SettingsForm.vue";
+import { uiText } from "../../i18n/uiText";
+import { useRuntimeContext } from "../../runtime/context";
+import type { AppConfig } from "../../runtime/types";
 
 const {
   audioInputDevices,

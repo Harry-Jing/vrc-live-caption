@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { uiText } from "../i18n/uiText";
-import type { AudioProbeResult } from "../runtime/types";
+import { uiText } from "../../i18n/uiText";
+import type { AudioProbeResult } from "../../runtime/types";
 
 const props = defineProps<{
   disabled: boolean;

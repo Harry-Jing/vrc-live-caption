@@ -1,18 +1,10 @@
 <script setup lang="ts">
-import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  ref,
-  toRaw,
-  watch,
-} from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { onBeforeRouteLeave } from "vue-router";
 import MicrophoneProbeControl from "./MicrophoneProbeControl.vue";
-import { uiText } from "../i18n/uiText";
-import { requestConfirmation } from "../platform/confirmation";
-import { isActiveRuntimeSessionPhase } from "../runtime/lifecycle";
+import { uiText } from "../../i18n/uiText";
+import { requestConfirmation } from "../../platform/confirmation";
+import { isActiveRuntimeSessionPhase } from "../../runtime/lifecycle";
 import {
   publicationModeDescriptionMessageKey,
   publicationModeMessageKey,
@@ -20,7 +12,7 @@ import {
   publicationSettingsView,
   openAiTranscriptionModelDescriptionMessageKey,
   openAiTranscriptionModelMessageKey,
-} from "../runtime/presentation";
+} from "../../runtime/presentation";
 import {
   OPENAI_TRANSCRIPTION_MODELS,
   PUBLICATION_MODES,
@@ -33,7 +25,8 @@ import {
   type RuntimePlan,
   type RuntimeSessionPhase,
   type SttProvider,
-} from "../runtime/types";
+} from "../../runtime/types";
+import { useSettingsDraft } from "./settingsDraft";
 
 const props = defineProps<{
   audioInputDevices: AudioInputDevice[];
@@ -60,33 +53,17 @@ const emit = defineEmits<{
   testMicrophone: [inputDeviceId: string | null];
 }>();
 
-// The form is a deep clone of the saved config: fields stay editable without
-// mutating shared state, and a save round-trip re-syncs it wholesale.
-const form = ref<AppConfig | null>(null);
+const {
+  createSaveConfig,
+  draft: form,
+  hasValidLanguageHints,
+  isDirty: isFormDirty,
+} = useSettingsDraft(() => props.config);
 const apiKeyInput = ref("");
 const isConfigSaveSubmitting = ref(false);
 const isRemoveKeyModalOpen = ref(false);
 const recognitionFields = ref<HTMLElement | null>(null);
 const lastTestedInputDeviceId = ref<string | null | undefined>(undefined);
-let lastSyncedConfigJson: string | null = null;
-
-watch(
-  () => props.config,
-  (config) => {
-    const configJson = config ? JSON.stringify(config) : null;
-
-    // Full control snapshots may replace the desired config object when only
-    // lifecycle state changed. Do not erase an in-progress form draft unless
-    // the saved config contents actually changed.
-    if (configJson === lastSyncedConfigJson) {
-      return;
-    }
-
-    lastSyncedConfigJson = configJson;
-    form.value = config ? structuredClone(toRaw(config)) : null;
-  },
-  { immediate: true },
-);
 
 const openAiSecretStatus = computed(() => props.secretStatuses.openai ?? null);
 const areConfigControlsDisabled = computed(
@@ -225,37 +202,11 @@ const selectedModelDescription = computed(() => {
     : "";
 });
 
-const normalizedLanguageHints = computed(() =>
-  (form.value?.stt.languages ?? []).map((language) => language.trim()),
-);
-
-const hasValidLanguageHints = computed(() => {
-  const languages = normalizedLanguageHints.value;
-  const normalized = languages.map((language) =>
-    language.toLocaleLowerCase("en"),
-  );
-
-  return (
-    languages.length > 0 &&
-    languages.every((language) => language.length > 0) &&
-    new Set(normalized).size === languages.length
-  );
-});
-
 const publicationModeItems = PUBLICATION_MODES.map((value) => ({
   label: uiText(publicationModeMessageKey[value]),
   description: uiText(publicationModeDescriptionMessageKey[value]),
   value,
 }));
-
-const isFormDirty = computed(() => {
-  if (!form.value || lastSyncedConfigJson === null) {
-    return false;
-  }
-
-  // Serialize through the reactive proxy so Vue tracks nested field edits.
-  return JSON.stringify(form.value) !== lastSyncedConfigJson;
-});
 
 const publicationView = computed(() =>
   publicationSettingsView(props.desiredRuntimePlan, isFormDirty.value),
@@ -301,27 +252,15 @@ const selectedInputDevice = computed({
   },
 });
 
-// UInputNumber yields undefined when cleared; keep the last saved value
-// instead of letting backend serde defaults silently replace it.
-function finiteOr(value: number, fallback: number) {
-  return Number.isFinite(value) ? value : fallback;
-}
-
 function save() {
-  const saved = props.config;
-
-  if (!form.value || !saved || areConfigControlsDisabled.value) {
+  if (areConfigControlsDisabled.value) {
     return;
   }
 
-  const next = structuredClone(toRaw(form.value));
-  if (!hasValidLanguageHints.value) {
+  const next = createSaveConfig();
+  if (next === null) {
     return;
   }
-
-  next.stt.languages = normalizedLanguageHints.value;
-  next.osc.host = next.osc.host.trim();
-  next.osc.port = finiteOr(next.osc.port, saved.osc.port);
 
   isConfigSaveSubmitting.value = true;
   emit("saveConfig", next, () => {

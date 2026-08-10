@@ -11,7 +11,7 @@ export const router = createRouter({
     {
       path: "/settings",
       name: "settings",
-      component: () => import("./pages/SettingsPage.vue"),
+      component: () => import("./features/settings/SettingsPage.vue"),
     },
     {
       path: "/diagnostics",
