@@ -631,3 +631,7 @@ fn submit_completed_chatbox_candidate<R: Runtime>(
         ),
     }
 }
+
+#[cfg(test)]
+#[path = "output_tests.rs"]
+mod tests;

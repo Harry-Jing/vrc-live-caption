@@ -19,26 +19,23 @@
 
 mod coordinator;
 mod output;
+mod supervisor;
+#[cfg(test)]
+mod test_support;
 
 pub(crate) use output::{ChatboxPublisherBoundary, RuntimeGeneration};
 
-use coordinator::run_runtime;
-#[cfg(test)]
-use output::RecognitionEventSubmitOutcome;
 use output::{
-    RuntimePublisherInit, finish_runtime_output, initialize_runtime_publisher, publisher_boundary,
+    RuntimePublisherInit, initialize_runtime_publisher, publisher_boundary,
     publisher_failure_message,
 };
+use supervisor::run_runtime_thread;
 
 use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
 use crate::caption_session::CaptionSessionStore;
 use crate::chatbox::{ChatboxPacer, PublisherCloseReason, RuntimeChatboxPublisher};
 #[cfg(test)]
-use crate::chatbox::{
-    CompletedChatboxPublisher, CompletedPublisherEvent, LiveChatboxPublisher,
-    LivePublisherReporter, PublisherReporter, PublisherSubmitOutcome,
-    completed_publisher_diagnostic, live_publisher_diagnostic,
-};
+use crate::chatbox::{completed_publisher_diagnostic, live_publisher_diagnostic};
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::events::{
@@ -46,8 +43,6 @@ use crate::events::{
     record_and_emit_runtime_status,
 };
 use crate::host_resolver::HostResolver;
-#[cfg(test)]
-use crate::recognition::{RecognitionEndReason, RecognitionEvent};
 use crate::runtime_control::{
     RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
     RuntimeSessionSnapshot,
@@ -472,91 +467,6 @@ fn clear_finished_runtime<R: Runtime>(
         .join_handle
         .join()
         .map_err(|_| AppError::runtime("Runtime thread panicked after stopping."))
-}
-
-fn run_runtime_thread<R: Runtime>(
-    app: AppHandle<R>,
-    config: AppConfig,
-    openai_api_key: SecretString,
-    publisher: Option<RuntimeChatboxPublisher>,
-    generation: RuntimeGeneration,
-    host_resolver: HostResolver,
-) {
-    let error_generation = generation.clone();
-    let cleanup_publisher = publisher.clone();
-    let runtime_app = app.clone();
-
-    supervise_runtime_thread(
-        &app,
-        &error_generation,
-        cleanup_publisher.as_ref(),
-        move || {
-            run_runtime(
-                runtime_app,
-                config,
-                openai_api_key,
-                publisher,
-                generation,
-                host_resolver,
-            )
-        },
-    );
-}
-
-fn supervise_runtime_thread<R: Runtime>(
-    app: &AppHandle<R>,
-    generation: &RuntimeGeneration,
-    publisher: Option<&RuntimeChatboxPublisher>,
-    run: impl FnOnce() -> AppResult<()>,
-) {
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
-    let runtime_result = match outcome {
-        Ok(runtime_result) => runtime_result,
-        Err(panic) => {
-            finish_runtime_output(app, generation, publisher, PublisherCloseReason::Stop);
-            tracing::error!("runtime thread panicked; its generation and Publisher were stopped");
-            record_and_emit_runtime_status(
-                app,
-                RuntimeStatus::Error,
-                Some("Runtime thread panicked and was stopped".to_string()),
-            );
-            emit_diagnostic(
-                app,
-                DiagnosticUpdate::error(
-                    DiagnosticCategory::Runtime,
-                    "runtime.thread_panicked",
-                    "Runtime thread panicked",
-                    "The runtime generation was invalidated and pending Chatbox output was discarded.",
-                ),
-            );
-            std::panic::resume_unwind(panic);
-        }
-    };
-
-    let reason = if generation.is_hard_stop_requested() {
-        PublisherCloseReason::Stop
-    } else {
-        PublisherCloseReason::RuntimeError
-    };
-    finish_runtime_output(app, generation, publisher, reason);
-
-    if let Err(error) = runtime_result {
-        tracing::warn!(
-            code = error.code(),
-            error_message = %error,
-            "runtime stopped with error"
-        );
-
-        if generation.is_hard_stop_requested() {
-            return;
-        }
-
-        record_and_emit_runtime_status(app, RuntimeStatus::Error, Some(error.to_string()));
-        emit_diagnostic(
-            app,
-            DiagnosticUpdate::from_error(&error, "Runtime stopped with an error"),
-        );
-    }
 }
 
 #[cfg(test)]
