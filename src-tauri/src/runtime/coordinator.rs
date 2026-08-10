@@ -25,7 +25,7 @@ use tauri::{AppHandle, Runtime};
 
 const RECEIVE_TIMEOUT: Duration = Duration::from_millis(100);
 
-pub(super) fn run_runtime<R: Runtime>(
+pub(super) struct RuntimeExecution<R: Runtime> {
     app: AppHandle<R>,
     config: AppConfig,
     openai_api_key: SecretString,
@@ -33,76 +33,106 @@ pub(super) fn run_runtime<R: Runtime>(
     generation: RuntimeGeneration,
     host_resolver: HostResolver,
     status_recorder: RuntimeStatusRecorder,
-) -> AppResult<()> {
-    let started = generation.commit_if_active(|| {
-        record_and_emit_runtime_status(
-            &app,
-            &status_recorder,
-            RuntimeStatus::Starting,
-            Some("Starting outgoing caption runtime".to_string()),
-        );
-    })?;
-    if !started {
-        return Ok(());
-    }
-
-    run_openai_runtime(
-        app,
-        config,
-        openai_api_key,
-        publisher,
-        generation,
-        host_resolver,
-        &status_recorder,
-    )
 }
 
-fn run_openai_runtime<R: Runtime>(
-    app: AppHandle<R>,
-    config: AppConfig,
-    openai_api_key: SecretString,
-    publisher: Option<RuntimeChatboxPublisher>,
-    generation: RuntimeGeneration,
-    host_resolver: HostResolver,
-    status_recorder: &RuntimeStatusRecorder,
-) -> AppResult<()> {
-    if !generation.accepts_new_work() {
-        return Ok(());
+impl<R: Runtime> RuntimeExecution<R> {
+    pub(super) fn new(
+        app: AppHandle<R>,
+        config: AppConfig,
+        openai_api_key: SecretString,
+        publisher: Option<RuntimeChatboxPublisher>,
+        generation: RuntimeGeneration,
+        host_resolver: HostResolver,
+        status_recorder: RuntimeStatusRecorder,
+    ) -> Self {
+        Self {
+            app,
+            config,
+            openai_api_key,
+            publisher,
+            generation,
+            host_resolver,
+            status_recorder,
+        }
     }
 
-    let module = openai_recognition_module(
-        config.stt.model,
-        config.stt.languages.clone(),
-        openai_api_key,
-        host_resolver,
-    )?;
-    let mut recognition = module.start(crate::recognition::RecognitionGenerationScope {
-        generation: generation.generation_id(),
-        stream_id: generation.stream_id().to_string(),
-    })?;
-    let runtime_result = coordinate_running_recognition(
-        &app,
-        &config,
-        publisher.as_ref(),
-        &generation,
-        &mut recognition,
-        status_recorder,
-    );
-    let stop_result = recognition.stop();
+    pub(super) fn app(&self) -> &AppHandle<R> {
+        &self.app
+    }
 
-    match (runtime_result, stop_result) {
-        (Err(runtime_error), Err(stop_error)) => {
-            tracing::warn!(
-                code = stop_error.code(),
-                error_message = %stop_error,
-                "Recognition owner also failed while closing after a runtime error"
+    pub(super) fn publisher(&self) -> Option<&RuntimeChatboxPublisher> {
+        self.publisher.as_ref()
+    }
+
+    pub(super) fn generation(&self) -> &RuntimeGeneration {
+        &self.generation
+    }
+
+    pub(super) fn status_recorder(&self) -> &RuntimeStatusRecorder {
+        &self.status_recorder
+    }
+
+    pub(super) fn run(self) -> AppResult<()> {
+        let Self {
+            app,
+            config,
+            openai_api_key,
+            publisher,
+            generation,
+            host_resolver,
+            status_recorder,
+        } = self;
+
+        let started = generation.commit_if_active(|| {
+            record_and_emit_runtime_status(
+                &app,
+                &status_recorder,
+                RuntimeStatus::Starting,
+                Some("Starting outgoing caption runtime".to_string()),
             );
-            Err(runtime_error)
+        })?;
+        if !started {
+            return Ok(());
         }
-        (Err(runtime_error), Ok(())) => Err(runtime_error),
-        (Ok(()), Err(_)) if generation.is_hard_stop_requested() => Ok(()),
-        (Ok(()), Err(stop_error)) => Err(stop_error),
-        (Ok(()), Ok(())) => Ok(()),
+
+        if !generation.accepts_new_work() {
+            return Ok(());
+        }
+
+        let module = openai_recognition_module(
+            config.stt.model,
+            config.stt.languages.clone(),
+            openai_api_key,
+            host_resolver,
+        )?;
+        let mut recognition = module.start(crate::recognition::RecognitionGenerationScope {
+            generation: generation.generation_id(),
+            stream_id: generation.stream_id().to_string(),
+        })?;
+        let runtime_result = coordinate_running_recognition(
+            &app,
+            &config,
+            publisher.as_ref(),
+            &generation,
+            &mut recognition,
+            &status_recorder,
+        );
+        let stop_result = recognition.stop();
+
+        match (runtime_result, stop_result) {
+            (Err(runtime_error), Err(stop_error)) => {
+                tracing::warn!(
+                    code = stop_error.code(),
+                    error_message = %stop_error,
+                    "Recognition owner also failed while closing after a runtime error"
+                );
+                Err(runtime_error)
+            }
+            (Err(runtime_error), Ok(())) => Err(runtime_error),
+            (Ok(()), Err(_)) if generation.is_hard_stop_requested() => Ok(()),
+            (Ok(()), Err(stop_error)) => Err(stop_error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
     }
 }
 

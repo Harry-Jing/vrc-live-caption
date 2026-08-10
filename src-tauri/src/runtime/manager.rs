@@ -1,3 +1,4 @@
+use super::coordinator::RuntimeExecution;
 use super::output::{
     RuntimeGeneration, RuntimePublisherInit, initialize_runtime_publisher, publisher_boundary,
     publisher_failure_message,
@@ -263,19 +264,18 @@ impl RuntimeManager {
 
         let thread_generation = generation.clone();
         let thread_publisher = publisher.clone();
+        let execution = RuntimeExecution::new(
+            app,
+            config,
+            openai_api_key,
+            thread_publisher,
+            thread_generation,
+            host_resolver,
+            status_recorder,
+        );
         let join_handle = thread::Builder::new()
             .name("vrc-live-caption-runtime".to_string())
-            .spawn(move || {
-                run_runtime_thread(
-                    app,
-                    config,
-                    openai_api_key,
-                    thread_publisher,
-                    thread_generation,
-                    host_resolver,
-                    status_recorder,
-                )
-            })
+            .spawn(move || run_runtime_thread(execution))
             .map_err(|error| AppError::runtime(format!("Failed to start runtime thread: {error}")));
         let join_handle = match join_handle {
             Ok(join_handle) => join_handle,

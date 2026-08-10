@@ -1,49 +1,28 @@
 //! Runtime-thread supervision and terminal output cleanup.
 
 use super::RuntimeGeneration;
-use super::coordinator::run_runtime;
+use super::coordinator::RuntimeExecution;
 use super::output::finish_runtime_output;
 use crate::chatbox::{PublisherCloseReason, RuntimeChatboxPublisher};
-use crate::config::AppConfig;
 use crate::error::AppResult;
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, record_and_emit_runtime_status,
 };
-use crate::host_resolver::HostResolver;
 use crate::runtime_control::{RuntimeStatus, RuntimeStatusRecorder};
-use secrecy::SecretString;
 use tauri::{AppHandle, Runtime};
 
-pub(super) fn run_runtime_thread<R: Runtime>(
-    app: AppHandle<R>,
-    config: AppConfig,
-    openai_api_key: SecretString,
-    publisher: Option<RuntimeChatboxPublisher>,
-    generation: RuntimeGeneration,
-    host_resolver: HostResolver,
-    status_recorder: RuntimeStatusRecorder,
-) {
-    let error_generation = generation.clone();
-    let cleanup_publisher = publisher.clone();
-    let runtime_app = app.clone();
-    let runtime_status_recorder = status_recorder.clone();
+pub(super) fn run_runtime_thread<R: Runtime>(execution: RuntimeExecution<R>) {
+    let error_generation = execution.generation().clone();
+    let cleanup_publisher = execution.publisher().cloned();
+    let supervisor_app = execution.app().clone();
+    let runtime_status_recorder = execution.status_recorder().clone();
 
     supervise_runtime_thread(
-        &app,
+        &supervisor_app,
         &error_generation,
         cleanup_publisher.as_ref(),
-        &status_recorder,
-        move || {
-            run_runtime(
-                runtime_app,
-                config,
-                openai_api_key,
-                publisher,
-                generation,
-                host_resolver,
-                runtime_status_recorder,
-            )
-        },
+        &runtime_status_recorder,
+        move || execution.run(),
     );
 }
 
