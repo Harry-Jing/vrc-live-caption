@@ -9,12 +9,33 @@ Authoritative project direction lives in [docs/](./docs/).
 
 ## Development
 
+Install Git, the platform-specific
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), and Rust
+through `rustup`. The repository's `rust-toolchain.toml` selects the Rust
+version plus the Clippy and rustfmt components.
+
+The frontend requires pnpm 11. The repository selects the pnpm version and a
+Node 24 runtime in `package.json`; `pnpm-lock.yaml` pins the exact project Node
+build and checksums. A normal machine may provide Node `>=24.11.0 <25.0.0` for
+the first install. A standalone-pnpm environment with no system Node can
+bootstrap one first:
+
 ```sh
-pnpm install
+pnpm runtime set node 24 --global
+```
+
+Then install and build with the locked project toolchain:
+
+```sh
+pnpm install --frozen-lockfile
 pnpm build
 (cd src-tauri && cargo check)
 pnpm tauri dev
 ```
+
+After installation, pnpm scripts and Git hooks use the project Node runtime;
+they do not depend on whichever Node version happens to be first on the shell
+`PATH`.
 
 ## Quality Gates
 

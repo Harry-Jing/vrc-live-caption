@@ -132,6 +132,10 @@
 - The Rust toolchain is pinned in `rust-toolchain.toml`. Upgrading Rust is an
   explicit change: update `rust-toolchain.toml`, the toolchain version in both
   GitHub workflows, and `rust-version` in `src-tauri/Cargo.toml` together.
+- The Node development-runtime range and pnpm version live in `package.json`;
+  the exact Node runtime and checksums live in `pnpm-lock.yaml`. Update them
+  through pnpm, and let `pnpm/setup` read `devEngines.runtime` in CI instead of
+  hard-coding a second Node version outside an intentional test matrix.
 - In CI, install frontend dependencies with
   `pnpm install --frozen-lockfile` before the frontend gate and use locked
   Cargo resolution for the Rust gate. `pnpm check:ci` remains the combined
