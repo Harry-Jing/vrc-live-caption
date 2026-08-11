@@ -32,14 +32,20 @@ Status: **not started — next**.
 Goal: deliver the smallest reliable text-driven translation path, which is the
 original cross-language product need.
 
-- select one translator for completed Source snapshots;
+- implement the accepted `OpenAiResponsesCompletedText` profile for completed
+  Source snapshots
+  ([ADR 0021](./adr/0021-use-openai-responses-for-completed-translation.md),
+  [evaluation](./research/cloud-translation-evaluation.md));
+- require an explicit English (`en`) or Simplified Chinese (`zh-Hans`) target
+  whenever selected content includes Translation;
 - correlate every result to its exact source generation, stream, unit, and
   revision;
 - bound admission, timeout, cancellation, retries, and retained source work;
 - add source-only, translation-only, and bilingual content selection;
 - render bilingual Completed pages against the verified Chatbox layout;
-- add a user-configured OpenAI-compatible base URL under the explicit endpoint
-  trust boundary in [ADR 0015](./adr/0015-cloud-connections-honor-explicit-routes-and-endpoints.md).
+- add an HTTPS Custom Responses-compatible base URL and separate credential
+  under the explicit, path-scoped trust boundary in
+  [ADR 0015](./adr/0015-cloud-connections-honor-explicit-routes-and-endpoints.md).
 
 Exit: translation never blocks capture, recognition, or Chatbox pacing; stale or
 late results cannot overwrite another source revision; failure is visible

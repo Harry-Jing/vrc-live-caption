@@ -33,6 +33,9 @@ maintaining another copy.
 
 ## Research library
 
+- [Cloud translation evaluation](./research/cloud-translation-evaluation.md)
+  records OpenAI evidence and the provider, language, and native validation
+  still required by ADR 0021.
 - [VRChat Chatbox reference](./research/vrchat-chatbox-reference.md) records
   the canonical evidence and derived constraints used by the Chatbox
   implementation, including its measured pacing and layout model.

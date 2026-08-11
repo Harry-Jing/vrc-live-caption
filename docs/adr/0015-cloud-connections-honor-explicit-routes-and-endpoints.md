@@ -9,8 +9,14 @@ Only verified proxy mechanisms are accepted; unsupported routes fail explicitly
 rather than being approximated. Platform-specific discovery and bypass
 semantics remain private transport details.
 
-A custom OpenAI-compatible base URL is a separate endpoint trust choice, not a
-proxy route or automatic fallback. It must be explicitly selected and disclosed
-before Start because its operator receives the configured service credential and
-the user content sent through that endpoint, including microphone audio for
-recognition and Source text for text-driven translation.
+A custom OpenAI-compatible base URL is a path-scoped endpoint trust choice, not
+a proxy route or fallback. It must be selected and disclosed before Start
+because its operator receives that path's credential and content: microphone
+audio for Recognition or Source text for text-driven Translation.
+
+Phase 5 Custom Translation requires HTTPS, including on loopback, and a
+separate OS-stored credential; it never receives the Official credential or
+Recognition audio. Redirects and silent direct-route fallback are forbidden,
+and request fields cannot guarantee the Custom operator's retention policy.
+The concrete Responses profile is in
+[ADR 0021](./0021-use-openai-responses-for-completed-translation.md).
