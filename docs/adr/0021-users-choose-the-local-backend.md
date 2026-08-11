@@ -2,12 +2,14 @@
 
 Date: 2026-07
 
-Local inference has one global preference: CPU or prefer NVIDIA GPU (CUDA),
-defaulting to CPU. There is no automatic performance selector — utilization
-numbers do not reveal frame-time or VRAM contention while VRChat runs, so
-model/backend recommendations wait for real benchmarks. The app always shows
-the effective backend when it differs from the preference, with the reason,
-and a crash never switches backend automatically.
+Local inference has one explicit preference: CPU or prefer NVIDIA GPU (CUDA),
+defaulting to CPU. Utilization alone cannot predict VRChat frame time, VRAM
+contention, or model behavior, so the app does not make an automatic performance
+choice. It always shows the effective backend and the reason when that differs
+from the saved preference, and a crash never switches backend or uploads audio
+to cloud on its own.
 
-CPU is implemented first because it is easiest to package for every Windows
-x64 machine; that is engineering order, not a quality ranking.
+Before Start, unavailable hardware, an incompatible path, or failed CUDA
+initialization may resolve a prefer-CUDA request to CPU only while preserving
+the preference and showing the reason. The backend never changes during a
+runtime generation; a worker failure ends that generation.

@@ -2,15 +2,9 @@
 
 Date: 2026-07
 
-Windows x86_64 is the first-release platform and the only one with complete
-real-machine validation, because it is the project's only full VRChat test
-environment (development happens on macOS). macOS arm64 and Linux x86_64 stay
-green in CI — compilation, tests, and native package builds — to catch
-portability regressions early.
+Windows x86_64 is the user and first-release platform because it is the
+project's complete VRChat validation environment. macOS arm64 and Linux x86_64
+remain compile, test, and package portability targets: failures block merging,
+but their artifacts are not support or release commitments.
 
-Consequences: a Tier 2 build or test failure blocks merging, but Tier 2
-bundles are test artifacts, not release commitments, and platform-specific
-Tier 2 runtime issues may be deferred.
-
-Revisit if repeatable real-machine validation becomes available for a Tier 2
-platform.
+Revisit when repeatable real-machine validation exists for another platform.

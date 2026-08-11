@@ -1,164 +1,117 @@
-# VRC Live Caption Context
+# VRC Live Caption Glossary
 
-VRC Live Caption turns speech into VRChat Chatbox captions and translations.
-These terms are the shared language for discussing provider behavior without
-tying the product to one model or endpoint.
+VRC Live Caption turns speech into captions and translations for the VRChat
+Chatbox. This glossary names the concepts shared across product, runtime, and UI
+work without tying them to one provider or protocol.
 
-## Language
+## Recognition
 
 **Speech recognition**:
-The application subsystem that turns microphone audio into normalized source
-caption snapshots. STT remains acceptable user shorthand and the stable
-`stt.*` diagnostic namespace, but code-domain names use Recognition.
-_Avoid_: STT, in new code-domain type and field names
+The subsystem that turns microphone audio into normalized Source snapshots;
+domain and code names use Recognition. `STT` remains user shorthand and the
+stable `stt.*` diagnostic namespace.
+_Avoid_: STT in new domain type or field names
 
 **Recognition path**:
-A concrete recognizer execution choice whose provider, model, protocol mode,
-runtime, backend, and relevant configuration are evaluated together.
-_Avoid_: Provider path, model when protocol- or runtime-dependent behavior is
-intended
+A complete speech-recognition choice, including the provider, model, protocol,
+runtime, backend, and configuration that determine its behavior.
+_Avoid_: Model, when the complete execution choice is intended
 
 **Recognition Module**:
-The generation-scoped application boundary that accepts continuous owned
-audio, enforces bounded admission and hard Stop, and emits ordered normalized
-signals. It delegates path-specific execution to one Recognition Driver.
+The application boundary that runs one selected recognition path for a runtime
+generation and presents normalized recognition behavior to the rest of the app.
 _Avoid_: Provider session, recognition worker
 
 **Recognition Driver**:
-The concrete executor for one recognition path. It owns speech boundaries,
-replaceable attempts, provider protocol or local-worker I/O, and normalization
-without leaking those mechanisms into Runtime.
-_Avoid_: Adapter, when the component owns execution and lifecycle rather than
-only data conversion
-
-**Translation path**:
-A concrete translator execution choice that consumes an exact completed source
-snapshot and produces correlated translation-lane snapshots.
-_Avoid_: Recognition path, translation model when provider or protocol behavior
-is intended
-
-**Service provider**:
-An external service identity, such as OpenAI, that may supply more than one
-recognition or translation path and may share one credential across them.
-_Avoid_: Recognition provider, when credential ownership or another service
-capability is intended
-
-**Service credential**:
-An authentication identity for one service provider. Recognition and
-translation paths may deliberately share it; local paths may require none.
-_Avoid_: STT key, recognition credential when the identity is service-wide
+The path-specific executor inside a Recognition Module.
+_Avoid_: Adapter, when execution and lifecycle ownership are intended
 
 **Runtime generation**:
-One user-started captioning lifetime, ending at its hard Stop boundary. It may
-contain more than one provider connection, but late output from an older
-connection can never re-enter the generation after that connection is retired.
-_Avoid_: Provider session or connection attempt, when the Start-to-Stop
-lifetime is intended
+One user-started captioning lifetime from Start through its matching Stop.
+_Avoid_: Provider session, connection attempt
 
 **Recognition attempt**:
-One replaceable execution lifetime inside a runtime generation, backed by one
-cloud connection or one local worker session. Retiring an attempt discards its
-unconfirmed audio and output without ending the runtime generation.
-_Avoid_: Runtime generation, provider session
+One replaceable recognition execution inside a runtime generation, backed by a
+cloud connection or local worker session.
+_Avoid_: Runtime generation
 
-**Caption unit**:
-An application-correlated span of speech and its source and translation lanes.
-A recognition driver decides when source input ends: local VAD, provider
-endpointing, an application hard limit, or another boundary supported by that
-path. A closed source unit does not imply that correlated translation work has
-settled.
-_Avoid_: Sentence, because a forced boundary may not be a grammatical sentence
+**Translation path**:
+A complete translation choice that produces a translation lane from correlated
+source material.
+_Avoid_: Translation model, when provider or runtime behavior is intended
+
+## Captions
 
 **Caption stream**:
-The ordered application correlation scope inside one runtime generation. It can
-remain stable across replacement recognition attempts and is not a provider
-connection, WebSocket stream, or model streaming state.
-_Avoid_: Provider stream, session
+The ordered correlation scope for captions inside one runtime generation; it may
+span more than one recognition attempt.
+_Avoid_: Provider stream, connection
+
+**Caption unit**:
+A correlated span of speech and its source and translation lanes.
+_Avoid_: Sentence, because a boundary need not be grammatical
 
 **Caption lane**:
-An ordered sequence of normalized source or translated text snapshots.
-_Avoid_: Transcript, when the lane contains translated text
+An ordered sequence of source or translation snapshots.
+_Avoid_: Transcript, when translated text is included
 
 **Caption snapshot**:
-The complete current text for one caption lane at one revision. It carries a
-caption-unit id when that path has real units; an ongoing-only continuous path
-instead remains correlated to its caption stream and must not invent a unit
-completion. Raw provider deltas are accumulated or reconciled inside the
-driver before a snapshot reaches the App or an output sink.
-_Avoid_: Delta, outside a provider transport or driver
-
-**Caption Aggregate**:
-The application-owned, revisioned view of the active caption stream, its open
-Source units, and bounded recent completed captions. An open Source unit means
-recognition is still active; it does not describe pending Translation work.
-The aggregate may retain history from older runtime generations, so it is not
-a provider or runtime session.
-_Avoid_: Caption session, transcript history
+The complete text of one caption lane at one revision.
+_Avoid_: Delta
 
 **Ongoing snapshot**:
-A revisable caption snapshot that has not completed. On a unit-based path, its
-unit is still open. On an ongoing-only continuous path, it remains attached to
-the caption stream without implying that a unit exists. Earlier text may be
-replaced unless the concrete recognition path documents a stronger rule.
+A caption snapshot that may still be revised.
 _Avoid_: Stable, provisional final, soft final
 
 **Completed snapshot**:
-The final normalized text for one caption lane's revision chain. Source
-completion can come from a provider item final or a real application-owned
-segment boundary; it is never inferred from a display timer and does not make
-another lane terminal.
-_Avoid_: Provider final, unless referring to the provider's exact event
+The final snapshot in one caption lane's revision chain.
+_Avoid_: Provider final, unless naming the provider's own event
+
+**Caption Aggregate**:
+The application-owned view of the active caption stream and recent normalized
+caption state.
+_Avoid_: Provider session, transcript history
 
 **Source snapshot reference**:
-The exact generation, caption stream, caption unit, and source revision consumed
-by a translation snapshot. Translation never attaches by timing or display
-position alone.
+The exact source snapshot consumed by a translation snapshot.
 _Avoid_: Latest source, current caption
 
+## Publication
+
 **Chatbox publication mode**:
-The user's timing choice: **Completed** publishes completed caption units only;
-**Live** may also publish ongoing revisions. This is independent of provider,
-model, and source/translation/bilingual content choice.
-_Avoid_: Automatic, translation mode, streaming toggle
+The user's timing choice: **Completed** publishes completed snapshots only;
+**Live** may also publish ongoing snapshots.
+_Avoid_: Content selection, streaming toggle
 
 **Content selection**:
-The lanes the user wants to publish: source only, translation only, or
-bilingual. Source and translation may progress at different speeds.
+The lanes the user wants to publish: source, translation, or both.
 _Avoid_: Publication mode
 
 **Publication policy**:
-The rule that combines the active caption pipeline's per-lane capabilities,
-content selection, publication mode, and the constraints of one output sink.
+The rule that combines selected lanes, publication timing, path capabilities,
+and output-sink constraints.
 _Avoid_: Provider output mode
 
 **Caption Pipeline Plan**:
-The application-resolved compatibility result for the selected recognition
-and translation paths, requested content lanes, publication mode, and output
-constraints. It records incompatibility rather than silently changing a user
-selection.
-_Avoid_: Backend plan, provider capability plan
+The resolved compatibility result for the selected recognition and translation
+paths, content selection, publication mode, and output constraints.
+_Avoid_: Backend plan
 
-**Application gateway (`AppGateway`)**:
-The frontend's primary typed boundary to caption-runtime, settings, audio, and
-OSC host capabilities. Tauri and Preview are concrete adapters behind it;
-narrow UI-only services such as confirmation or diagnostic-report clipboard
-access may keep feature-specific host ports. The term backend remains reserved
-for local-inference compute such as CPU or CUDA.
-_Avoid_: Runtime backend, when referring to frontend-to-host IPC
+## Services and local inference
+
+**Service provider**:
+An external service identity, such as OpenAI, that may supply several paths.
+_Avoid_: Recognition provider, when the service supplies other capabilities
+
+**Service credential**:
+An authentication identity for one service provider, potentially shared by
+several paths.
+_Avoid_: STT key, when the credential is service-wide
 
 **Backend preference**:
-The user's global local-inference preference: CPU or prefer NVIDIA GPU (CUDA).
-It is stored separately from the effective backend used by a concrete attempt.
-_Avoid_: Auto backend, guaranteed GPU execution
+The user's preferred compute backend for local inference.
+_Avoid_: Effective backend
 
 **Effective backend**:
-The compute backend actually used by one local-inference attempt. If the
-preferred backend is unavailable, the App keeps the preference, exposes the
-reason, and never hides the effective backend.
-_Avoid_: Application gateway, fallback without also reporting the reason
-
-**Two-pass pipeline**:
-Optional future orchestration that runs a low-latency recognizer and a separate
-correction recognizer over correlated audio. It is not a speech-model mode and
-is not part of the first local implementation.
-_Avoid_: Two-pass model, stable mode
+The compute backend actually used by one local-inference attempt.
+_Avoid_: Backend preference

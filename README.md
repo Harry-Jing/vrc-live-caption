@@ -1,76 +1,82 @@
 # VRC Live Caption
 
-Desktop app that turns microphone speech into VRChat Chatbox captions:
-audio is captured locally, sent through the selected recognition path
-(currently OpenAI), normalized into captions, and published to VRChat over
-OSC.
+VRC Live Caption turns microphone speech into captions in the VRChat Chatbox.
+Choose a microphone, start captioning, and let nearby players read what you say
+without leaving VRChat.
 
-Authoritative project direction lives in [docs/](./docs/).
+> [!IMPORTANT]
+> This is a beta-stage project under active development. There is no published
+> release or installer yet, so trying the app currently means building it from
+> source. Development and hands-on VRChat testing primarily target Windows.
 
-## Development
+## What works today
+
+- Capture a selected microphone and check its level with a short, local-only
+  microphone test.
+- Recognize speech with OpenAI in either **Completed** mode (send after a speech
+  unit finishes) or **Live** mode (update the caption while speech continues).
+- Preview source-language captions in the app and publish them to the VRChat
+  Chatbox through OSC.
+- Pace, wrap, and paginate Chatbox messages around VRChat's practical limits.
+- Show connection and runtime failures, reconnect from supported transient
+  failures, and stop without publishing late captions.
+
+The current cloud paths have been exercised with a real microphone and VRChat on
+Windows, including long and mixed English/Chinese speech. This is validation of
+the current development build, not a promise of release stability.
+
+## What is still being built
+
+Translation, bilingual output, local/offline recognition, a Chinese interface,
+and a supported Windows installer are not available yet. The next major step is
+reliable completed translation; later work evaluates Live translation, adds
+localization and local recognition, and prepares a public Windows build. The
+[roadmap](./docs/roadmap.md) is the authoritative record of current progress and
+sequencing.
+
+## Cloud audio and credentials
+
+The recognition paths available today use OpenAI. While cloud recognition is
+active, the app uploads microphone audio to OpenAI for transcription. You need
+your own OpenAI API key and are responsible for any provider usage or charges.
+
+An API key entered in Settings is stored in the operating system credential
+store and is not written to ordinary app configuration or logs. For development,
+the app can also read `OPENAI_API_KEY` from the environment. The local microphone
+test does not contact a recognition provider.
+
+## Try the current build from source
 
 Install Git, the platform-specific
-[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), and Rust
-through `rustup`. The repository's `rust-toolchain.toml` selects the Rust
-version plus the Clippy and rustfmt components.
-
-The frontend requires pnpm 11. The repository selects the pnpm version and a
-Node 24 runtime in `package.json`; `pnpm-lock.yaml` pins the exact project Node
-build and checksums. A normal machine may provide Node `>=24.11.0 <25.0.0` for
-the first install. A standalone-pnpm environment with no system Node can
-bootstrap one first:
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), Rust through
+`rustup`, and the Node/pnpm versions declared in
+[`package.json`](./package.json). Then:
 
 ```sh
-pnpm runtime set node 24 --global
-```
-
-Then install and build with the locked project toolchain:
-
-```sh
+git clone https://github.com/Harry-Jing/vrc-live-caption.git
+cd vrc-live-caption
 pnpm install --frozen-lockfile
-pnpm build
-(cd src-tauri && cargo check)
 pnpm tauri dev
 ```
 
-After installation, pnpm scripts and Git hooks use the project Node runtime;
-they do not depend on whichever Node version happens to be first on the shell
-`PATH`.
+When the app opens:
 
-## Quality Gates
+1. Enable OSC in VRChat.
+2. In Settings, select and test a microphone, add an OpenAI API key, and choose
+   the recognition and publication modes.
+3. Save the settings, return to Captioning, and start the runtime.
 
-Use the project scripts instead of spelling out tool commands in day-to-day
-work:
+The app defaults to VRChat's local OSC target. Change the host or port only if
+your VRChat setup uses a different target.
 
-```sh
-pnpm check:frontend
-pnpm check:rust
-pnpm check
-pnpm check:ci
-```
+## Project information
 
-Git hooks are managed by Lefthook. `prepare` installs the hooks after dependency
-installation, `pre-commit` runs the fast local gate, `commit-msg` enforces
-Conventional Commits, and `pre-push` runs the full quality gate.
+- [Product direction](./docs/product.md)
+- [Implementation roadmap](./docs/roadmap.md)
+- [Documentation guide](./docs/README.md)
+- [Contributing](./CONTRIBUTING.md)
+- [Issue tracker](https://github.com/Harry-Jing/vrc-live-caption/issues)
 
-GitHub Actions runs the CI gate on push and pull request. CI uses frozen pnpm
-installs, locked Cargo resolution, dependency caching, frontend checks, and Rust
-checks.
+## License
 
-Direct Cargo commands should be run from `src-tauri`, following the Tauri
-project layout:
-
-```sh
-cd src-tauri
-cargo fmt --all
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-Rust lint policy is configured in `src-tauri/Cargo.toml` under `[lints]` so the
-same restrictions apply locally and in CI.
-
-Markdown documentation is intentionally kept out of automated formatting checks.
-Keep docs concise and readable, and reserve build checks for docs changes that
-alter commands, configuration, or documented behavior.
+VRC Live Caption is available under the [MIT License](./LICENSE).

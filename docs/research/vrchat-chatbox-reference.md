@@ -1,6 +1,11 @@
 # VRChat Chatbox Reference
 
-This document is the canonical implementation reference for the fixed VRChat chatbox wrap model used by `VRC Live Caption`. It keeps the project-facing layout, font, validation, and line-break facts needed to simulate VRChat wrapping and clipping without the reverse-engineering narrative.
+This document is the canonical evidence reference for VRChat Chatbox OSC and
+text-layout constraints used by `VRC Live Caption`. It records official
+interfaces, first-party client notes, real-client experiments, and extracted
+TMP layout/font data. Current publisher queues, lifecycle behavior,
+configuration, and other implementation mechanics belong in code and tests,
+not in this reference.
 
 The OSC and rate-limit sections were re-verified against first-party VRChat
 documentation on 2026-07-15. Layout extraction facts retain their original
@@ -12,24 +17,15 @@ verification basis.
 - Long-text behavior is defined by a fixed text rectangle, fixed margins, fixed font size, the VRChat font/fallback stack, real glyph widths, TMP line-break tables, and a hard `9`-line cap.
 - For this project, the important target is text layout and clipping inside the `ChatText` rectangle, not full world-space chat bubble rendering.
 
-## OSC input contract
+## OSC and client-behavior evidence
 
-These are the OSC endpoints VRChat exposes for the chatbox, separate from the
-layout model below.
+### Official OSC surface
 
 - `/chatbox/input s b n`: sets the chatbox text. `s` is the message, `b` true
   sends immediately (false opens the in-game keyboard instead), `n` true plays
-  the notification sound for nearby players. This app sends
-  `(text, true, false)`: immediate send, no notification sound, so captions do
-  not ping other players on every update.
-- The input text is hard-capped at `144` characters by VRChat. This cap applies
-  before the layout model below: for Latin text it is reached well before the
-  `9`-line cap (about `29` characters per line over `9` lines is far more than
-  `144`), so `144` is the binding constraint for Latin output. For CJK,
-  `15 × 9 = 135` visible characters stays under the cap.
-- The project enforces the input cap conservatively as a UTF-16 budget and only
-  cuts at grapheme boundaries. The official wording is `144` characters; this
-  implementation rule avoids splitting surrogate pairs or visible clusters.
+  the notification sound for nearby players.
+- Chatbox input is limited to `144` characters and `9` lines. The official
+  reference does not define which Unicode counting unit “character” means.
 - `/chatbox/typing b`: toggles the typing indicator on the chat bubble. Useful
   for showing activity while speech is still being recognized.
 
@@ -43,13 +39,6 @@ documented that the typing indicator automatically hides after five seconds of
 inactive input. A July 2026 Phase 1 real-client test reproduced that behavior:
 one `/chatbox/typing true` packet disappeared after about five seconds while the
 speaker continued talking for roughly twenty seconds.
-
-The Completed publisher therefore reasserts `/chatbox/typing true` every four
-seconds while normalized speech or publication activity remains active. The
-one-second margin covers ordinary scheduling delay. These control-state packets
-do not pass through `ChatboxPacer` and do not consume a `/chatbox/input`
-text-send opportunity. Activity resolution, failure, and Stop still turn the
-indicator off; Stop permits only its one typing-off cleanup attempt.
 
 ### Current rate-limit evidence
 
@@ -95,55 +84,16 @@ messages and recovery of about one message per second. It is experimental
 evidence, not a documented OSC protocol guarantee. In particular, a short 900
 ms test can look successful because it consumes the initial allowance slowly.
 
-### Project pacing policy
+### Derived pacing constraint
 
-The reliable current-client boundary is therefore:
-
-- keep at least `1000 ms` between actual text-send attempts;
-- measure from the previous attempt, not from a drifting periodic timer;
-- count a failed attempt too, so failure cannot create a rapid retry loop;
-- do not exploit the initial burst allowance;
-- coalesce Live revisions latest-wins instead of queueing missed intermediate
-  screens;
-- keep distinct Completed pages ordered in a bounded queue.
-
-The current code uses one fixed `1000 ms` text-attempt interval for the lifetime
-of the desktop process. Runtime output and OSC Test share the same pacing state,
-failed attempts consume the next opportunity, and restarting Runtime does not
-reset it. The removed legacy `osc.minIntervalMs` key is not migrated into the
-supported V1 config. Archived pre-baseline configs instead load editable
-defaults and require explicit review and save.
-
-Cloud, model, or translation latency only makes the actual interval longer and
-does not invalidate the one-second lower bound. Publication eligibility and
-transport pacing remain independent: a timer can say that VRChat may be
-updated, but cannot prove text is complete.
+On the tested July 2026 client, `1000 ms` between sustained numbered sends was
+the reliable conservative boundary. This is an experimental integration
+constraint, not a documented fixed minimum interval and not a statement about
+the current publisher implementation.
 
 Future current-client validation should still use numbered messages and a
 remote observer when available. A successful UDP send proves only that the
 local socket accepted the packet, not that VRChat displayed or relayed it.
-
-### Current Completed publisher policy
-
-The current Completed publisher publishes whole Completed caption units
-through a dedicated non-blocking worker. Its queue behavior is:
-
-- keep at most `32` resident pages that have not yet been sent successfully;
-- expire a whole unit after `30` seconds only while it remains unstarted;
-- define started publication at the unit's first actual text-send attempt, after
-  it receives a pacing opportunity;
-- on capacity pressure, remove the oldest whole unstarted units until the new
-  unit fits, or reject the new whole unit if it cannot fit without splitting a
-  unit or displacing one that has started;
-- do not retry a failed page. The attempt still consumes the pacing opportunity,
-  and the publisher discards that unit's failed and remaining pages, reports the
-  failure, and may continue with later units;
-- on Stop or a runtime-fatal close, close admission and discard every resident
-  page without draining caption text, then attempt one typing-off cleanup.
-
-The `32`-page and `30`-second values are internal provisional safety limits, not
-user settings or settled product limits. Their adjustment remains release-phase
-work based on measured backlog and readability.
 
 ## Verified layout contract
 
@@ -358,45 +308,24 @@ Additional confirmed validation:
 
 ## Implementation rules
 
-- Use the verified Noto Sans and Noto CJK glyph advances for covered common
-  Chinese ideographs, Basic Latin/Latin-1 English, measured punctuation, and
-  mixtures of those characters, not a fixed character-count heuristic.
+- Use real glyph widths from the verified font/fallback model, not a fixed
+  character-count heuristic. Scripts that require shaping or reordering need
+  shaped glyph advances rather than per-codepoint widths.
 - Wrap against the usable width budget of `280 px`.
-- Use grapheme clusters as the default processing boundary when simulating wrapping behavior.
-- Determine legal break opportunities from Unicode line-break behavior plus TMP leading/following restrictions.
-- Use soft wraps only to simulate visible lines and choose page boundaries. Do
-  not insert artificial newlines into a page; preserve only the source's
-  explicit line breaks.
-- Pages are a lossless partition of the source. If an explicit line-break
-  grapheme would create a tenth line, keep it at the start of the next page and
-  count it there; do not consume or move it merely because it crosses a page
-  boundary.
-- Re-layout every candidate page as standalone text and shrink it until it still
-  fits one page from start-of-text context. UAX or TMP state from a prior page
-  must not make a page appear safer than it will be when sent independently.
+- Preserve grapheme clusters as the text-processing boundary.
+- Determine legal wrap opportunities from Unicode line-breaking behavior plus
+  the extracted TMP leading/following tables.
 - Prefer legal break opportunities and fall back to the nearest legal break
-  before a page boundary; if none exists, hard-break at a grapheme-cluster
-  boundary.
-- Spaces both consume width and act as break opportunities; if a wrap happens at a space, the next line should not keep that leading break-space.
-- If a zero-advance modifier joins a break-space into one grapheme, project the
-  space's internal legal break to the end of that grapheme. Never split the
-  grapheme merely to use the original UAX break position.
-- Continuous CJK text is breakable between characters by default, but breaks must still respect TMP leading/following restrictions.
-- In the current pure-layout stage, other Unicode text uses conservative
-  best-effort advances while preserving grapheme clusters, content order, and
-  every page limit. An unsupported grapheme reserves the full `280 px` line
-  budget so an unknown wide glyph is not underestimated. This intentionally
-  sparse fallback does not relax the product-wide target of real glyph-width
-  wrapping; verified shaping and language-specific line breaking remain future
-  quality work for those languages.
-- If one grapheme alone exceeds the `144` UTF-16-unit budget, no compliant page
-  can both preserve and avoid splitting it. Return an explicit layout error
-  rather than splitting, dropping, or sending an over-limit grapheme.
-- Limit each result to at most `9` visible lines after wrapping. Completed layout
-  returns all remaining text as later ordered pages instead of clipping it, and
-  the Completed publisher consumes those pages in order. Live layout instead
-  returns one safe viewport retaining the newest text. Translation-aware
-  rendering remains a later stage.
+  before a boundary; if none exists, hard-break at a grapheme-cluster boundary.
+- Spaces consume width and act as break opportunities; when wrapping at a
+  space, do not retain that leading break-space on the next line.
+- Continuous CJK text is breakable between characters by default, while still
+  respecting the TMP leading/following restrictions.
+- Treat the official `144`-character input cap conservatively as a `144`
+  UTF-16-unit safety budget, and never satisfy that budget by splitting a
+  grapheme. This convention does not claim that VRChat documents UTF-16
+  counting.
+- Keep every transmitted view within `9` visible lines after wrapping.
 
 ## Known unknowns
 
@@ -404,10 +333,12 @@ Additional confirmed validation:
   visible, whether a new `/chatbox/input` resets the timer, and when the bubble
   fades. These need in-game measurement before tuning replacement pacing.
 - Whether OSC `(text, true, false)` is classified as exempt auto-sent text is
-  not documented. The project does not depend on an exemption.
+  not documented.
 - The exact internal bucket implementation and what every excess update does
-  are not documented. The project uses the measured 1000 ms boundary instead of
-  relying on those internals.
+  are not documented; the numbered-send experiment does not resolve those
+  internals.
+- The official `144`-character limit does not define whether VRChat counts
+  Unicode scalar values, UTF-16 code units, grapheme clusters, or another unit.
 - Local-sender and remote-observer behavior may differ and must be measured
   independently.
 - The full custom MonoBehaviour typetree was not recovered, so some non-critical fields remain inferred rather than directly dumped.
