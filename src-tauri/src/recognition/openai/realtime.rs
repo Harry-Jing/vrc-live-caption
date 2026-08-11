@@ -2,9 +2,9 @@
 //!
 //! This module is a transport-independent deep module: it owns the OpenAI JSON
 //! protocol, item correlation, model-specific output semantics, completion
-//! ordering, and the hard Stop fence. The OpenAI attempt factory supplies its
-//! transport, and the state machine emits normalized `RecognitionEvent`s back
-//! to the OpenAI driver.
+//! ordering, and attempt-local Stop behavior. The OpenAI attempt factory
+//! supplies its transport, and the state machine emits normalized
+//! `RecognitionEvent`s back to the OpenAI driver.
 
 use super::OpenAiTranscriptionModel;
 use super::attempt::{RecognitionAttempt, RecognitionAttemptAudioChunk};
