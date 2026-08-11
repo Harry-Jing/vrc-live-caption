@@ -123,7 +123,8 @@ jobs:
   native_build_gate:
     name: Native Build Gate
     if: ${{ always() }}
-    needs: [build]
+    needs:
+      - build
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
