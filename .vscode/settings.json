@@ -1,0 +1,17 @@
+{
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.patterns": {
+    "package.json": "pnpm-lock.yaml, package-lock.json, yarn.lock, bun.lock, bun.lockb, .npmrc, .yarnrc*, .eslint*, eslint*, .prettier*, prettier*, .editorconfig",
+    "tsconfig.json": "tsconfig.*.json, components.d.ts",
+    "vite.config.*": "jsconfig*, vitest.config.*, playwright.config.*",
+    "Cargo.toml": "Cargo.lock"
+  },
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "never"
+  },
+  "eslint.format.enable": false,
+  "js/ts.tsdk.path": "./node_modules/typescript/lib",
+  "js/ts.tsdk.promptToUseWorkspaceVersion": true
+}

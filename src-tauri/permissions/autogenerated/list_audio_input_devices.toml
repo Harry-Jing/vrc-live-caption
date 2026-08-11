@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-audio-input-devices"
+description = "Enables the list_audio_input_devices command without any pre-configured scope."
+commands.allow = ["list_audio_input_devices"]
+
+[[permission]]
+identifier = "deny-list-audio-input-devices"
+description = "Denies the list_audio_input_devices command without any pre-configured scope."
+commands.deny = ["list_audio_input_devices"]

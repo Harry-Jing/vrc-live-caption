@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-send-osc-test-message"
+description = "Enables the send_osc_test_message command without any pre-configured scope."
+commands.allow = ["send_osc_test_message"]
+
+[[permission]]
+identifier = "deny-send-osc-test-message"
+description = "Denies the send_osc_test_message command without any pre-configured scope."
+commands.deny = ["send_osc_test_message"]

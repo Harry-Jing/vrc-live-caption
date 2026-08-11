@@ -1,0 +1,100 @@
+{
+  "contractVersion": 1,
+  "revision": 9,
+  "runtimeStatus": {
+    "status": "running",
+    "message": "Runtime is running",
+    "timestampMs": 900
+  },
+  "desired": {
+    "revision": 4,
+    "config": {
+      "schemaVersion": 1,
+      "audio": { "inputDeviceId": null },
+      "recognition": {
+        "path": "openai/gpt-live-transcribe",
+        "expectedLanguages": ["zh", "en"]
+      },
+      "osc": { "host": "127.0.0.1", "port": 9000, "enabled": true },
+      "publication": { "mode": "live" },
+      "ui": { "showOngoingPreview": true }
+    },
+    "captionPipelinePlan": {
+      "recognition": {
+        "path": "openai/gpt-live-transcribe",
+        "inputShape": "continuousAudioFrames",
+        "captionBoundaryOwner": "application",
+        "unitBehavior": "unitBased",
+        "lanes": [
+          {
+            "lane": "source",
+            "updates": "ongoingAndCompleted",
+            "revisions": "revisableFullSnapshot"
+          }
+        ]
+      },
+      "publication": {
+        "state": "compatible",
+        "mode": "live",
+        "timing": { "timing": "liveUnit", "observationWindowMs": 1000 },
+        "selectedLanes": ["source"]
+      }
+    },
+    "credentials": [
+      {
+        "state": "configured",
+        "id": "openai",
+        "storage": "systemCredentialStore",
+        "displaySuffix": "abcd"
+      }
+    ]
+  },
+  "generation": {
+    "id": 3,
+    "phase": "running",
+    "startedFromConfigRevision": 4,
+    "selection": {
+      "audio": { "inputDeviceId": null },
+      "recognition": {
+        "path": "openai/gpt-live-transcribe",
+        "expectedLanguages": ["zh", "en"]
+      },
+      "osc": { "host": "127.0.0.1", "port": 9000, "enabled": true },
+      "publication": { "mode": "live" }
+    },
+    "captionPipelinePlan": {
+      "recognition": {
+        "path": "openai/gpt-live-transcribe",
+        "inputShape": "continuousAudioFrames",
+        "captionBoundaryOwner": "application",
+        "unitBehavior": "unitBased",
+        "lanes": [
+          {
+            "lane": "source",
+            "updates": "ongoingAndCompleted",
+            "revisions": "revisableFullSnapshot"
+          }
+        ]
+      },
+      "publication": {
+        "state": "compatible",
+        "mode": "live",
+        "timing": { "timing": "liveUnit", "observationWindowMs": 1000 },
+        "selectedLanes": ["source"]
+      }
+    },
+    "credential": {
+      "id": "openai",
+      "storage": "systemCredentialStore",
+      "displaySuffix": "abcd",
+      "revision": 2
+    },
+    "chatboxPublication": {
+      "state": "ready",
+      "host": "127.0.0.1",
+      "port": 9000
+    },
+    "uploadsMicrophoneAudio": true
+  },
+  "pendingGenerationChanges": []
+}

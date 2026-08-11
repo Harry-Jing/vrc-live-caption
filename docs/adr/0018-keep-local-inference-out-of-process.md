@@ -1,0 +1,9 @@
+# Keep local inference out of process
+
+Local recognition and translation run behind Rust workers or sidecars, never inside
+the main app process. Users should not need Python, PyTorch, or CUDA Toolkit
+installs, and a model or GPU crash must not take down the app.
+
+Consequences: a worker crash ends that runtime generation and offers an
+explicit retry or backend change. It never restarts silently on CPU and never
+falls back to cloud on its own.

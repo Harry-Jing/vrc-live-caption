@@ -1,0 +1,31 @@
+pre-commit:
+  parallel: true
+  jobs:
+    - name: format check
+      run: pnpm format:check
+
+    - name: lint
+      run: pnpm lint
+
+    - name: frontend build
+      run: pnpm build
+
+    - name: rust format check
+      run: cd src-tauri && cargo fmt --all -- --check
+
+    - name: rust check
+      run: cd src-tauri && cargo check --workspace --all-targets
+
+commit-msg:
+  jobs:
+    - name: conventional commit message
+      run: pnpm commitlint --edit {1}
+
+pre-push:
+  parallel: true
+  jobs:
+    - name: frontend quality gate
+      run: pnpm check:frontend
+
+    - name: locked Rust quality gate
+      run: pnpm check:rust:locked

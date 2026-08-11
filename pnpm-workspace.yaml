@@ -1,0 +1,8 @@
+allowBuilds:
+  esbuild: true
+  lefthook: true
+  vue-demi: true
+
+# Lefthook runs independent quality gates in parallel. Dependency installation
+# is an explicit prerequisite so concurrent checks never mutate node_modules.
+verifyDepsBeforeRun: false

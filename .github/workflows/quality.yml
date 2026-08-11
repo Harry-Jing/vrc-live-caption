@@ -1,0 +1,163 @@
+name: Quality
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    # All branches; naming a branch pattern also keeps tag pushes from
+    # triggering a duplicate run.
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm and Node
+        uses: pnpm/setup@4700d737c3d7a2e7199f3d42a920f0bf7f34e411 # v2.0.1
+        with:
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check pull request title
+        if: github.event_name == 'pull_request' && runner.os == 'Linux'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | pnpm commitlint
+
+      - name: Run frontend quality gate
+        run: pnpm check:frontend
+
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Windows needs headroom for the first uncached Rust compile.
+    timeout-minutes: 45
+
+    strategy:
+      # Report all desktop platforms even when one fails; Windows is the
+      # release platform and its result matters independently.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            curl \
+            file \
+            wget \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libdbus-1-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
+
+      - name: Set up pnpm and Node
+        uses: pnpm/setup@4700d737c3d7a2e7199f3d42a920f0bf7f34e411 # v2.0.1
+        with:
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
+          install: false
+
+      # Keep dependency resolution explicit and locked for the Rust gate too.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Keep this version in sync with rust-toolchain.toml.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Run Rust quality gate
+        run: pnpm check:rust:locked
+
+  audit_pnpm:
+    name: Dependency Audit (pnpm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm and Node
+        uses: pnpm/setup@4700d737c3d7a2e7199f3d42a920f0bf7f34e411 # v2.0.1
+        with:
+          install: false
+
+      - name: Audit pnpm dependencies
+        run: pnpm audit --audit-level high
+
+  audit_cargo:
+    name: Dependency Audit (Cargo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: cargo-audit
+
+      - name: Audit Cargo dependencies
+        working-directory: src-tauri
+        run: cargo audit
+
+  quality_gate:
+    name: Quality Gate
+    if: ${{ always() }}
+    needs: [frontend, rust, audit_pnpm, audit_cargo]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every quality job to succeed
+        if: >-
+          ${{
+            needs.frontend.result != 'success' ||
+            needs.rust.result != 'success' ||
+            needs.audit_pnpm.result != 'success' ||
+            needs.audit_cargo.result != 'success'
+          }}
+        run: exit 1

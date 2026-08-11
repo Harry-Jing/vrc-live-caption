@@ -1,0 +1,5 @@
+# Cargo build output
+/target/
+
+# Tauri-generated schema files for capability auto-completion
+/gen/schemas/
