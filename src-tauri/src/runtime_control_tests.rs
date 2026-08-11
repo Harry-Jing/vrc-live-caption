@@ -94,12 +94,12 @@ fn snapshot_has_a_versioned_authoritative_shape() -> AppResult<()> {
     let value = serde_json::to_value(snapshot)
         .map_err(|error| AppError::state(format!("Failed to serialize snapshot: {error}")))?;
 
-    assert_eq!(value["contractVersion"], serde_json::json!(4));
+    assert_eq!(value["contractVersion"], serde_json::json!(1));
     assert_eq!(value["revision"], serde_json::json!(0));
     assert_eq!(value["desired"]["revision"], serde_json::json!(0));
     assert_eq!(
         value["desired"]["config"]["schemaVersion"],
-        serde_json::json!(4)
+        serde_json::json!(1)
     );
     assert_eq!(
         value["desired"]["captionPipelinePlan"]["publication"]["state"],

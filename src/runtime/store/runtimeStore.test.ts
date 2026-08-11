@@ -1,15 +1,15 @@
 import { afterEach, expect, test, vi } from "vitest";
-import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v2.json?raw";
-import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v4.json?raw";
-import type { CaptionAggregateSnapshotV2 } from "../captionAggregate";
+import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v1.json?raw";
+import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v1.json?raw";
+import type { CaptionAggregateSnapshot } from "../captionAggregate";
 import type {
   AppGateway,
   RuntimeControlSnapshotListener,
   RuntimeEventListener,
 } from "../gateway";
 import type { RuntimeControlSnapshot } from "../runtimeControl";
-import { decodeCaptionAggregateSnapshotV2 } from "../wire/captionAggregateContract";
-import { decodeRuntimeControlSnapshotV4 } from "../wire/runtimeControlContract";
+import { decodeCaptionAggregateSnapshot } from "../wire/captionAggregateContract";
+import { decodeRuntimeControlSnapshot } from "../wire/runtimeControlContract";
 import { createRuntimeStore } from "./runtimeStore";
 
 function deferred<T>() {
@@ -23,10 +23,10 @@ function deferred<T>() {
 }
 
 function createRuntimeStoreHarness() {
-  const fixtureControl = decodeRuntimeControlSnapshotV4(
+  const fixtureControl = decodeRuntimeControlSnapshot(
     JSON.parse(runtimeControlFixture) as unknown,
   );
-  const fixtureCaption = decodeCaptionAggregateSnapshotV2(
+  const fixtureCaption = decodeCaptionAggregateSnapshot(
     JSON.parse(captionAggregateFixture) as unknown,
   );
   if (fixtureControl.generation === null) {
@@ -49,14 +49,14 @@ function createRuntimeStoreHarness() {
       phase: "running",
     },
   };
-  const initialCaption: CaptionAggregateSnapshotV2 = {
+  const initialCaption: CaptionAggregateSnapshot = {
     ...fixtureCaption,
     snapshotRevision: 1,
     activeStream: null,
     openSourceUnits: [],
     captions: [],
   };
-  const runningCaption: CaptionAggregateSnapshotV2 = {
+  const runningCaption: CaptionAggregateSnapshot = {
     ...initialCaption,
     snapshotRevision: 2,
     activeStream: { generation: 8, streamId: "recognition-8-1" },

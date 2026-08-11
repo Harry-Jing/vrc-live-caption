@@ -204,8 +204,8 @@ microphone is opened.
 | Semantic concept | Tauri event | Meaning |
 |---|---|---|
 | `runtime.status` | `runtime-status` | `idle`, `starting`, `running`, `reconnecting`, `stopping`, `stopped`, or `error` |
-| `runtime.control.changed` | `runtime-control-changed` | the newest revisioned, redacted `RuntimeControlSnapshot` V4 after an authoritative control change |
-| `caption.aggregate.changed` | `caption-aggregate-changed` | the newest full `CaptionAggregateSnapshotV2` |
+| `runtime.control.changed` | `runtime-control-changed` | the newest revisioned, redacted `RuntimeControlSnapshot` after an authoritative control change |
+| `caption.aggregate.changed` | `caption-aggregate-changed` | the newest full `CaptionAggregateSnapshot` |
 | `audio.level` | `audio-level` | generation/revision-scoped 100 ms RMS/peak/gate/clipping scalars; never PCM |
 | `diagnostic` | `diagnostic-event` | categorized report with a stable code ([ADR 0014](./adr/0014-diagnostic-codes-are-category-detail.md)) |
 
@@ -223,7 +223,7 @@ diagnostic messages and details, configuration, device identifiers, network
 targets, paths, and credential status are not serialized. Clipboard
 access is write-only, and the App does not create or retain a report file.
 
-Rust owns one versioned Caption Aggregate, `CaptionAggregateSnapshotV2`: a
+Rust owns one versioned Caption Aggregate, `CaptionAggregateSnapshot`: a
 monotonic aggregate revision, the active application-assigned stream, open
 Source units, and bounded recent full-text snapshots with lane, per-scope
 revision, and ongoing/completed state
@@ -244,7 +244,7 @@ the caption aggregate to resynchronize, and reducers ignore older revisions
 ([ADR 0013](./adr/0013-event-delivery-is-best-effort.md)). Audio level telemetry
 is deliberately ephemeral: the UI accepts only newer generation/revision pairs
 and hides stale readings outside Running. A shared JSON fixture pins the Rust
-caption serialization and TypeScript runtime decoder to the same V2 wire
+caption serialization and TypeScript runtime decoder to the same V1 wire
 shape. Admission, ordering, and reload-race handling live in reducers and
 their tests.
 
@@ -273,11 +273,15 @@ Saved settings and the active runtime generation are separate state
 owns one revisioned, redacted control snapshot: the desired configuration,
 the application-resolved Caption Pipeline Plan, service-credential status,
 lifecycle status, and the immutable selection captured by the current
-generation. `RuntimeControlSnapshot` V4 names that generation explicitly and
+generation. `RuntimeControlSnapshot` names that generation explicitly and
 records its phase, selection, credential, Chatbox-publication state, and
 pending generation changes. Control mutations return the resulting snapshot;
 the frontend never reconstructs active state by shallow-merging saved config.
 The Stop-versus-Start ordering guarantees live in the runtime code and tests.
+The first supported App Config, Runtime Control, and Caption Aggregate formats
+are independent V1 contracts; current implementation types do not carry those
+wire versions in their names
+([ADR 0028](./adr/0028-establish-the-supported-contract-baseline-at-v1.md)).
 
 ## Runtime lifecycle
 

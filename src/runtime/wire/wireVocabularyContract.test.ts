@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import wireVocabularyFixture from "../../../contracts/wire-vocabulary-v2.json?raw";
+import wireVocabularyFixture from "../../../contracts/wire-vocabulary.json?raw";
 import { CAPTION_LANES, CAPTION_STATES } from "../captionAggregate";
 import {
   CAPTION_BOUNDARY_OWNERS,

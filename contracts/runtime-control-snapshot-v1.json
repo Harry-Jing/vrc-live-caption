@@ -1,5 +1,5 @@
 {
-  "contractVersion": 4,
+  "contractVersion": 1,
   "revision": 9,
   "runtimeStatus": {
     "status": "running",
@@ -9,7 +9,7 @@
   "desired": {
     "revision": 4,
     "config": {
-      "schemaVersion": 4,
+      "schemaVersion": 1,
       "audio": { "inputDeviceId": null },
       "recognition": {
         "path": "openai/gpt-live-transcribe",

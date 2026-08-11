@@ -6,11 +6,11 @@ Status: accepted
 
 ## Context
 
-The V1 caption-session aggregate treated the first completed lane as terminal
-for the entire caption unit. That matched the source-only Phase 4 path, but it
-would reject a translation arriving after its source completed. The word
-"session" also hid that the aggregate retains completed history across runtime
-generations.
+The pre-baseline caption-session aggregate treated the first completed lane as
+terminal for the entire caption unit. That matched the source-only Phase 4
+path, but it would reject a translation arriving after its source completed.
+The word "session" also hid that the aggregate retains completed history
+across runtime generations.
 
 Translation cannot safely attach to whichever source text is newest when the
 result arrives. Source revisions can be replaced before completion, units may
@@ -19,7 +19,7 @@ generation, and old completed units remain visible in the aggregate.
 
 ## Decision
 
-Caption Aggregate V2 is the authoritative normalized caption state. One active
+The Caption Aggregate is the authoritative normalized caption state. One active
 caption stream belongs to a runtime generation and may survive replacement
 recognition attempts. Open Source units describe source recognition activity;
 they do not imply that correlated Translation work has settled.
@@ -55,8 +55,8 @@ retaining bounded completed history for the UI.
   which revisable Source snapshot the translator consumed.
 - Attaching to the latest visible Source text or using timestamps was rejected
   because event timing and display order are not correlation contracts.
-- Keeping the V1 `CaptionSessionSnapshot` name was rejected because the state
-  intentionally spans multiple runtime generations.
+- Keeping the pre-baseline `CaptionSessionSnapshot` name was rejected because
+  the state intentionally spans multiple runtime generations.
 
 ## Consequences
 

@@ -110,8 +110,9 @@ The reliable current-client boundary is therefore:
 The current code uses one fixed `1000 ms` text-attempt interval for the lifetime
 of the desktop process. Runtime output and OSC Test share the same pacing state,
 failed attempts consume the next opportunity, and restarting Runtime does not
-reset it. The removed legacy `osc.minIntervalMs` key is ignored when older
-config files are loaded, while every other setting continues to load normally.
+reset it. The removed legacy `osc.minIntervalMs` key is not migrated into the
+supported V1 config. Archived pre-baseline configs instead load editable
+defaults and require explicit review and save.
 
 Cloud, model, or translation latency only makes the actual interval longer and
 does not invalidate the one-second lower bound. Publication eligibility and

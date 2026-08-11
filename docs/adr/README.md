@@ -83,3 +83,5 @@ ADR only to refresh its descriptive slug.
   CPAL ids, never display names
 - [0023 — Keep caption history in memory only](./0023-keep-session-history-in-memory-only.md):
   nothing persists until history/export is built
+- [0028 — Establish the supported contract baseline at V1](./0028-establish-the-supported-contract-baseline-at-v1.md):
+  one pre-main reset, then monotonic versions only at real compatibility seams

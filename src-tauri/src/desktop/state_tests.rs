@@ -111,10 +111,10 @@ fn rejected_audio_probe_lease_does_not_emit_a_failure_diagnostic() -> AppResult<
 }
 
 #[test]
-fn removed_config_requires_an_explicit_review_before_start() -> AppResult<()> {
+fn unsupported_saved_config_requires_an_explicit_review_before_start() -> AppResult<()> {
     let error = ensure_config_was_reviewed(true)
         .err()
-        .ok_or_else(|| AppError::state("An unreviewed migrated config unexpectedly started."))?;
+        .ok_or_else(|| AppError::state("An unreviewed saved config unexpectedly started."))?;
 
     assert_eq!(error.code(), "config.invalid");
     assert!(error.to_string().contains("Review and save"));

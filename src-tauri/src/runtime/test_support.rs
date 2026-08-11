@@ -1,6 +1,6 @@
 use super::RuntimeGeneration;
 use crate::caption::{
-    CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateChange, CaptionAggregateSnapshotV2,
+    CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateChange, CaptionAggregateSnapshot,
     CaptionAggregateUpdate,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
@@ -66,7 +66,7 @@ pub(super) fn runtime_test_publisher(
 
 pub(super) fn inactive_caption_update(revision: u64) -> CaptionAggregateUpdate {
     CaptionAggregateUpdate {
-        snapshot: CaptionAggregateSnapshotV2 {
+        snapshot: CaptionAggregateSnapshot {
             contract_version: CAPTION_AGGREGATE_CONTRACT_VERSION,
             snapshot_revision: revision,
             active_stream: None,

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import tauriIpcFixture from "../../../contracts/tauri-ipc-v2.json?raw";
+import tauriIpcFixture from "../../../contracts/tauri-ipc.json?raw";
 import {
   RUNTIME_CONTROL_EVENT,
   RUNTIME_EVENTS,

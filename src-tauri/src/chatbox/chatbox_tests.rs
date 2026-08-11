@@ -2,9 +2,9 @@ use super::pacer::{ChatboxPacer, Clock};
 use super::transport::{ChatboxSendReceipt, ChatboxTransport};
 use super::*;
 use crate::caption::{
-    ActiveCaptionStreamV2, CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateChange,
-    CaptionAggregateSnapshotV2, CaptionAggregateUpdate, CaptionLane, CaptionSnapshotV2,
-    CaptionState, OpenSourceUnitV2,
+    ActiveCaptionStream, CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateChange,
+    CaptionAggregateSnapshot, CaptionAggregateUpdate, CaptionLane, CaptionSnapshot, CaptionState,
+    OpenSourceUnit,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::error::AppError;
@@ -172,7 +172,7 @@ fn start_live() -> AppResult<(ChatboxPublication, Receiver<String>)> {
     Ok((publication, receiver))
 }
 
-fn completed_snapshot(revision: u64, text: &str) -> CaptionAggregateSnapshotV2 {
+fn completed_snapshot(revision: u64, text: &str) -> CaptionAggregateSnapshot {
     completed_snapshot_for(1, revision, "unit-1", text)
 }
 
@@ -198,16 +198,16 @@ fn completed_snapshot_for(
     revision: u64,
     unit_id: &str,
     text: &str,
-) -> CaptionAggregateSnapshotV2 {
-    CaptionAggregateSnapshotV2 {
+) -> CaptionAggregateSnapshot {
+    CaptionAggregateSnapshot {
         contract_version: CAPTION_AGGREGATE_CONTRACT_VERSION,
         snapshot_revision: revision,
-        active_stream: Some(ActiveCaptionStreamV2 {
+        active_stream: Some(ActiveCaptionStream {
             generation,
             stream_id: format!("recognition-{generation}-1"),
         }),
         open_source_units: Vec::new(),
-        captions: vec![CaptionSnapshotV2 {
+        captions: vec![CaptionSnapshot {
             generation,
             stream_id: format!("recognition-{generation}-1"),
             unit_id: Some(unit_id.to_string()),
@@ -223,17 +223,17 @@ fn completed_snapshot_for(
     }
 }
 
-fn open_snapshot(revision: u64, unit_id: Option<&str>) -> CaptionAggregateSnapshotV2 {
-    CaptionAggregateSnapshotV2 {
+fn open_snapshot(revision: u64, unit_id: Option<&str>) -> CaptionAggregateSnapshot {
+    CaptionAggregateSnapshot {
         contract_version: CAPTION_AGGREGATE_CONTRACT_VERSION,
         snapshot_revision: revision,
-        active_stream: Some(ActiveCaptionStreamV2 {
+        active_stream: Some(ActiveCaptionStream {
             generation: 1,
             stream_id: "recognition-1-1".to_string(),
         }),
         open_source_units: unit_id
             .map(|unit_id| {
-                vec![OpenSourceUnitV2 {
+                vec![OpenSourceUnit {
                     unit_id: unit_id.to_string(),
                     started_at_ms: 100,
                 }]
@@ -246,7 +246,7 @@ fn open_snapshot(revision: u64, unit_id: Option<&str>) -> CaptionAggregateSnapsh
 fn opened_update(revision: u64, unit_id: &str) -> CaptionAggregateUpdate {
     CaptionAggregateUpdate {
         snapshot: open_snapshot(revision, Some(unit_id)),
-        change: CaptionAggregateChange::SourceUnitOpened(OpenSourceUnitV2 {
+        change: CaptionAggregateChange::SourceUnitOpened(OpenSourceUnit {
             unit_id: unit_id.to_string(),
             started_at_ms: 100,
         }),
@@ -455,7 +455,7 @@ fn completed_publication_ignores_duplicate_out_of_order_and_prior_generation_his
         prior_reporter,
     )?;
     let mut prior_snapshot = completed_snapshot(3, "prior generation");
-    prior_snapshot.active_stream = Some(ActiveCaptionStreamV2 {
+    prior_snapshot.active_stream = Some(ActiveCaptionStream {
         generation: 2,
         stream_id: "recognition-2-1".to_string(),
     });

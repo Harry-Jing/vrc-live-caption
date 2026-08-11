@@ -4,11 +4,9 @@ mod aggregate;
 mod contract;
 
 pub(crate) use aggregate::{CaptionAggregateChange, CaptionAggregateStore, CaptionAggregateUpdate};
-pub(crate) use contract::{
-    CaptionAggregateSnapshotV2, CaptionLane, CaptionSnapshotV2, CaptionState,
-};
+pub(crate) use contract::{CaptionAggregateSnapshot, CaptionLane, CaptionSnapshot, CaptionState};
 
 #[cfg(test)]
 pub(crate) use contract::{
-    ActiveCaptionStreamV2, CAPTION_AGGREGATE_CONTRACT_VERSION, OpenSourceUnitV2,
+    ActiveCaptionStream, CAPTION_AGGREGATE_CONTRACT_VERSION, OpenSourceUnit,
 };

@@ -15,7 +15,7 @@ import {
   type AppConfig,
 } from "../runtime/appConfig";
 import type { AudioProbeRequest } from "../runtime/audio";
-import type { CaptionAggregateSnapshotV2 } from "../runtime/captionAggregate";
+import type { CaptionAggregateSnapshot } from "../runtime/captionAggregate";
 import type {
   RuntimeControlSnapshot,
   RuntimeGenerationSnapshot,
@@ -58,8 +58,8 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
     message: "Runtime is idle",
     timestampMs: 1,
   };
-  let captionAggregate: CaptionAggregateSnapshotV2 = {
-    contractVersion: 2,
+  let captionAggregate: CaptionAggregateSnapshot = {
+    contractVersion: 1,
     snapshotRevision: 0,
     activeStream: null,
     openSourceUnits: [],
@@ -90,7 +90,7 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
 
   function controlSnapshot(): RuntimeControlSnapshot {
     return {
-      contractVersion: 4,
+      contractVersion: 1,
       revision: controlRevision,
       runtimeStatus: { ...latestStatus },
       desired: {
@@ -111,12 +111,12 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
 
   function emitCaptionAggregateUpdate(
     next: Omit<
-      CaptionAggregateSnapshotV2,
+      CaptionAggregateSnapshot,
       "contractVersion" | "snapshotRevision"
     >,
   ) {
     captionAggregate = {
-      contractVersion: 2,
+      contractVersion: 1,
       snapshotRevision: captionAggregate.snapshotRevision + 1,
       ...next,
     };

@@ -5,7 +5,7 @@ import { useSettingsDraft } from "./settingsDraft";
 
 function appConfig(): AppConfig {
   return {
-    schemaVersion: 4,
+    schemaVersion: 1,
     audio: { inputDeviceId: null },
     recognition: {
       path: "openai/gpt-live-transcribe",

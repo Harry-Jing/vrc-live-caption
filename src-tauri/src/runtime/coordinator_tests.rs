@@ -1,5 +1,5 @@
 use super::*;
-use crate::caption::{CaptionAggregateSnapshotV2, CaptionAggregateStore};
+use crate::caption::{CaptionAggregateSnapshot, CaptionAggregateStore};
 use crate::recognition::{
     RecognitionDriver, RecognitionDriverIo, RecognitionEvent, RecognitionGenerationScope,
     RecognitionModule,
@@ -204,8 +204,7 @@ fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<(
     let observed_capture_drop = Arc::clone(&capture_dropped);
     let (aggregate_closed_sender, aggregate_closed_receiver) = mpsc::channel();
     app.listen("caption-aggregate-changed", move |event| {
-        let Ok(snapshot) = serde_json::from_str::<CaptionAggregateSnapshotV2>(event.payload())
-        else {
+        let Ok(snapshot) = serde_json::from_str::<CaptionAggregateSnapshot>(event.payload()) else {
             return;
         };
         if snapshot.open_source_units.is_empty() {

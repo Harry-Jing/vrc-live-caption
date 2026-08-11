@@ -4,7 +4,7 @@ import type {
   AudioProbeResult,
 } from "./audio";
 import type { AppConfig } from "./appConfig";
-import type { CaptionAggregateSnapshotV2 } from "./captionAggregate";
+import type { CaptionAggregateSnapshot } from "./captionAggregate";
 import type { CredentialId, RuntimeControlSnapshot } from "./runtimeControl";
 import type { RuntimeEvent } from "./runtimeEvents";
 
@@ -24,7 +24,7 @@ export interface AppGateway {
   startRuntime(): Promise<RuntimeControlSnapshot>;
   stopRuntime(): Promise<RuntimeControlSnapshot>;
   getRuntimeControlSnapshot(): Promise<RuntimeControlSnapshot>;
-  getCaptionAggregateSnapshot(): Promise<CaptionAggregateSnapshotV2>;
+  getCaptionAggregateSnapshot(): Promise<CaptionAggregateSnapshot>;
   saveAppConfig(config: AppConfig): Promise<RuntimeControlSnapshot>;
   listAudioInputDevices(): Promise<AudioInputDevice[]>;
   probeAudioInput(request: AudioProbeRequest): Promise<AudioProbeResult>;

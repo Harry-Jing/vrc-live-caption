@@ -60,7 +60,7 @@ fn serialized_tag_values<T: serde::Serialize, const N: usize>(
 #[test]
 fn closed_rust_wire_values_match_the_shared_vocabulary() -> AppResult<()> {
     let expected = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../contracts/wire-vocabulary-v2.json"
+        "../../contracts/wire-vocabulary.json"
     ))
     .map_err(|error| AppError::config(format!("Failed to parse wire vocabulary: {error}")))?;
     let actual = serde_json::json!({
@@ -194,7 +194,7 @@ fn closed_rust_wire_values_match_the_shared_vocabulary() -> AppResult<()> {
 }
 
 #[test]
-fn shared_v4_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Error> {
+fn shared_v1_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Error> {
     let mut config = AppConfig::default();
     config.recognition.expected_languages = vec!["zh".to_string(), "en".to_string()];
     config.recognition.path = RecognitionPath::OpenAiGptLiveTranscribe;
@@ -239,7 +239,7 @@ fn shared_v4_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Err
         pending_generation_changes: Vec::new(),
     };
     let expected = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../contracts/runtime-control-snapshot-v4.json"
+        "../../contracts/runtime-control-snapshot-v1.json"
     ))?;
 
     assert_eq!(serde_json::to_value(snapshot)?, expected);

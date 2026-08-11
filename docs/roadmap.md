@@ -52,14 +52,15 @@ out-of-order, and late-after-Stop delivery.
 
 Status: generic foundation complete. The first real Live provider is Phase 4.
 
-Application-owned `CaptionAggregateSnapshotV2` state, the Caption Pipeline Plan
+Application-owned `CaptionAggregateSnapshot` state, the Caption Pipeline Plan
 ([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md),
 [ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)), a
 versioned config/control contract, a latest-wins Live worker sharing pacing and
 Stop with the Completed path, and Settings that keeps both modes visible with
-explicit alternatives instead of automatic fallback. The current config and
-runtime-control contracts are V4; the caption contract is V2; deterministic
-Recognition Drivers are test-only rather than product paths.
+explicit alternatives instead of automatic fallback. The first supported
+config, Runtime Control, and Caption Aggregate contracts are independent V1
+formats ([ADR 0028](./adr/0028-establish-the-supported-contract-baseline-at-v1.md));
+deterministic Recognition Drivers are test-only rather than product paths.
 
 ## Phase 4: OpenAI Realtime recognition cutover
 

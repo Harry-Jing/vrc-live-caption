@@ -1,15 +1,15 @@
 import { createRenderer, defineComponent } from "vue";
 import { expect, test, vi } from "vitest";
-import captionAggregateFixture from "../../contracts/caption-aggregate-snapshot-v2.json?raw";
-import runtimeControlFixture from "../../contracts/runtime-control-snapshot-v4.json?raw";
+import captionAggregateFixture from "../../contracts/caption-aggregate-snapshot-v1.json?raw";
+import runtimeControlFixture from "../../contracts/runtime-control-snapshot-v1.json?raw";
 import type {
   AppGateway,
   RuntimeControlSnapshotListener,
   RuntimeEventListener,
 } from "./gateway";
-import { decodeCaptionAggregateSnapshotV2 } from "./wire/captionAggregateContract";
-import { decodeRuntimeControlSnapshotV4 } from "./wire/runtimeControlContract";
-import type { CaptionAggregateSnapshotV2 } from "./captionAggregate";
+import { decodeCaptionAggregateSnapshot } from "./wire/captionAggregateContract";
+import { decodeRuntimeControlSnapshot } from "./wire/runtimeControlContract";
+import type { CaptionAggregateSnapshot } from "./captionAggregate";
 import type { RuntimeControlSnapshot } from "./runtimeControl";
 import { useRuntime } from "./useRuntime";
 
@@ -91,10 +91,10 @@ function deferred<T>() {
 }
 
 function mountRuntimeHarness() {
-  const fixtureControl = decodeRuntimeControlSnapshotV4(
+  const fixtureControl = decodeRuntimeControlSnapshot(
     JSON.parse(runtimeControlFixture) as unknown,
   );
-  const fixtureCaption = decodeCaptionAggregateSnapshotV2(
+  const fixtureCaption = decodeCaptionAggregateSnapshot(
     JSON.parse(captionAggregateFixture) as unknown,
   );
   if (fixtureControl.generation === null) {
@@ -152,7 +152,7 @@ function mountRuntimeHarness() {
     throw new Error("The runtime event listener is not registered.");
   };
   let currentControl = initialControl;
-  let currentCaption: CaptionAggregateSnapshotV2 = initialCaption;
+  let currentCaption: CaptionAggregateSnapshot = initialCaption;
   const unsubscribeEvents = vi.fn();
   const unsubscribeControl = vi.fn();
   const startRuntime = vi.fn(() => pendingStart.promise);
@@ -217,7 +217,7 @@ function mountRuntimeHarness() {
     publishEvent(event: Parameters<RuntimeEventListener>[0]) {
       eventListener(event);
     },
-    setCaption(snapshot: CaptionAggregateSnapshotV2) {
+    setCaption(snapshot: CaptionAggregateSnapshot) {
       currentCaption = snapshot;
     },
   };

@@ -8,7 +8,7 @@
 use super::OpenAiTranscriptionModel;
 use super::attempt::{RecognitionAttempt, RecognitionAttemptAudioChunk};
 use super::audio::{REALTIME_PCM_SAMPLE_RATE_HZ, RealtimePcm16Encoder};
-use crate::caption::{CaptionLane, CaptionSnapshotV2, CaptionState};
+use crate::caption::{CaptionLane, CaptionSnapshot, CaptionState};
 use crate::error::{AppError, AppResult, ProviderFailureClass};
 use crate::recognition::{RecognitionEvent, RecognitionUnitAbortReason};
 use base64::Engine as _;
@@ -89,7 +89,7 @@ struct CaptionEmission {
 }
 
 enum UnitTerminal {
-    Caption(CaptionSnapshotV2),
+    Caption(CaptionSnapshot),
     Aborted(RecognitionUnitAbortReason),
 }
 
@@ -679,8 +679,8 @@ impl<T: RealtimeTransport> OpenAiRealtimeAttempt<T> {
         })
     }
 
-    fn caption(&self, emission: CaptionEmission) -> CaptionSnapshotV2 {
-        CaptionSnapshotV2 {
+    fn caption(&self, emission: CaptionEmission) -> CaptionSnapshot {
+        CaptionSnapshot {
             generation: self.context.generation,
             stream_id: self.context.stream_id.clone(),
             unit_id: Some(emission.unit_id),

@@ -1,11 +1,12 @@
 import {
   CAPTION_LANES,
   CAPTION_STATES,
-  type CaptionAggregateSnapshotV2,
+  CAPTION_AGGREGATE_CONTRACT_VERSION,
+  type CaptionAggregateSnapshot,
   type CaptionLane,
-  type CaptionSnapshotV2,
+  type CaptionSnapshot,
   type CaptionState,
-  type SourceSnapshotRefV2,
+  type SourceSnapshotRef,
 } from "../captionAggregate";
 import { createDecoders } from "./contractDecoding";
 
@@ -44,7 +45,7 @@ function explicitNullableInteger(value: unknown, path: string) {
 function decodeSourceRef(
   value: unknown,
   path: string,
-): SourceSnapshotRefV2 | null {
+): SourceSnapshotRef | null {
   if (value === null) {
     return null;
   }
@@ -64,7 +65,7 @@ function decodeSourceRef(
   };
 }
 
-function decodeCaption(value: unknown, index: number): CaptionSnapshotV2 {
+function decodeCaption(value: unknown, index: number): CaptionSnapshot {
   const path = `$.captions[${String(index)}]`;
   const input = exactRecord(value, path, [
     "generation",
@@ -111,7 +112,7 @@ function decodeCaption(value: unknown, index: number): CaptionSnapshotV2 {
   };
 }
 
-function captionScopeKey(caption: CaptionSnapshotV2) {
+function captionScopeKey(caption: CaptionSnapshot) {
   return JSON.stringify([
     caption.generation,
     caption.streamId,
@@ -121,8 +122,8 @@ function captionScopeKey(caption: CaptionSnapshotV2) {
 }
 
 function sourceReferenceMatches(
-  caption: CaptionSnapshotV2,
-  source: CaptionSnapshotV2,
+  caption: CaptionSnapshot,
+  source: CaptionSnapshot,
 ) {
   const sourceRef = caption.sourceRef;
 
@@ -137,9 +138,9 @@ function sourceReferenceMatches(
   );
 }
 
-export function decodeCaptionAggregateSnapshotV2(
+export function decodeCaptionAggregateSnapshot(
   value: unknown,
-): CaptionAggregateSnapshotV2 {
+): CaptionAggregateSnapshot {
   const input = exactRecord(value, "$", [
     "contractVersion",
     "snapshotRevision",
@@ -148,8 +149,11 @@ export function decodeCaptionAggregateSnapshotV2(
     "captions",
   ]);
 
-  if (input["contractVersion"] !== 2) {
-    throw new CaptionAggregateContractError("$.contractVersion", "expected 2");
+  if (input["contractVersion"] !== CAPTION_AGGREGATE_CONTRACT_VERSION) {
+    throw new CaptionAggregateContractError(
+      "$.contractVersion",
+      `expected ${String(CAPTION_AGGREGATE_CONTRACT_VERSION)}`,
+    );
   }
 
   const activeStreamInput = input["activeStream"];
@@ -287,7 +291,7 @@ export function decodeCaptionAggregateSnapshotV2(
   }
 
   return {
-    contractVersion: 2,
+    contractVersion: CAPTION_AGGREGATE_CONTRACT_VERSION,
     snapshotRevision: safeInteger(
       input["snapshotRevision"],
       "$.snapshotRevision",

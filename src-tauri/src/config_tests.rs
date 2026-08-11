@@ -4,7 +4,7 @@ use super::*;
 fn default_config_selects_the_gpt_transcribe_recognition_path_with_language_hints() {
     let config = AppConfig::default();
 
-    assert_eq!(config.schema_version, 4);
+    assert_eq!(config.schema_version, 1);
     assert_eq!(
         config.recognition.path,
         RecognitionPath::OpenAiGptTranscribe
@@ -39,7 +39,7 @@ fn config_accepts_only_the_two_exact_recognition_paths() -> AppResult<()> {
 }
 
 #[test]
-fn config_rejects_v3_recognition_fields_in_the_v4_schema() -> AppResult<()> {
+fn config_rejects_pre_baseline_recognition_fields_in_the_current_v1_schema() -> AppResult<()> {
     let mut legacy_language = valid_config_json("openai/gpt-transcribe");
     let recognition = legacy_language["recognition"]
         .as_object_mut()
@@ -76,7 +76,7 @@ fn config_validation_rejects_empty_or_duplicate_language_hints() {
 
 fn valid_config_json(path: &str) -> serde_json::Value {
     serde_json::json!({
-        "schemaVersion": 4,
+        "schemaVersion": 1,
         "audio": { "inputDeviceId": null },
         "recognition": {
             "path": path,

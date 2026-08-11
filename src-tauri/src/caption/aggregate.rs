@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use super::contract::{
-    ActiveCaptionStreamV2, CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateSnapshotV2,
-    CaptionLane, CaptionSnapshotV2, CaptionState, OpenSourceUnitV2,
+    ActiveCaptionStream, CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateSnapshot, CaptionLane,
+    CaptionSnapshot, CaptionState, OpenSourceUnit,
 };
 use crate::error::{AppError, AppResult};
 
@@ -30,27 +30,27 @@ struct CaptionLaneKey {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CaptionAggregateUpdate {
-    pub(crate) snapshot: CaptionAggregateSnapshotV2,
+    pub(crate) snapshot: CaptionAggregateSnapshot,
     pub(crate) change: CaptionAggregateChange,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CaptionAggregateChange {
-    SourceUnitOpened(OpenSourceUnitV2),
+    SourceUnitOpened(OpenSourceUnit),
     SourceUnitAborted { unit_id: String },
-    CaptionAccepted(CaptionSnapshotV2),
+    CaptionAccepted(CaptionSnapshot),
 }
 
 #[derive(Default)]
 struct CaptionAggregateState {
     generation_high_watermark: u64,
     snapshot_revision: u64,
-    // Application-only ordering metadata. The V2 wire contract conveys this order
+    // Application-only ordering metadata. The wire contract conveys this order
     // through its `captions` array and does not expose another clock-like field.
     next_unit_ordinal: u64,
-    active_stream: Option<ActiveCaptionStreamV2>,
-    open_source_units: Vec<OpenSourceUnitV2>,
-    captions: Vec<CaptionSnapshotV2>,
+    active_stream: Option<ActiveCaptionStream>,
+    open_source_units: Vec<OpenSourceUnit>,
+    captions: Vec<CaptionSnapshot>,
     unit_ordinals: Vec<(CaptionUnitKey, u64)>,
     completed_units: VecDeque<CaptionUnitKey>,
     recent_terminal_lanes: VecDeque<CaptionLaneKey>,
@@ -62,17 +62,14 @@ pub(crate) struct CaptionAggregateStore {
 }
 
 impl CaptionAggregateStore {
-    pub(crate) fn begin_generation(
-        &self,
-        generation: u64,
-    ) -> AppResult<CaptionAggregateSnapshotV2> {
+    pub(crate) fn begin_generation(&self, generation: u64) -> AppResult<CaptionAggregateSnapshot> {
         let mut state = self.lock()?;
         if generation <= state.generation_high_watermark {
             return Ok(Self::snapshot_from(&state));
         }
 
         state.generation_high_watermark = generation;
-        state.active_stream = Some(ActiveCaptionStreamV2 {
+        state.active_stream = Some(ActiveCaptionStream {
             generation,
             stream_id: format!("recognition-{generation}-1"),
         });
@@ -120,7 +117,7 @@ impl CaptionAggregateStore {
         })?;
         state.next_unit_ordinal = unit_ordinal;
         state.unit_ordinals.push((unit_key, unit_ordinal));
-        let opened_source_unit = OpenSourceUnitV2 {
+        let opened_source_unit = OpenSourceUnit {
             unit_id,
             started_at_ms,
         };
@@ -135,7 +132,7 @@ impl CaptionAggregateStore {
 
     pub(crate) fn accept_caption(
         &self,
-        caption: CaptionSnapshotV2,
+        caption: CaptionSnapshot,
     ) -> AppResult<Option<CaptionAggregateUpdate>> {
         let mut state = self.lock()?;
         if !Self::matches_active(&state, caption.generation, &caption.stream_id)
@@ -282,7 +279,7 @@ impl CaptionAggregateStore {
     pub(crate) fn close_generation(
         &self,
         generation: u64,
-    ) -> AppResult<Option<CaptionAggregateSnapshotV2>> {
+    ) -> AppResult<Option<CaptionAggregateSnapshot>> {
         let mut state = self.lock()?;
         if state.active_stream.as_ref().map(|active| active.generation) != Some(generation) {
             return Ok(None);
@@ -299,7 +296,7 @@ impl CaptionAggregateStore {
         Ok(Some(Self::snapshot_from(&state)))
     }
 
-    pub(crate) fn snapshot(&self) -> AppResult<CaptionAggregateSnapshotV2> {
+    pub(crate) fn snapshot(&self) -> AppResult<CaptionAggregateSnapshot> {
         let state = self.lock()?;
         Ok(Self::snapshot_from(&state))
     }
@@ -317,10 +314,7 @@ impl CaptionAggregateStore {
             .is_some_and(|active| active.generation == generation && active.stream_id == stream_id)
     }
 
-    fn source_reference_is_valid(
-        state: &CaptionAggregateState,
-        caption: &CaptionSnapshotV2,
-    ) -> bool {
+    fn source_reference_is_valid(state: &CaptionAggregateState, caption: &CaptionSnapshot) -> bool {
         match (caption.lane, caption.source_ref.as_ref()) {
             (CaptionLane::Source, None) => true,
             (CaptionLane::Source, Some(_)) | (CaptionLane::Translation, None) => false,
@@ -344,8 +338,8 @@ impl CaptionAggregateStore {
         state.snapshot_revision = state.snapshot_revision.saturating_add(1);
     }
 
-    fn snapshot_from(state: &CaptionAggregateState) -> CaptionAggregateSnapshotV2 {
-        CaptionAggregateSnapshotV2 {
+    fn snapshot_from(state: &CaptionAggregateState) -> CaptionAggregateSnapshot {
+        CaptionAggregateSnapshot {
             contract_version: CAPTION_AGGREGATE_CONTRACT_VERSION,
             snapshot_revision: state.snapshot_revision,
             active_stream: state.active_stream.clone(),

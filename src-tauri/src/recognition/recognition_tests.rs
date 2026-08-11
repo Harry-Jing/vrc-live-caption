@@ -1,5 +1,5 @@
 use super::*;
-use crate::caption::{CaptionLane, CaptionSnapshotV2, CaptionState};
+use crate::caption::{CaptionLane, CaptionSnapshot, CaptionState};
 use crate::error::{AppError, AppResult};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
@@ -77,7 +77,7 @@ impl RecognitionDriver for OngoingFloodThenControlDriver {
                 AppError::state(format!("Signal flood trigger was not received: {error}"))
             })?;
         for revision in 1..=128 {
-            io.emit_event(RecognitionEvent::Caption(CaptionSnapshotV2 {
+            io.emit_event(RecognitionEvent::Caption(CaptionSnapshot {
                 generation: io.scope().generation,
                 stream_id: io.scope().stream_id.clone(),
                 unit_id: Some("ongoing-unit".to_string()),
@@ -200,7 +200,7 @@ fn short_frame(sequence: u64) -> OwnedRecognitionAudioFrame {
 }
 
 fn ongoing_signal(unit_id: &str, revision: u64) -> RecognitionSignal {
-    RecognitionSignal::Event(RecognitionEvent::Caption(CaptionSnapshotV2 {
+    RecognitionSignal::Event(RecognitionEvent::Caption(CaptionSnapshot {
         generation: 17,
         stream_id: "stream-17".to_string(),
         unit_id: Some(unit_id.to_string()),
@@ -523,7 +523,7 @@ fn coalesced_ongoing_caption_keeps_its_latest_emission_position() -> AppResult<(
     assert!(matches!(
         received.try_recv(),
         Ok(RecognitionSignal::Event(RecognitionEvent::Caption(
-            CaptionSnapshotV2 { revision: 2, .. }
+            CaptionSnapshot { revision: 2, .. }
         )))
     ));
     assert_eq!(received.try_recv(), Err(TryRecvError::Empty));
@@ -579,7 +579,7 @@ fn ongoing_flood_is_coalesced_without_blocking_lifecycle_control() -> AppResult<
     assert!(matches!(
         running.signals.recv_timeout(TEST_TIMEOUT),
         Ok(RecognitionSignal::Event(RecognitionEvent::Caption(
-            CaptionSnapshotV2 {
+            CaptionSnapshot {
                 revision: 128,
                 state: CaptionState::Ongoing,
                 ..

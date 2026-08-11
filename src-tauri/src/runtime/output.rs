@@ -4,7 +4,7 @@
 //! admission, linearized App/Chatbox commits, and publication lifecycle.
 
 use crate::caption::{
-    CaptionAggregateSnapshotV2, CaptionAggregateStore, CaptionAggregateUpdate, CaptionSnapshotV2,
+    CaptionAggregateSnapshot, CaptionAggregateStore, CaptionAggregateUpdate, CaptionSnapshot,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::chatbox::{
@@ -25,7 +25,7 @@ use tauri::{AppHandle, Runtime};
 
 pub(super) use crate::chatbox::ChatboxPublicationInit;
 
-type CaptionAggregateReporter = Arc<dyn Fn(CaptionAggregateSnapshotV2) + Send + Sync>;
+type CaptionAggregateReporter = Arc<dyn Fn(CaptionAggregateSnapshot) + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct RuntimeGeneration {
@@ -199,16 +199,16 @@ impl RuntimeGeneration {
 
     fn accept_caption(
         &self,
-        caption: CaptionSnapshotV2,
+        caption: CaptionSnapshot,
     ) -> AppResult<Option<CaptionAggregateUpdate>> {
         self.caption_aggregate.accept_caption(caption)
     }
 
-    fn caption_snapshot(&self) -> AppResult<CaptionAggregateSnapshotV2> {
+    fn caption_snapshot(&self) -> AppResult<CaptionAggregateSnapshot> {
         self.caption_aggregate.snapshot()
     }
 
-    fn report_caption_snapshot(&self, snapshot: CaptionAggregateSnapshotV2) {
+    fn report_caption_snapshot(&self, snapshot: CaptionAggregateSnapshot) {
         (self.caption_reporter)(snapshot);
     }
 

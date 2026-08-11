@@ -1,18 +1,18 @@
 import { describe, expect, test } from "vitest";
-import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v2.json?raw";
+import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v1.json?raw";
 import {
   CaptionAggregateContractError,
-  decodeCaptionAggregateSnapshotV2,
+  decodeCaptionAggregateSnapshot,
 } from "./captionAggregateContract";
 
-describe("caption aggregate V2 contract", () => {
-  test("decodes the shared Caption Aggregate V2 fixture", () => {
-    const decoded = decodeCaptionAggregateSnapshotV2(
+describe("caption aggregate contract", () => {
+  test("decodes the shared Caption Aggregate fixture", () => {
+    const decoded = decodeCaptionAggregateSnapshot(
       JSON.parse(captionAggregateFixture) as unknown,
     );
 
     expect(decoded).toEqual({
-      contractVersion: 2,
+      contractVersion: 1,
       snapshotRevision: 4,
       activeStream: { generation: 7, streamId: "recognition-7-1" },
       openSourceUnits: [],
@@ -52,15 +52,26 @@ describe("caption aggregate V2 contract", () => {
     });
   });
 
+  test("rejects the old Caption Aggregate contract version", () => {
+    expect(() =>
+      decodeCaptionAggregateSnapshot({
+        ...(JSON.parse(captionAggregateFixture) as object),
+        contractVersion: 2,
+      }),
+    ).toThrow(
+      "Invalid caption aggregate payload at $.contractVersion: expected 1.",
+    );
+  });
+
   test("admits an ongoing translation after its source lane completed", () => {
-    const fixture = decodeCaptionAggregateSnapshotV2(
+    const fixture = decodeCaptionAggregateSnapshot(
       JSON.parse(captionAggregateFixture) as unknown,
     );
     const source = fixture.captions[0];
 
     expect(source?.lane).toBe("source");
     expect(() =>
-      decodeCaptionAggregateSnapshotV2({
+      decodeCaptionAggregateSnapshot({
         ...fixture,
         captions: [
           source,
@@ -78,7 +89,7 @@ describe("caption aggregate V2 contract", () => {
   test.each([
     [
       "source metadata left in the application contract",
-      (fixture: ReturnType<typeof decodeCaptionAggregateSnapshotV2>) => ({
+      (fixture: ReturnType<typeof decodeCaptionAggregateSnapshot>) => ({
         ...fixture,
         captions: fixture.captions.map((caption, index) =>
           index === 0 ? { ...caption, provider: "openai" } : caption,
@@ -88,7 +99,7 @@ describe("caption aggregate V2 contract", () => {
     ],
     [
       "a source caption linked to another source",
-      (fixture: ReturnType<typeof decodeCaptionAggregateSnapshotV2>) => ({
+      (fixture: ReturnType<typeof decodeCaptionAggregateSnapshot>) => ({
         ...fixture,
         captions: fixture.captions.map((caption, index) =>
           index === 0
@@ -100,7 +111,7 @@ describe("caption aggregate V2 contract", () => {
     ],
     [
       "a translation linked to a stale source revision",
-      (fixture: ReturnType<typeof decodeCaptionAggregateSnapshotV2>) => ({
+      (fixture: ReturnType<typeof decodeCaptionAggregateSnapshot>) => ({
         ...fixture,
         captions: fixture.captions.map((caption, index) =>
           index === 1 && caption.sourceRef !== null
@@ -114,17 +125,15 @@ describe("caption aggregate V2 contract", () => {
       /sourceRef/u,
     ],
   ] as const)("rejects %s", (_name, mutate, path) => {
-    const fixture = decodeCaptionAggregateSnapshotV2(
+    const fixture = decodeCaptionAggregateSnapshot(
       JSON.parse(captionAggregateFixture) as unknown,
     );
 
-    expect(() => decodeCaptionAggregateSnapshotV2(mutate(fixture))).toThrow(
-      path,
-    );
+    expect(() => decodeCaptionAggregateSnapshot(mutate(fixture))).toThrow(path);
   });
 
   test("preserves the aggregate contract error type", () => {
-    expect(() => decodeCaptionAggregateSnapshotV2(null)).toThrow(
+    expect(() => decodeCaptionAggregateSnapshot(null)).toThrow(
       CaptionAggregateContractError,
     );
   });

@@ -3,6 +3,8 @@ import type { AppFailure } from "./appFailure";
 import type { CaptionPipelinePlan } from "./captionPipeline";
 import type { RuntimeStatusEvent } from "./runtimeEvents";
 
+export const RUNTIME_CONTROL_CONTRACT_VERSION = 1 as const;
+
 export const CREDENTIAL_IDS = ["openai"] as const;
 export type CredentialId = (typeof CREDENTIAL_IDS)[number];
 
@@ -102,7 +104,7 @@ export type RuntimeGenerationSnapshot = Readonly<{
 }>;
 
 export type RuntimeControlSnapshot = Readonly<{
-  contractVersion: 4;
+  contractVersion: typeof RUNTIME_CONTROL_CONTRACT_VERSION;
   revision: number;
   runtimeStatus: RuntimeStatusEvent;
   desired: Readonly<{

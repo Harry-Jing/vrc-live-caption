@@ -7,7 +7,7 @@
 //! or in a frontend-facing snapshot.
 
 use crate::audio::{AudioProbeRequest, AudioProbeResult, probe_audio_input as run_audio_probe};
-use crate::caption::{CaptionAggregateSnapshotV2, CaptionAggregateStore};
+use crate::caption::{CaptionAggregateSnapshot, CaptionAggregateStore};
 use crate::caption_pipeline::{plan_caption_pipeline, publication_timing_for_start};
 use crate::chatbox::{ChatboxOscSender, ChatboxPacer, ChatboxSendReceipt, OSC_TEST_MESSAGE};
 use crate::config::AppConfig;
@@ -182,7 +182,7 @@ impl AppState {
         self.control.snapshot()
     }
 
-    pub(super) fn caption_aggregate_snapshot(&self) -> AppResult<CaptionAggregateSnapshotV2> {
+    pub(super) fn caption_aggregate_snapshot(&self) -> AppResult<CaptionAggregateSnapshot> {
         self.caption_aggregate.snapshot()
     }
 

@@ -1,14 +1,14 @@
 import { describe, expect, test } from "vitest";
-import captionAggregateFixture from "../../contracts/caption-aggregate-snapshot-v2.json?raw";
+import captionAggregateFixture from "../../contracts/caption-aggregate-snapshot-v1.json?raw";
 import {
   createCaptionAggregateState,
   reduceCaptionAggregateState,
   selectCaptionAggregateView,
 } from "./captionAggregate";
-import { decodeCaptionAggregateSnapshotV2 } from "./wire/captionAggregateContract";
+import { decodeCaptionAggregateSnapshot } from "./wire/captionAggregateContract";
 
 function fixture() {
-  return decodeCaptionAggregateSnapshotV2(
+  return decodeCaptionAggregateSnapshot(
     JSON.parse(captionAggregateFixture) as unknown,
   );
 }
@@ -42,8 +42,8 @@ describe("caption aggregate state", () => {
   test("closes caption admission immediately on local Stop", () => {
     const source = fixture().captions[0];
     expect(source).toBeDefined();
-    const active = decodeCaptionAggregateSnapshotV2({
-      contractVersion: 2,
+    const active = decodeCaptionAggregateSnapshot({
+      contractVersion: 1,
       snapshotRevision: 10,
       activeStream: { generation: 8, streamId: "recognition-8-1" },
       openSourceUnits: [{ unitId: "speech-8-1", startedAtMs: 2000 }],
@@ -87,7 +87,7 @@ describe("caption aggregate state", () => {
     const aggregate = fixture();
     const completed = aggregate.captions[0];
     expect(completed).toBeDefined();
-    const active = decodeCaptionAggregateSnapshotV2({
+    const active = decodeCaptionAggregateSnapshot({
       ...aggregate,
       snapshotRevision: 20,
       openSourceUnits: [{ unitId: "speech-7-2", startedAtMs: 1300 }],
@@ -127,7 +127,7 @@ describe("caption aggregate state", () => {
     const aggregate = fixture();
     const completed = aggregate.captions[0];
     expect(completed).toBeDefined();
-    const snapshot = decodeCaptionAggregateSnapshotV2({
+    const snapshot = decodeCaptionAggregateSnapshot({
       ...aggregate,
       snapshotRevision: 21,
       openSourceUnits: [{ unitId: "speech-7-2", startedAtMs: 1300 }],
@@ -158,7 +158,7 @@ describe("caption aggregate state", () => {
     const aggregate = fixture();
     const completed = aggregate.captions[0];
     expect(completed).toBeDefined();
-    const snapshot = decodeCaptionAggregateSnapshotV2({
+    const snapshot = decodeCaptionAggregateSnapshot({
       ...aggregate,
       snapshotRevision: 22,
       captions: Array.from({ length: 6 }, (_, index) => ({

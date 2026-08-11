@@ -20,10 +20,10 @@ fn declared_ui_facing_events() -> AppResult<Vec<String>> {
 
 #[test]
 fn tauri_event_names_match_the_shared_contract() -> AppResult<()> {
-    let manifest = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../contracts/tauri-ipc-v2.json"
-    ))
-    .map_err(|error| AppError::config(format!("Failed to parse Tauri IPC contract: {error}")))?;
+    let manifest_json = include_str!("../../contracts/tauri-ipc.json");
+    let manifest = serde_json::from_str::<serde_json::Value>(manifest_json).map_err(|error| {
+        AppError::config(format!("Failed to parse Tauri IPC contract: {error}"))
+    })?;
     let expected_events = serde_json::json!({
         "runtimeStatus": EVENT_RUNTIME_STATUS,
         "runtimeControlChanged": EVENT_RUNTIME_CONTROL_CHANGED,

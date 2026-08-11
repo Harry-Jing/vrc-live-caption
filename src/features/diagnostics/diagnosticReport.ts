@@ -16,7 +16,7 @@ type DiagnosticReportEvent = Readonly<
   Pick<DiagnosticEvent, "category" | "severity" | "code" | "timestampMs">
 >;
 
-type DiagnosticReportV1 = Readonly<{
+type DiagnosticReport = Readonly<{
   reportVersion: typeof DIAGNOSTIC_REPORT_VERSION;
   generatedAt: string;
   appVersion: string;
@@ -67,7 +67,7 @@ export function serializeDiagnosticReport(input: DiagnosticReportInput) {
       code: diagnostic.code,
       timestampMs: diagnostic.timestampMs,
     })),
-  } satisfies DiagnosticReportV1;
+  } satisfies DiagnosticReport;
 
   return JSON.stringify(report, null, 2);
 }

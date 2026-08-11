@@ -1,5 +1,5 @@
 import type { AudioLevelEvent } from "./audio";
-import type { CaptionAggregateSnapshotV2 } from "./captionAggregate";
+import type { CaptionAggregateSnapshot } from "./captionAggregate";
 
 export const RUNTIME_STATUSES = [
   "idle",
@@ -46,5 +46,5 @@ export type RuntimeEvent =
   | Readonly<{ type: "diagnostic"; payload: DiagnosticEvent }>
   | Readonly<{
       type: "captionAggregateChanged";
-      payload: CaptionAggregateSnapshotV2;
+      payload: CaptionAggregateSnapshot;
     }>;

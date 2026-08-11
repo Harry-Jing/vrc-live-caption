@@ -9,14 +9,18 @@ import {
   type AppConfig,
   APP_CONFIG_SCHEMA_VERSION,
 } from "../../runtime/appConfig";
-import type { CaptionAggregateSnapshotV2 } from "../../runtime/captionAggregate";
+import {
+  CAPTION_AGGREGATE_CONTRACT_VERSION,
+  type CaptionAggregateSnapshot,
+} from "../../runtime/captionAggregate";
 import type { CaptionPipelinePlan } from "../../runtime/captionPipeline";
-import type {
-  CredentialId,
-  CredentialStatus,
-  RuntimeControlSnapshot,
-  RuntimeGenerationSnapshot,
-  RuntimePendingGenerationChange,
+import {
+  RUNTIME_CONTROL_CONTRACT_VERSION,
+  type CredentialId,
+  type CredentialStatus,
+  type RuntimeControlSnapshot,
+  type RuntimeGenerationSnapshot,
+  type RuntimePendingGenerationChange,
 } from "../../runtime/runtimeControl";
 import type {
   DiagnosticCategory,
@@ -121,8 +125,8 @@ export function createPreviewAppGateway(): AppGateway {
   let generation: RuntimeGenerationSnapshot | null = null;
   let generationCredentialRevision: number | null = null;
   let nextEventNumber = 1;
-  let captionAggregate: CaptionAggregateSnapshotV2 = {
-    contractVersion: 2,
+  let captionAggregate: CaptionAggregateSnapshot = {
+    contractVersion: CAPTION_AGGREGATE_CONTRACT_VERSION,
     snapshotRevision: 0,
     activeStream: null,
     openSourceUnits: [],
@@ -173,12 +177,12 @@ export function createPreviewAppGateway(): AppGateway {
 
   function emitCaptionAggregateUpdate(
     next: Omit<
-      CaptionAggregateSnapshotV2,
+      CaptionAggregateSnapshot,
       "contractVersion" | "snapshotRevision"
     >,
   ) {
     captionAggregate = {
-      contractVersion: 2,
+      contractVersion: CAPTION_AGGREGATE_CONTRACT_VERSION,
       snapshotRevision: captionAggregate.snapshotRevision + 1,
       ...next,
     };
@@ -201,7 +205,7 @@ export function createPreviewAppGateway(): AppGateway {
 
   function controlSnapshot(): RuntimeControlSnapshot {
     return {
-      contractVersion: 4,
+      contractVersion: RUNTIME_CONTROL_CONTRACT_VERSION,
       revision: controlRevision,
       runtimeStatus: { ...latestStatus },
       desired: {

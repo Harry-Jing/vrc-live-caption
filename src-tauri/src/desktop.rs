@@ -9,7 +9,7 @@
 mod state;
 
 use crate::audio::{AudioInputDevice, AudioProbeRequest, AudioProbeResult, list_input_devices};
-use crate::caption::CaptionAggregateSnapshotV2;
+use crate::caption::CaptionAggregateSnapshot;
 use crate::chatbox::OSC_CHATBOX_INPUT_ADDRESS;
 use crate::config::AppConfig;
 use crate::credentials::CredentialId;
@@ -129,7 +129,7 @@ fn get_runtime_control_snapshot(state: State<'_, AppState>) -> AppResult<Runtime
 #[tauri::command(async)]
 fn get_caption_aggregate_snapshot(
     state: State<'_, AppState>,
-) -> AppResult<CaptionAggregateSnapshotV2> {
+) -> AppResult<CaptionAggregateSnapshot> {
     state.caption_aggregate_snapshot()
 }
 

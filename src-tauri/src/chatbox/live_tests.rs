@@ -2,8 +2,8 @@ use super::super::pacer::Clock;
 use super::super::transport::ChatboxSendReceipt;
 use super::*;
 use crate::caption::{
-    ActiveCaptionStreamV2, CaptionAggregateStore, CaptionLane, CaptionSnapshotV2, CaptionState,
-    OpenSourceUnitV2,
+    ActiveCaptionStream, CaptionAggregateStore, CaptionLane, CaptionSnapshot, CaptionState,
+    OpenSourceUnit,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::generation_fence::{GenerationCommitter, GenerationFence};
@@ -284,8 +284,8 @@ fn recording_reporter() -> (
     (reporter, diagnostics)
 }
 
-fn active() -> ActiveCaptionStreamV2 {
-    ActiveCaptionStreamV2 {
+fn active() -> ActiveCaptionStream {
+    ActiveCaptionStream {
         generation: 1,
         stream_id: "recognition-1-1".to_string(),
     }
@@ -296,8 +296,8 @@ fn caption(
     revision: u64,
     text: &str,
     state: CaptionState,
-) -> CaptionSnapshotV2 {
-    CaptionSnapshotV2 {
+) -> CaptionSnapshot {
+    CaptionSnapshot {
         generation: 1,
         stream_id: "recognition-1-1".to_string(),
         unit_id: unit_id.map(str::to_string),
@@ -315,15 +315,15 @@ fn caption(
 fn snapshot(
     revision: u64,
     open_source_units: &[&str],
-    captions: Vec<CaptionSnapshotV2>,
-) -> CaptionAggregateSnapshotV2 {
-    CaptionAggregateSnapshotV2 {
+    captions: Vec<CaptionSnapshot>,
+) -> CaptionAggregateSnapshot {
+    CaptionAggregateSnapshot {
         contract_version: 1,
         snapshot_revision: revision,
         active_stream: Some(active()),
         open_source_units: open_source_units
             .iter()
-            .map(|unit_id| OpenSourceUnitV2 {
+            .map(|unit_id| OpenSourceUnit {
                 unit_id: (*unit_id).to_string(),
                 started_at_ms: 100,
             })
@@ -375,10 +375,7 @@ fn close(publisher: &LiveChatboxPublisher) -> AppResult<()> {
     publisher.join()
 }
 
-fn observe(
-    publisher: &LiveChatboxPublisher,
-    snapshot: &CaptionAggregateSnapshotV2,
-) -> AppResult<()> {
+fn observe(publisher: &LiveChatboxPublisher, snapshot: &CaptionAggregateSnapshot) -> AppResult<()> {
     assert_eq!(
         publisher.try_observe(snapshot)?,
         PublisherSubmitOutcome::Handled
@@ -1059,7 +1056,7 @@ fn ignores_out_of_order_and_other_generation_aggregates() -> AppResult<()> {
             CaptionState::Completed,
         )],
     );
-    other_generation.active_stream = Some(ActiveCaptionStreamV2 {
+    other_generation.active_stream = Some(ActiveCaptionStream {
         generation: 2,
         stream_id: "recognition-2-1".to_string(),
     });

@@ -1,6 +1,6 @@
 use super::super::attempt::{RecognitionAttempt, RecognitionAttemptAudioChunk};
 use super::*;
-use crate::caption::{CaptionSnapshotV2, CaptionState};
+use crate::caption::{CaptionSnapshot, CaptionState};
 use crate::error::{AppError, AppResult, ProviderFailureClass, RetryDisposition};
 use crate::recognition::{RecognitionEvent, RecognitionUnitAbortReason};
 use serde_json::{Value, json};
@@ -212,7 +212,7 @@ fn start_unit(
     Ok(())
 }
 
-fn captions(events: Vec<RecognitionEvent>) -> Vec<CaptionSnapshotV2> {
+fn captions(events: Vec<RecognitionEvent>) -> Vec<CaptionSnapshot> {
     events
         .into_iter()
         .filter_map(|event| match event {

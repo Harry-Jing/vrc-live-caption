@@ -1,19 +1,21 @@
 import type { CaptionPreviewStatus } from "./presentation";
 
+export const CAPTION_AGGREGATE_CONTRACT_VERSION = 1 as const;
+
 export const CAPTION_LANES = ["source", "translation"] as const;
 export type CaptionLane = (typeof CAPTION_LANES)[number];
 
 export const CAPTION_STATES = ["ongoing", "completed"] as const;
 export type CaptionState = (typeof CAPTION_STATES)[number];
 
-export type SourceSnapshotRefV2 = Readonly<{
+export type SourceSnapshotRef = Readonly<{
   generation: number;
   streamId: string;
   unitId: string;
   revision: number;
 }>;
 
-export type CaptionSnapshotV2 = Readonly<{
+export type CaptionSnapshot = Readonly<{
   generation: number;
   streamId: string;
   unitId: string | null;
@@ -22,33 +24,33 @@ export type CaptionSnapshotV2 = Readonly<{
   text: string;
   state: CaptionState;
   language: string | null;
-  sourceRef: SourceSnapshotRefV2 | null;
+  sourceRef: SourceSnapshotRef | null;
   unitStartedAtMs: number | null;
   timestampMs: number;
 }>;
 
-export type OpenSourceUnitV2 = Readonly<{
+export type OpenSourceUnit = Readonly<{
   unitId: string;
   startedAtMs: number;
 }>;
 
-export type CaptionAggregateSnapshotV2 = Readonly<{
-  contractVersion: 2;
+export type CaptionAggregateSnapshot = Readonly<{
+  contractVersion: typeof CAPTION_AGGREGATE_CONTRACT_VERSION;
   snapshotRevision: number;
   activeStream: Readonly<{
     generation: number;
     streamId: string;
   }> | null;
-  openSourceUnits: readonly OpenSourceUnitV2[];
-  captions: readonly CaptionSnapshotV2[];
+  openSourceUnits: readonly OpenSourceUnit[];
+  captions: readonly CaptionSnapshot[];
 }>;
 
-export type CaptionDisplay = CaptionSnapshotV2 & Readonly<{ id: string }>;
+export type CaptionDisplay = CaptionSnapshot & Readonly<{ id: string }>;
 
 export type CaptionAggregateView = Readonly<{
   captionPreviewStatus: CaptionPreviewStatus;
-  visibleCaption: CaptionSnapshotV2 | null;
-  completedCaptions: readonly CaptionSnapshotV2[];
+  visibleCaption: CaptionSnapshot | null;
+  completedCaptions: readonly CaptionSnapshot[];
 }>;
 
 const COMPLETED_CAPTION_DISPLAY_LIMIT = 5;
@@ -56,7 +58,7 @@ const COMPLETED_CAPTION_DISPLAY_LIMIT = 5;
 type CaptionAdmission = "open" | "stopped" | "awaitingStartSnapshot";
 
 export type CaptionAggregateState = Readonly<{
-  snapshot: CaptionAggregateSnapshotV2 | null;
+  snapshot: CaptionAggregateSnapshot | null;
   admission: CaptionAdmission;
   admissionBeforeStop: Exclude<CaptionAdmission, "stopped"> | null;
   highestGenerationSeen: number;
@@ -65,7 +67,7 @@ export type CaptionAggregateState = Readonly<{
 export type CaptionAggregateStateInput =
   | Readonly<{
       type: "snapshotReceived";
-      snapshot: CaptionAggregateSnapshotV2;
+      snapshot: CaptionAggregateSnapshot;
     }>
   | Readonly<{ type: "stopRequested" }>
   | Readonly<{ type: "stopFailed" }>

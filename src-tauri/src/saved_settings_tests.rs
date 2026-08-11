@@ -80,10 +80,11 @@ fn invalid_saved_settings_load_defaults_with_review_context() -> AppResult<()> {
 }
 
 #[test]
-fn save_writes_current_settings_through_the_temporary_path() -> AppResult<()> {
+fn current_v1_settings_save_and_load_through_the_temporary_path() -> AppResult<()> {
     let directory = TestSettingsDirectory::new("save")?;
     let path = directory.config_path();
     let mut config = AppConfig::default();
+    assert_eq!(config.schema_version, 1);
     config.audio.input_device_id = Some("saved-device".to_string());
 
     save_to_path(&path, &config)?;
@@ -165,7 +166,7 @@ fn failed_temporary_write_preserves_existing_settings() -> AppResult<()> {
 fn default_config_serializes_schema_version() -> Result<(), serde_json::Error> {
     let value = serde_json::to_value(AppConfig::default())?;
 
-    assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(4)));
+    assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(1)));
     assert_eq!(
         value.pointer("/recognition/path"),
         Some(&serde_json::json!("openai/gpt-transcribe"))
@@ -269,7 +270,7 @@ fn parse_valid_config_still_rejects_other_unknown_fields() -> AppResult<()> {
 }
 
 #[test]
-fn parse_valid_config_rejects_old_schema_version() -> AppResult<()> {
+fn parse_valid_config_rejects_unsupported_schema_version() -> AppResult<()> {
     let mut value = serde_json::to_value(AppConfig::default())
         .map_err(|error| AppError::config(format!("Failed to build test JSON: {error}")))?;
     value["schemaVersion"] = serde_json::json!(2);
@@ -279,59 +280,112 @@ fn parse_valid_config_rejects_old_schema_version() -> AppResult<()> {
 }
 
 #[test]
-fn v3_saved_settings_migrate_every_value_to_v4() -> AppResult<()> {
-    let v3 = serde_json::json!({
-        "schemaVersion": 3,
-        "audio": { "inputDeviceId": "saved-device" },
-        "stt": {
-            "provider": "openai",
-            "languages": ["zh", "en"],
-            "model": "gpt-live-transcribe"
-        },
-        "osc": { "host": "192.0.2.25", "port": 9012, "enabled": false },
-        "publication": { "mode": "live" },
-        "ui": { "showPartial": false }
-    });
+fn pre_baseline_v1_through_v4_require_review_without_rewriting_the_file() -> AppResult<()> {
+    let directory = TestSettingsDirectory::new("pre-baseline")?;
+    let path = directory.config_path();
+    let configs = [
+        (
+            "V1",
+            serde_json::json!({
+                "schemaVersion": 1,
+                "audio": { "inputDeviceId": "v1-device" },
+                "stt": {
+                    "provider": "openai",
+                    "language": "en",
+                    "model": "gpt-4o-mini-transcribe"
+                },
+                "osc": {
+                    "host": "192.0.2.1",
+                    "port": 9001,
+                    "enabled": true,
+                    "minIntervalMs": 1200
+                },
+                "ui": { "showPartial": true }
+            }),
+        ),
+        (
+            "V2",
+            serde_json::json!({
+                "schemaVersion": 2,
+                "audio": { "inputDeviceId": "v2-device" },
+                "stt": {
+                    "provider": "openai",
+                    "language": "zh",
+                    "model": "gpt-4o-mini-transcribe"
+                },
+                "osc": { "host": "192.0.2.2", "port": 9002, "enabled": false },
+                "publication": { "mode": "completed" },
+                "ui": { "showPartial": false }
+            }),
+        ),
+        (
+            "V3",
+            serde_json::json!({
+                "schemaVersion": 3,
+                "audio": { "inputDeviceId": "v3-device" },
+                "stt": {
+                    "provider": "openai",
+                    "languages": ["zh", "en"],
+                    "model": "gpt-live-transcribe"
+                },
+                "osc": { "host": "192.0.2.3", "port": 9003, "enabled": false },
+                "publication": { "mode": "live" },
+                "ui": { "showPartial": false }
+            }),
+        ),
+        (
+            "V4",
+            serde_json::json!({
+                "schemaVersion": 4,
+                "audio": { "inputDeviceId": "v4-device" },
+                "recognition": {
+                    "path": "openai/gpt-live-transcribe",
+                    "expectedLanguages": ["zh", "en"]
+                },
+                "osc": { "host": "192.0.2.4", "port": 9004, "enabled": false },
+                "publication": { "mode": "live" },
+                "ui": { "showOngoingPreview": false }
+            }),
+        ),
+    ];
 
-    let migrated = parse_valid_config(&v3.to_string())?;
+    for (version, config) in configs {
+        let contents = serde_json::to_string_pretty(&config).map_err(|error| {
+            AppError::state(format!(
+                "Failed to serialize pre-baseline {version}: {error}"
+            ))
+        })?;
+        fs::write(&path, &contents).map_err(|error| {
+            AppError::config_io(format!(
+                "Failed to write pre-baseline {version} settings at {}: {error}",
+                path.display()
+            ))
+        })?;
 
-    assert_eq!(migrated.schema_version, 4);
-    assert_eq!(
-        migrated.audio.input_device_id.as_deref(),
-        Some("saved-device")
-    );
-    assert_eq!(
-        migrated.recognition.path,
-        crate::config::RecognitionPath::OpenAiGptLiveTranscribe
-    );
-    assert_eq!(migrated.recognition.expected_languages, ["zh", "en"]);
-    assert_eq!(migrated.osc.host, "192.0.2.25");
-    assert_eq!(migrated.osc.port, 9012);
-    assert!(!migrated.osc.enabled);
-    assert_eq!(
-        migrated.publication.mode,
-        crate::config::PublicationMode::Live
-    );
-    assert!(!migrated.ui.show_ongoing_preview);
-    Ok(())
-}
+        match load_from_path(path.clone())? {
+            SavedSettingsLoad::Ready(_) => {
+                return Err(AppError::state(format!(
+                    "Pre-baseline {version} settings unexpectedly loaded without review."
+                )));
+            }
+            SavedSettingsLoad::DefaultsRequireReview {
+                config,
+                path: reported_path,
+                error,
+            } => {
+                assert_eq!(config, AppConfig::default());
+                assert_eq!(reported_path, path);
+                assert_eq!(error.code(), "config.io_failed");
+            }
+        }
+        let preserved = fs::read_to_string(&path).map_err(|error| {
+            AppError::config_io(format!(
+                "Failed to reread pre-baseline {version} settings at {}: {error}",
+                path.display()
+            ))
+        })?;
+        assert_eq!(preserved, contents);
+    }
 
-#[test]
-fn v3_migration_fails_closed_on_unknown_fields() -> AppResult<()> {
-    let mut v3 = serde_json::json!({
-        "schemaVersion": 3,
-        "audio": { "inputDeviceId": null },
-        "stt": {
-            "provider": "openai",
-            "languages": ["en"],
-            "model": "gpt-transcribe"
-        },
-        "osc": { "host": "127.0.0.1", "port": 9000, "enabled": true },
-        "publication": { "mode": "completed" },
-        "ui": { "showPartial": true }
-    });
-    v3["stt"]["translationModel"] = serde_json::json!("must-not-be-accepted");
-
-    assert!(parse_valid_config(&v3.to_string()).is_err());
     Ok(())
 }

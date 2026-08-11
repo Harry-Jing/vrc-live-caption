@@ -1,16 +1,41 @@
 import { describe, expect, test } from "vitest";
-import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v4.json?raw";
+import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v1.json?raw";
 import {
-  decodeRuntimeControlSnapshotV4,
+  decodeRuntimeControlSnapshot,
   RuntimeControlContractError,
 } from "./runtimeControlContract";
 
 const fixtureJson = JSON.parse(runtimeControlFixture) as unknown;
-const completePayload = decodeRuntimeControlSnapshotV4(fixtureJson);
+const completePayload = decodeRuntimeControlSnapshot(fixtureJson);
 
-describe("decodeRuntimeControlSnapshotV4", () => {
-  test("decodes the shared Rust-serialized V4 fixture", () => {
-    expect(decodeRuntimeControlSnapshotV4(fixtureJson)).toEqual(fixtureJson);
+describe("decodeRuntimeControlSnapshot", () => {
+  test("decodes the shared Rust-serialized fixture", () => {
+    expect(decodeRuntimeControlSnapshot(fixtureJson)).toEqual(fixtureJson);
+  });
+
+  test("rejects the old runtime control contract version", () => {
+    expect(() =>
+      decodeRuntimeControlSnapshot({
+        ...(fixtureJson as object),
+        contractVersion: 4,
+      }),
+    ).toThrow(
+      "Invalid runtime control payload at $.contractVersion: expected 1.",
+    );
+  });
+
+  test("rejects the old app config schema version", () => {
+    expect(() =>
+      decodeRuntimeControlSnapshot({
+        ...completePayload,
+        desired: {
+          ...completePayload.desired,
+          config: { ...completePayload.desired.config, schemaVersion: 4 },
+        },
+      }),
+    ).toThrow(
+      "Invalid runtime control payload at $.desired.config.schemaVersion: expected 1.",
+    );
   });
 
   test.each([
@@ -44,7 +69,7 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       },
     };
 
-    expect(() => decodeRuntimeControlSnapshotV4(payload)).toThrow(path);
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(path);
   });
 
   test("decodes an active generation while its recognition service reconnects", () => {
@@ -56,7 +81,7 @@ describe("decodeRuntimeControlSnapshotV4", () => {
         : null,
     };
 
-    expect(decodeRuntimeControlSnapshotV4(payload)).toMatchObject({
+    expect(decodeRuntimeControlSnapshot(payload)).toMatchObject({
       runtimeStatus: { status: "reconnecting" },
       generation: { phase: "reconnecting" },
     });
@@ -71,9 +96,9 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       },
     };
 
-    expect(decodeRuntimeControlSnapshotV4(payload).desired.credentials).toEqual(
-      [{ state: "unconfigured", id: "openai" }],
-    );
+    expect(decodeRuntimeControlSnapshot(payload).desired.credentials).toEqual([
+      { state: "unconfigured", id: "openai" },
+    ]);
   });
 
   test("decodes an unavailable service credential with a structured failure", () => {
@@ -89,9 +114,9 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       },
     };
 
-    expect(decodeRuntimeControlSnapshotV4(payload).desired.credentials).toEqual(
-      [{ state: "unavailable", id: "openai", failure }],
-    );
+    expect(decodeRuntimeControlSnapshot(payload).desired.credentials).toEqual([
+      { state: "unavailable", id: "openai", failure },
+    ]);
   });
 
   test("rejects credential fields that do not belong to the tagged state", () => {
@@ -113,7 +138,7 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       },
     };
 
-    expect(() => decodeRuntimeControlSnapshotV4(payload)).toThrow(
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
       "$.desired.credentials[0].configured",
     );
   });
@@ -138,7 +163,7 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       generation: null,
     };
 
-    expect(decodeRuntimeControlSnapshotV4(payload)).toMatchObject({
+    expect(decodeRuntimeControlSnapshot(payload)).toMatchObject({
       desired: {
         config: { publication: { mode: "live" } },
         captionPipelinePlan: { publication: incompatiblePublication },
@@ -179,7 +204,7 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       };
 
       expect(
-        decodeRuntimeControlSnapshotV4(payload).desired.captionPipelinePlan
+        decodeRuntimeControlSnapshot(payload).desired.captionPipelinePlan
           .publication,
       ).toEqual(payload.desired.captionPipelinePlan.publication);
     }
@@ -205,7 +230,7 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       },
     };
 
-    expect(() => decodeRuntimeControlSnapshotV4(payload)).toThrow(
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
       `$.desired.captionPipelinePlan.recognition.${field}`,
     );
   });
@@ -225,7 +250,7 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       },
     };
 
-    expect(() => decodeRuntimeControlSnapshotV4(payload)).toThrow(
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
       "$.desired.captionPipelinePlan.publication.timing.timing",
     );
   });
@@ -233,7 +258,7 @@ describe("decodeRuntimeControlSnapshotV4", () => {
   test("rejects an incompatible plan on an installed generation", () => {
     const generation = completePayload.generation;
     if (generation === null) {
-      throw new Error("V4 fixture must contain a runtime generation.");
+      throw new Error("Fixture must contain a runtime generation.");
     }
     const payload = {
       ...completePayload,
@@ -252,19 +277,19 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       },
     };
 
-    expect(() => decodeRuntimeControlSnapshotV4(payload)).toThrow(
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
       "Invalid runtime control payload at $.generation.captionPipelinePlan.publication.state: installed generations require a compatible publication plan.",
     );
   });
 
   test.each([
     [
-      "a legacy contract version",
+      "a pre-baseline contract version",
       { ...completePayload, contractVersion: 3 },
       "$.contractVersion",
     ],
     [
-      "the legacy V3 stt config",
+      "the removed stt config shape",
       {
         ...completePayload,
         desired: {
@@ -283,7 +308,7 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       "$.desired.config.stt",
     ],
     [
-      "the V3 ongoing-preview field",
+      "the removed partial-preview field",
       {
         ...completePayload,
         desired: {
@@ -353,11 +378,11 @@ describe("decodeRuntimeControlSnapshotV4", () => {
       "$.desired.captionPipelinePlan.publication.mode",
     ],
   ])("rejects %s", (_name, payload, path) => {
-    expect(() => decodeRuntimeControlSnapshotV4(payload)).toThrow(path);
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(path);
   });
 
   test("preserves the runtime control contract error type", () => {
-    expect(() => decodeRuntimeControlSnapshotV4(null)).toThrow(
+    expect(() => decodeRuntimeControlSnapshot(null)).toThrow(
       RuntimeControlContractError,
     );
   });

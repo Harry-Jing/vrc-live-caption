@@ -1,6 +1,6 @@
 import type { PublicationMode, RecognitionPath } from "./captionPipeline";
 
-export const APP_CONFIG_SCHEMA_VERSION = 4 as const;
+export const APP_CONFIG_SCHEMA_VERSION = 1 as const;
 
 export type AppConfig = {
   schemaVersion: typeof APP_CONFIG_SCHEMA_VERSION;

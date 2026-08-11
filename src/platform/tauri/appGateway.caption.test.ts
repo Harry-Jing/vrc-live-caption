@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v2.json?raw";
+import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v1.json?raw";
 import { RUNTIME_EVENTS, TAURI_COMMANDS } from "../../runtime/wire/tauriIpc";
 import { createTauriAppGateway, type TauriIpcBridge } from "./appGateway";
 
@@ -20,7 +20,7 @@ test("Tauri AppGateway decodes the authoritative caption aggregate pull", async 
   const gateway = createTauriAppGateway(bridge);
 
   await expect(gateway.getCaptionAggregateSnapshot()).resolves.toMatchObject({
-    contractVersion: 2,
+    contractVersion: 1,
     snapshotRevision: 4,
     activeStream: { generation: 7, streamId: "recognition-7-1" },
   });
@@ -55,7 +55,7 @@ test("Tauri AppGateway decodes caption-aggregate-changed before delivery", async
 
   expect(received).toHaveLength(1);
   expect(received[0]).toMatchObject({
-    contractVersion: 2,
+    contractVersion: 1,
     snapshotRevision: 4,
   });
 });

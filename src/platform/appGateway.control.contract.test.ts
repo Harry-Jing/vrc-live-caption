@@ -14,7 +14,7 @@ import {
   APP_CONFIG_SCHEMA_VERSION,
   type AppConfig,
 } from "../runtime/appConfig";
-import type { CaptionAggregateSnapshotV2 } from "../runtime/captionAggregate";
+import type { CaptionAggregateSnapshot } from "../runtime/captionAggregate";
 import type {
   RuntimeControlSnapshot,
   RuntimePendingGenerationChange,
@@ -38,7 +38,7 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
     Set<(event: Readonly<{ payload: unknown }>) => void>
   >();
   let snapshot: RuntimeControlSnapshot = {
-    contractVersion: 4,
+    contractVersion: 1,
     revision: 1,
     runtimeStatus: { status: "idle", timestampMs: 1 },
     desired: {
@@ -52,8 +52,8 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
   };
   let credentialRevision = 0;
   let generationCredentialRevision: number | null = null;
-  let captionAggregate: CaptionAggregateSnapshotV2 = {
-    contractVersion: 2,
+  let captionAggregate: CaptionAggregateSnapshot = {
+    contractVersion: 1,
     snapshotRevision: 0,
     activeStream: null,
     openSourceUnits: [],
@@ -72,12 +72,12 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
 
   function emitCaptionAggregateUpdate(
     next: Omit<
-      CaptionAggregateSnapshotV2,
+      CaptionAggregateSnapshot,
       "contractVersion" | "snapshotRevision"
     >,
   ) {
     captionAggregate = {
-      contractVersion: 2,
+      contractVersion: 1,
       snapshotRevision: captionAggregate.snapshotRevision + 1,
       ...next,
     };
@@ -301,12 +301,12 @@ test("TauriAppGateway rejects an invalid runtime-control pull", async () => {
       return Promise.resolve(() => undefined);
     },
     invoke<Result>() {
-      return Promise.resolve({ contractVersion: 1 } as Result);
+      return Promise.resolve({ contractVersion: 4 } as Result);
     },
   });
 
   await expect(gateway.getRuntimeControlSnapshot()).rejects.toThrow(
-    "Invalid runtime control payload at $.contractVersion: expected 4.",
+    "Invalid runtime control payload at $.contractVersion: expected 1.",
   );
 });
 
@@ -331,12 +331,12 @@ test.each([
       return Promise.resolve(() => undefined);
     },
     invoke<Result>() {
-      return Promise.resolve({ contractVersion: 1 } as Result);
+      return Promise.resolve({ contractVersion: 4 } as Result);
     },
   });
 
   await expect(invoke(gateway)).rejects.toThrow(
-    "Invalid runtime control payload at $.contractVersion: expected 4.",
+    "Invalid runtime control payload at $.contractVersion: expected 1.",
   );
 });
 
@@ -361,8 +361,8 @@ test("TauriAppGateway decodes runtime-control pushes before delivery", async () 
     },
   );
 
-  expect(() => deliver?.({ payload: { contractVersion: 1 } })).toThrow(
-    "Invalid runtime control payload at $.contractVersion: expected 4.",
+  expect(() => deliver?.({ payload: { contractVersion: 4 } })).toThrow(
+    "Invalid runtime control payload at $.contractVersion: expected 1.",
   );
   expect(received).toEqual([]);
   unsubscribe();
@@ -382,7 +382,7 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
     const started = await gateway.startRuntime();
     unsubscribe();
 
-    expect(initial.contractVersion).toBe(4);
+    expect(initial.contractVersion).toBe(1);
     expect(initial.generation).toBeNull();
     expect(started.generation?.selection.recognition.path).toBe(
       "openai/gpt-transcribe",

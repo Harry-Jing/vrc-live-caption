@@ -1,4 +1,4 @@
-use super::super::contract::SourceSnapshotRefV2;
+use super::super::contract::SourceSnapshotRef;
 use super::*;
 
 fn source_caption(
@@ -8,8 +8,8 @@ fn source_caption(
     text: impl Into<String>,
     state: CaptionState,
     started_at_ms: u64,
-) -> CaptionSnapshotV2 {
-    CaptionSnapshotV2 {
+) -> CaptionSnapshot {
+    CaptionSnapshot {
         generation,
         stream_id: stream_id.to_string(),
         unit_id: Some(unit_id.to_string()),
@@ -25,21 +25,21 @@ fn source_caption(
 }
 
 fn translation_caption(
-    source: &CaptionSnapshotV2,
+    source: &CaptionSnapshot,
     text: impl Into<String>,
     state: CaptionState,
-) -> crate::error::AppResult<CaptionSnapshotV2> {
+) -> crate::error::AppResult<CaptionSnapshot> {
     let unit_id = source
         .unit_id
         .clone()
         .ok_or_else(|| crate::error::AppError::state("Test source caption had no unit id."))?;
-    Ok(CaptionSnapshotV2 {
+    Ok(CaptionSnapshot {
         lane: CaptionLane::Translation,
         revision: 1,
         text: text.into(),
         state,
         language: Some("zh".to_string()),
-        source_ref: Some(SourceSnapshotRefV2 {
+        source_ref: Some(SourceSnapshotRef {
             generation: source.generation,
             stream_id: source.stream_id.clone(),
             unit_id,
@@ -157,7 +157,7 @@ fn lane_linkage_shape_is_enforced_at_aggregate_admission() -> crate::error::AppR
         CaptionState::Ongoing,
         20,
     );
-    linked_source.source_ref = Some(SourceSnapshotRefV2 {
+    linked_source.source_ref = Some(SourceSnapshotRef {
         generation: source.generation,
         stream_id: source.stream_id,
         unit_id: source.unit_id.unwrap_or_default(),
@@ -169,7 +169,7 @@ fn lane_linkage_shape_is_enforced_at_aggregate_admission() -> crate::error::AppR
 }
 
 #[test]
-fn linked_translation_produces_the_shared_v2_aggregate_snapshot() -> crate::error::AppResult<()> {
+fn linked_translation_produces_the_shared_v1_aggregate_snapshot() -> crate::error::AppResult<()> {
     let store = CaptionAggregateStore::default();
     let started = store.begin_generation(7)?;
     let active = started
@@ -182,7 +182,7 @@ fn linked_translation_produces_the_shared_v2_aggregate_snapshot() -> crate::erro
             .start_unit(7, &active.stream_id, "speech-7-1".to_string(), 1_000)?
             .is_some()
     );
-    let source = CaptionSnapshotV2 {
+    let source = CaptionSnapshot {
         generation: 7,
         stream_id: active.stream_id,
         unit_id: Some("speech-7-1".to_string()),
@@ -201,7 +201,7 @@ fn linked_translation_produces_the_shared_v2_aggregate_snapshot() -> crate::erro
     assert!(store.accept_caption(translation)?.is_some());
 
     let expected = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../../contracts/caption-aggregate-snapshot-v2.json"
+        "../../../contracts/caption-aggregate-snapshot-v1.json"
     ))
     .map_err(|error| crate::error::AppError::state(error.to_string()))?;
     let actual = serde_json::to_value(store.snapshot()?)
@@ -221,7 +221,7 @@ fn stop_and_new_generation_reject_old_writers_without_losing_completed_history()
         .active_stream
         .ok_or_else(|| crate::error::AppError::state("Generation 1 was not active."))?;
     store.start_unit(1, &active.stream_id, "completed".to_string(), 10)?;
-    let completed = CaptionSnapshotV2 {
+    let completed = CaptionSnapshot {
         generation: 1,
         stream_id: active.stream_id.clone(),
         unit_id: Some("completed".to_string()),
@@ -237,7 +237,7 @@ fn stop_and_new_generation_reject_old_writers_without_losing_completed_history()
     assert!(store.accept_caption(completed.clone())?.is_some());
     assert!(
         store
-            .accept_caption(CaptionSnapshotV2 {
+            .accept_caption(CaptionSnapshot {
                 revision: 2,
                 text: "must not reopen".to_string(),
                 state: CaptionState::Ongoing,
@@ -249,7 +249,7 @@ fn stop_and_new_generation_reject_old_writers_without_losing_completed_history()
     store.start_unit(1, &active.stream_id, "ongoing".to_string(), 30)?;
     assert!(
         store
-            .accept_caption(CaptionSnapshotV2 {
+            .accept_caption(CaptionSnapshot {
                 unit_id: Some("ongoing".to_string()),
                 revision: 2,
                 text: "discarded on stop".to_string(),
@@ -300,7 +300,7 @@ fn stop_and_new_generation_reject_old_writers_without_losing_completed_history()
     );
     assert!(
         store
-            .accept_caption(CaptionSnapshotV2 {
+            .accept_caption(CaptionSnapshot {
                 generation: 2,
                 stream_id: next_active.stream_id,
                 unit_id: Some("no-result".to_string()),
@@ -324,7 +324,7 @@ fn unitless_ongoing_caption_replaces_by_revision_but_cannot_complete() -> crate:
         .begin_generation(3)?
         .active_stream
         .ok_or_else(|| crate::error::AppError::state("Generation 3 was not active."))?;
-    let first = CaptionSnapshotV2 {
+    let first = CaptionSnapshot {
         generation: 3,
         stream_id: active.stream_id,
         unit_id: None,
@@ -342,7 +342,7 @@ fn unitless_ongoing_caption_replaces_by_revision_but_cannot_complete() -> crate:
     assert!(store.accept_caption(first.clone())?.is_none());
     assert!(
         store
-            .accept_caption(CaptionSnapshotV2 {
+            .accept_caption(CaptionSnapshot {
                 revision: 0,
                 text: "older".to_string(),
                 ..first.clone()
@@ -351,7 +351,7 @@ fn unitless_ongoing_caption_replaces_by_revision_but_cannot_complete() -> crate:
     );
     assert!(
         store
-            .accept_caption(CaptionSnapshotV2 {
+            .accept_caption(CaptionSnapshot {
                 revision: 2,
                 text: "replacement full snapshot".to_string(),
                 timestamp_ms: 20,
@@ -361,7 +361,7 @@ fn unitless_ongoing_caption_replaces_by_revision_but_cannot_complete() -> crate:
     );
     assert!(
         store
-            .accept_caption(CaptionSnapshotV2 {
+            .accept_caption(CaptionSnapshot {
                 revision: 1,
                 text: "stale full snapshot".to_string(),
                 timestamp_ms: 25,
@@ -371,7 +371,7 @@ fn unitless_ongoing_caption_replaces_by_revision_but_cannot_complete() -> crate:
     );
     assert!(
         store
-            .accept_caption(CaptionSnapshotV2 {
+            .accept_caption(CaptionSnapshot {
                 revision: 3,
                 text: "unitless completion is invalid".to_string(),
                 state: CaptionState::Completed,
@@ -405,7 +405,7 @@ fn completed_history_keeps_the_five_newest_units_in_newest_first_order()
         store.start_unit(4, &active.stream_id, unit_id.clone(), index * 10)?;
         assert!(
             store
-                .accept_caption(CaptionSnapshotV2 {
+                .accept_caption(CaptionSnapshot {
                     generation: 4,
                     stream_id: active.stream_id.clone(),
                     unit_id: Some(unit_id),
@@ -523,7 +523,7 @@ fn completing_an_older_unit_preserves_application_unit_order_after_clock_rollbac
     assert!(store.accept_caption(newer)?.is_some());
     assert!(
         store
-            .accept_caption(CaptionSnapshotV2 {
+            .accept_caption(CaptionSnapshot {
                 revision: 2,
                 text: "older completed".to_string(),
                 state: CaptionState::Completed,
@@ -612,7 +612,7 @@ fn unit_order_is_generation_scoped_when_unit_ids_are_reused() -> crate::error::A
     assert!(store.accept_caption(newer)?.is_some());
     assert!(
         store
-            .accept_caption(CaptionSnapshotV2 {
+            .accept_caption(CaptionSnapshot {
                 revision: 2,
                 text: "generation 8 second revised".to_string(),
                 timestamp_ms: 300,
@@ -650,7 +650,7 @@ fn terminal_lane_replay_guard_stays_bounded_during_a_long_generation() -> crate:
     store.start_unit(5, &active.stream_id, retained_unit_id.clone(), 0)?;
     assert!(
         store
-            .accept_caption(CaptionSnapshotV2 {
+            .accept_caption(CaptionSnapshot {
                 generation: 5,
                 stream_id: active.stream_id.clone(),
                 unit_id: Some(retained_unit_id.clone()),
@@ -745,7 +745,7 @@ fn accepted_completion_change_survives_immediate_snapshot_history_trimming()
     );
     assert!(matches!(
         update.change,
-        CaptionAggregateChange::CaptionAccepted(CaptionSnapshotV2 {
+        CaptionAggregateChange::CaptionAccepted(CaptionSnapshot {
             unit_id: Some(ref unit_id),
             ref text,
             state: CaptionState::Completed,
@@ -769,7 +769,7 @@ fn unit_admissions_return_the_exact_open_and_abort_changes() -> crate::error::Ap
         .ok_or_else(|| crate::error::AppError::state("Caption unit was not opened."))?;
     assert!(matches!(
         opened.change,
-        CaptionAggregateChange::SourceUnitOpened(OpenSourceUnitV2 {
+        CaptionAggregateChange::SourceUnitOpened(OpenSourceUnit {
             ref unit_id,
             started_at_ms: 123,
         }) if unit_id == "speech-10"

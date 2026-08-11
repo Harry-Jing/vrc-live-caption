@@ -133,26 +133,26 @@ impl PublicationPlan {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CaptionPipelinePlanSnapshot {
+pub(crate) struct CaptionPipelinePlan {
     pub(crate) recognition: RecognitionCapabilityProfile,
     pub(crate) publication: PublicationPlan,
 }
 
-pub(crate) fn plan_caption_pipeline(config: &AppConfig) -> CaptionPipelinePlanSnapshot {
+pub(crate) fn plan_caption_pipeline(config: &AppConfig) -> CaptionPipelinePlan {
     let recognition = recognition_capabilities(&config.recognition);
     let publication = plan_publication(
         &recognition.lanes,
         config.publication.mode,
         &[CaptionLane::Source],
     );
-    CaptionPipelinePlanSnapshot {
+    CaptionPipelinePlan {
         recognition,
         publication,
     }
 }
 
 pub(crate) fn publication_timing_for_start(
-    plan: &CaptionPipelinePlanSnapshot,
+    plan: &CaptionPipelinePlan,
 ) -> AppResult<ResolvedPublicationTiming> {
     plan.publication.resolved_timing().ok_or_else(|| {
         AppError::config(format!(

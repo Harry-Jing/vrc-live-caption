@@ -48,10 +48,10 @@ fn build_manifest_commands() -> AppResult<Vec<String>> {
 
 #[test]
 fn tauri_command_names_match_the_shared_contract() -> AppResult<()> {
-    let manifest = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../contracts/tauri-ipc-v2.json"
-    ))
-    .map_err(|error| AppError::config(format!("Failed to parse Tauri IPC contract: {error}")))?;
+    let manifest_json = include_str!("../../contracts/tauri-ipc.json");
+    let manifest = serde_json::from_str::<serde_json::Value>(manifest_json).map_err(|error| {
+        AppError::config(format!("Failed to parse Tauri IPC contract: {error}"))
+    })?;
     let mut expected_commands = manifest
         .get("commands")
         .and_then(serde_json::Value::as_object)

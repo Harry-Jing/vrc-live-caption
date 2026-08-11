@@ -31,6 +31,7 @@ import {
   CREDENTIAL_STORAGES,
   RUNTIME_GENERATION_PHASES,
   RUNTIME_PENDING_GENERATION_CHANGES,
+  RUNTIME_CONTROL_CONTRACT_VERSION,
   type ChatboxPublicationSnapshot,
   type CredentialId,
   type CredentialStatus,
@@ -653,7 +654,7 @@ function decodeRuntimeGenerationSnapshot(
   };
 }
 
-export function decodeRuntimeControlSnapshotV4(
+export function decodeRuntimeControlSnapshot(
   value: unknown,
 ): RuntimeControlSnapshot {
   const input = exactRecord(value, "$", [
@@ -664,8 +665,11 @@ export function decodeRuntimeControlSnapshotV4(
     "generation",
     "pendingGenerationChanges",
   ]);
-  if (input["contractVersion"] !== 4) {
-    throw new RuntimeControlContractError("$.contractVersion", "expected 4");
+  if (input["contractVersion"] !== RUNTIME_CONTROL_CONTRACT_VERSION) {
+    throw new RuntimeControlContractError(
+      "$.contractVersion",
+      `expected ${String(RUNTIME_CONTROL_CONTRACT_VERSION)}`,
+    );
   }
   const desiredInput = exactRecord(input["desired"], "$.desired", [
     "revision",
@@ -676,7 +680,7 @@ export function decodeRuntimeControlSnapshotV4(
   const config = decodeAppConfig(desiredInput["config"], "$.desired.config");
 
   return {
-    contractVersion: 4,
+    contractVersion: RUNTIME_CONTROL_CONTRACT_VERSION,
     revision: safeInteger(input["revision"], "$.revision", 0),
     runtimeStatus: decodeRuntimeStatus(
       input["runtimeStatus"],

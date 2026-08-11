@@ -1,6 +1,6 @@
 //! Deterministic normalized recognition events for runtime contract tests.
 
-use crate::caption::{CaptionLane, CaptionSnapshotV2, CaptionState};
+use crate::caption::{CaptionLane, CaptionSnapshot, CaptionState};
 use crate::recognition::{RecognitionEvent, RecognitionUnitAbortReason};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,8 +99,8 @@ impl ScriptedRecognitionEvents {
         revision: u64,
         scripted: ScriptedText,
         state: CaptionState,
-    ) -> CaptionSnapshotV2 {
-        CaptionSnapshotV2 {
+    ) -> CaptionSnapshot {
+        CaptionSnapshot {
             generation: self.context.generation,
             stream_id: self.context.stream_id.clone(),
             unit_id: Some(unit_id),

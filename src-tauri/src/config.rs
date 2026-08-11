@@ -7,7 +7,7 @@
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const APP_CONFIG_SCHEMA_VERSION: u32 = 4;
+pub(crate) const APP_CONFIG_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

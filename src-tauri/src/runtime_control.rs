@@ -1,6 +1,6 @@
 //! Authoritative desired settings and effective runtime-generation state.
 
-use crate::caption_pipeline::{CaptionPipelinePlanSnapshot, plan_caption_pipeline};
+use crate::caption_pipeline::{CaptionPipelinePlan, plan_caption_pipeline};
 use crate::config::{AppConfig, AudioConfig, OscConfig, PublicationConfig, RecognitionConfig};
 use crate::credentials::{CredentialId, CredentialStatus, CredentialStorage};
 use crate::error::{AppError, AppResult};
@@ -8,7 +8,7 @@ use crate::wall_clock::unix_timestamp_ms;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 
-pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 4;
+pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,7 +61,7 @@ pub(crate) struct RuntimeControlSnapshot {
 pub(crate) struct RuntimeDesiredSnapshot {
     pub(crate) revision: u64,
     pub(crate) config: AppConfig,
-    pub(crate) caption_pipeline_plan: CaptionPipelinePlanSnapshot,
+    pub(crate) caption_pipeline_plan: CaptionPipelinePlan,
     pub(crate) credentials: Vec<CredentialStatus>,
 }
 
@@ -72,7 +72,7 @@ pub(crate) struct RuntimeGenerationSnapshot {
     pub(crate) phase: RuntimeGenerationPhase,
     pub(crate) started_from_config_revision: u64,
     pub(crate) selection: RuntimeGenerationSelection,
-    pub(crate) caption_pipeline_plan: CaptionPipelinePlanSnapshot,
+    pub(crate) caption_pipeline_plan: CaptionPipelinePlan,
     pub(crate) credential: Option<RuntimeGenerationCredentialSnapshot>,
     pub(crate) chatbox_publication: ChatboxPublicationSnapshot,
     pub(crate) uploads_microphone_audio: bool,

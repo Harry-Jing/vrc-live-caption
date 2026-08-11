@@ -8,7 +8,7 @@ mod openai;
 #[cfg(test)]
 mod scripted_events;
 
-use crate::caption::{CaptionSnapshotV2, CaptionState};
+use crate::caption::{CaptionSnapshot, CaptionState};
 use crate::error::{AppError, AppResult};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -42,7 +42,7 @@ pub(crate) enum RecognitionEvent {
         unit_id: String,
         reason: RecognitionUnitAbortReason,
     },
-    Caption(CaptionSnapshotV2),
+    Caption(CaptionSnapshot),
 }
 
 /// Why a confirmed source unit produced no Completed caption.
@@ -248,7 +248,7 @@ fn same_ongoing_caption(existing: &RecognitionSignal, incoming: &RecognitionSign
 fn is_ongoing_caption(signal: &RecognitionSignal) -> bool {
     matches!(
         signal,
-        RecognitionSignal::Event(RecognitionEvent::Caption(CaptionSnapshotV2 {
+        RecognitionSignal::Event(RecognitionEvent::Caption(CaptionSnapshot {
             state: CaptionState::Ongoing,
             ..
         }))

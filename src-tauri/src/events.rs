@@ -15,7 +15,7 @@
 //! rather than propagated. The runtime's lifecycle never depends on whether
 //! an event reached the webview.
 
-use crate::caption::CaptionAggregateSnapshotV2;
+use crate::caption::CaptionAggregateSnapshot;
 use crate::error::AppError;
 use crate::runtime_control::{
     RuntimeControlSnapshot, RuntimeStatus, RuntimeStatusEvent, RuntimeStatusRecorder,
@@ -204,7 +204,7 @@ pub(crate) fn emit_runtime_control_changed<R: Runtime>(
 
 pub(crate) fn emit_caption_aggregate_changed<R: Runtime>(
     app: &AppHandle<R>,
-    snapshot: CaptionAggregateSnapshotV2,
+    snapshot: CaptionAggregateSnapshot,
 ) {
     emit_event(app, EVENT_CAPTION_AGGREGATE_CHANGED, snapshot);
 }

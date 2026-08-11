@@ -5,8 +5,8 @@ import {
   decodeAudioLevelEvent,
   decodeAudioProbeResult,
 } from "../../runtime/wire/audioContract";
-import { decodeCaptionAggregateSnapshotV2 } from "../../runtime/wire/captionAggregateContract";
-import { decodeRuntimeControlSnapshotV4 } from "../../runtime/wire/runtimeControlContract";
+import { decodeCaptionAggregateSnapshot } from "../../runtime/wire/captionAggregateContract";
+import { decodeRuntimeControlSnapshot } from "../../runtime/wire/runtimeControlContract";
 import {
   decodeDiagnosticEvent,
   decodeRuntimeStatusEvent,
@@ -90,7 +90,7 @@ export function createTauriAppGateway(
   ) {
     const payload = await invokeCommand(command, args);
 
-    return decodeRuntimeControlSnapshotV4(payload);
+    return decodeRuntimeControlSnapshot(payload);
   }
 
   return {
@@ -132,7 +132,7 @@ export function createTauriAppGateway(
           ),
           listenFor(
             RUNTIME_EVENTS.captionAggregateChanged,
-            decodeCaptionAggregateSnapshotV2,
+            decodeCaptionAggregateSnapshot,
             (payload) => {
               listener({ type: "captionAggregateChanged", payload });
             },
@@ -170,7 +170,7 @@ export function createTauriAppGateway(
 
     async subscribeRuntimeControlSnapshots(listener) {
       const unlisten = await bridge.listen(RUNTIME_CONTROL_EVENT, (event) => {
-        listener(decodeRuntimeControlSnapshotV4(event.payload));
+        listener(decodeRuntimeControlSnapshot(event.payload));
       });
 
       return () => {
@@ -199,7 +199,7 @@ export function createTauriAppGateway(
         TAURI_COMMANDS.getCaptionAggregateSnapshot,
       );
 
-      return decodeCaptionAggregateSnapshotV2(payload);
+      return decodeCaptionAggregateSnapshot(payload);
     },
 
     saveAppConfig(config: AppConfig) {

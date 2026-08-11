@@ -12,7 +12,7 @@ use super::common::{
 use super::layout::render_live_viewport;
 use super::pacer::ChatboxPacer;
 use super::transport::ChatboxTransport;
-use crate::caption::{CaptionAggregateSnapshotV2, CaptionLane, CaptionSnapshotV2, CaptionState};
+use crate::caption::{CaptionAggregateSnapshot, CaptionLane, CaptionSnapshot, CaptionState};
 use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::error::{AppError, AppResult};
 use crate::generation_fence::GenerationCommitter;
@@ -242,7 +242,7 @@ impl LiveChatboxPublisher {
     /// Replaces the observed Live state without waiting for pacing or OSC.
     pub(crate) fn try_observe(
         &self,
-        snapshot: &CaptionAggregateSnapshotV2,
+        snapshot: &CaptionAggregateSnapshot,
     ) -> AppResult<PublisherSubmitOutcome> {
         let mut state = self.lock_state()?;
         if state.lifecycle != PublisherLifecycle::Running || self.shared.committer.is_closed() {
@@ -411,8 +411,8 @@ impl LiveChatboxPublisher {
     fn candidate_from_captions(
         &self,
         state: &mut LivePublisherState,
-        caption: &CaptionSnapshotV2,
-        source_captions: &[&CaptionSnapshotV2],
+        caption: &CaptionSnapshot,
+        source_captions: &[&CaptionSnapshot],
         recent_source_text: &str,
         now: Instant,
     ) -> Option<LiveCandidate> {
@@ -454,7 +454,7 @@ impl LiveChatboxPublisher {
     fn candidate_ready_at(
         &self,
         state: &mut LivePublisherState,
-        source_captions: &[&CaptionSnapshotV2],
+        source_captions: &[&CaptionSnapshot],
         now: Instant,
     ) -> Option<Instant> {
         let LiveObservationPolicy::Unit { observation_window } = self.shared.policy;
@@ -813,7 +813,7 @@ fn candidate_needs_publication(state: &LivePublisherState) -> bool {
     })
 }
 
-fn compose_recent_source(captions: &[&CaptionSnapshotV2]) -> String {
+fn compose_recent_source(captions: &[&CaptionSnapshot]) -> String {
     captions
         .iter()
         .rev()
