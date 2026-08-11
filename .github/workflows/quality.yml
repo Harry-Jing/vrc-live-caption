@@ -2,11 +2,16 @@ name: Quality
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
   push:
-    # All branches; naming a branch pattern also keeps tag pushes from
-    # triggering a duplicate run.
-    branches: ["**"]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -24,7 +29,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
 
     steps:
       - name: Checkout
@@ -60,7 +68,10 @@ jobs:
       # release platform and its result matters independently.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
 
     steps:
       - name: Checkout
@@ -147,7 +158,11 @@ jobs:
   quality_gate:
     name: Quality Gate
     if: ${{ always() }}
-    needs: [frontend, rust, audit_pnpm, audit_cargo]
+    needs:
+      - frontend
+      - rust
+      - audit_pnpm
+      - audit_cargo
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
