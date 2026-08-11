@@ -115,12 +115,12 @@ Recognition Module
 
 This ownership keeps provider commits, identifiers, JSON, worker messages,
 model-native frames, and inference windows out of Runtime
-([ADR 0026](./adr/0026-recognition-modules-own-path-execution.md)). A concrete
+([ADR 0016](./adr/0016-recognition-modules-own-path-execution.md)). A concrete
 Driver may be cloud or local without pretending that its internal attempts,
 budgets, or speech boundaries are identical.
 
 The current cloud Module exposes the closed OpenAI recognition catalog selected
-in [ADR 0024](./adr/0024-use-openai-realtime-transcription.md). Both paths use
+in [ADR 0018](./adr/0018-use-openai-realtime-transcription.md). Both paths use
 Realtime transcription behind the same Module boundary; no REST/WAV or product
 Mock fallback exists.
 
@@ -129,7 +129,7 @@ generation. The retired attempt cannot publish again, ambiguous audio is not
 replayed, capture resumes only for a fresh ready attempt, and the UI remains in a
 visible reconnecting state. Terminal and retryable policy is based on structured
 application classifications, never provider-authored prose
-([ADR 0025](./adr/0025-reconnect-within-one-runtime-generation.md)).
+([ADR 0019](./adr/0019-reconnect-within-one-runtime-generation.md)).
 Provider-authored error messages and metadata stay inside the Driver; they
 neither select retry policy nor enter application diagnostics.
 
@@ -144,7 +144,7 @@ Each lane has its own monotonic revision chain. Completion is terminal for that
 lane, not for the whole caption unit. A Translation snapshot identifies the
 exact completed Source snapshot it consumed, preventing timing or display order
 from becoming a correlation contract
-([ADR 0027](./adr/0027-link-translations-to-exact-source-snapshots.md)).
+([ADR 0022](./adr/0022-link-translations-to-exact-source-snapshots.md)).
 
 The Aggregate may retain bounded completed captions from older runtime
 generations for the app view. Stop removes ongoing work and rejects late output
@@ -162,7 +162,7 @@ ready to include explicit content selection when translation paths arrive.
 Translation-only and bilingual requests will use that boundary rather than a
 separate planner. An incompatible request remains explicit instead of causing a
 silent path or mode change
-([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)).
+([ADR 0007](./adr/0007-publication-timing-is-completed-or-live.md)).
 
 ### Chatbox publication
 
@@ -191,7 +191,7 @@ frontend. Config and diagnostics carry only redacted credential status.
 Cloud connections follow the user's selected system or explicit environment
 proxy route. Unsupported or malformed selected proxy configurations fail closed;
 the app does not silently bypass them with a direct connection
-([ADR 0019](./adr/0019-cloud-connections-honor-the-selected-proxy-route.md)).
+([ADR 0017](./adr/0017-cloud-connections-honor-the-selected-proxy-route.md)).
 Network targets use bounded, cancellable resolution so Start and Stop cannot
 wait indefinitely on an operating-system lookup.
 

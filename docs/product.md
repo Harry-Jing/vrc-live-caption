@@ -46,7 +46,7 @@ mutate a running generation. A removed or unsupported path remains visible as a
 choice that needs attention; the app does not silently migrate it.
 
 The supported catalog is closed and capability-driven rather than accepting
-arbitrary model strings ([ADR 0024](./adr/0024-use-openai-realtime-transcription.md)).
+arbitrary model strings ([ADR 0018](./adr/0018-use-openai-realtime-transcription.md)).
 
 ### Publication timing
 
@@ -56,14 +56,14 @@ arbitrary model strings ([ADR 0024](./adr/0024-use-openai-realtime-transcription
 
 Model capability and publication timing are independent choices. When they are
 incompatible, the app offers explicit alternatives instead of selecting one
-([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)).
+([ADR 0007](./adr/0007-publication-timing-is-completed-or-live.md)).
 
 ### Content
 
 The target choices are source-only, translation-only, and bilingual output.
 Bilingual output places source and translation in one asynchronous view, with
 space leaning toward the translation rather than a fixed 50/50 split
-([ADR 0007](./adr/0007-bilingual-output-is-one-asynchronous-view.md)).
+([ADR 0008](./adr/0008-bilingual-output-is-one-asynchronous-view.md)).
 
 ### Local backend
 
@@ -99,7 +99,7 @@ path-specific benchmark parameter, not a user setting.
 
 A retryable recognition outage may reconnect within the same runtime generation
 without replaying ambiguous audio or changing the selected path. Speech near the
-outage may be lost, but not duplicated ([ADR 0025](./adr/0025-reconnect-within-one-runtime-generation.md)).
+outage may be lost, but not duplicated ([ADR 0019](./adr/0019-reconnect-within-one-runtime-generation.md)).
 
 ### Stop
 
@@ -120,7 +120,7 @@ publication state. Finishing the current utterance is not implicit.
   independent choices.
 - Caption and diagnostic history stays bounded and in memory unless a future
   persistence design explicitly changes that privacy boundary
-  ([ADR 0023](./adr/0023-keep-caption-history-in-memory-only.md)).
+  ([ADR 0006](./adr/0006-keep-caption-history-in-memory-only.md)).
 - Local inference runs outside the desktop process and never falls back to cloud
   without explicit user action
   ([ADR 0020](./adr/0020-keep-local-inference-out-of-process.md)).

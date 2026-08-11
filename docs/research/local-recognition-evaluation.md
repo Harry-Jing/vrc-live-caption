@@ -16,7 +16,7 @@ contract or product policy:
 - the process boundary is [ADR 0020](../adr/0020-keep-local-inference-out-of-process.md);
 - backend choice is [ADR 0021](../adr/0021-users-choose-the-local-backend.md);
 - Recognition Module ownership is
-  [ADR 0026](../adr/0026-recognition-modules-own-path-execution.md);
+  [ADR 0016](../adr/0016-recognition-modules-own-path-execution.md);
 - implementation order and status are in the [roadmap](../roadmap.md).
 
 For this project, a local path is Rust-native when the app and worker are Rust
