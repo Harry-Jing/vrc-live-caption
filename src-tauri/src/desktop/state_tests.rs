@@ -270,13 +270,25 @@ fn stop_is_not_blocked_by_a_desired_state_operation() -> AppResult<()> {
         .lock()
         .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
     let stop_handle = app.handle().clone();
+    let (worker_ready_sender, worker_ready_receiver) = std::sync::mpsc::sync_channel(0);
+    let (begin_stop_sender, begin_stop_receiver) = std::sync::mpsc::sync_channel(0);
     let (sender, receiver) = std::sync::mpsc::channel();
     let worker = thread::spawn(move || {
+        let _ = worker_ready_sender.send(());
+        let _ = begin_stop_receiver.recv();
         let result = stop_handle.state::<AppState>().stop_runtime(&stop_handle);
         let _ = sender.send(result);
     });
+    worker_ready_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::runtime("Stop priority test worker did not become ready."))?;
+    begin_stop_sender
+        .send(())
+        .map_err(|_| AppError::runtime("Stop priority test worker exited before starting."))?;
 
-    let prompt_result = receiver.recv_timeout(Duration::from_millis(100));
+    // Timing is only a deadlock guard after the worker rendezvous. Correctness
+    // comes from Stop finishing while the unrelated desired-state gate is held.
+    let prompt_result = receiver.recv_timeout(Duration::from_secs(2));
     drop(blocked_operation);
     let (completed_promptly, stop_result) = match prompt_result {
         Ok(result) => (true, result),

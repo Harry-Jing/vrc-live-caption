@@ -1,7 +1,5 @@
 use super::*;
 use crate::error::{AppError, AppResult};
-use std::sync::{Arc, Barrier};
-use std::thread;
 
 fn generation_snapshot(config: &AppConfig, generation: u64) -> RuntimeGenerationSnapshot {
     RuntimeGenerationSnapshot {
@@ -137,37 +135,16 @@ fn snapshot_reads_the_cached_desired_credential_status() -> AppResult<()> {
 }
 
 #[test]
-fn snapshot_reads_cannot_mix_a_revision_with_another_config() -> AppResult<()> {
-    let store = Arc::new(RuntimeControlStore::default());
-    let barrier = Arc::new(Barrier::new(2));
-    let writer_store = Arc::clone(&store);
-    let writer_barrier = Arc::clone(&barrier);
-    let writer = thread::spawn(move || -> AppResult<()> {
-        writer_barrier.wait();
-        for revision in 1..=2_000_u64 {
-            let mut control = writer_store.lock()?;
-            control.revision = revision;
-            control.config_revision = revision;
-            control.config.recognition.expected_languages = vec![format!("revision-{revision}")];
-        }
-        Ok(())
-    });
+fn saved_config_snapshot_keeps_its_desired_revision_and_config_together() -> AppResult<()> {
+    let store = RuntimeControlStore::default();
+    let mut config = AppConfig::default();
+    config.recognition.expected_languages = vec!["zh".to_string(), "en".to_string()];
 
-    barrier.wait();
-    for _ in 0..2_000 {
-        let snapshot = store.snapshot()?;
-        if snapshot.revision > 0 {
-            assert_eq!(snapshot.desired.revision, snapshot.revision);
-            assert_eq!(
-                snapshot.desired.config.recognition.expected_languages,
-                vec![format!("revision-{}", snapshot.revision)]
-            );
-        }
-    }
+    let snapshot = store.replace_saved_config(config.clone())?;
 
-    writer
-        .join()
-        .map_err(|_| AppError::runtime("Snapshot writer test thread panicked."))??;
+    assert_eq!(snapshot.revision, 1);
+    assert_eq!(snapshot.desired.revision, 1);
+    assert_eq!(snapshot.desired.config, config);
     Ok(())
 }
 

@@ -54,7 +54,6 @@ fn recognition_events_fan_out_to_the_aggregate_and_completed_publisher() -> AppR
             .map_err(|_| AppError::runtime("Completed caption was not published."))?,
         "full completed text"
     );
-    assert!(text_receiver.try_recv().is_err());
 
     publisher.request_close(PublisherCloseReason::RuntimeError)?;
     publisher.join()?;

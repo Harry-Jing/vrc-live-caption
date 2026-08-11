@@ -20,6 +20,8 @@ struct TerminalAfterCaptureOpensDriver {
     capture_opened: mpsc::Receiver<()>,
 }
 
+struct ReadyUntilStoppedDriver;
+
 struct DropTrackedRecognitionDriver {
     dropped: Arc<AtomicBool>,
 }
@@ -75,8 +77,20 @@ impl RecognitionDriver for ReconnectAfterCaptureOpensDriver {
     }
 }
 
+impl RecognitionDriver for ReadyUntilStoppedDriver {
+    fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
+        io.ready(false)?;
+        io.wait_until_stopped()
+    }
+}
+
 struct DropAwareRecognitionCapture {
     dropped: Arc<AtomicBool>,
+}
+
+struct HardStopRecognitionCapture {
+    _drop_tracker: DropAwareRecognitionCapture,
+    generation: RuntimeGeneration,
 }
 
 impl RecognitionCapture for DropAwareRecognitionCapture {
@@ -92,6 +106,17 @@ impl RecognitionCapture for DropAwareRecognitionCapture {
 impl Drop for DropAwareRecognitionCapture {
     fn drop(&mut self) {
         self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+impl RecognitionCapture for HardStopRecognitionCapture {
+    fn sample_rate(&self) -> u32 {
+        16_000
+    }
+
+    fn receive(&self, _timeout: Duration) -> AppResult<Option<Vec<f32>>> {
+        self.generation.request_stop(None)?;
+        Ok(None)
     }
 }
 
@@ -190,6 +215,50 @@ fn coordinator_drops_capture_before_acknowledging_reconnect() -> AppResult<()> {
         control.snapshot()?.runtime_status.status,
         RuntimeStatus::Reconnecting
     );
+    Ok(())
+}
+
+#[test]
+fn hard_stop_drops_active_capture_before_coordinator_returns() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
+    let generation =
+        RuntimeGeneration::activate(app.handle(), 1, CaptionAggregateStore::default())?;
+    let module = RecognitionModule::with_audio_budget(
+        Duration::from_millis(100),
+        1,
+        ReadyUntilStoppedDriver,
+    )?;
+    let mut recognition = module.start(RecognitionGenerationScope {
+        generation: generation.generation_id(),
+        stream_id: generation.stream_id().to_string(),
+    })?;
+    let capture_dropped = Arc::new(AtomicBool::new(false));
+    let opened_capture_dropped = Arc::clone(&capture_dropped);
+    let stop_generation = generation.clone();
+    let open_capture = move |_config: &AudioConfig| {
+        Ok(Box::new(HardStopRecognitionCapture {
+            _drop_tracker: DropAwareRecognitionCapture {
+                dropped: Arc::clone(&opened_capture_dropped),
+            },
+            generation: stop_generation.clone(),
+        }) as Box<dyn RecognitionCapture>)
+    };
+
+    coordinate_running_recognition_with_capture(
+        app.handle(),
+        &AudioConfig::default(),
+        None,
+        &generation,
+        &mut recognition,
+        &status_recorder,
+        &open_capture,
+    )?;
+
+    assert!(generation.is_hard_stop_requested());
+    assert!(capture_dropped.load(Ordering::SeqCst));
+    recognition.stop()?;
     Ok(())
 }
 
