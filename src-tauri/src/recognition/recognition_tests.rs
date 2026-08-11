@@ -5,6 +5,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(1);
+const STOP_WAIT_WATCHDOG: Duration = Duration::from_secs(5);
 
 struct EchoFirstFrameDriver;
 
@@ -32,6 +33,25 @@ impl RecognitionDriver for WaitForStopDriver {
     fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
         io.ready(false)?;
         io.wait_until_stopped()
+    }
+}
+
+struct LongStopWaitDriver {
+    wait_started: SyncSender<()>,
+    wait_result: SyncSender<bool>,
+}
+
+impl RecognitionDriver for LongStopWaitDriver {
+    fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
+        io.ready(false)?;
+        self.wait_started
+            .send(())
+            .map_err(|_| AppError::state("Stop-wait test dropped its synchronization receiver."))?;
+        let interrupted = io.wait_for_stop(Duration::from_secs(30))?;
+        self.wait_result
+            .send(interrupted)
+            .map_err(|_| AppError::state("Stop-wait test dropped its result receiver."))?;
+        Ok(())
     }
 }
 
@@ -66,6 +86,52 @@ struct AdmissionEpochRaceDriver {
 struct OngoingFloodThenControlDriver {
     begin_flood: Receiver<()>,
     control_result: SyncSender<bool>,
+}
+
+struct DurableSignalOverflowDriver {
+    begin_flood: Receiver<()>,
+    overflow_code: SyncSender<&'static str>,
+}
+
+impl RecognitionDriver for DurableSignalOverflowDriver {
+    fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
+        io.ready(false)?;
+        self.begin_flood
+            .recv_timeout(TEST_TIMEOUT)
+            .map_err(|error| {
+                AppError::state(format!(
+                    "Durable-signal flood trigger was not received: {error}"
+                ))
+            })?;
+        for unit in 0..(RECOGNITION_SIGNAL_QUEUE_CAPACITY - RECOGNITION_SIGNAL_CONTROL_RESERVE) {
+            io.emit(ongoing_signal(&format!("ongoing-{unit}"), 1))?;
+        }
+        for durable in 0..RECOGNITION_SIGNAL_CONTROL_RESERVE {
+            io.emit_event(RecognitionEvent::UnitAborted {
+                generation: io.scope().generation,
+                stream_id: io.scope().stream_id.clone(),
+                unit_id: format!("durable-{durable}"),
+                reason: RecognitionUnitAbortReason::NoSpeech,
+            })?;
+        }
+        let error = match io.emit_event(RecognitionEvent::UnitAborted {
+            generation: io.scope().generation,
+            stream_id: io.scope().stream_id.clone(),
+            unit_id: "durable-overflow".to_string(),
+            reason: RecognitionUnitAbortReason::NoSpeech,
+        }) {
+            Err(error) => error,
+            Ok(()) => {
+                return Err(AppError::state(
+                    "A durable signal exceeded the bounded reserve without reporting backpressure.",
+                ));
+            }
+        };
+        self.overflow_code.send(error.code()).map_err(|_| {
+            AppError::state("Durable-signal flood test dropped its result receiver.")
+        })?;
+        io.wait_until_stopped()
+    }
 }
 
 impl RecognitionDriver for OngoingFloodThenControlDriver {
@@ -277,6 +343,50 @@ fn try_submit_fails_closed_when_bounded_ingress_is_full() -> AppResult<()> {
     );
 
     running.stop()
+}
+
+#[test]
+fn stop_interrupts_a_long_driver_wait() -> AppResult<()> {
+    let (wait_started, wait_started_receiver) = mpsc::sync_channel(1);
+    let (wait_result, wait_result_receiver) = mpsc::sync_channel(1);
+    let module = RecognitionModule::with_audio_budget(
+        Duration::from_millis(100),
+        1,
+        LongStopWaitDriver {
+            wait_started,
+            wait_result,
+        },
+    )?;
+    let mut running = module.start(scope())?;
+    assert!(matches!(
+        running.signals.recv_timeout(TEST_TIMEOUT),
+        Ok(RecognitionSignal::Ready { .. })
+    ));
+    wait_started_receiver
+        .recv_timeout(TEST_TIMEOUT)
+        .map_err(|error| AppError::state(format!("Driver did not start its Stop wait: {error}")))?;
+
+    let (stop_result, stop_result_receiver) = mpsc::sync_channel(1);
+    let stop_thread = std::thread::spawn(move || {
+        let _sent = stop_result.send(running.stop());
+    });
+
+    assert_eq!(
+        wait_result_receiver.recv_timeout(STOP_WAIT_WATCHDOG),
+        Ok(true),
+        "Stop did not interrupt the driver's 30-second wait"
+    );
+    stop_result_receiver
+        .recv_timeout(STOP_WAIT_WATCHDOG)
+        .map_err(|error| {
+            AppError::state(format!(
+                "Stop did not finish after waking the driver: {error}"
+            ))
+        })??;
+    stop_thread
+        .join()
+        .map_err(|_| AppError::state("Stop-wait test thread panicked."))?;
+    Ok(())
 }
 
 #[test]
@@ -531,27 +641,31 @@ fn coalesced_ongoing_caption_keeps_its_latest_emission_position() -> AppResult<(
 }
 
 #[test]
-fn lifecycle_signals_use_reserved_capacity_after_ongoing_queue_saturates() -> AppResult<()> {
-    let (signals, _received) = recognition_signal_queue();
-    for unit in 0..(RECOGNITION_SIGNAL_QUEUE_CAPACITY - RECOGNITION_SIGNAL_CONTROL_RESERVE) {
-        assert!(
-            signals
-                .try_send(ongoing_signal(&format!("ongoing-{unit}"), 1))
-                .is_ok()
-        );
-    }
+fn durable_signal_exhaustion_returns_backpressure_after_reserved_capacity_fills() -> AppResult<()> {
+    let (begin_flood, flood_trigger) = mpsc::sync_channel(1);
+    let (overflow_code, overflow_code_receiver) = mpsc::sync_channel(1);
+    let module = RecognitionModule::with_audio_budget(
+        Duration::from_millis(100),
+        1,
+        DurableSignalOverflowDriver {
+            begin_flood: flood_trigger,
+            overflow_code,
+        },
+    )?;
+    let mut running = module.start(scope())?;
+    assert!(matches!(
+        running.signals.recv_timeout(TEST_TIMEOUT),
+        Ok(RecognitionSignal::Ready { .. })
+    ));
+    begin_flood
+        .send(())
+        .map_err(|_| AppError::state("Durable-signal flood driver stopped before its trigger."))?;
 
-    assert!(
-        signals
-            .try_send(RecognitionSignal::Event(RecognitionEvent::UnitAborted {
-                generation: 17,
-                stream_id: "stream-17".to_string(),
-                unit_id: "durable-unit".to_string(),
-                reason: RecognitionUnitAbortReason::NoSpeech,
-            }))
-            .is_ok()
+    assert_eq!(
+        overflow_code_receiver.recv_timeout(TEST_TIMEOUT),
+        Ok("stt.backpressure")
     );
-    Ok(())
+    running.stop()
 }
 
 #[test]

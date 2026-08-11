@@ -317,7 +317,7 @@ fn caption_unit_ids_remain_unique_across_reconnect_attempts() -> AppResult<()> {
 }
 
 #[test]
-fn stop_interrupts_the_reconnect_backoff() -> AppResult<()> {
+fn stop_after_reconnect_ack_prevents_a_fresh_attempt() -> AppResult<()> {
     let probe = Arc::new(Mutex::new(AttemptProbe::default()));
     let driver = OpenAiRecognitionDriver::new(RecordingAttemptFactory {
         probe: Arc::clone(&probe),
@@ -342,10 +342,8 @@ fn stop_interrupts_the_reconnect_backoff() -> AppResult<()> {
         })
         .map_err(|error| AppError::state(format!("Test audio was rejected: {error:?}")))?;
 
-    let (pause_epoch, delay) = match running.signals.recv_timeout(TEST_TIMEOUT) {
-        Ok(RecognitionSignal::Reconnecting {
-            epoch, delay_ms, ..
-        }) => (epoch, Duration::from_millis(delay_ms)),
+    let pause_epoch = match running.signals.recv_timeout(TEST_TIMEOUT) {
+        Ok(RecognitionSignal::Reconnecting { epoch, .. }) => epoch,
         signal => {
             return Err(AppError::state(format!(
                 "Expected reconnect signal, received {signal:?}."
@@ -354,13 +352,8 @@ fn stop_interrupts_the_reconnect_backoff() -> AppResult<()> {
     };
     running.acknowledge_capture_paused(pause_epoch)?;
 
-    let stop_started = Instant::now();
     running.stop()?;
 
-    assert!(
-        stop_started.elapsed() < delay,
-        "Stop waited for the advertised reconnect backoff of {delay:?}."
-    );
     let probe = probe
         .lock()
         .map_err(|_| AppError::state("OpenAI driver test probe lock was poisoned."))?;

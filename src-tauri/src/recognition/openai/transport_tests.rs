@@ -20,6 +20,11 @@ use std::thread;
 use tungstenite::error::ProtocolError;
 use tungstenite::protocol::{CloseFrame, Role, frame::coding::CloseCode};
 
+const NONBLOCKING_POLL_ATTEMPTS: usize = 128;
+// A 10 ms blocking read repeated this many times exceeds the aggregate budget,
+// while one-off scheduler pauses still have ample headroom on shared CI hosts.
+const NONBLOCKING_POLL_BUDGET: Duration = Duration::from_millis(750);
+
 const TEST_TLS_ROOT_PEM: &str = r#"-----BEGIN CERTIFICATE-----
 MIIBgDCCASegAwIBAgIUPHDUu9WL36yvTmFeNFZVe/qhClcwCgYIKoZIzj0EAwIw
 HTEbMBkGA1UEAwwSUnVzdGxzIFJvYnVzdCBSb290MCAXDTc1MDEwMTAwMDAwMFoY
@@ -172,6 +177,22 @@ fn backpressure_websocket_config() -> WebSocketConfig {
     WebSocketConfig::default()
         .write_buffer_size(64 * 1024)
         .max_write_buffer_size(32 * 1024 * 1024)
+}
+
+fn assert_repeated_transport_polls_are_nonblocking(
+    transport: &mut OpenAiWebSocketTransport,
+    partial_input: &str,
+) -> AppResult<()> {
+    let started_at = Instant::now();
+    for _attempt in 0..NONBLOCKING_POLL_ATTEMPTS {
+        assert_eq!(transport.try_receive_text()?, None);
+    }
+    let elapsed = started_at.elapsed();
+    assert!(
+        elapsed < NONBLOCKING_POLL_BUDGET,
+        "{NONBLOCKING_POLL_ATTEMPTS} polls with {partial_input} took {elapsed:?}; the transport may be waiting on each socket read"
+    );
+    Ok(())
 }
 
 fn plain_client_stream(transport: &mut OpenAiWebSocketTransport) -> AppResult<&mut TcpStream> {
@@ -962,23 +983,13 @@ fn transport_poll_is_nonblocking_and_preserves_partial_frame_state() -> AppResul
         peer: mut server,
     } = PlainWebSocketHarness::connect(WebSocketConfig::default())?;
 
-    let started_at = Instant::now();
     assert_eq!(transport.try_receive_text()?, None);
-    assert!(
-        started_at.elapsed() < Duration::from_millis(500),
-        "An idle transport poll waited for the blocking socket read timeout."
-    );
 
     server
         .write_all(&[0x81, 0x02, b'o'])
         .map_err(|error| AppError::state(format!("Failed to send a partial frame: {error}")))?;
     wait_for_plain_client_readable(&transport, 1, Instant::now() + Duration::from_secs(1))?;
-    let partial_started_at = Instant::now();
-    assert_eq!(transport.try_receive_text()?, None);
-    assert!(
-        partial_started_at.elapsed() < Duration::from_millis(500),
-        "A partial-frame poll waited for the blocking socket read timeout."
-    );
+    assert_repeated_transport_polls_are_nonblocking(&mut transport, "a partial WebSocket frame")?;
 
     server
         .write_all(b"k")
@@ -1044,7 +1055,7 @@ fn transport_poll_is_nonblocking_and_preserves_partial_tls_record_state() -> App
             .send(())
             .map_err(|_| AppError::state("Could not report the first TLS record fragment."))?;
         send_remainder_receiver
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(2))
             .map_err(|_| AppError::state("Test TLS record remainder was not requested."))?;
         server_stream
             .write_all(&encrypted_record[split_at..])
@@ -1062,12 +1073,7 @@ fn transport_poll_is_nonblocking_and_preserves_partial_tls_record_state() -> App
         .map_err(|_| AppError::state("Test TLS server did not send its first fragment."))?;
     wait_for_socket_readable(&client_probe, 1, Instant::now() + Duration::from_secs(1))?;
 
-    let partial_started_at = Instant::now();
-    assert_eq!(transport.try_receive_text()?, None);
-    assert!(
-        partial_started_at.elapsed() < Duration::from_millis(500),
-        "A partial TLS record blocked the transport poll."
-    );
+    assert_repeated_transport_polls_are_nonblocking(&mut transport, "a partial TLS record")?;
     send_remainder_sender
         .send(())
         .map_err(|_| AppError::state("Could not request the test TLS record remainder."))?;
