@@ -1,0 +1,47 @@
+{
+  "runtimeStatuses": [
+    "idle",
+    "starting",
+    "running",
+    "reconnecting",
+    "stopping",
+    "stopped",
+    "error"
+  ],
+  "credentialIds": ["openai"],
+  "credentialStorages": ["systemCredentialStore", "environment"],
+  "credentialStatusStates": ["unconfigured", "configured", "unavailable"],
+  "diagnosticCategories": ["config", "runtime", "audio", "stt", "osc"],
+  "diagnosticSeverities": ["info", "warning", "error"],
+  "captionLanes": ["source", "translation"],
+  "captionStates": ["ongoing", "completed"],
+  "publicationModes": ["completed", "live"],
+  "recognitionPaths": ["openai/gpt-transcribe", "openai/gpt-live-transcribe"],
+  "recognitionInputShapes": ["continuousAudioFrames"],
+  "captionBoundaryOwners": ["application"],
+  "captionUnitBehaviors": ["unitBased"],
+  "laneUpdateBehaviors": ["completedOnly", "ongoingAndCompleted"],
+  "revisionBehaviors": ["appendOnly", "revisableFullSnapshot"],
+  "resolvedPublicationTimings": ["completed", "liveUnit"],
+  "publicationPlanStates": ["compatible", "incompatible"],
+  "publicationIncompatibilityReasons": [
+    "noLanesSelected",
+    "laneUnavailable",
+    "modeUnsupported"
+  ],
+  "runtimePendingGenerationChanges": [
+    "microphone",
+    "recognition",
+    "credential",
+    "chatboxOutput",
+    "publication"
+  ],
+  "runtimeGenerationPhases": [
+    "starting",
+    "running",
+    "reconnecting",
+    "stopping",
+    "error"
+  ],
+  "chatboxPublicationStates": ["disabled", "ready", "unavailable"]
+}

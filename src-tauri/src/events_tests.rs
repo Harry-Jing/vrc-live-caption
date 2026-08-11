@@ -1,11 +1,10 @@
 use super::*;
 use crate::error::{AppResult, ProviderFailureClass};
 use crate::runtime_control::RuntimeControlStore;
+use std::time::Duration;
 use tauri::Listener;
 
 fn declared_ui_facing_events() -> AppResult<Vec<String>> {
-    let internal_events = [EVENT_UTTERANCE_STARTED, EVENT_UTTERANCE_ENDED];
-
     include_str!("events.rs")
         .lines()
         .filter(|line| line.trim_start().starts_with("const EVENT_"))
@@ -16,23 +15,19 @@ fn declared_ui_facing_events() -> AppResult<Vec<String>> {
                 .map(str::to_owned)
                 .ok_or_else(|| AppError::state("Tauri event declaration must remain discoverable"))
         })
-        .filter_map(|event| match event {
-            Ok(event) if internal_events.contains(&event.as_str()) => None,
-            event => Some(event),
-        })
         .collect()
 }
 
 #[test]
 fn tauri_event_names_match_the_shared_contract() -> AppResult<()> {
     let manifest = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../contracts/tauri-ipc-v1.json"
+        "../../contracts/tauri-ipc-v2.json"
     ))
     .map_err(|error| AppError::config(format!("Failed to parse Tauri IPC contract: {error}")))?;
     let expected_events = serde_json::json!({
         "runtimeStatus": EVENT_RUNTIME_STATUS,
         "runtimeControlChanged": EVENT_RUNTIME_CONTROL_CHANGED,
-        "captionSessionChanged": EVENT_CAPTION_SESSION_CHANGED,
+        "captionAggregateChanged": EVENT_CAPTION_AGGREGATE_CHANGED,
         "audioLevel": EVENT_AUDIO_LEVEL,
         "diagnostic": EVENT_DIAGNOSTIC,
     });
@@ -68,7 +63,7 @@ fn status_snapshot_is_updated_before_event_delivery() -> AppResult<()> {
 
     app.listen(EVENT_RUNTIME_STATUS, move |_| {
         let snapshot = listener_control.snapshot().and_then(|control| {
-            let status = control.runtime;
+            let status = control.runtime_status;
             serde_json::to_value(status).map_err(|error| {
                 AppError::runtime(format!("Failed to serialize status snapshot: {error}"))
             })
@@ -124,61 +119,9 @@ fn authoritative_control_event_precedes_the_legacy_status_event() -> AppResult<(
 
     assert_eq!(first_kind, "control");
     assert_eq!(second_kind, "status");
-    assert_eq!(control["runtime"]["status"], "running");
+    assert_eq!(control["runtimeStatus"]["status"], "running");
     assert_eq!(control["revision"], 1);
     Ok(())
-}
-
-#[test]
-fn utterance_started_payload_uses_stable_wire_format() {
-    let event = UtteranceStartedEvent {
-        id: "utterance-start-1".to_string(),
-        generation: 7,
-        stream_id: "recognition-7-1".to_string(),
-        utterance_id: "speech-1".to_string(),
-        timestamp_ms: 42,
-    };
-    let value = serde_json::to_value(event).unwrap_or_else(|serialization_error| {
-            serde_json::json!({ "serializationError": serialization_error.to_string() })
-        });
-
-    assert_eq!(value["generation"], 7);
-    assert_eq!(value["streamId"], "recognition-7-1");
-    assert_eq!(value["utteranceId"], "speech-1");
-    assert_eq!(value["timestampMs"], 42);
-}
-
-#[test]
-fn utterance_ended_payload_uses_stable_wire_format() {
-    let event = UtteranceEndedEvent {
-        id: "utterance-end-1".to_string(),
-        generation: 7,
-        stream_id: "recognition-7-1".to_string(),
-        utterance_id: "speech-1".to_string(),
-        reason: UtteranceEndReason::NoSpeech,
-        timestamp_ms: 42,
-    };
-    let value = serde_json::to_value(event).unwrap_or_else(|serialization_error| {
-            serde_json::json!({ "serializationError": serialization_error.to_string() })
-        });
-
-    assert_eq!(value["generation"], 7);
-    assert_eq!(value["streamId"], "recognition-7-1");
-    assert_eq!(value["utteranceId"], "speech-1");
-    assert_eq!(value["reason"], "noSpeech");
-
-    let reasons = [
-        (UtteranceEndReason::NoSpeech, "noSpeech"),
-        (UtteranceEndReason::SttFailed, "sttFailed"),
-    ];
-
-    for (reason, expected) in reasons {
-        let value = serde_json::to_value(reason).unwrap_or_else(|serialization_error| {
-                serde_json::json!({ "serializationError": serialization_error.to_string() })
-            });
-
-        assert_eq!(value, expected);
-    }
 }
 
 #[test]
@@ -201,6 +144,17 @@ fn diagnostic_payload_includes_machine_readable_code() {
     assert_eq!(value["code"], "osc.send_failed");
     assert_eq!(value["message"], "OSC send failed");
     assert!(value.get("detail").is_none());
+}
+
+#[test]
+fn recognition_category_keeps_the_stable_stt_wire_name() {
+    let category = serde_json::to_value(DiagnosticCategory::Recognition).unwrap_or_else(
+        |serialization_error| {
+            serde_json::json!({ "serializationError": serialization_error.to_string() })
+        },
+    );
+
+    assert_eq!(category, "stt");
 }
 
 #[test]
@@ -241,10 +195,10 @@ fn error_codes_share_the_prefix_of_their_diagnostic_category() {
         AppError::runtime("x"),
         AppError::secret("x"),
         AppError::state("x"),
-        AppError::stt("x"),
-        AppError::stt_provider(ProviderFailureClass::Unknown, "x"),
-        AppError::stt_backpressure("x"),
-        AppError::stt_network_terminal("x"),
+        AppError::recognition("x"),
+        AppError::recognition_provider(ProviderFailureClass::Unknown, "x"),
+        AppError::recognition_backpressure("x"),
+        AppError::recognition_network_terminal("x"),
     ];
 
     for error in errors {

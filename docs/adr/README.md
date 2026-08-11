@@ -5,6 +5,10 @@ decision is: lower numbers shape more of the project. A new ADR takes the
 next free number (scan for the highest and add one) and gets a line in the
 right group below; do not renumber existing ADRs.
 
+Existing ADR filenames are stable link targets. When the domain language
+changes, update the title, body, and this index, but do not rename an accepted
+ADR only to refresh its descriptive slug.
+
 ## Foundations
 
 - [0001 — Use Tauri, Vue, and Rust](./0001-use-tauri-vue-and-rust.md): the
@@ -14,7 +18,7 @@ right group below; do not renumber existing ADRs.
 - [0003 — Windows is Tier 1](./0003-windows-is-tier-1.md): the only fully
   validated platform; macOS/Linux stay green in CI
 - [0004 — Local inference is the long-term default](./0004-local-stt-is-the-long-term-default.md):
-  cloud now; local STT, and eventually local translation, once validated
+  cloud now; local recognition, and eventually local translation, once validated
 - [0005 — Keep secrets out of config and logs](./0005-keep-secrets-out-of-config-and-logs.md):
   keys live in the OS credential store
 
@@ -25,17 +29,17 @@ right group below; do not renumber existing ADRs.
 - [0007 — Bilingual output is one asynchronous view](./0007-bilingual-output-is-one-asynchronous-view.md):
   source above translation, capacity leans toward translation
 - [0008 — Localize the UI in the frontend](./0008-localize-the-ui-in-the-frontend.md):
-  English and Chinese; the backend emits codes only
+  English and Chinese; the application runtime emits codes only
 - [0009 — Cloud audio disclosure lives in Settings](./0009-cloud-audio-disclosure-lives-in-settings.md):
   a persistent line instead of dialogs or banners
 
 ## Runtime core
 
-- [0010 — Adapters emit full snapshots, not deltas](./0010-adapters-emit-full-snapshots-not-deltas.md):
+- [0010 — Drivers emit full snapshots, not deltas](./0010-adapters-emit-full-snapshots-not-deltas.md):
   ongoing/completed full-text snapshots with revisions
 - [0011 — Stop is a hard cutoff](./0011-stop-is-a-hard-cutoff.md): no late
   text after Stop, ever
-- [0012 — Saved settings are not the running session](./0012-saved-settings-are-not-the-running-session.md):
+- [0012 — Saved settings are not the runtime generation](./0012-saved-settings-are-not-the-running-session.md):
   desired state versus the immutable active selection
 - [0013 — Event delivery is best-effort](./0013-event-delivery-is-best-effort.md):
   the UI resynchronizes from revisioned snapshots
@@ -45,6 +49,8 @@ right group below; do not renumber existing ADRs.
   fresh attempts, visible backoff, and no ambiguous audio replay
 - [0026 — Recognition Modules own attempt execution](./0026-recognition-modules-own-attempt-execution.md):
   continuous audio outside; unitization, attempts, and I/O inside
+- [0027 — Link translations to exact source snapshots](./0027-link-translations-to-exact-source-snapshots.md):
+  lane-scoped completion and exact Source revision correlation
 
 ## Chatbox output
 
@@ -57,12 +63,12 @@ right group below; do not renumber existing ADRs.
 
 ## Cloud path
 
-- [0018 — Default to OpenAI for cloud STT](./0018-default-to-openai-for-cloud-stt.md):
+- [0018 — Default to OpenAI for cloud recognition](./0018-default-to-openai-for-cloud-stt.md):
   bounded `gpt-4o-mini-transcribe` requests; superseded by ADR 0024
 - [0019 — Follow the system proxy; plan a relay API option](./0019-follow-system-proxy-plan-relay-api.md):
   China-friendly network access, honestly scoped
 - [0024 — Use OpenAI Realtime transcription](./0024-use-openai-realtime-transcription.md):
-  two exact model paths behind the recognition-session seam
+  two exact paths behind the Recognition Module boundary
 
 ## Local path
 
@@ -75,5 +81,5 @@ right group below; do not renumber existing ADRs.
 
 - [0022 — Identify audio devices by stable id](./0022-identify-audio-devices-by-stable-id.md):
   CPAL ids, never display names
-- [0023 — Keep session history in memory only](./0023-keep-session-history-in-memory-only.md):
+- [0023 — Keep caption history in memory only](./0023-keep-session-history-in-memory-only.md):
   nothing persists until history/export is built

@@ -29,8 +29,8 @@ pub(super) fn connect_with_system_proxy(
 ) -> AppResult<TcpStream> {
     let deadline = Instant::now() + PROXY_CONNECT_BUDGET;
     ensure_connection_not_cancelled(is_cancelled)?;
-    // Read the environment and OS settings for every session so changing the
-    // system proxy does not require restarting the application.
+    // Read the environment and OS settings for every connection attempt so
+    // changing the system proxy does not require restarting the application.
     let match_uri = https_proxy_match_uri(request.uri())?;
     let matcher = system_proxy_matcher(&match_uri)?;
     connect_with_matcher_until(request, &matcher, resolver, deadline, is_cancelled)
@@ -69,7 +69,7 @@ fn first_environment_value(names: &[&str]) -> AppResult<Option<String>> {
             Ok(value) => return Ok(Some(value)),
             Err(VarError::NotPresent) => {}
             Err(VarError::NotUnicode(_)) => {
-                return Err(AppError::stt_network_terminal(format!(
+                return Err(AppError::recognition_network_terminal(format!(
                     "The {name} proxy setting is not valid Unicode; refusing a direct OpenAI connection."
                 )));
             }
@@ -90,7 +90,7 @@ fn matcher_for_configured_https_proxy(proxy: &str, no_proxy: Option<&str>) -> Ap
 fn normalized_http_proxy_uri(value: &str) -> AppResult<String> {
     let value = value.trim();
     if value.is_empty() {
-        return Err(AppError::stt_network_terminal(
+        return Err(AppError::recognition_network_terminal(
             "A proxy was selected for OpenAI Realtime but its address is empty.",
         ));
     }
@@ -100,20 +100,22 @@ fn normalized_http_proxy_uri(value: &str) -> AppResult<String> {
         format!("http://{value}")
     };
     let uri = candidate.parse::<Uri>().map_err(|error| {
-        AppError::stt_network_terminal(format!(
+        AppError::recognition_network_terminal(format!(
             "The configured OpenAI Realtime proxy address is invalid: {error}"
         ))
     })?;
     let scheme = uri.scheme_str().ok_or_else(|| {
-        AppError::stt_network_terminal("The configured OpenAI Realtime proxy has no URI scheme.")
+        AppError::recognition_network_terminal(
+            "The configured OpenAI Realtime proxy has no URI scheme.",
+        )
     })?;
     if scheme != "http" {
-        return Err(AppError::stt_network_terminal(format!(
+        return Err(AppError::recognition_network_terminal(format!(
             "The selected system proxy scheme '{scheme}' is not supported for OpenAI Realtime; use an HTTP CONNECT proxy."
         )));
     }
     if uri.host().is_none() {
-        return Err(AppError::stt_network_terminal(
+        return Err(AppError::recognition_network_terminal(
             "The configured OpenAI Realtime proxy has no host name.",
         ));
     }
@@ -205,12 +207,12 @@ struct Target {
 impl Target {
     fn from_request(request: &Request) -> AppResult<Self> {
         if request.uri().scheme_str() != Some("wss") {
-            return Err(AppError::stt(
+            return Err(AppError::recognition(
                 "OpenAI Realtime system-proxy routing requires a wss URI.",
             ));
         }
         let host = request.uri().host().ok_or_else(|| {
-            AppError::stt("OpenAI Realtime WebSocket URI did not include a host name.")
+            AppError::recognition("OpenAI Realtime WebSocket URI did not include a host name.")
         })?;
         let port = request.uri().port_u16().unwrap_or(443);
         Ok(Self {
@@ -223,7 +225,7 @@ impl Target {
 
 fn https_proxy_match_uri(websocket_uri: &Uri) -> AppResult<Uri> {
     let authority = websocket_uri.authority().cloned().ok_or_else(|| {
-        AppError::stt("OpenAI Realtime WebSocket URI did not include an authority.")
+        AppError::recognition("OpenAI Realtime WebSocket URI did not include an authority.")
     })?;
     Uri::builder()
         .scheme("https")
@@ -231,7 +233,7 @@ fn https_proxy_match_uri(websocket_uri: &Uri) -> AppResult<Uri> {
         .path_and_query("/")
         .build()
         .map_err(|error| {
-            AppError::stt(format!(
+            AppError::recognition(format!(
                 "Failed to map the OpenAI Realtime URI for system-proxy matching: {error}"
             ))
         })
@@ -254,12 +256,14 @@ fn connect_http_proxy(
 ) -> AppResult<TcpStream> {
     let scheme = proxy.uri().scheme_str().unwrap_or("http");
     if scheme != "http" {
-        return Err(AppError::stt_network_terminal(format!(
+        return Err(AppError::recognition_network_terminal(format!(
             "The selected system proxy scheme '{scheme}' is not supported for OpenAI Realtime; use an HTTP CONNECT proxy."
         )));
     }
     let proxy_host = proxy.uri().host().ok_or_else(|| {
-        AppError::stt_network_terminal("The selected system proxy did not include a host name.")
+        AppError::recognition_network_terminal(
+            "The selected system proxy did not include a host name.",
+        )
     })?;
     let proxy_host = proxy_host.trim_matches(['[', ']']);
     let proxy_port = proxy.uri().port_u16().unwrap_or(80);
@@ -287,13 +291,13 @@ fn connect_http_proxy(
 fn validate_proxy_connect_status(status: u16) -> AppResult<()> {
     match status {
         200..=299 => Ok(()),
-        407 => Err(AppError::stt_network_terminal(
+        407 => Err(AppError::recognition_network_terminal(
             "The system proxy rejected OpenAI Realtime with HTTP 407; check the proxy authentication settings.",
         )),
-        408 | 429 | 502..=504 => Err(AppError::stt_network_retryable(format!(
+        408 | 429 | 502..=504 => Err(AppError::recognition_network_retryable(format!(
             "The system proxy temporarily could not open the OpenAI Realtime tunnel: HTTP {status}."
         ))),
-        other => Err(AppError::stt_network_terminal(format!(
+        other => Err(AppError::recognition_network_terminal(format!(
             "The system proxy could not open the OpenAI Realtime tunnel: HTTP {other}."
         ))),
     }
@@ -321,14 +325,14 @@ fn connect_tcp(
             }
         };
         let mut poll = Poll::new().map_err(|error| {
-            AppError::stt_network_terminal(format!(
+            AppError::recognition_network_terminal(format!(
                 "Failed to create a connection poller for {destination}: {error}"
             ))
         })?;
         poll.registry()
             .register(&mut stream, TCP_CONNECT_TOKEN, Interest::WRITABLE)
             .map_err(|error| {
-                AppError::stt_network_terminal(format!(
+                AppError::recognition_network_terminal(format!(
                     "Failed to monitor the connection to {destination}: {error}"
                 ))
             })?;
@@ -342,7 +346,7 @@ fn connect_tcp(
                 Ok(()) => {}
                 Err(error) if error.kind() == ErrorKind::Interrupted => continue,
                 Err(error) => {
-                    return Err(AppError::stt_network_retryable(format!(
+                    return Err(AppError::recognition_network_retryable(format!(
                         "Failed while waiting to connect to {destination}: {error}"
                     )));
                 }
@@ -368,12 +372,12 @@ fn connect_tcp(
                 Ok(_) => {
                     let stream = TcpStream::from(stream);
                     stream.set_nonblocking(false).map_err(|error| {
-                        AppError::stt_network_terminal(format!(
+                        AppError::recognition_network_terminal(format!(
                             "Failed to restore blocking I/O for {destination}: {error}"
                         ))
                     })?;
                     stream.set_nodelay(true).map_err(|error| {
-                        AppError::stt_network_terminal(format!(
+                        AppError::recognition_network_terminal(format!(
                             "Failed to configure the connection to {destination}: {error}"
                         ))
                     })?;
@@ -392,7 +396,7 @@ fn connect_tcp(
     let detail = last_error
         .map(|error| error.to_string())
         .unwrap_or_else(|| "DNS returned no addresses".to_string());
-    Err(AppError::stt_network_retryable(format!(
+    Err(AppError::recognition_network_retryable(format!(
         "Could not connect to {destination} within {} seconds: {detail}",
         PROXY_CONNECT_BUDGET.as_secs()
     )))
@@ -400,7 +404,7 @@ fn connect_tcp(
 
 fn ensure_connection_not_cancelled(is_cancelled: &dyn Fn() -> bool) -> AppResult<()> {
     if is_cancelled() {
-        Err(AppError::stt_network_terminal(
+        Err(AppError::recognition_network_terminal(
             "OpenAI Realtime connection was cancelled during startup.",
         ))
     } else {
@@ -433,9 +437,9 @@ fn map_resolution_error(destination: &str, error: HostResolutionError) -> AppErr
         ),
     };
     if retryable {
-        AppError::stt_network_retryable(detail)
+        AppError::recognition_network_retryable(detail)
     } else {
-        AppError::stt_network_terminal(detail)
+        AppError::recognition_network_terminal(detail)
     }
 }
 
@@ -451,7 +455,7 @@ fn write_connect_request(
     );
     if let Some(value) = proxy_authorization {
         let value = value.to_str().map_err(|error| {
-            AppError::stt_network_terminal(format!(
+            AppError::recognition_network_terminal(format!(
                 "The system proxy authorization value is invalid: {error}"
             ))
         })?;
@@ -468,7 +472,7 @@ fn write_connect_request(
         set_write_budget(stream, deadline, "send the system proxy CONNECT request")?;
         match stream.write(&request[written..]) {
             Ok(0) => {
-                return Err(AppError::stt_network_retryable(
+                return Err(AppError::recognition_network_retryable(
                     "The system proxy closed the connection before receiving the complete CONNECT request.",
                 ));
             }
@@ -479,7 +483,7 @@ fn write_connect_request(
                     ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
                 ) => {}
             Err(error) => {
-                return Err(AppError::stt_network_retryable(format!(
+                return Err(AppError::recognition_network_retryable(format!(
                     "Failed to send the system proxy CONNECT request: {error}"
                 )));
             }
@@ -504,7 +508,7 @@ fn read_connect_response(
             return parse_connect_status(&response[..header_length]);
         }
         if response.len() == MAX_CONNECT_RESPONSE_HEADER_BYTES {
-            return Err(AppError::stt_network_terminal(
+            return Err(AppError::recognition_network_terminal(
                 "The system proxy CONNECT response header exceeded 16 KiB.",
             ));
         }
@@ -524,13 +528,13 @@ fn read_connect_response(
                 continue;
             }
             Err(error) => {
-                return Err(AppError::stt_network_retryable(format!(
+                return Err(AppError::recognition_network_retryable(format!(
                     "Failed to read the system proxy CONNECT response: {error}"
                 )));
             }
         };
         if count == 0 {
-            return Err(AppError::stt_network_retryable(
+            return Err(AppError::recognition_network_retryable(
                 "The system proxy closed the connection before completing its CONNECT response.",
             ));
         }
@@ -543,14 +547,14 @@ fn parse_connect_status(header: &[u8]) -> AppResult<u16> {
     let mut response = httparse::Response::new(&mut headers);
     match response.parse(header) {
         Ok(httparse::Status::Complete(_)) => response.code.ok_or_else(|| {
-            AppError::stt_network_terminal(
+            AppError::recognition_network_terminal(
                 "The system proxy CONNECT response omitted its HTTP status.",
             )
         }),
-        Ok(httparse::Status::Partial) => Err(AppError::stt_network_terminal(
+        Ok(httparse::Status::Partial) => Err(AppError::recognition_network_terminal(
             "The system proxy CONNECT response header was incomplete.",
         )),
-        Err(error) => Err(AppError::stt_network_terminal(format!(
+        Err(error) => Err(AppError::recognition_network_terminal(format!(
             "The system proxy returned an invalid CONNECT response: {error}"
         ))),
     }
@@ -559,7 +563,7 @@ fn parse_connect_status(header: &[u8]) -> AppResult<u16> {
 fn set_write_budget(stream: &TcpStream, deadline: Instant, operation: &str) -> AppResult<()> {
     let wait = remaining_budget(deadline, operation)?.min(CONNECTION_CANCEL_POLL_INTERVAL);
     stream.set_write_timeout(Some(wait)).map_err(|error| {
-        AppError::stt_network_terminal(format!(
+        AppError::recognition_network_terminal(format!(
             "Failed to configure the system proxy write timeout: {error}"
         ))
     })
@@ -568,7 +572,7 @@ fn set_write_budget(stream: &TcpStream, deadline: Instant, operation: &str) -> A
 fn set_read_budget(stream: &TcpStream, deadline: Instant, operation: &str) -> AppResult<()> {
     let wait = remaining_budget(deadline, operation)?.min(CONNECTION_CANCEL_POLL_INTERVAL);
     stream.set_read_timeout(Some(wait)).map_err(|error| {
-        AppError::stt_network_terminal(format!(
+        AppError::recognition_network_terminal(format!(
             "Failed to configure the system proxy read timeout: {error}"
         ))
     })
@@ -577,7 +581,7 @@ fn set_read_budget(stream: &TcpStream, deadline: Instant, operation: &str) -> Ap
 fn remaining_budget(deadline: Instant, operation: &str) -> AppResult<Duration> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
-        Err(AppError::stt_network_retryable(format!(
+        Err(AppError::recognition_network_retryable(format!(
             "Timed out while trying to {operation}."
         )))
     } else {

@@ -6,10 +6,10 @@ const APP_COMMANDS: &[&str] = &[
     "start_runtime",
     "stop_runtime",
     "get_runtime_control_snapshot",
-    "get_caption_session_snapshot",
+    "get_caption_aggregate_snapshot",
     "send_osc_test_message",
-    "save_provider_secret",
-    "delete_provider_secret",
+    "save_credential",
+    "delete_credential",
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

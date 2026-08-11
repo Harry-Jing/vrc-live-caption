@@ -1,5 +1,5 @@
 import { computed, ref, toRaw, watch } from "vue";
-import type { AppConfig } from "../../runtime/types";
+import type { AppConfig } from "../../runtime/appConfig";
 
 export function useSettingsDraft(savedConfig: () => AppConfig | null) {
   const draft = ref<AppConfig | null>(null);
@@ -22,12 +22,14 @@ export function useSettingsDraft(savedConfig: () => AppConfig | null) {
     { immediate: true },
   );
 
-  const normalizedLanguageHints = computed(() =>
-    (draft.value?.stt.languages ?? []).map((language) => language.trim()),
+  const normalizedExpectedLanguages = computed(() =>
+    (draft.value?.recognition.expectedLanguages ?? []).map((language) =>
+      language.trim(),
+    ),
   );
 
-  const hasValidLanguageHints = computed(() => {
-    const languages = normalizedLanguageHints.value;
+  const hasValidExpectedLanguages = computed(() => {
+    const languages = normalizedExpectedLanguages.value;
     const normalized = languages.map((language) =>
       language.toLocaleLowerCase("en"),
     );
@@ -51,12 +53,12 @@ export function useSettingsDraft(savedConfig: () => AppConfig | null) {
   function createSaveConfig() {
     const saved = savedConfig();
 
-    if (!draft.value || !saved || !hasValidLanguageHints.value) {
+    if (!draft.value || !saved || !hasValidExpectedLanguages.value) {
       return null;
     }
 
     const next = structuredClone(toRaw(draft.value));
-    next.stt.languages = normalizedLanguageHints.value;
+    next.recognition.expectedLanguages = normalizedExpectedLanguages.value;
     next.osc.host = next.osc.host.trim();
     next.osc.port = Number.isFinite(next.osc.port)
       ? next.osc.port
@@ -68,7 +70,7 @@ export function useSettingsDraft(savedConfig: () => AppConfig | null) {
   return {
     createSaveConfig,
     draft,
-    hasValidLanguageHints,
+    hasValidExpectedLanguages,
     isDirty,
   };
 }

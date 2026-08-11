@@ -1,14 +1,14 @@
-//! Authoritative desired settings and effective runtime-session state.
+//! Authoritative desired settings and effective runtime-generation state.
 
-use crate::capability_planner::{RuntimePlanSnapshot, plan_runtime};
-use crate::config::{AppConfig, AudioConfig, OscConfig, PublicationConfig, SttConfig, SttProvider};
+use crate::caption_pipeline::{CaptionPipelinePlanSnapshot, plan_caption_pipeline};
+use crate::config::{AppConfig, AudioConfig, OscConfig, PublicationConfig, RecognitionConfig};
+use crate::credentials::{CredentialId, CredentialStatus, CredentialStorage};
 use crate::error::{AppError, AppResult};
-use crate::secrets::{ProviderSecretStatus, ProviderSecretStorage};
+use crate::wall_clock::unix_timestamp_ms;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 3;
+pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,7 +28,7 @@ impl RuntimeStatusEvent {
         Self {
             status,
             message,
-            timestamp_ms: runtime_status_now_ms(),
+            timestamp_ms: unix_timestamp_ms(),
         }
     }
 }
@@ -50,10 +50,10 @@ pub(crate) enum RuntimeStatus {
 pub(crate) struct RuntimeControlSnapshot {
     pub(crate) contract_version: u32,
     pub(crate) revision: u64,
-    pub(crate) runtime: RuntimeStatusEvent,
+    pub(crate) runtime_status: RuntimeStatusEvent,
     pub(crate) desired: RuntimeDesiredSnapshot,
-    pub(crate) session: Option<RuntimeSessionSnapshot>,
-    pub(crate) pending_changes: Vec<PendingSessionChange>,
+    pub(crate) generation: Option<RuntimeGenerationSnapshot>,
+    pub(crate) pending_generation_changes: Vec<PendingGenerationChange>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -61,26 +61,26 @@ pub(crate) struct RuntimeControlSnapshot {
 pub(crate) struct RuntimeDesiredSnapshot {
     pub(crate) revision: u64,
     pub(crate) config: AppConfig,
-    pub(crate) runtime_plan: RuntimePlanSnapshot,
-    pub(crate) provider_secrets: Vec<ProviderSecretStatus>,
+    pub(crate) caption_pipeline_plan: CaptionPipelinePlanSnapshot,
+    pub(crate) credentials: Vec<CredentialStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RuntimeSessionSnapshot {
-    pub(crate) generation: u64,
-    pub(crate) phase: RuntimeSessionPhase,
+pub(crate) struct RuntimeGenerationSnapshot {
+    pub(crate) id: u64,
+    pub(crate) phase: RuntimeGenerationPhase,
     pub(crate) started_from_config_revision: u64,
-    pub(crate) selected: RuntimeSelectedConfig,
-    pub(crate) runtime_plan: RuntimePlanSnapshot,
-    pub(crate) credential: Option<RuntimeCredentialSnapshot>,
-    pub(crate) chatbox: RuntimeChatboxSnapshot,
+    pub(crate) selection: RuntimeGenerationSelection,
+    pub(crate) caption_pipeline_plan: CaptionPipelinePlanSnapshot,
+    pub(crate) credential: Option<RuntimeGenerationCredentialSnapshot>,
+    pub(crate) chatbox_publication: ChatboxPublicationSnapshot,
     pub(crate) uploads_microphone_audio: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) enum RuntimeSessionPhase {
+pub(crate) enum RuntimeGenerationPhase {
     Starting,
     Running,
     Reconnecting,
@@ -90,16 +90,16 @@ pub(crate) enum RuntimeSessionPhase {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RuntimeCredentialSnapshot {
-    pub(crate) provider: SttProvider,
-    pub(crate) storage: ProviderSecretStorage,
+pub(crate) struct RuntimeGenerationCredentialSnapshot {
+    pub(crate) id: CredentialId,
+    pub(crate) storage: CredentialStorage,
     pub(crate) display_suffix: Option<String>,
     pub(crate) revision: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
-pub(crate) enum RuntimeChatboxSnapshot {
+pub(crate) enum ChatboxPublicationSnapshot {
     Disabled {
         host: String,
         port: u16,
@@ -118,27 +118,39 @@ pub(crate) enum RuntimeChatboxSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RuntimeSelectedConfig {
+pub(crate) struct RuntimeGenerationSelection {
     pub(crate) audio: AudioConfig,
-    pub(crate) stt: SttConfig,
+    pub(crate) recognition: RecognitionConfig,
     pub(crate) osc: OscConfig,
     pub(crate) publication: PublicationConfig,
 }
 
-impl From<&AppConfig> for RuntimeSelectedConfig {
+impl From<&AppConfig> for RuntimeGenerationSelection {
     fn from(config: &AppConfig) -> Self {
+        // Classify every saved field explicitly as generation-scoped or not.
+        // Omitting `..` makes a future AppConfig field a compile-time decision
+        // instead of silently presenting desired state as active state.
+        let AppConfig {
+            schema_version: _,
+            audio,
+            recognition,
+            osc,
+            publication,
+            ui: _,
+        } = config;
+
         Self {
-            audio: config.audio.clone(),
-            stt: config.stt.clone(),
-            osc: config.osc.clone(),
-            publication: config.publication.clone(),
+            audio: audio.clone(),
+            recognition: recognition.clone(),
+            osc: osc.clone(),
+            publication: publication.clone(),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) enum PendingSessionChange {
+pub(crate) enum PendingGenerationChange {
     Microphone,
     Recognition,
     Credential,
@@ -146,28 +158,30 @@ pub(crate) enum PendingSessionChange {
     Publication,
 }
 
-fn pending_session_changes(
+fn pending_generation_changes(
     desired: &AppConfig,
-    selected: &RuntimeSelectedConfig,
+    selection: &RuntimeGenerationSelection,
     desired_credential_revision: u64,
-    session_credential_revision: u64,
-) -> Vec<PendingSessionChange> {
+    generation_credential_revision: Option<u64>,
+) -> Vec<PendingGenerationChange> {
     let mut changes = Vec::new();
 
-    if desired.audio != selected.audio {
-        changes.push(PendingSessionChange::Microphone);
+    if desired.audio != selection.audio {
+        changes.push(PendingGenerationChange::Microphone);
     }
-    if desired.stt != selected.stt {
-        changes.push(PendingSessionChange::Recognition);
+    if desired.recognition != selection.recognition {
+        changes.push(PendingGenerationChange::Recognition);
     }
-    if desired_credential_revision != session_credential_revision {
-        changes.push(PendingSessionChange::Credential);
+    if generation_credential_revision
+        .is_some_and(|revision| desired_credential_revision != revision)
+    {
+        changes.push(PendingGenerationChange::Credential);
     }
-    if desired.osc != selected.osc {
-        changes.push(PendingSessionChange::ChatboxOutput);
+    if desired.osc != selection.osc {
+        changes.push(PendingGenerationChange::ChatboxOutput);
     }
-    if desired.publication != selected.publication {
-        changes.push(PendingSessionChange::Publication);
+    if desired.publication != selection.publication {
+        changes.push(PendingGenerationChange::Publication);
     }
 
     changes
@@ -190,9 +204,9 @@ struct RuntimeControlState {
     next_generation: u64,
     config: AppConfig,
     config_requires_review: bool,
-    provider_secrets: Vec<ProviderSecretStatus>,
-    runtime: RuntimeStatusEvent,
-    session: Option<RuntimeSessionSnapshot>,
+    credentials: Vec<CredentialStatus>,
+    runtime_status: RuntimeStatusEvent,
+    generation: Option<RuntimeGenerationSnapshot>,
 }
 
 impl Default for RuntimeControlState {
@@ -204,9 +218,9 @@ impl Default for RuntimeControlState {
             next_generation: 0,
             config: AppConfig::default(),
             config_requires_review: false,
-            provider_secrets: Vec::new(),
-            runtime: RuntimeStatusEvent::idle(),
-            session: None,
+            credentials: Vec::new(),
+            runtime_status: RuntimeStatusEvent::idle(),
+            generation: None,
         }
     }
 }
@@ -221,7 +235,7 @@ impl Default for RuntimeControlStore {
 
 /// The lifecycle-only capability handed to runtime event recording.
 ///
-/// It can advance status and the corresponding session phase, but cannot
+/// It can advance status and the corresponding generation phase, but cannot
 /// mutate desired settings, credentials, generations, or start selections.
 #[derive(Clone)]
 pub(crate) struct RuntimeStatusRecorder {
@@ -258,16 +272,16 @@ impl RuntimeControlStore {
         Ok(control.next_generation)
     }
 
-    pub(crate) fn install_starting_session(
+    pub(crate) fn install_starting_generation(
         &self,
-        session: RuntimeSessionSnapshot,
+        generation: RuntimeGenerationSnapshot,
     ) -> AppResult<()> {
         let mut control = self.lock()?;
-        control.runtime = RuntimeStatusEvent::new(
+        control.runtime_status = RuntimeStatusEvent::new(
             RuntimeStatus::Starting,
-            Some("Starting outgoing caption runtime".to_string()),
+            Some("Starting caption runtime".to_string()),
         );
-        control.session = Some(session);
+        control.generation = Some(generation);
         Self::advance_revision(&mut control);
         Ok(())
     }
@@ -311,9 +325,9 @@ impl RuntimeControlStore {
     pub(crate) fn effective_osc_config(&self) -> AppResult<OscConfig> {
         let control = self.lock()?;
         Ok(control
-            .session
+            .generation
             .as_ref()
-            .map(|session| session.selected.osc.clone())
+            .map(|generation| generation.selection.osc.clone())
             .unwrap_or_else(|| control.config.osc.clone()))
     }
 
@@ -321,12 +335,12 @@ impl RuntimeControlStore {
         &self,
         config: AppConfig,
         config_requires_review: bool,
-        provider_secrets: Vec<ProviderSecretStatus>,
+        credentials: Vec<CredentialStatus>,
     ) -> AppResult<()> {
         let mut control = self.lock()?;
         control.config = config;
         control.config_requires_review = config_requires_review;
-        control.provider_secrets = provider_secrets;
+        control.credentials = credentials;
         control.config_revision = control.config_revision.saturating_add(1);
         Self::advance_revision(&mut control);
         Ok(())
@@ -344,13 +358,13 @@ impl RuntimeControlStore {
         Ok(Self::snapshot_from(&control))
     }
 
-    pub(crate) fn replace_provider_secret_statuses(
+    pub(crate) fn replace_credential_statuses(
         &self,
-        provider_secrets: Vec<ProviderSecretStatus>,
+        credentials: Vec<CredentialStatus>,
     ) -> AppResult<RuntimeControlSnapshot> {
         let mut control = self.lock()?;
         control.credential_revision = control.credential_revision.saturating_add(1);
-        control.provider_secrets = provider_secrets;
+        control.credentials = credentials;
         Self::advance_revision(&mut control);
         Ok(Self::snapshot_from(&control))
     }
@@ -368,19 +382,18 @@ impl RuntimeControlStore {
     }
 
     fn snapshot_from(control: &RuntimeControlState) -> RuntimeControlSnapshot {
-        let pending_changes = control
-            .session
+        let pending_generation_changes = control
+            .generation
             .as_ref()
-            .map(|session| {
-                pending_session_changes(
+            .map(|generation| {
+                pending_generation_changes(
                     &control.config,
-                    &session.selected,
+                    &generation.selection,
                     control.credential_revision,
-                    session
+                    generation
                         .credential
                         .as_ref()
-                        .map(|credential| credential.revision)
-                        .unwrap_or(0),
+                        .map(|credential| credential.revision),
                 )
             })
             .unwrap_or_default();
@@ -388,15 +401,15 @@ impl RuntimeControlStore {
         RuntimeControlSnapshot {
             contract_version: RUNTIME_CONTROL_CONTRACT_VERSION,
             revision: control.revision,
-            runtime: control.runtime.clone(),
+            runtime_status: control.runtime_status.clone(),
             desired: RuntimeDesiredSnapshot {
                 revision: control.config_revision,
                 config: control.config.clone(),
-                runtime_plan: plan_runtime(&control.config),
-                provider_secrets: control.provider_secrets.clone(),
+                caption_pipeline_plan: plan_caption_pipeline(&control.config),
+                credentials: control.credentials.clone(),
             },
-            session: control.session.clone(),
-            pending_changes,
+            generation: control.generation.clone(),
+            pending_generation_changes,
         }
     }
 
@@ -405,19 +418,20 @@ impl RuntimeControlStore {
         error: &AppError,
         installed_generation: Option<u64>,
     ) -> RuntimeControlSnapshot {
-        control.runtime = RuntimeStatusEvent::new(RuntimeStatus::Error, Some(error.to_string()));
-        if control.session.as_ref().map(|session| session.generation) == installed_generation {
-            Self::set_session_phase(control, RuntimeSessionPhase::Error);
+        control.runtime_status =
+            RuntimeStatusEvent::new(RuntimeStatus::Error, Some(error.to_string()));
+        if control.generation.as_ref().map(|generation| generation.id) == installed_generation {
+            Self::set_generation_phase(control, RuntimeGenerationPhase::Error);
         } else {
-            control.session = None;
+            control.generation = None;
         }
         Self::advance_revision(control);
         Self::snapshot_from(control)
     }
 
-    fn set_session_phase(control: &mut RuntimeControlState, phase: RuntimeSessionPhase) {
-        if let Some(session) = control.session.as_mut() {
-            session.phase = phase;
+    fn set_generation_phase(control: &mut RuntimeControlState, phase: RuntimeGenerationPhase) {
+        if let Some(generation) = control.generation.as_mut() {
+            generation.phase = phase;
         }
     }
 
@@ -432,36 +446,41 @@ impl RuntimeStatusRecorder {
             .inner
             .lock()
             .map_err(|_| AppError::state("Runtime control state lock was poisoned."))?;
-        control.runtime = status.clone();
+        control.runtime_status = status.clone();
         match status.status {
-            RuntimeStatus::Idle | RuntimeStatus::Stopped => control.session = None,
+            RuntimeStatus::Idle | RuntimeStatus::Stopped => control.generation = None,
             RuntimeStatus::Starting => {
-                RuntimeControlStore::set_session_phase(&mut control, RuntimeSessionPhase::Starting);
+                RuntimeControlStore::set_generation_phase(
+                    &mut control,
+                    RuntimeGenerationPhase::Starting,
+                );
             }
             RuntimeStatus::Running => {
-                RuntimeControlStore::set_session_phase(&mut control, RuntimeSessionPhase::Running);
+                RuntimeControlStore::set_generation_phase(
+                    &mut control,
+                    RuntimeGenerationPhase::Running,
+                );
             }
-            RuntimeStatus::Reconnecting => RuntimeControlStore::set_session_phase(
+            RuntimeStatus::Reconnecting => RuntimeControlStore::set_generation_phase(
                 &mut control,
-                RuntimeSessionPhase::Reconnecting,
+                RuntimeGenerationPhase::Reconnecting,
             ),
             RuntimeStatus::Stopping => {
-                RuntimeControlStore::set_session_phase(&mut control, RuntimeSessionPhase::Stopping);
+                RuntimeControlStore::set_generation_phase(
+                    &mut control,
+                    RuntimeGenerationPhase::Stopping,
+                );
             }
             RuntimeStatus::Error => {
-                RuntimeControlStore::set_session_phase(&mut control, RuntimeSessionPhase::Error);
+                RuntimeControlStore::set_generation_phase(
+                    &mut control,
+                    RuntimeGenerationPhase::Error,
+                );
             }
         }
         RuntimeControlStore::advance_revision(&mut control);
         Ok(RuntimeControlStore::snapshot_from(&control))
     }
-}
-
-fn runtime_status_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_millis() as u64
 }
 
 #[cfg(test)]

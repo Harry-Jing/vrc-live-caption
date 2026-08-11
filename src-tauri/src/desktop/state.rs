@@ -7,24 +7,28 @@
 //! or in a frontend-facing snapshot.
 
 use crate::audio::{AudioProbeRequest, AudioProbeResult, probe_audio_input as run_audio_probe};
-use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
-use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore};
+use crate::caption::{CaptionAggregateSnapshotV2, CaptionAggregateStore};
+use crate::caption_pipeline::{plan_caption_pipeline, publication_timing_for_start};
 use crate::chatbox::{ChatboxOscSender, ChatboxPacer, ChatboxSendReceipt, OSC_TEST_MESSAGE};
-use crate::config::{AppConfig, SttProvider};
+use crate::config::AppConfig;
+use crate::credentials::{
+    CredentialId, credential_statuses, delete_credential, resolve_openai_credential,
+    save_credential,
+};
 use crate::error::{AppError, AppResult};
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, emit_runtime_control_and_status,
 };
 use crate::host_resolver::HostResolver;
-use crate::runtime::{RuntimeManager, RuntimeStartOutcome, RuntimeStartRequest};
+use crate::recognition::{openai_gpt_live_transcribe_module, openai_gpt_transcribe_module};
+use crate::runtime::{
+    PreparedRecognition, RuntimeManager, RuntimeStartOutcome, RuntimeStartRequest,
+};
 use crate::runtime_control::{
-    RuntimeControlSnapshot, RuntimeControlStore, RuntimeCredentialSnapshot, RuntimeStartSelection,
-    RuntimeStatusRecorder,
+    RuntimeControlSnapshot, RuntimeControlStore, RuntimeGenerationCredentialSnapshot,
+    RuntimeStartSelection, RuntimeStatusRecorder,
 };
 use crate::saved_settings::{self, SavedSettingsLoad};
-use crate::secrets::{
-    delete_provider_secret, provider_secret_statuses, resolve_openai_api_key, save_provider_secret,
-};
 use std::sync::Mutex;
 use tauri::{AppHandle, Runtime};
 
@@ -35,8 +39,12 @@ pub(super) struct AppState {
     // store I/O must not delay the hard generation boundary.
     desired_state_gate: Mutex<()>,
     chatbox_pacer: ChatboxPacer,
-    caption_session: CaptionSessionStore,
-    host_resolver: HostResolver,
+    caption_aggregate: CaptionAggregateStore,
+    // OS hostname lookup is blocking. Keep the two current network subsystems
+    // on separate bounded workers so a stuck OSC lookup cannot queue OpenAI
+    // connection setup behind it, or vice versa.
+    chatbox_host_resolver: HostResolver,
+    recognition_host_resolver: HostResolver,
     runtime: RuntimeManager,
 }
 
@@ -46,8 +54,9 @@ impl Default for AppState {
             control: RuntimeControlStore::default(),
             desired_state_gate: Mutex::new(()),
             chatbox_pacer: ChatboxPacer::default(),
-            caption_session: CaptionSessionStore::default(),
-            host_resolver: HostResolver::default(),
+            caption_aggregate: CaptionAggregateStore::default(),
+            chatbox_host_resolver: HostResolver::default(),
+            recognition_host_resolver: HostResolver::default(),
             runtime: RuntimeManager::default(),
         }
     }
@@ -71,7 +80,7 @@ impl AppState {
 
         // Reject an active generation before touching the credential store.
         // A second Start must remain an idempotency error even if the key used
-        // by the active session was deleted after that session began.
+        // by the active generation was deleted after that generation began.
         self.runtime.prepare_for_start(app)?;
 
         let RuntimeStartSelection {
@@ -86,30 +95,48 @@ impl AppState {
         if let Err(error) = config.validate() {
             return self.finish_start_failure(app, error, None, expected_stop_epoch);
         }
-        let runtime_plan = plan_runtime(&config);
-        if let Err(error) = ensure_runtime_plan_is_startable(&runtime_plan) {
+        let caption_pipeline_plan = plan_caption_pipeline(&config);
+        if let Err(error) = publication_timing_for_start(&caption_pipeline_plan) {
             return self.finish_start_failure(app, error, None, expected_stop_epoch);
         }
-        let resolved = match resolve_openai_api_key() {
+        let resolved = match resolve_openai_credential() {
             Ok(resolved) => resolved,
             Err(error) => {
                 emit_diagnostic(
                     app,
-                    DiagnosticUpdate::error(
-                        DiagnosticCategory::Config,
-                        "config.openai_api_key_missing",
-                        "Cloud STT is not configured",
-                        error.to_string(),
+                    DiagnosticUpdate::from_error(
+                        &error,
+                        "Cloud recognition credential could not be resolved",
                     ),
                 );
                 return self.finish_start_failure(app, error, None, expected_stop_epoch);
             }
         };
-        let credential = RuntimeCredentialSnapshot {
-            provider: SttProvider::OpenAi,
+        let credential = RuntimeGenerationCredentialSnapshot {
+            id: CredentialId::OpenAi,
             storage: resolved.storage,
             display_suffix: resolved.display_suffix,
             revision: credential_revision,
+        };
+        let recognition_module = match config.recognition.path {
+            crate::config::RecognitionPath::OpenAiGptTranscribe => openai_gpt_transcribe_module(
+                config.recognition.expected_languages.clone(),
+                resolved.secret,
+                self.recognition_host_resolver.clone(),
+            ),
+            crate::config::RecognitionPath::OpenAiGptLiveTranscribe => {
+                openai_gpt_live_transcribe_module(
+                    config.recognition.expected_languages.clone(),
+                    resolved.secret,
+                    self.recognition_host_resolver.clone(),
+                )
+            }
+        };
+        let recognition_module = match recognition_module {
+            Ok(module) => module,
+            Err(error) => {
+                return self.finish_start_failure(app, error, None, expected_stop_epoch);
+            }
         };
 
         let generation = self.control.allocate_generation()?;
@@ -119,16 +146,15 @@ impl AppState {
             RuntimeStartRequest {
                 config,
                 chatbox_pacer: self.chatbox_pacer.clone(),
-                caption_session: self.caption_session.clone(),
-                host_resolver: self.host_resolver.clone(),
+                caption_aggregate: self.caption_aggregate.clone(),
+                chatbox_host_resolver: self.chatbox_host_resolver.clone(),
+                prepared_recognition: PreparedRecognition::cloud(recognition_module, credential),
                 generation_id: generation,
                 config_revision,
-                openai_api_key: resolved.secret,
-                credential,
                 status_recorder,
                 expected_stop_epoch,
             },
-            |session| self.control.install_starting_session(session),
+            |generation| self.control.install_starting_generation(generation),
         );
 
         match start_result {
@@ -156,8 +182,8 @@ impl AppState {
         self.control.snapshot()
     }
 
-    pub(super) fn caption_session_snapshot(&self) -> AppResult<CaptionSessionSnapshotV1> {
-        self.caption_session.snapshot()
+    pub(super) fn caption_aggregate_snapshot(&self) -> AppResult<CaptionAggregateSnapshotV2> {
+        self.caption_aggregate.snapshot()
     }
 
     pub(super) fn probe_audio_input<R: Runtime>(
@@ -194,7 +220,7 @@ impl AppState {
 
     pub(super) fn send_osc_test_message(&self) -> AppResult<ChatboxSendReceipt> {
         let osc_config = self.control.effective_osc_config()?;
-        let sender = ChatboxOscSender::new(&osc_config, &self.host_resolver, &|| false)?;
+        let sender = ChatboxOscSender::new(&osc_config, &self.chatbox_host_resolver, &|| false)?;
         self.chatbox_pacer
             .wait_for_turn(None)?
             .ok_or_else(|| AppError::state("OSC Test pacing was cancelled."))?
@@ -289,7 +315,7 @@ impl AppState {
         self.control.replace_loaded_config(
             config.clone(),
             config_requires_review,
-            provider_secret_statuses(),
+            credential_statuses(),
         )?;
 
         Ok(config)
@@ -309,45 +335,28 @@ impl AppState {
         self.control.replace_saved_config(config)
     }
 
-    pub(super) fn save_provider_secret(
+    pub(super) fn save_credential(
         &self,
-        provider: SttProvider,
+        id: CredentialId,
         secret: String,
     ) -> AppResult<RuntimeControlSnapshot> {
         let _operation = self
             .desired_state_gate
             .lock()
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
-        save_provider_secret(provider, secret)?;
+        save_credential(id, secret)?;
         self.control
-            .replace_provider_secret_statuses(provider_secret_statuses())
+            .replace_credential_statuses(credential_statuses())
     }
 
-    pub(super) fn delete_provider_secret(
-        &self,
-        provider: SttProvider,
-    ) -> AppResult<RuntimeControlSnapshot> {
+    pub(super) fn delete_credential(&self, id: CredentialId) -> AppResult<RuntimeControlSnapshot> {
         let _operation = self
             .desired_state_gate
             .lock()
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
-        delete_provider_secret(provider)?;
+        delete_credential(id)?;
         self.control
-            .replace_provider_secret_statuses(provider_secret_statuses())
-    }
-}
-
-fn ensure_runtime_plan_is_startable(plan: &RuntimePlanSnapshot) -> AppResult<()> {
-    match plan.publication.resolved_policy() {
-        Some(ResolvedPublicationPolicy::Completed | ResolvedPublicationPolicy::LiveUnit { .. }) => {
-            Ok(())
-        }
-        None => Err(AppError::config(format!(
-            "The selected recognition path and publication mode are incompatible ({}).",
-            plan.publication
-                .incompatibility_code()
-                .unwrap_or("publication.incompatible")
-        ))),
+            .replace_credential_statuses(credential_statuses())
     }
 }
 

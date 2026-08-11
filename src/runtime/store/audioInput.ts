@@ -1,28 +1,19 @@
 import { ref, shallowRef } from "vue";
 import { uiText } from "../../i18n/uiText";
-import type { RuntimeBackend } from "../backend";
+import { normalizeAppFailure, type AppFailure } from "../appFailure";
+import type { AppGateway } from "../gateway";
 import type {
   AudioLevelEvent,
   AudioProbeRequest,
   AudioProbeResult,
-} from "../types";
+} from "../audio";
 
-type AudioInputBackend = Pick<RuntimeBackend, "probeAudioInput">;
+type AudioInputGateway = Pick<AppGateway, "probeAudioInput">;
 
-function probeErrorMessage(cause: unknown) {
-  if (typeof cause === "string") {
-    return cause;
-  }
-  if (cause instanceof Error) {
-    return cause.message;
-  }
-  return uiText("settings.microphoneTest.unknownError");
-}
-
-export function createAudioInputState(backend: AudioInputBackend) {
+export function createAudioInputState(gateway: AudioInputGateway) {
   const latestAudioLevel = shallowRef<AudioLevelEvent | null>(null);
   const audioProbeResult = shallowRef<AudioProbeResult | null>(null);
-  const audioProbeError = ref("");
+  const audioProbeFailure = shallowRef<AppFailure | null>(null);
   const isAudioProbeRunning = ref(false);
 
   function acceptAudioLevel(event: AudioLevelEvent) {
@@ -41,16 +32,19 @@ export function createAudioInputState(backend: AudioInputBackend) {
   }
 
   async function probeAudioInput(request: AudioProbeRequest) {
-    audioProbeError.value = "";
+    audioProbeFailure.value = null;
     audioProbeResult.value = null;
     isAudioProbeRunning.value = true;
 
     try {
-      const result = await backend.probeAudioInput(request);
+      const result = await gateway.probeAudioInput(request);
       audioProbeResult.value = result;
       return result;
     } catch (cause) {
-      audioProbeError.value = probeErrorMessage(cause);
+      audioProbeFailure.value = normalizeAppFailure(
+        cause,
+        uiText("settings.microphoneTest.unknownError"),
+      );
       return null;
     } finally {
       isAudioProbeRunning.value = false;
@@ -61,7 +55,7 @@ export function createAudioInputState(backend: AudioInputBackend) {
     latestAudioLevel,
     acceptAudioLevel,
     audioProbeResult,
-    audioProbeError,
+    audioProbeFailure,
     isAudioProbeRunning,
     probeAudioInput,
   };

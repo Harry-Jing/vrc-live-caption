@@ -5,20 +5,19 @@ use super::output::RecognitionEventSubmitOutcome;
 use crate::audio::{
     AudioLevelMeter, AudioLevelReading, open_input_capture, speech_gate_level_meter,
 };
-use crate::chatbox::RuntimeChatboxPublisher;
-use crate::config::AppConfig;
+use crate::chatbox::ChatboxPublication;
+use crate::config::AudioConfig;
 use crate::error::{AppError, AppResult};
 use crate::events::{
     AudioLevelEvent, DiagnosticCategory, DiagnosticUpdate, emit_audio_level, emit_diagnostic,
-    now_ms, record_and_emit_runtime_status,
+    record_and_emit_runtime_status,
 };
-use crate::host_resolver::HostResolver;
 use crate::recognition::{
-    OwnedRecognitionAudioFrame, RecognitionSignal, RecognitionSubmitError, RunningRecognition,
-    openai_recognition_module,
+    OwnedRecognitionAudioFrame, RecognitionModule, RecognitionSignal, RecognitionSubmitError,
+    RunningRecognition,
 };
 use crate::runtime_control::{RuntimeStatus, RuntimeStatusRecorder};
-use secrecy::SecretString;
+use crate::wall_clock::unix_timestamp_ms;
 use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 use std::time::Duration;
 use tauri::{AppHandle, Runtime};
@@ -27,31 +26,28 @@ const RECEIVE_TIMEOUT: Duration = Duration::from_millis(100);
 
 pub(super) struct RuntimeExecution<R: Runtime> {
     app: AppHandle<R>,
-    config: AppConfig,
-    openai_api_key: SecretString,
-    publisher: Option<RuntimeChatboxPublisher>,
+    audio_config: AudioConfig,
+    recognition_module: RecognitionModule,
+    publisher: Option<ChatboxPublication>,
     generation: RuntimeGeneration,
-    host_resolver: HostResolver,
     status_recorder: RuntimeStatusRecorder,
 }
 
 impl<R: Runtime> RuntimeExecution<R> {
     pub(super) fn new(
         app: AppHandle<R>,
-        config: AppConfig,
-        openai_api_key: SecretString,
-        publisher: Option<RuntimeChatboxPublisher>,
+        audio_config: AudioConfig,
+        recognition_module: RecognitionModule,
+        publisher: Option<ChatboxPublication>,
         generation: RuntimeGeneration,
-        host_resolver: HostResolver,
         status_recorder: RuntimeStatusRecorder,
     ) -> Self {
         Self {
             app,
-            config,
-            openai_api_key,
+            audio_config,
+            recognition_module,
             publisher,
             generation,
-            host_resolver,
             status_recorder,
         }
     }
@@ -60,7 +56,7 @@ impl<R: Runtime> RuntimeExecution<R> {
         &self.app
     }
 
-    pub(super) fn publisher(&self) -> Option<&RuntimeChatboxPublisher> {
+    pub(super) fn publisher(&self) -> Option<&ChatboxPublication> {
         self.publisher.as_ref()
     }
 
@@ -75,11 +71,10 @@ impl<R: Runtime> RuntimeExecution<R> {
     pub(super) fn run(self) -> AppResult<()> {
         let Self {
             app,
-            config,
-            openai_api_key,
+            audio_config,
+            recognition_module,
             publisher,
             generation,
-            host_resolver,
             status_recorder,
         } = self;
 
@@ -88,7 +83,7 @@ impl<R: Runtime> RuntimeExecution<R> {
                 &app,
                 &status_recorder,
                 RuntimeStatus::Starting,
-                Some("Starting outgoing caption runtime".to_string()),
+                Some("Starting caption runtime".to_string()),
             );
         })?;
         if !started {
@@ -99,19 +94,14 @@ impl<R: Runtime> RuntimeExecution<R> {
             return Ok(());
         }
 
-        let module = openai_recognition_module(
-            config.stt.model,
-            config.stt.languages.clone(),
-            openai_api_key,
-            host_resolver,
-        )?;
-        let mut recognition = module.start(crate::recognition::RecognitionGenerationScope {
-            generation: generation.generation_id(),
-            stream_id: generation.stream_id().to_string(),
-        })?;
+        let mut recognition =
+            recognition_module.start(crate::recognition::RecognitionGenerationScope {
+                generation: generation.generation_id(),
+                stream_id: generation.stream_id().to_string(),
+            })?;
         let runtime_result = coordinate_running_recognition(
             &app,
-            &config,
+            &audio_config,
             publisher.as_ref(),
             &generation,
             &mut recognition,
@@ -158,9 +148,7 @@ impl RecognitionCapture for MicrophoneRecognitionCapture {
     }
 }
 
-fn open_recognition_capture(
-    config: &crate::config::AudioConfig,
-) -> AppResult<Box<dyn RecognitionCapture>> {
+fn open_recognition_capture(config: &AudioConfig) -> AppResult<Box<dyn RecognitionCapture>> {
     open_input_capture(config)
         .map(MicrophoneRecognitionCapture)
         .map(|capture| Box::new(capture) as Box<dyn RecognitionCapture>)
@@ -174,25 +162,24 @@ enum RecognitionCoordinatorFlow {
 
 struct RecognitionCoordinator<'context, R: Runtime> {
     app: &'context AppHandle<R>,
-    config: &'context AppConfig,
-    publisher: Option<&'context RuntimeChatboxPublisher>,
+    audio_config: &'context AudioConfig,
+    publisher: Option<&'context ChatboxPublication>,
     generation: &'context RuntimeGeneration,
     status_recorder: &'context RuntimeStatusRecorder,
-    open_capture:
-        &'context dyn Fn(&crate::config::AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
+    open_capture: &'context dyn Fn(&AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
 }
 
 fn coordinate_running_recognition<R: Runtime>(
     app: &AppHandle<R>,
-    config: &AppConfig,
-    publisher: Option<&RuntimeChatboxPublisher>,
+    audio_config: &AudioConfig,
+    publisher: Option<&ChatboxPublication>,
     generation: &RuntimeGeneration,
     recognition: &mut RunningRecognition,
     status_recorder: &RuntimeStatusRecorder,
 ) -> AppResult<()> {
     coordinate_running_recognition_with_capture(
         app,
-        config,
+        audio_config,
         publisher,
         generation,
         recognition,
@@ -203,19 +190,19 @@ fn coordinate_running_recognition<R: Runtime>(
 
 fn coordinate_running_recognition_with_capture<R: Runtime>(
     app: &AppHandle<R>,
-    config: &AppConfig,
-    publisher: Option<&RuntimeChatboxPublisher>,
+    audio_config: &AudioConfig,
+    publisher: Option<&ChatboxPublication>,
     generation: &RuntimeGeneration,
     recognition: &mut RunningRecognition,
     status_recorder: &RuntimeStatusRecorder,
-    open_capture: &dyn Fn(&crate::config::AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
+    open_capture: &dyn Fn(&AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
 ) -> AppResult<()> {
     let mut active_capture = None;
     let mut audio_level_revision = 0_u64;
     let mut audio_sequence = 0_u64;
     let coordinator = RecognitionCoordinator {
         app,
-        config,
+        audio_config,
         publisher,
         generation,
         status_recorder,
@@ -290,7 +277,7 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
                         peak_dbfs: reading.peak_dbfs,
                         clipping: reading.clipping,
                         gate_open: reading.vad_gate_open,
-                        timestamp_ms: now_ms(),
+                        timestamp_ms: unix_timestamp_ms(),
                     },
                 );
             })?;
@@ -305,14 +292,14 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
             .ok_or_else(|| AppError::state("Recognition audio sequence was exhausted."))?;
         match recognition.try_submit(OwnedRecognitionAudioFrame {
             sequence: audio_sequence,
-            captured_at_ms: now_ms(),
+            captured_at_ms: unix_timestamp_ms(),
             sample_rate_hz: active.capture.sample_rate(),
             samples: samples.into_boxed_slice(),
         }) {
             Ok(()) => {}
             Err(RecognitionSubmitError::Backpressure) => {
-                return Err(AppError::stt_backpressure(
-                    "The recognition backend could not keep up with microphone audio; the bounded recognition audio budget filled, so the session stopped instead of silently dropping audio.",
+                return Err(AppError::recognition_backpressure(
+                    "The active recognizer could not keep up with microphone audio; its bounded audio budget filled, so captioning stopped instead of silently dropping audio.",
                 ));
             }
             Err(RecognitionSubmitError::InvalidAudio) => {
@@ -347,7 +334,7 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
         signal: RecognitionSignal,
     ) -> AppResult<RecognitionCoordinatorFlow> {
         let app = self.app;
-        let config = self.config;
+        let audio_config = self.audio_config;
         let publisher = self.publisher;
         let generation = self.generation;
         let status_recorder = self.status_recorder;
@@ -372,7 +359,7 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
                     ));
                 }
 
-                let capture = open_capture(&config.audio)?;
+                let capture = open_capture(audio_config)?;
                 let sample_rate = capture.sample_rate();
                 let audio_level = speech_gate_level_meter(sample_rate)?;
                 if !recognition.is_accepting_audio() {
@@ -400,10 +387,10 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
                         emit_diagnostic(
                             app,
                             DiagnosticUpdate::info(
-                                DiagnosticCategory::Stt,
+                                DiagnosticCategory::Recognition,
                                 "stt.reconnected",
                                 "Recognition connection restored",
-                                "Microphone capture resumed with a fresh provider session. No prior audio was replayed.",
+                                "Microphone capture resumed with a fresh recognition attempt. No prior audio was replayed.",
                             ),
                         );
                     }
@@ -420,28 +407,28 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
             }
             RecognitionSignal::Reconnecting {
                 epoch,
-                attempt,
+                retry_number,
                 delay_ms,
             } => {
                 drop(active_capture.take());
-                generation.abort_active_units_for_reconnect(app, publisher)?;
+                generation.abort_open_source_units_for_reconnect(app, publisher)?;
                 let reconnecting = generation.commit_if_active(|| {
                     record_and_emit_runtime_status(
                         app,
                         status_recorder,
                         RuntimeStatus::Reconnecting,
                         Some(format!(
-                            "Recognition connection interrupted; retry {attempt} in {delay_ms} ms"
+                            "Recognition connection interrupted; retry {retry_number} in {delay_ms} ms"
                         )),
                     );
                     emit_diagnostic(
                         app,
                         DiagnosticUpdate::warning(
-                            DiagnosticCategory::Stt,
+                            DiagnosticCategory::Recognition,
                             "stt.reconnecting",
                             "Recognition connection interrupted",
                             format!(
-                                "Microphone capture is paused; retry {attempt} begins in {delay_ms} ms. Unconfirmed speech was discarded."
+                                "Microphone capture is paused; retry {retry_number} begins in {delay_ms} ms. Unconfirmed speech was discarded."
                             ),
                         ),
                     );
@@ -467,7 +454,7 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
 
 fn finish_unexpected_recognition_owner<R: Runtime>(
     app: &AppHandle<R>,
-    publisher: Option<&RuntimeChatboxPublisher>,
+    publisher: Option<&ChatboxPublication>,
     generation: &RuntimeGeneration,
     recognition: &mut RunningRecognition,
     active_capture: &mut Option<ActiveRecognitionCapture>,
@@ -475,10 +462,12 @@ fn finish_unexpected_recognition_owner<R: Runtime>(
     drop(active_capture.take());
     let owner_error = recognition.stop().err().unwrap_or_else(|| {
         AppError::runtime(
-            "Recognition session owner stopped unexpectedly while the runtime was active.",
+            "Recognition Module owner stopped unexpectedly while the runtime was active.",
         )
     });
-    if let Err(cleanup_error) = generation.abort_active_units_for_terminal_failure(app, publisher) {
+    if let Err(cleanup_error) =
+        generation.abort_open_source_units_for_terminal_failure(app, publisher)
+    {
         emit_diagnostic(
             app,
             DiagnosticUpdate::from_error(

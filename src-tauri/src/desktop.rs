@@ -9,9 +9,10 @@
 mod state;
 
 use crate::audio::{AudioInputDevice, AudioProbeRequest, AudioProbeResult, list_input_devices};
-use crate::caption_session::CaptionSessionSnapshotV1;
+use crate::caption::CaptionAggregateSnapshotV2;
 use crate::chatbox::OSC_CHATBOX_INPUT_ADDRESS;
-use crate::config::{AppConfig, SttProvider};
+use crate::config::AppConfig;
+use crate::credentials::CredentialId;
 use crate::error::AppResult;
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, emit_runtime_control_changed,
@@ -38,15 +39,15 @@ pub(super) fn install(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tau
         start_runtime,
         stop_runtime,
         get_runtime_control_snapshot,
-        get_caption_session_snapshot,
+        get_caption_aggregate_snapshot,
         send_osc_test_message,
-        save_provider_secret,
-        delete_provider_secret
+        save_credential,
+        delete_credential
     ])
 }
 
 pub(super) fn handle_run_event<R: Runtime>(app: &AppHandle<R>, event: tauri::RunEvent) {
-    // Stop explicitly so the microphone is released and the STT worker joins
+    // Stop explicitly so the microphone is released and the recognition owner joins
     // before the process dies. Runtime correctness never depends on an event
     // emit reaching a webview that is already being torn down.
     if matches!(event, tauri::RunEvent::Exit)
@@ -106,7 +107,7 @@ fn probe_audio_input(
 
 #[tauri::command(async)]
 fn start_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<RuntimeControlSnapshot> {
-    tracing::info!("starting outgoing caption runtime");
+    tracing::info!("starting caption runtime");
     let snapshot = state.start_runtime(&app)?;
     emit_runtime_control_changed(&app, snapshot.clone());
     Ok(snapshot)
@@ -114,7 +115,7 @@ fn start_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<Runtim
 
 #[tauri::command(async)]
 fn stop_runtime(app: AppHandle, state: State<'_, AppState>) -> AppResult<RuntimeControlSnapshot> {
-    tracing::info!("stopping outgoing caption runtime");
+    tracing::info!("stopping caption runtime");
     let snapshot = state.stop_runtime(&app)?;
     emit_runtime_control_changed(&app, snapshot.clone());
     Ok(snapshot)
@@ -126,8 +127,10 @@ fn get_runtime_control_snapshot(state: State<'_, AppState>) -> AppResult<Runtime
 }
 
 #[tauri::command(async)]
-fn get_caption_session_snapshot(state: State<'_, AppState>) -> AppResult<CaptionSessionSnapshotV1> {
-    state.caption_session_snapshot()
+fn get_caption_aggregate_snapshot(
+    state: State<'_, AppState>,
+) -> AppResult<CaptionAggregateSnapshotV2> {
+    state.caption_aggregate_snapshot()
 }
 
 #[tauri::command(async)]
@@ -173,21 +176,21 @@ fn send_osc_test_message(app: AppHandle, state: State<'_, AppState>) -> AppResul
 }
 
 #[tauri::command(async)]
-fn save_provider_secret(
+fn save_credential(
     app: AppHandle,
     state: State<'_, AppState>,
-    provider: SttProvider,
+    id: CredentialId,
     secret: String,
 ) -> AppResult<RuntimeControlSnapshot> {
-    let snapshot = state.save_provider_secret(provider, secret)?;
+    let snapshot = state.save_credential(id, secret)?;
     emit_runtime_control_changed(&app, snapshot.clone());
 
     emit_diagnostic(
         &app,
         DiagnosticUpdate::info(
             DiagnosticCategory::Config,
-            "config.provider_secret_saved",
-            "Provider API key saved",
+            "config.credential_saved",
+            "Credential saved",
             "The API key was saved in the system credential store, not app config.",
         ),
     );
@@ -196,21 +199,21 @@ fn save_provider_secret(
 }
 
 #[tauri::command(async)]
-fn delete_provider_secret(
+fn delete_credential(
     app: AppHandle,
     state: State<'_, AppState>,
-    provider: SttProvider,
+    id: CredentialId,
 ) -> AppResult<RuntimeControlSnapshot> {
-    let snapshot = state.delete_provider_secret(provider)?;
+    let snapshot = state.delete_credential(id)?;
     emit_runtime_control_changed(&app, snapshot.clone());
 
     emit_diagnostic(
         &app,
         DiagnosticUpdate::info(
             DiagnosticCategory::Config,
-            "config.provider_secret_deleted",
-            "Provider API key removed",
-            "The saved provider API key was removed from secure storage.",
+            "config.credential_deleted",
+            "Credential removed",
+            "The saved credential was removed from secure storage.",
         ),
     );
 

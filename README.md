@@ -1,8 +1,9 @@
 # VRC Live Caption
 
 Desktop app that turns microphone speech into VRChat Chatbox captions:
-audio is captured locally, transcribed with cloud STT, and the final text
-is sent to VRChat over OSC.
+audio is captured locally, sent through the selected recognition path
+(currently OpenAI), normalized into captions, and published to VRChat over
+OSC.
 
 Authoritative project direction lives in [docs/](./docs/).
 

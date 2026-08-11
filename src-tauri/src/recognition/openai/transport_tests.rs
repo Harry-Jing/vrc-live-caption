@@ -1,8 +1,7 @@
-use super::super::attempt::RecognitionAttemptSession;
-use super::super::realtime::{OpenAiRealtimeSession, OpenAiRealtimeSessionContext};
+use super::super::attempt::RecognitionAttempt;
+use super::super::realtime::{OpenAiRealtimeAttempt, OpenAiRealtimeAttemptContext};
 use super::super::{OpenAiRecognitionAttemptFactory, OpenAiRecognitionDriver};
 use super::*;
-use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppResult, ProviderFailureClass, RetryDisposition};
 use crate::recognition::{
     OwnedRecognitionAudioFrame, RecognitionGenerationScope, RecognitionModule, RecognitionSignal,
@@ -292,38 +291,38 @@ struct EstablishedTransportAttemptFactory {
 }
 
 impl OpenAiRecognitionAttemptFactory for EstablishedTransportAttemptFactory {
-    type Session = OpenAiRealtimeSession<OpenAiWebSocketTransport>;
+    type Attempt = OpenAiRealtimeAttempt<OpenAiWebSocketTransport>;
 
     fn connect(
         &mut self,
-        context: OpenAiRealtimeSessionContext,
+        context: OpenAiRealtimeAttemptContext,
         is_cancelled: &dyn Fn() -> bool,
-    ) -> AppResult<Self::Session> {
+    ) -> AppResult<Self::Attempt> {
         let transport = self.transport.take().ok_or_else(|| {
             AppError::state("Realtime-rate test attempted to reuse its one transport.")
         })?;
-        let mut session = OpenAiRealtimeSession::connect(
+        let mut attempt = OpenAiRealtimeAttempt::connect(
             context,
             OpenAiTranscriptionModel::GptLiveTranscribe,
             vec!["en".to_string()],
             transport,
         )?;
         let deadline = Instant::now() + Duration::from_secs(1);
-        while !session.is_ready() {
+        while !attempt.is_ready() {
             if is_cancelled() {
                 return Err(AppError::state(
-                    "Realtime-rate test was cancelled before session readiness.",
+                    "Realtime-rate test was cancelled before attempt readiness.",
                 ));
             }
-            let _events = session.drain_events(0)?;
+            let _events = attempt.drain_events(0)?;
             if Instant::now() >= deadline {
                 return Err(AppError::state(
-                    "Realtime-rate test session did not become ready before its deadline.",
+                    "Realtime-rate test attempt did not become ready before its deadline.",
                 ));
             }
             thread::sleep(Duration::from_millis(1));
         }
-        Ok(session)
+        Ok(attempt)
     }
 }
 
@@ -647,7 +646,7 @@ fn peer_close_is_acknowledged_before_the_transport_reports_it() -> AppResult<()>
     let error = transport
         .try_receive_text()
         .err()
-        .ok_or_else(|| AppError::state("Peer Close was not reported as a session failure."))?;
+        .ok_or_else(|| AppError::state("Peer Close was not reported as an attempt failure."))?;
     server
         .join()
         .map_err(|_| AppError::state("Test WebSocket peer thread panicked."))??;
@@ -1174,7 +1173,7 @@ fn tls_inbound_text_ping_and_close_progress_while_outbound_is_backpressured() ->
 // Request construction, failure mapping, and handshake cancellation.
 
 #[test]
-fn handshake_request_uses_transcription_intent_without_session_model() -> AppResult<()> {
+fn handshake_request_uses_transcription_intent_without_a_model_query() -> AppResult<()> {
     let api_key = SecretString::from("test-api-key".to_string());
     let request = openai_websocket_request(&api_key)?;
 

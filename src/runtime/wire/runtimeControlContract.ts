@@ -1,51 +1,51 @@
 import { createDecoders } from "./contractDecoding";
+import { APP_CONFIG_SCHEMA_VERSION, type AppConfig } from "../appConfig";
+import { CAPTION_LANES, type CaptionLane } from "../captionAggregate";
 import {
-  APP_CONFIG_SCHEMA_VERSION,
-  BOUNDARY_OWNERS,
-  CAPTION_LANES,
+  CAPTION_BOUNDARY_OWNERS,
   CAPTION_UNIT_BEHAVIORS,
   LANE_UPDATE_BEHAVIORS,
-  OPENAI_TRANSCRIPTION_MODELS,
-  PROVIDER_SECRET_STORAGES,
   PUBLICATION_INCOMPATIBILITY_REASONS,
   PUBLICATION_MODES,
   PUBLICATION_PLAN_STATES,
   RECOGNITION_INPUT_SHAPES,
   RECOGNITION_PATHS,
-  RESOLVED_PUBLICATION_POLICIES,
+  RESOLVED_PUBLICATION_TIMINGS,
   REVISION_BEHAVIORS,
-  RUNTIME_CHATBOX_STATES,
-  RUNTIME_PENDING_CHANGES,
-  RUNTIME_SESSION_PHASES,
-  RUNTIME_STATUSES,
-  STT_PROVIDERS,
-  type AppConfig,
-  type BoundaryOwner,
-  type CaptionLane,
+  type CaptionBoundaryOwner,
+  type CaptionPipelinePlan,
   type CaptionUnitBehavior,
   type LaneUpdateBehavior,
-  type OpenAiTranscriptionModel,
-  type ProviderSecretStatus,
-  type ProviderSecretStorage,
   type PublicationMode,
   type PublicationPlan,
   type RecognitionCapabilityProfile,
   type RecognitionInputShape,
   type RecognitionPath,
-  type ResolvedPublicationPolicy,
+  type ResolvedPublicationTiming,
   type RevisionBehavior,
+} from "../captionPipeline";
+import {
+  CHATBOX_PUBLICATION_STATES,
+  CREDENTIAL_IDS,
+  CREDENTIAL_STATUS_STATES,
+  CREDENTIAL_STORAGES,
+  RUNTIME_GENERATION_PHASES,
+  RUNTIME_PENDING_GENERATION_CHANGES,
+  type ChatboxPublicationSnapshot,
+  type CredentialId,
+  type CredentialStatus,
+  type CredentialStorage,
   type RuntimeControlSnapshot,
-  type RuntimePendingChange,
-  type RuntimePlan,
-  type RuntimeSession,
-  type RuntimeSessionChatbox,
-  type RuntimeSessionCredential,
-  type RuntimeSessionPhase,
+  type RuntimeGenerationCredentialSnapshot,
+  type RuntimeGenerationPhase,
+  type RuntimeGenerationSnapshot,
+  type RuntimePendingGenerationChange,
+} from "../runtimeControl";
+import {
+  RUNTIME_STATUSES,
   type RuntimeStatus,
   type RuntimeStatusEvent,
-  type SttProvider,
-} from "../types";
-
+} from "../runtimeEvents";
 export class RuntimeControlContractError extends Error {
   constructor(path: string, expectation: string) {
     super(`Invalid runtime control payload at ${path}: ${expectation}.`);
@@ -103,20 +103,21 @@ function decodeAudioConfig(value: unknown, path: string): AppConfig["audio"] {
   };
 }
 
-function decodeSttConfig(value: unknown, path: string): AppConfig["stt"] {
-  const input = exactRecord(value, path, ["provider", "languages", "model"]);
+function decodeRecognitionConfig(
+  value: unknown,
+  path: string,
+): AppConfig["recognition"] {
+  const input = exactRecord(value, path, ["path", "expectedLanguages"]);
 
   return {
-    provider: literal<SttProvider>(
-      input["provider"],
-      `${path}.provider`,
-      STT_PROVIDERS,
+    path: literal<RecognitionPath>(
+      input["path"],
+      `${path}.path`,
+      RECOGNITION_PATHS,
     ),
-    languages: languageHints(input["languages"], `${path}.languages`),
-    model: literal<OpenAiTranscriptionModel>(
-      input["model"],
-      `${path}.model`,
-      OPENAI_TRANSCRIPTION_MODELS,
+    expectedLanguages: languageHints(
+      input["expectedLanguages"],
+      `${path}.expectedLanguages`,
     ),
   };
 }
@@ -150,7 +151,7 @@ function decodeAppConfig(value: unknown, path: string): AppConfig {
   const input = exactRecord(value, path, [
     "schemaVersion",
     "audio",
-    "stt",
+    "recognition",
     "osc",
     "publication",
     "ui",
@@ -161,19 +162,25 @@ function decodeAppConfig(value: unknown, path: string): AppConfig {
       `expected ${String(APP_CONFIG_SCHEMA_VERSION)}`,
     );
   }
-  const ui = exactRecord(input["ui"], `${path}.ui`, ["showPartial"]);
+  const ui = exactRecord(input["ui"], `${path}.ui`, ["showOngoingPreview"]);
 
   return {
     schemaVersion: APP_CONFIG_SCHEMA_VERSION,
     audio: decodeAudioConfig(input["audio"], `${path}.audio`),
-    stt: decodeSttConfig(input["stt"], `${path}.stt`),
+    recognition: decodeRecognitionConfig(
+      input["recognition"],
+      `${path}.recognition`,
+    ),
     osc: decodeOscConfig(input["osc"], `${path}.osc`),
     publication: decodePublicationConfig(
       input["publication"],
       `${path}.publication`,
     ),
     ui: {
-      showPartial: boolean(ui["showPartial"], `${path}.ui.showPartial`),
+      showOngoingPreview: boolean(
+        ui["showOngoingPreview"],
+        `${path}.ui.showOngoingPreview`,
+      ),
     },
   };
 }
@@ -191,7 +198,7 @@ function decodeRecognitionProfile(
   const input = exactRecord(value, path, [
     "path",
     "inputShape",
-    "boundaryOwner",
+    "captionBoundaryOwner",
     "unitBehavior",
     "lanes",
   ]);
@@ -207,10 +214,10 @@ function decodeRecognitionProfile(
       `${path}.inputShape`,
       RECOGNITION_INPUT_SHAPES,
     ),
-    boundaryOwner: literal<BoundaryOwner>(
-      input["boundaryOwner"],
-      `${path}.boundaryOwner`,
-      BOUNDARY_OWNERS,
+    captionBoundaryOwner: literal<CaptionBoundaryOwner>(
+      input["captionBoundaryOwner"],
+      `${path}.captionBoundaryOwner`,
+      CAPTION_BOUNDARY_OWNERS,
     ),
     unitBehavior: literal<CaptionUnitBehavior>(
       input["unitBehavior"],
@@ -246,26 +253,26 @@ function decodeRecognitionProfile(
   };
 }
 
-function decodeResolvedPolicy(
+function decodeResolvedTiming(
   value: unknown,
   path: string,
-): ResolvedPublicationPolicy {
+): ResolvedPublicationTiming {
   const tagged = record(value, path);
-  const policy = literal(
-    tagged["policy"],
-    `${path}.policy`,
-    RESOLVED_PUBLICATION_POLICIES,
+  const timing = literal(
+    tagged["timing"],
+    `${path}.timing`,
+    RESOLVED_PUBLICATION_TIMINGS,
   );
 
-  switch (policy) {
+  switch (timing) {
     case "completed": {
-      exactRecord(value, path, ["policy"]);
-      return { policy };
+      exactRecord(value, path, ["timing"]);
+      return { timing };
     }
     case "liveUnit": {
-      const input = exactRecord(value, path, ["policy", "observationWindowMs"]);
+      const input = exactRecord(value, path, ["timing", "observationWindowMs"]);
       return {
-        policy,
+        timing,
         observationWindowMs: safeInteger(
           input["observationWindowMs"],
           `${path}.observationWindowMs`,
@@ -302,11 +309,11 @@ function decodePublicationPlan(
   );
 
   switch (state) {
-    case "ready": {
+    case "compatible": {
       const input = exactRecord(value, path, [
         "state",
         "mode",
-        "policy",
+        "timing",
         "selectedLanes",
       ]);
       const mode = literal<PublicationMode>(
@@ -314,22 +321,22 @@ function decodePublicationPlan(
         `${path}.mode`,
         PUBLICATION_MODES,
       );
-      const policy = decodeResolvedPolicy(input["policy"], `${path}.policy`);
+      const timing = decodeResolvedTiming(input["timing"], `${path}.timing`);
       assertPlanMatchesMode(mode, expectedMode, `${path}.mode`);
       if (
-        (mode === "completed" && policy.policy !== "completed") ||
-        (mode === "live" && policy.policy === "completed")
+        (mode === "completed" && timing.timing !== "completed") ||
+        (mode === "live" && timing.timing === "completed")
       ) {
         throw new RuntimeControlContractError(
-          `${path}.policy`,
-          `policy does not implement ${mode} mode`,
+          `${path}.timing`,
+          `timing does not implement ${mode} mode`,
         );
       }
 
       return {
         state,
         mode,
-        policy,
+        timing,
         selectedLanes: decodeCaptionLanes(
           input["selectedLanes"],
           `${path}.selectedLanes`,
@@ -407,11 +414,11 @@ function decodePublicationPlan(
   }
 }
 
-function decodeRuntimePlan(
+function decodeCaptionPipelinePlan(
   value: unknown,
   path: string,
   expectedMode: PublicationMode,
-): RuntimePlan {
+): CaptionPipelinePlan {
   const input = exactRecord(value, path, ["recognition", "publication"]);
 
   return {
@@ -427,40 +434,62 @@ function decodeRuntimePlan(
   };
 }
 
-function decodeProviderSecretStatus(
+function decodeCredentialStatus(
   value: unknown,
   path: string,
-): ProviderSecretStatus {
-  const input = exactRecord(value, path, [
-    "provider",
-    "configured",
-    "storage",
-    "displaySuffix",
-    "error",
-  ]);
-  const storage = input["storage"];
+): CredentialStatus {
+  const tagged = record(value, path);
+  const state = literal(
+    tagged["state"],
+    `${path}.state`,
+    CREDENTIAL_STATUS_STATES,
+  );
 
-  return {
-    provider: literal<SttProvider>(
-      input["provider"],
-      `${path}.provider`,
-      STT_PROVIDERS,
-    ),
-    configured: boolean(input["configured"], `${path}.configured`),
-    storage:
-      storage === null
-        ? null
-        : literal<ProviderSecretStorage>(
-            storage,
-            `${path}.storage`,
-            PROVIDER_SECRET_STORAGES,
-          ),
-    displaySuffix: nullableString(
-      input["displaySuffix"],
-      `${path}.displaySuffix`,
-    ),
-    error: nullableString(input["error"], `${path}.error`),
-  };
+  switch (state) {
+    case "unconfigured": {
+      const input = exactRecord(value, path, ["state", "id"]);
+      return {
+        state,
+        id: literal<CredentialId>(input["id"], `${path}.id`, CREDENTIAL_IDS),
+      };
+    }
+    case "configured": {
+      const input = exactRecord(value, path, [
+        "state",
+        "id",
+        "storage",
+        "displaySuffix",
+      ]);
+      return {
+        state,
+        id: literal<CredentialId>(input["id"], `${path}.id`, CREDENTIAL_IDS),
+        storage: literal<CredentialStorage>(
+          input["storage"],
+          `${path}.storage`,
+          CREDENTIAL_STORAGES,
+        ),
+        displaySuffix: nullableString(
+          input["displaySuffix"],
+          `${path}.displaySuffix`,
+        ),
+      };
+    }
+    case "unavailable": {
+      const input = exactRecord(value, path, ["state", "id", "failure"]);
+      const failure = exactRecord(input["failure"], `${path}.failure`, [
+        "code",
+        "message",
+      ]);
+      return {
+        state,
+        id: literal<CredentialId>(input["id"], `${path}.id`, CREDENTIAL_IDS),
+        failure: {
+          code: string(failure["code"], `${path}.failure.code`),
+          message: string(failure["message"], `${path}.failure.message`),
+        },
+      };
+    }
+  }
 }
 
 function decodeRuntimeStatus(value: unknown, path: string): RuntimeStatusEvent {
@@ -487,27 +516,23 @@ function decodeRuntimeStatus(value: unknown, path: string): RuntimeStatusEvent {
   };
 }
 
-function decodeRuntimeCredential(
+function decodeRuntimeGenerationCredentialSnapshot(
   value: unknown,
   path: string,
-): RuntimeSessionCredential {
+): RuntimeGenerationCredentialSnapshot {
   const input = exactRecord(value, path, [
-    "provider",
+    "id",
     "storage",
     "displaySuffix",
     "revision",
   ]);
 
   return {
-    provider: literal<SttProvider>(
-      input["provider"],
-      `${path}.provider`,
-      STT_PROVIDERS,
-    ),
-    storage: literal<ProviderSecretStorage>(
+    id: literal<CredentialId>(input["id"], `${path}.id`, CREDENTIAL_IDS),
+    storage: literal<CredentialStorage>(
       input["storage"],
       `${path}.storage`,
-      PROVIDER_SECRET_STORAGES,
+      CREDENTIAL_STORAGES,
     ),
     displaySuffix: nullableString(
       input["displaySuffix"],
@@ -517,15 +542,15 @@ function decodeRuntimeCredential(
   };
 }
 
-function decodeRuntimeChatbox(
+function decodeChatboxPublication(
   value: unknown,
   path: string,
-): RuntimeSessionChatbox {
+): ChatboxPublicationSnapshot {
   const tagged = record(value, path);
   const state = literal(
     tagged["state"],
     `${path}.state`,
-    RUNTIME_CHATBOX_STATES,
+    CHATBOX_PUBLICATION_STATES,
   );
   const fields =
     state === "unavailable"
@@ -549,63 +574,78 @@ function decodeRuntimeChatbox(
   }
 }
 
-function decodeRuntimeSession(value: unknown, path: string): RuntimeSession {
+function decodeRuntimeGenerationSnapshot(
+  value: unknown,
+  path: string,
+): RuntimeGenerationSnapshot {
   const input = exactRecord(value, path, [
-    "generation",
+    "id",
     "phase",
     "startedFromConfigRevision",
-    "selected",
-    "runtimePlan",
+    "selection",
+    "captionPipelinePlan",
     "credential",
-    "chatbox",
+    "chatboxPublication",
     "uploadsMicrophoneAudio",
   ]);
-  const selectedInput = exactRecord(input["selected"], `${path}.selected`, [
+  const selectionInput = exactRecord(input["selection"], `${path}.selection`, [
     "audio",
-    "stt",
+    "recognition",
     "osc",
     "publication",
   ]);
-  const selected = {
-    audio: decodeAudioConfig(selectedInput["audio"], `${path}.selected.audio`),
-    stt: decodeSttConfig(selectedInput["stt"], `${path}.selected.stt`),
-    osc: decodeOscConfig(selectedInput["osc"], `${path}.selected.osc`),
+  const selection = {
+    audio: decodeAudioConfig(
+      selectionInput["audio"],
+      `${path}.selection.audio`,
+    ),
+    recognition: decodeRecognitionConfig(
+      selectionInput["recognition"],
+      `${path}.selection.recognition`,
+    ),
+    osc: decodeOscConfig(selectionInput["osc"], `${path}.selection.osc`),
     publication: decodePublicationConfig(
-      selectedInput["publication"],
-      `${path}.selected.publication`,
+      selectionInput["publication"],
+      `${path}.selection.publication`,
     ),
   };
-  const runtimePlan = decodeRuntimePlan(
-    input["runtimePlan"],
-    `${path}.runtimePlan`,
-    selected.publication.mode,
+  const captionPipelinePlan = decodeCaptionPipelinePlan(
+    input["captionPipelinePlan"],
+    `${path}.captionPipelinePlan`,
+    selection.publication.mode,
   );
-  if (runtimePlan.publication.state !== "ready") {
+  if (captionPipelinePlan.publication.state !== "compatible") {
     throw new RuntimeControlContractError(
-      `${path}.runtimePlan.publication.state`,
-      "installed sessions require a ready publication plan",
+      `${path}.captionPipelinePlan.publication.state`,
+      "installed generations require a compatible publication plan",
     );
   }
 
   return {
-    generation: safeInteger(input["generation"], `${path}.generation`, 1),
-    phase: literal<RuntimeSessionPhase>(
+    id: safeInteger(input["id"], `${path}.id`, 1),
+    phase: literal<RuntimeGenerationPhase>(
       input["phase"],
       `${path}.phase`,
-      RUNTIME_SESSION_PHASES,
+      RUNTIME_GENERATION_PHASES,
     ),
     startedFromConfigRevision: safeInteger(
       input["startedFromConfigRevision"],
       `${path}.startedFromConfigRevision`,
       0,
     ),
-    selected,
-    runtimePlan,
+    selection,
+    captionPipelinePlan,
     credential:
       input["credential"] === null
         ? null
-        : decodeRuntimeCredential(input["credential"], `${path}.credential`),
-    chatbox: decodeRuntimeChatbox(input["chatbox"], `${path}.chatbox`),
+        : decodeRuntimeGenerationCredentialSnapshot(
+            input["credential"],
+            `${path}.credential`,
+          ),
+    chatboxPublication: decodeChatboxPublication(
+      input["chatboxPublication"],
+      `${path}.chatboxPublication`,
+    ),
     uploadsMicrophoneAudio: boolean(
       input["uploadsMicrophoneAudio"],
       `${path}.uploadsMicrophoneAudio`,
@@ -613,61 +653,66 @@ function decodeRuntimeSession(value: unknown, path: string): RuntimeSession {
   };
 }
 
-export function decodeRuntimeControlSnapshotV3(
+export function decodeRuntimeControlSnapshotV4(
   value: unknown,
 ): RuntimeControlSnapshot {
   const input = exactRecord(value, "$", [
     "contractVersion",
     "revision",
-    "runtime",
+    "runtimeStatus",
     "desired",
-    "session",
-    "pendingChanges",
+    "generation",
+    "pendingGenerationChanges",
   ]);
-  if (input["contractVersion"] !== 3) {
-    throw new RuntimeControlContractError("$.contractVersion", "expected 3");
+  if (input["contractVersion"] !== 4) {
+    throw new RuntimeControlContractError("$.contractVersion", "expected 4");
   }
   const desiredInput = exactRecord(input["desired"], "$.desired", [
     "revision",
     "config",
-    "runtimePlan",
-    "providerSecrets",
+    "captionPipelinePlan",
+    "credentials",
   ]);
   const config = decodeAppConfig(desiredInput["config"], "$.desired.config");
 
   return {
-    contractVersion: 3,
+    contractVersion: 4,
     revision: safeInteger(input["revision"], "$.revision", 0),
-    runtime: decodeRuntimeStatus(input["runtime"], "$.runtime"),
+    runtimeStatus: decodeRuntimeStatus(
+      input["runtimeStatus"],
+      "$.runtimeStatus",
+    ),
     desired: {
       revision: safeInteger(desiredInput["revision"], "$.desired.revision", 0),
       config,
-      runtimePlan: decodeRuntimePlan(
-        desiredInput["runtimePlan"],
-        "$.desired.runtimePlan",
+      captionPipelinePlan: decodeCaptionPipelinePlan(
+        desiredInput["captionPipelinePlan"],
+        "$.desired.captionPipelinePlan",
         config.publication.mode,
       ),
-      providerSecrets: array(
-        desiredInput["providerSecrets"],
-        "$.desired.providerSecrets",
+      credentials: array(
+        desiredInput["credentials"],
+        "$.desired.credentials",
       ).map((status, index) =>
-        decodeProviderSecretStatus(
+        decodeCredentialStatus(
           status,
-          `$.desired.providerSecrets[${String(index)}]`,
+          `$.desired.credentials[${String(index)}]`,
         ),
       ),
     },
-    session:
-      input["session"] === null
+    generation:
+      input["generation"] === null
         ? null
-        : decodeRuntimeSession(input["session"], "$.session"),
-    pendingChanges: array(input["pendingChanges"], "$.pendingChanges").map(
-      (change, index) =>
-        literal<RuntimePendingChange>(
-          change,
-          `$.pendingChanges[${String(index)}]`,
-          RUNTIME_PENDING_CHANGES,
-        ),
+        : decodeRuntimeGenerationSnapshot(input["generation"], "$.generation"),
+    pendingGenerationChanges: array(
+      input["pendingGenerationChanges"],
+      "$.pendingGenerationChanges",
+    ).map((change, index) =>
+      literal<RuntimePendingGenerationChange>(
+        change,
+        `$.pendingGenerationChanges[${String(index)}]`,
+        RUNTIME_PENDING_GENERATION_CHANGES,
+      ),
     ),
   };
 }

@@ -1,35 +1,38 @@
 import { expect, test } from "vitest";
-import wireVocabularyFixture from "../../../contracts/wire-vocabulary-v1.json?raw";
+import wireVocabularyFixture from "../../../contracts/wire-vocabulary-v2.json?raw";
+import { CAPTION_LANES, CAPTION_STATES } from "../captionAggregate";
 import {
-  BOUNDARY_OWNERS,
-  CAPTION_LANES,
-  CAPTION_STATES,
+  CAPTION_BOUNDARY_OWNERS,
   CAPTION_UNIT_BEHAVIORS,
-  DIAGNOSTIC_CATEGORIES,
-  DIAGNOSTIC_SEVERITIES,
   LANE_UPDATE_BEHAVIORS,
-  OPENAI_TRANSCRIPTION_MODELS,
-  PROVIDER_SECRET_STORAGES,
   PUBLICATION_INCOMPATIBILITY_REASONS,
   PUBLICATION_MODES,
   PUBLICATION_PLAN_STATES,
   RECOGNITION_INPUT_SHAPES,
   RECOGNITION_PATHS,
-  RESOLVED_PUBLICATION_POLICIES,
+  RESOLVED_PUBLICATION_TIMINGS,
   REVISION_BEHAVIORS,
-  RUNTIME_CHATBOX_STATES,
-  RUNTIME_PENDING_CHANGES,
-  RUNTIME_SESSION_PHASES,
+} from "../captionPipeline";
+import {
+  CHATBOX_PUBLICATION_STATES,
+  CREDENTIAL_IDS,
+  CREDENTIAL_STATUS_STATES,
+  CREDENTIAL_STORAGES,
+  RUNTIME_GENERATION_PHASES,
+  RUNTIME_PENDING_GENERATION_CHANGES,
+} from "../runtimeControl";
+import {
+  DIAGNOSTIC_CATEGORIES,
+  DIAGNOSTIC_SEVERITIES,
   RUNTIME_STATUSES,
-  STT_PROVIDERS,
-} from "../types";
+} from "../runtimeEvents";
 
 test("closed frontend wire values match the shared vocabulary", () => {
   expect(JSON.parse(wireVocabularyFixture) as unknown).toEqual({
     runtimeStatuses: RUNTIME_STATUSES,
-    sttProviders: STT_PROVIDERS,
-    openAiTranscriptionModels: OPENAI_TRANSCRIPTION_MODELS,
-    providerSecretStorages: PROVIDER_SECRET_STORAGES,
+    credentialIds: CREDENTIAL_IDS,
+    credentialStorages: CREDENTIAL_STORAGES,
+    credentialStatusStates: CREDENTIAL_STATUS_STATES,
     diagnosticCategories: DIAGNOSTIC_CATEGORIES,
     diagnosticSeverities: DIAGNOSTIC_SEVERITIES,
     captionLanes: CAPTION_LANES,
@@ -37,15 +40,15 @@ test("closed frontend wire values match the shared vocabulary", () => {
     publicationModes: PUBLICATION_MODES,
     recognitionPaths: RECOGNITION_PATHS,
     recognitionInputShapes: RECOGNITION_INPUT_SHAPES,
-    boundaryOwners: BOUNDARY_OWNERS,
+    captionBoundaryOwners: CAPTION_BOUNDARY_OWNERS,
     captionUnitBehaviors: CAPTION_UNIT_BEHAVIORS,
     laneUpdateBehaviors: LANE_UPDATE_BEHAVIORS,
     revisionBehaviors: REVISION_BEHAVIORS,
-    resolvedPublicationPolicies: RESOLVED_PUBLICATION_POLICIES,
+    resolvedPublicationTimings: RESOLVED_PUBLICATION_TIMINGS,
     publicationPlanStates: PUBLICATION_PLAN_STATES,
     publicationIncompatibilityReasons: PUBLICATION_INCOMPATIBILITY_REASONS,
-    runtimePendingChanges: RUNTIME_PENDING_CHANGES,
-    runtimeSessionPhases: RUNTIME_SESSION_PHASES,
-    runtimeChatboxStates: RUNTIME_CHATBOX_STATES,
+    runtimePendingGenerationChanges: RUNTIME_PENDING_GENERATION_CHANGES,
+    runtimeGenerationPhases: RUNTIME_GENERATION_PHASES,
+    chatboxPublicationStates: CHATBOX_PUBLICATION_STATES,
   });
 });

@@ -1,22 +1,22 @@
 use super::*;
-use crate::capability_planner::plan_runtime;
+use crate::caption_pipeline::plan_caption_pipeline;
 use crate::runtime_control::{
-    RuntimeChatboxSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase, RuntimeSessionSnapshot,
-    RuntimeStatus, RuntimeStatusEvent,
+    ChatboxPublicationSnapshot, RuntimeGenerationPhase, RuntimeGenerationSelection,
+    RuntimeGenerationSnapshot, RuntimeStatus, RuntimeStatusEvent,
 };
 use std::thread;
 use std::time::Duration;
 use tauri::{Listener, Manager};
 
-fn session_snapshot(config: &AppConfig, generation: u64) -> RuntimeSessionSnapshot {
-    RuntimeSessionSnapshot {
-        generation,
-        phase: RuntimeSessionPhase::Starting,
+fn generation_snapshot(config: &AppConfig, generation: u64) -> RuntimeGenerationSnapshot {
+    RuntimeGenerationSnapshot {
+        id: generation,
+        phase: RuntimeGenerationPhase::Starting,
         started_from_config_revision: 0,
-        selected: RuntimeSelectedConfig::from(config),
-        runtime_plan: plan_runtime(config),
+        selection: RuntimeGenerationSelection::from(config),
+        caption_pipeline_plan: plan_caption_pipeline(config),
         credential: None,
-        chatbox: RuntimeChatboxSnapshot::Disabled {
+        chatbox_publication: ChatboxPublicationSnapshot::Disabled {
             host: config.osc.host.clone(),
             port: config.osc.port,
         },
@@ -140,8 +140,8 @@ fn stop_epoch_prevents_a_late_start_error_from_overwriting_stopped() -> AppResul
     let snapshot = state.runtime_control_snapshot()?;
 
     assert!(recorded.is_none());
-    assert_eq!(snapshot.runtime.status, RuntimeStatus::Stopped);
-    assert!(snapshot.session.is_none());
+    assert_eq!(snapshot.runtime_status.status, RuntimeStatus::Stopped);
+    assert!(snapshot.generation.is_none());
     Ok(())
 }
 
@@ -182,8 +182,8 @@ fn recorded_start_error_publishes_control_before_legacy_status() -> AppResult<()
 
     assert_eq!(first_kind, "control");
     assert_eq!(second_kind, "status");
-    assert_eq!(control["runtime"]["status"], "error");
-    assert!(control["session"].is_null());
+    assert_eq!(control["runtimeStatus"]["status"], "error");
+    assert!(control["generation"].is_null());
     assert_eq!(status["status"], "error");
     Ok(())
 }
@@ -192,8 +192,8 @@ fn recorded_start_error_publishes_control_before_legacy_status() -> AppResult<()
 fn incompatible_publication_fails_before_openai_credentials_are_resolved() -> AppResult<()> {
     let mut config = AppConfig::default();
     config.publication.mode = crate::config::PublicationMode::Live;
-    let plan = plan_runtime(&config);
-    let Err(error) = ensure_runtime_plan_is_startable(&plan) else {
+    let plan = plan_caption_pipeline(&config);
+    let Err(error) = publication_timing_for_start(&plan) else {
         return Err(AppError::state(
             "Bounded OpenAI Live unexpectedly passed runtime preflight.",
         ));
@@ -203,7 +203,7 @@ fn incompatible_publication_fails_before_openai_credentials_are_resolved() -> Ap
     assert!(error.to_string().contains("publication.mode_unsupported"));
     assert!(
         !error.to_string().contains("API key"),
-        "planner failure must win over missing credentials"
+        "Caption Pipeline Plan failure must win over missing credentials"
     );
     assert_eq!(
         config.publication.mode,
@@ -216,14 +216,14 @@ fn incompatible_publication_fails_before_openai_credentials_are_resolved() -> Ap
 #[test]
 fn gpt_live_transcribe_live_publication_passes_runtime_preflight() -> AppResult<()> {
     let mut config = AppConfig::default();
-    config.stt.model = crate::config::OpenAiTranscriptionModel::GptLiveTranscribe;
+    config.recognition.path = crate::config::RecognitionPath::OpenAiGptLiveTranscribe;
     config.publication.mode = crate::config::PublicationMode::Live;
 
-    ensure_runtime_plan_is_startable(&plan_runtime(&config))
+    publication_timing_for_start(&plan_caption_pipeline(&config)).map(|_| ())
 }
 
 #[test]
-fn stop_does_not_hold_the_control_lock_while_status_events_clear_session() -> AppResult<()> {
+fn stop_does_not_hold_the_control_lock_while_status_events_clear_generation() -> AppResult<()> {
     let app = tauri::test::mock_builder()
         .manage(AppState::default())
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
@@ -232,7 +232,7 @@ fn stop_does_not_hold_the_control_lock_while_status_events_clear_session() -> Ap
     let selected = AppConfig::default();
     state
         .control
-        .install_starting_session(session_snapshot(&selected, 5))?;
+        .install_starting_generation(generation_snapshot(&selected, 5))?;
     state
         .runtime_status_recorder()
         .record(RuntimeStatusEvent::new(
@@ -253,8 +253,8 @@ fn stop_does_not_hold_the_control_lock_while_status_events_clear_session() -> Ap
         .join()
         .map_err(|_| AppError::runtime("Stop test thread panicked."))?;
 
-    assert_eq!(snapshot.runtime.status, RuntimeStatus::Stopped);
-    assert!(snapshot.session.is_none());
+    assert_eq!(snapshot.runtime_status.status, RuntimeStatus::Stopped);
+    assert!(snapshot.generation.is_none());
     Ok(())
 }
 
@@ -296,6 +296,6 @@ fn stop_is_not_blocked_by_a_desired_state_operation() -> AppResult<()> {
         completed_promptly,
         "Stop waited for an unrelated desired-state operation."
     );
-    assert_eq!(snapshot.runtime.status, RuntimeStatus::Stopped);
+    assert_eq!(snapshot.runtime_status.status, RuntimeStatus::Stopped);
     Ok(())
 }

@@ -43,23 +43,23 @@ release phase.
 
 Status: complete.
 
-Vitest runs in the normal quality gate. Framework-free lifecycle and
-caption-session reducers, one behavior suite shared by the Preview and Tauri
-backends, and deterministic outcomes for reload, duplicate, out-of-order, and
-late-after-Stop delivery.
+Vitest runs in the normal quality gate. Framework-free lifecycle and Caption
+Aggregate reducers, one typed `AppGateway` contract shared by the Preview and
+Tauri adapters, and deterministic outcomes for reload, duplicate,
+out-of-order, and late-after-Stop delivery.
 
-## Phase 3: Normalized recognition sessions and a Live-capable publisher
+## Phase 3: Normalized caption state and a Live-capable publisher
 
 Status: generic foundation complete. The first real Live provider is Phase 4.
 
-Backend-owned `CaptionSessionSnapshotV1` state, the capability planner
+Application-owned `CaptionAggregateSnapshotV2` state, the Caption Pipeline Plan
 ([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md),
 [ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)), a
 versioned config/control contract, a latest-wins Live worker sharing pacing and
 Stop with the Completed path, and Settings that keeps both modes visible with
 explicit alternatives instead of automatic fallback. The current config and
-runtime-control contract are V3; deterministic recognition scripts are now
-test-only rather than a product provider.
+runtime-control contracts are V4; the caption contract is V2; deterministic
+Recognition Drivers are test-only rather than product paths.
 
 ## Phase 4: OpenAI Realtime recognition cutover
 
@@ -72,13 +72,13 @@ WebSockets ([ADR 0024](./adr/0024-use-openai-realtime-transcription.md)).
 
 Implemented:
 
-- the backend-owned catalog contains exactly the two release paths and their
+- the application-owned catalog contains exactly the two release paths and their
   publication capabilities; legacy models and incompatible timing are rejected
   without migration or fallback;
-- the runtime uses one provider-independent active Recognition Interface:
+- the runtime uses one path-independent active Recognition Module boundary:
   continuous owned mono audio enters a generation-scoped Module, while speech
-  units, provider attempts, reconnect policy, and protocol/worker commands stay
-  behind it; scripted deterministic Adapters are test-only
+  units, recognition attempts, reconnect policy, and protocol/worker commands
+  stay behind it; scripted deterministic Drivers are test-only
   ([ADR 0026](./adr/0026-recognition-modules-own-attempt-execution.md));
 - bounded audio admission is measured in represented audio duration with an
   independent frame safety ceiling; attempt epochs, RAII budget permits, exact
@@ -91,16 +91,16 @@ Implemented:
   partial records, Ping/Pong, Close, and pending output independently with
   permanent non-blocking socket I/O; microphone throughput is not paced by a
   platform-specific read-timeout approximation;
-- ordering, item failure, terminal session errors, bounded audio/protocol and
+- ordering, item failure, terminal attempt errors, bounded audio/protocol and
   normalized-signal queues, coalesced ongoing revisions with reserved lifecycle
   capacity, a 30-second post-commit completion deadline, visible per-item
   diagnostics, authentication/status diagnostics, and late events after Stop
   are deterministic under tests;
-- provider-authored error text is discarded at the Adapter boundary; stable
+- provider-authored error text is discarded at the Driver boundary; stable
   structured classes distinguish terminal failures from transient network,
   rate-limit, and provider-availability failures;
 - transient recognition failures reconnect inside the same runtime generation
-  with capped jittered backoff, a fresh provider session, no ambiguous audio
+  with capped jittered backoff, a fresh recognition attempt, no ambiguous audio
   replay, explicit unconfirmed-unit termination, and Stop-cancellable waits
   ([ADR 0025](./adr/0025-reconnect-within-one-runtime-generation.md));
 - VAD analysis uses fixed 10 ms frames and sample-count boundaries independent
@@ -113,11 +113,11 @@ Implemented:
 - macOS target routing preserves `ExceptionsList` and
   `ExcludeSimpleHostnames` through CFNetwork instead of translating Apple
   rules into `NO_PROXY` semantics;
-- an authenticated production-adapter smoke covers both exact models with
+- an authenticated production Recognition Driver smoke test covers both exact models with
   Chinese, English, and mixed-language audio plus a provider-error probe; it
   exposed and verified fixes for the transcription-intent route and rustls
   crypto-provider selection; and
-- the production Mock selection, bounded HTTP/WAV Adapter, old model fields,
+- the production Mock selection, bounded HTTP/WAV Driver, old model fields,
   and otherwise-unused direct HTTP/WAV dependencies are removed with no
   fallback branch.
 
@@ -126,7 +126,7 @@ Windows/VRChat exit matrix with a real microphone. Representative successful
 scenarios included long uninterrupted speech and mixed English/Chinese speech;
 no release-blocking issue was observed.
 
-Exit met: only the two catalog paths can start an OpenAI recognition session;
+Exit met: only the two catalog paths can start an OpenAI recognition attempt;
 the capability matrix is enforced; no REST/WAV, legacy-model, production-Mock,
 or silent fallback path remains; both models pass contract tests and native
 Windows/VRChat validation.
@@ -140,7 +140,10 @@ reason this project exists.
 
 - select and implement one concrete translator for completed source units; no
   local model download required;
-- link every target result to its source generation, unit, and revision;
+- link every target result to its source generation, stream, unit, and revision;
+- reserve that exact completed Source snapshot when bounded translation work is
+  admitted, release the reservation on every terminal/cancellation path, and
+  exclude reserved units from ordinary five-unit history trimming;
 - add source-only, translation-only, and bilingual content settings; bilingual
   Completed output follows
   [ADR 0007](./adr/0007-bilingual-output-is-one-asynchronous-view.md);
@@ -195,7 +198,7 @@ Exit: every first-release surface switches between English and Chinese; a
 headset user can start, stop, and notice a failure without technical error
 text reaching the public Chatbox.
 
-## Phase 8: Local STT on CPU
+## Phase 8: Local recognition on CPU
 
 Status: not started; model and runtime research may continue earlier.
 
@@ -209,14 +212,14 @@ silent cloud fallback
 - define a narrow Rust worker protocol with bounded queues, health checks,
   and crash isolation;
 - implement sherpa-onnx plus SenseVoiceSmall on CPU as the first bounded local
-  driver behind the same active Recognition Interface used by OpenAI
+  driver behind the same active Recognition Module boundary used by OpenAI
   ([research](./research/local-inference-notes.md));
 - record an English/Chinese/mixed-speech, latency, and resource baseline with
   VRChat running;
 - add distinct diagnostics for missing files, incompatible runtime, load
   failure, backlog, and worker crash.
 
-Exit: a sustained local Windows/VRChat session works, a worker crash cannot
+Exit: a sustained local Windows/VRChat runtime generation works, a worker crash cannot
 destabilize the app, and the local component can be installed, verified,
 repaired, and removed per the recorded distribution decision.
 
@@ -230,7 +233,7 @@ Goal: complete the local backend choice and add real local Live candidates
 - package and validate the CUDA runtime path; preserve the preference when a
   model lacks CUDA support;
 - implement Streaming Paraformer and Streaming Zipformer as independent local
-  Live drivers behind the same active Recognition Interface;
+  Live drivers behind the same active Recognition Module boundary;
 - bring every model/runtime pack through the Phase 8 distribution,
   verification, and removal flow;
 - benchmark accuracy, mixed-language speech, latency, resources, and VRChat
@@ -261,7 +264,7 @@ the paths that passed their gates
 - audit the Tauri permission allowlist against the APIs actually used;
 - adjust the provisional Phase 1 publisher limits from measured backlog and
   readability;
-- run long-session Windows tests for every enabled path with VRChat active;
+- run long-running Windows tests for every enabled path with VRChat active;
   test install, update-failure recovery, and uninstall;
 - produce final workflow artifacts for Windows, macOS arm64, and the Linux
   x86_64 AppImage.

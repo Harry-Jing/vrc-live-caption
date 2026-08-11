@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-caption-aggregate-snapshot"
+description = "Enables the get_caption_aggregate_snapshot command without any pre-configured scope."
+commands.allow = ["get_caption_aggregate_snapshot"]
+
+[[permission]]
+identifier = "deny-get-caption-aggregate-snapshot"
+description = "Denies the get_caption_aggregate_snapshot command without any pre-configured scope."
+commands.deny = ["get_caption_aggregate_snapshot"]

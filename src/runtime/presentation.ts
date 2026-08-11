@@ -1,19 +1,22 @@
 // Shared semantic presentation mappings for runtime state shown in the UI.
 // Each map covers its full union type, so adding a status, mode, category, or
-// provider without choosing its presentation fails the typecheck instead of
+// service path without choosing its presentation fails the typecheck instead of
 // silently rendering a default.
 
 import { uiText, type UiStaticMessageKey } from "../i18n/uiText";
 import type {
-  CaptionPreviewStatus,
+  CaptionPipelinePlan,
+  PublicationMode,
+  RecognitionPath,
+} from "./captionPipeline";
+import type {
   DiagnosticCategory,
   DiagnosticSeverity,
-  OpenAiTranscriptionModel,
-  PublicationMode,
-  RuntimePlan,
   RuntimeStatus,
-  SttProvider,
-} from "./types";
+} from "./runtimeEvents";
+
+export type CaptionPreviewStatus =
+  "waiting" | "listening" | "ongoing" | "completed";
 
 type StatusBadgeColor = "error" | "info" | "neutral" | "success" | "warning";
 
@@ -86,19 +89,21 @@ export const diagnosticCategoryMessageKey = {
   osc: "diagnostics.category.osc",
 } satisfies Record<DiagnosticCategory, UiStaticMessageKey>;
 
-export const sttProviderMessageKey = {
-  openai: "stt.providers.openai",
-} satisfies Record<SttProvider, UiStaticMessageKey>;
+export const recognitionPathServiceMessageKey = {
+  "openai/gpt-transcribe": "serviceProvider.openai",
+  "openai/gpt-live-transcribe": "serviceProvider.openai",
+} satisfies Record<RecognitionPath, UiStaticMessageKey>;
 
-export const openAiTranscriptionModelMessageKey = {
-  "gpt-transcribe": "stt.models.gptTranscribe",
-  "gpt-live-transcribe": "stt.models.gptLiveTranscribe",
-} satisfies Record<OpenAiTranscriptionModel, UiStaticMessageKey>;
+export const recognitionPathMessageKey = {
+  "openai/gpt-transcribe": "recognition.path.gptTranscribe",
+  "openai/gpt-live-transcribe": "recognition.path.gptLiveTranscribe",
+} satisfies Record<RecognitionPath, UiStaticMessageKey>;
 
-export const openAiTranscriptionModelDescriptionMessageKey = {
-  "gpt-transcribe": "stt.models.gptTranscribe.description",
-  "gpt-live-transcribe": "stt.models.gptLiveTranscribe.description",
-} satisfies Record<OpenAiTranscriptionModel, UiStaticMessageKey>;
+export const recognitionPathDescriptionMessageKey = {
+  "openai/gpt-transcribe": "recognition.path.gptTranscribe.description",
+  "openai/gpt-live-transcribe":
+    "recognition.path.gptLiveTranscribe.description",
+} satisfies Record<RecognitionPath, UiStaticMessageKey>;
 
 export const publicationModeMessageKey = {
   completed: "publication.mode.completed",
@@ -113,15 +118,15 @@ export const publicationModeDescriptionMessageKey = {
 export type PublicationPlanView =
   | Readonly<{ state: "unavailable" }>
   | Readonly<{
-      state: "ready";
+      state: "compatible";
       mode: PublicationMode;
-      policy: "completed";
+      timing: "completed";
       delayMs: null;
     }>
   | Readonly<{
-      state: "ready";
+      state: "compatible";
       mode: PublicationMode;
-      policy: "liveUnit";
+      timing: "liveUnit";
       delayMs: number;
     }>
   | Readonly<{
@@ -133,19 +138,19 @@ export type PublicationPlanView =
 export type PublicationSettingsView =
   Readonly<{ state: "unverified" }> | PublicationPlanView;
 
-export type PublicationReadyView = Extract<
+export type PublicationCompatibleView = Extract<
   PublicationPlanView,
-  Readonly<{ state: "ready" }>
+  Readonly<{ state: "compatible" }>
 >;
 
 export function publicationPlanView(
-  runtimePlan: RuntimePlan | null,
+  captionPipelinePlan: CaptionPipelinePlan | null,
 ): PublicationPlanView {
-  if (runtimePlan === null) {
+  if (captionPipelinePlan === null) {
     return { state: "unavailable" };
   }
 
-  const { publication } = runtimePlan;
+  const { publication } = captionPipelinePlan;
 
   if (publication.state === "incompatible") {
     return {
@@ -155,58 +160,62 @@ export function publicationPlanView(
     };
   }
 
-  if (publication.policy.policy === "completed") {
+  if (publication.timing.timing === "completed") {
     return {
-      state: "ready",
+      state: "compatible",
       mode: publication.mode,
-      policy: "completed",
+      timing: "completed",
       delayMs: null,
     };
   }
 
   return {
-    state: "ready",
+    state: "compatible",
     mode: publication.mode,
-    policy: "liveUnit",
-    delayMs: publication.policy.observationWindowMs,
+    timing: "liveUnit",
+    delayMs: publication.timing.observationWindowMs,
   };
 }
 
 export function publicationDisplayPlanView(
-  sessionRuntimePlan: RuntimePlan | null,
-  desiredRuntimePlan: RuntimePlan | null,
+  currentGenerationCaptionPipelinePlan: CaptionPipelinePlan | null,
+  desiredCaptionPipelinePlan: CaptionPipelinePlan | null,
 ): PublicationPlanView {
-  return publicationPlanView(sessionRuntimePlan ?? desiredRuntimePlan);
+  return publicationPlanView(
+    currentGenerationCaptionPipelinePlan ?? desiredCaptionPipelinePlan,
+  );
 }
 
 export function publicationSettingsView(
-  desiredRuntimePlan: RuntimePlan | null,
+  desiredCaptionPipelinePlan: CaptionPipelinePlan | null,
   isFormDirty: boolean,
 ): PublicationSettingsView {
   if (isFormDirty) {
     return { state: "unverified" };
   }
 
-  return publicationPlanView(desiredRuntimePlan);
+  return publicationPlanView(desiredCaptionPipelinePlan);
 }
 
-export function publicationPlanDescription(plan: PublicationReadyView): string {
-  switch (plan.policy) {
+export function publicationPlanDescription(
+  plan: PublicationCompatibleView,
+): string {
+  switch (plan.timing) {
     case "completed":
-      return uiText("publication.policy.completed");
+      return uiText("publication.timing.completed");
     case "liveUnit":
-      return uiText("publication.policy.liveUnit", {
+      return uiText("publication.timing.liveUnit", {
         delayMs: plan.delayMs,
       });
   }
 }
 
 export function publicationStartIsBlocked(
-  hasActiveSession: boolean,
-  desiredRuntimePlan: RuntimePlan | null,
+  hasActiveGeneration: boolean,
+  desiredCaptionPipelinePlan: CaptionPipelinePlan | null,
 ): boolean {
   return (
-    !hasActiveSession &&
-    desiredRuntimePlan?.publication.state === "incompatible"
+    !hasActiveGeneration &&
+    desiredCaptionPipelinePlan?.publication.state === "incompatible"
   );
 }

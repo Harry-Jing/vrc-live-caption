@@ -1,20 +1,19 @@
 import { nextTick, ref } from "vue";
 import { expect, test } from "vitest";
-import type { AppConfig } from "../../runtime/types";
+import type { AppConfig } from "../../runtime/appConfig";
 import { useSettingsDraft } from "./settingsDraft";
 
 function appConfig(): AppConfig {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     audio: { inputDeviceId: null },
-    stt: {
-      provider: "openai",
-      languages: ["zh", "en"],
-      model: "gpt-live-transcribe",
+    recognition: {
+      path: "openai/gpt-live-transcribe",
+      expectedLanguages: ["zh", "en"],
     },
     osc: { host: "127.0.0.1", port: 9_000, enabled: true },
     publication: { mode: "live" },
-    ui: { showPartial: true },
+    ui: { showOngoingPreview: true },
   };
 }
 
@@ -24,7 +23,7 @@ test("has no editable or saveable draft until saved config exists", async () => 
 
   expect(settings.draft.value).toBeNull();
   expect(settings.isDirty.value).toBe(false);
-  expect(settings.hasValidLanguageHints.value).toBe(false);
+  expect(settings.hasValidExpectedLanguages.value).toBe(false);
   expect(settings.createSaveConfig()).toBeNull();
 
   saved.value = appConfig();
@@ -73,18 +72,18 @@ test("validates trimmed language hints without case-insensitive duplicates", () 
     throw new Error("The initial saved config must create a draft.");
   }
 
-  settings.draft.value.stt.languages = [" zh ", "EN"];
-  expect(settings.hasValidLanguageHints.value).toBe(true);
+  settings.draft.value.recognition.expectedLanguages = [" zh ", "EN"];
+  expect(settings.hasValidExpectedLanguages.value).toBe(true);
 
-  settings.draft.value.stt.languages = [" en ", "EN"];
-  expect(settings.hasValidLanguageHints.value).toBe(false);
+  settings.draft.value.recognition.expectedLanguages = [" en ", "EN"];
+  expect(settings.hasValidExpectedLanguages.value).toBe(false);
   expect(settings.createSaveConfig()).toBeNull();
 
-  settings.draft.value.stt.languages = ["zh", "   "];
-  expect(settings.hasValidLanguageHints.value).toBe(false);
+  settings.draft.value.recognition.expectedLanguages = ["zh", "   "];
+  expect(settings.hasValidExpectedLanguages.value).toBe(false);
 
-  settings.draft.value.stt.languages = [];
-  expect(settings.hasValidLanguageHints.value).toBe(false);
+  settings.draft.value.recognition.expectedLanguages = [];
+  expect(settings.hasValidExpectedLanguages.value).toBe(false);
 });
 
 test("becomes clean again when edits return to the saved content", () => {
@@ -95,10 +94,10 @@ test("becomes clean again when edits return to the saved content", () => {
     throw new Error("The initial saved config must create a draft.");
   }
 
-  settings.draft.value.ui.showPartial = false;
+  settings.draft.value.ui.showOngoingPreview = false;
   expect(settings.isDirty.value).toBe(true);
 
-  settings.draft.value.ui.showPartial = true;
+  settings.draft.value.ui.showOngoingPreview = true;
   expect(settings.isDirty.value).toBe(false);
 });
 
@@ -110,18 +109,21 @@ test("normalizes a detached save payload and retains the saved port fallback", (
     throw new Error("The initial saved config must create a draft.");
   }
 
-  settings.draft.value.stt.languages = [" zh-CN ", "EN"];
+  settings.draft.value.recognition.expectedLanguages = [" zh-CN ", "EN"];
   settings.draft.value.osc.host = "  vrchat.local  ";
   settings.draft.value.osc.port = Number.NaN;
 
   const next = settings.createSaveConfig();
 
   expect(next).toMatchObject({
-    stt: { languages: ["zh-CN", "EN"] },
+    recognition: { expectedLanguages: ["zh-CN", "EN"] },
     osc: { host: "vrchat.local", port: 9_000 },
   });
   expect(next).not.toBe(settings.draft.value);
-  expect(settings.draft.value.stt.languages).toEqual([" zh-CN ", "EN"]);
+  expect(settings.draft.value.recognition.expectedLanguages).toEqual([
+    " zh-CN ",
+    "EN",
+  ]);
   expect(settings.draft.value.osc.host).toBe("  vrchat.local  ");
   expect(settings.draft.value.osc.port).toBeNaN();
 

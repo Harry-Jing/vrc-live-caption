@@ -17,7 +17,7 @@ import { uiText } from "../i18n/uiText";
 
         <UButton
           class="mx-auto"
-          :label="uiText('notFound.backToLive')"
+          :label="uiText('notFound.backToCaptioning')"
           to="/"
         />
       </div>

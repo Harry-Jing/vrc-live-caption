@@ -155,7 +155,7 @@ impl OpenAiTlsPump {
                 }
                 Err(error) if error.kind() == ErrorKind::Interrupted => continue,
                 Err(error) => {
-                    return Err(AppError::stt_network_terminal(format!(
+                    return Err(AppError::recognition_network_terminal(format!(
                         "Failed to read the OpenAI Realtime WebSocket owner channel: {error}"
                     )));
                 }
@@ -236,7 +236,7 @@ impl OpenAiTlsPump {
                     self.websocket_input_shutdown = true;
                 }
                 Err(error) => {
-                    return Err(AppError::stt_network_terminal(format!(
+                    return Err(AppError::recognition_network_terminal(format!(
                         "Failed to close the OpenAI Realtime WebSocket owner input: {error}"
                     )));
                 }
@@ -262,7 +262,7 @@ impl OpenAiTlsPump {
                         Err(error) if error.kind() == ErrorKind::WouldBlock => 0,
                         Err(error) if error.kind() == ErrorKind::Interrupted => 0,
                         Err(error) => {
-                            return Err(AppError::stt_network_terminal(format!(
+                            return Err(AppError::recognition_network_terminal(format!(
                                 "Failed to feed the OpenAI Realtime WebSocket owner: {error}"
                             )));
                         }
@@ -295,7 +295,7 @@ impl OpenAiTlsPump {
             };
             match write_result {
                 Ok(0) => {
-                    return Err(AppError::stt_network_terminal(
+                    return Err(AppError::recognition_network_terminal(
                         "OpenAI Realtime WebSocket owner input closed unexpectedly.",
                     ));
                 }
@@ -306,7 +306,7 @@ impl OpenAiTlsPump {
                 Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(false),
                 Err(error) if error.kind() == ErrorKind::Interrupted => continue,
                 Err(error) => {
-                    return Err(AppError::stt_network_terminal(format!(
+                    return Err(AppError::recognition_network_terminal(format!(
                         "Failed to feed pending OpenAI Realtime WebSocket bytes: {error}"
                     )));
                 }
@@ -345,32 +345,32 @@ pub(super) fn split_established_tls(socket: &mut OpenAiSocket) -> AppResult<Opti
 
 fn nonblocking_loopback_pair() -> AppResult<(TcpStream, TcpStream)> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| {
-        AppError::stt_network_terminal(format!(
+        AppError::recognition_network_terminal(format!(
             "Failed to create the OpenAI Realtime TLS owner channel: {error}"
         ))
     })?;
     let address = listener.local_addr().map_err(|error| {
-        AppError::stt_network_terminal(format!(
+        AppError::recognition_network_terminal(format!(
             "Failed to address the OpenAI Realtime TLS owner channel: {error}"
         ))
     })?;
     let websocket_stream = TcpStream::connect(address).map_err(|error| {
-        AppError::stt_network_terminal(format!(
+        AppError::recognition_network_terminal(format!(
             "Failed to connect the OpenAI Realtime TLS owner channel: {error}"
         ))
     })?;
     let expected_peer = websocket_stream.local_addr().map_err(|error| {
-        AppError::stt_network_terminal(format!(
+        AppError::recognition_network_terminal(format!(
             "Failed to identify the OpenAI Realtime TLS owner channel: {error}"
         ))
     })?;
     let (pump_stream, peer) = listener.accept().map_err(|error| {
-        AppError::stt_network_terminal(format!(
+        AppError::recognition_network_terminal(format!(
             "Failed to accept the OpenAI Realtime TLS owner channel: {error}"
         ))
     })?;
     if peer != expected_peer {
-        return Err(AppError::stt_network_terminal(
+        return Err(AppError::recognition_network_terminal(
             "OpenAI Realtime TLS owner channel accepted an unexpected local peer.",
         ));
     }
@@ -379,7 +379,7 @@ fn nonblocking_loopback_pair() -> AppResult<(TcpStream, TcpStream)> {
             .set_nodelay(true)
             .and_then(|()| stream.set_nonblocking(true))
             .map_err(|error| {
-                AppError::stt_network_terminal(format!(
+                AppError::recognition_network_terminal(format!(
                     "Failed to configure the OpenAI Realtime TLS owner channel: {error}"
                 ))
             })?;

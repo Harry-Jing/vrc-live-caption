@@ -9,10 +9,10 @@ languages; real-time captions for same-language listeners turned out to
 matter just as much. The goal is one complete, polished voice tool, not a
 minimal single-feature app.
 
-The product is designed for long always-on sessions: start it once and keep
-playing. English and Chinese are the first language priorities. Cloud STT is
-the current baseline; the long-term default is a validated local path that
-needs no account or per-minute payment
+The product is designed for long always-on runs: start it once and keep
+playing. English and Chinese are the first language priorities. Cloud
+recognition is the current baseline; the long-term default is a validated local
+path that needs no account or per-minute payment
 ([ADR 0004](./adr/0004-local-stt-is-the-long-term-default.md)).
 
 ## Current scope
@@ -29,7 +29,8 @@ microphone
 ```
 
 This implementation has deterministic protocol and runtime coverage, and both
-OpenAI models have passed an authenticated production-adapter smoke. The
+OpenAI models have passed an authenticated production Recognition Driver smoke
+test. The
 maintainer has also completed native Windows/VRChat and real-microphone
 validation, including long uninterrupted speech and mixed English/Chinese
 speech, with no release-blocking issue observed. Phase 4 is complete;
@@ -49,9 +50,9 @@ The OpenAI release catalog is intentionally closed:
 | `gpt-transcribe` | supported | unsupported | text appears after an audio item is committed and completed |
 | `gpt-live-transcribe` | supported | supported | text can revise while speech continues, then completes |
 
-One running recognition session uses exactly one model. Changing the saved
-model takes effect on the next Start; the app never runs both models as an
-implicit two-pass path. A removed or unknown model is an explicit unsupported
+One runtime generation uses exactly one recognition path. Changing the saved
+path takes effect on the next Start; the app never runs both models as an
+implicit two-pass path. A removed or unknown path is an explicit unsupported
 selection, not a reason to migrate or fall back silently
 ([ADR 0024](./adr/0024-use-openai-realtime-transcription.md)).
 
@@ -126,37 +127,38 @@ parameters, not user settings.
 ### Stop
 
 Stop is a hard trust action: capture stops, queued work is discarded, and no
-text from the stopped session reaches the App or the Chatbox afterward
+text from the stopped generation reaches the App or the Chatbox afterward
 ([ADR 0011](./adr/0011-stop-is-a-hard-cutoff.md)).
 
 ## Requirements
 
-- Provider output is normalized before the UI or Chatbox sees it
+- Recognition and translation output is normalized before the UI or Chatbox
+  sees it
   ([ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)).
 - Chatbox output is paced, coalesced, length-limited, and layout-aware
   ([ADR 0015](./adr/0015-pace-chatbox-sends-at-one-second.md),
   [research](./research/vrchat-chatbox-reference.md)).
 - Capture, recognition, and translation never wait on Chatbox pacing.
-- The app never silently changes provider, model, backend, mode, or content
-  selection, and never falls back to cloud when a local path fails.
+- The app never silently changes recognition path, translation path, effective
+  backend, publication mode, or content selection, and never falls back to
+  cloud when a local path fails.
 - The OpenAI release path accepts only `gpt-transcribe` and
   `gpt-live-transcribe`, uses Realtime transcription WebSockets for both, and
   has no REST/WAV recognition fallback, legacy-model compatibility path, or
   production Mock provider
   ([ADR 0024](./adr/0024-use-openai-realtime-transcription.md)).
-- Secrets never enter ordinary config or logs
+- Credential secrets never enter ordinary config or logs
   ([ADR 0005](./adr/0005-keep-secrets-out-of-config-and-logs.md)).
 - The app discloses when microphone audio is uploaded to a cloud provider
   ([ADR 0009](./adr/0009-cloud-audio-disclosure-lives-in-settings.md)).
 - Temporary recognition outages reconnect visibly without replaying ambiguous
-  audio or changing the selected provider/model; Stop remains the hard user
+  audio or changing the selected recognition path; Stop remains the hard user
   boundary ([ADR 0025](./adr/0025-reconnect-within-one-runtime-generation.md)).
 - Users can see whether the selected microphone crosses the current speech
   gate and can run a short local-only microphone test without contacting a
   recognition provider.
-- Diagnostics separate audio, provider, translation, worker, backend, OSC,
-  config, and network failures, and should be exportable as a redacted
-  report.
+- Diagnostics separate audio, recognition, translation, worker, backend, OSC,
+  config, and network failures, and should be exportable as a redacted report.
 - The UI is localizable; English and Chinese come first
   ([ADR 0008](./adr/0008-localize-the-ui-in-the-frontend.md)).
 
@@ -164,7 +166,7 @@ text from the stopped session reaches the App or the Chatbox afterward
 
 Not in the current implementation plan: system-audio capture, speaker
 diarization, TTS, virtual microphone output, plugins, mobile support, and
-persistent searchable history. Incoming captions, local STT, local
+persistent searchable history. Incoming captions, local recognition, local
 translation, and two-pass recognition are scheduled roadmap or Later items,
 not open-ended ideas — see [roadmap.md](./roadmap.md).
 

@@ -1,9 +1,12 @@
 use super::RuntimeGeneration;
-use crate::chatbox::{
-    ChatboxPacer, ChatboxSendReceipt, ChatboxTransport, CompletedChatboxPublisher,
-    PublisherReporter, RuntimeChatboxPublisher,
+use crate::caption::{
+    CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateChange, CaptionAggregateSnapshotV2,
+    CaptionAggregateUpdate,
 };
+use crate::caption_pipeline::ResolvedPublicationTiming;
+use crate::chatbox::{ChatboxPacer, ChatboxPublication, ChatboxSendReceipt, ChatboxTransport};
 use crate::error::{AppError, AppResult};
+use crate::events::DiagnosticUpdate;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,20 +46,37 @@ impl ChatboxTransport for RecordingChatboxTransport {
 pub(super) fn runtime_test_publisher(
     generation: RuntimeGeneration,
     typing_sender: Option<std::sync::mpsc::Sender<bool>>,
-) -> AppResult<(RuntimeChatboxPublisher, std::sync::mpsc::Receiver<String>)> {
+) -> AppResult<(ChatboxPublication, std::sync::mpsc::Receiver<String>)> {
     let (text_sender, text_receiver) = std::sync::mpsc::channel();
-    let reporter: PublisherReporter = Arc::new(|_| {});
-    let publisher = CompletedChatboxPublisher::start(
+    let reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync> = Arc::new(|_| {});
+    let publication = ChatboxPublication::start_with_transport(
         Arc::new(RecordingChatboxTransport {
             text_sender,
             typing_sender,
         }),
         ChatboxPacer::default(),
-        generation,
+        generation.generation_id(),
+        generation.committer(),
+        ResolvedPublicationTiming::Completed,
         reporter,
     )?;
 
-    Ok((RuntimeChatboxPublisher::Completed(publisher), text_receiver))
+    Ok((publication, text_receiver))
+}
+
+pub(super) fn inactive_caption_update(revision: u64) -> CaptionAggregateUpdate {
+    CaptionAggregateUpdate {
+        snapshot: CaptionAggregateSnapshotV2 {
+            contract_version: CAPTION_AGGREGATE_CONTRACT_VERSION,
+            snapshot_revision: revision,
+            active_stream: None,
+            open_source_units: Vec::new(),
+            captions: Vec::new(),
+        },
+        change: CaptionAggregateChange::SourceUnitAborted {
+            unit_id: "inactive-unit".to_string(),
+        },
+    }
 }
 
 pub(super) fn receive_json_event(

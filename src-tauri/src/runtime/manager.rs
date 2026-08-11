@@ -1,24 +1,21 @@
 use super::coordinator::RuntimeExecution;
-use super::output::{
-    RuntimeGeneration, RuntimePublisherInit, initialize_runtime_publisher, publisher_boundary,
-    publisher_failure_message,
-};
+use super::output::{ChatboxPublicationInit, RuntimeGeneration, initialize_chatbox_publication};
 use super::supervisor::run_runtime_thread;
 
-use crate::capability_planner::{ResolvedPublicationPolicy, RuntimePlanSnapshot, plan_runtime};
-use crate::caption_session::CaptionSessionStore;
-use crate::chatbox::{ChatboxPacer, PublisherCloseReason, RuntimeChatboxPublisher};
+use crate::caption::CaptionAggregateStore;
+use crate::caption_pipeline::{plan_caption_pipeline, publication_timing_for_start};
+use crate::chatbox::{ChatboxPacer, ChatboxPublication};
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, record_and_emit_runtime_status,
 };
 use crate::host_resolver::HostResolver;
+use crate::recognition::RecognitionModule;
 use crate::runtime_control::{
-    RuntimeChatboxSnapshot, RuntimeCredentialSnapshot, RuntimeSelectedConfig, RuntimeSessionPhase,
-    RuntimeSessionSnapshot, RuntimeStatus, RuntimeStatusRecorder,
+    ChatboxPublicationSnapshot, RuntimeGenerationCredentialSnapshot, RuntimeGenerationPhase,
+    RuntimeGenerationSelection, RuntimeGenerationSnapshot, RuntimeStatus, RuntimeStatusRecorder,
 };
-use secrecy::SecretString;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
@@ -43,14 +40,39 @@ impl Drop for AudioProbeLease<'_> {
 pub(crate) struct RuntimeStartRequest {
     pub(crate) config: AppConfig,
     pub(crate) chatbox_pacer: ChatboxPacer,
-    pub(crate) caption_session: CaptionSessionStore,
-    pub(crate) host_resolver: HostResolver,
+    pub(crate) caption_aggregate: CaptionAggregateStore,
+    pub(crate) chatbox_host_resolver: HostResolver,
+    pub(crate) prepared_recognition: PreparedRecognition,
     pub(crate) generation_id: u64,
     pub(crate) config_revision: u64,
-    pub(crate) openai_api_key: SecretString,
-    pub(crate) credential: RuntimeCredentialSnapshot,
     pub(crate) status_recorder: RuntimeStatusRecorder,
     pub(crate) expected_stop_epoch: u64,
+}
+
+/// A recognition Module bound to the generation metadata implied by how it was
+/// prepared at the desktop composition boundary.
+///
+/// Runtime receives this value as one unit so a cloud Module cannot be paired
+/// with a missing credential snapshot or a false microphone-upload disclosure.
+/// A future local path can add its own constructor without adding path branches
+/// to Runtime.
+pub(crate) struct PreparedRecognition {
+    module: RecognitionModule,
+    credential: Option<RuntimeGenerationCredentialSnapshot>,
+    uploads_microphone_audio: bool,
+}
+
+impl PreparedRecognition {
+    pub(crate) fn cloud(
+        module: RecognitionModule,
+        credential: RuntimeGenerationCredentialSnapshot,
+    ) -> Self {
+        Self {
+            module,
+            credential: Some(credential),
+            uploads_microphone_audio: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,22 +83,8 @@ pub(crate) enum RuntimeStartOutcome {
 
 struct RuntimeHandle {
     generation: RuntimeGeneration,
-    publisher: Option<RuntimeChatboxPublisher>,
+    publisher: Option<ChatboxPublication>,
     join_handle: JoinHandle<()>,
-}
-
-fn resolve_runtime_publication_policy(
-    runtime_plan: &RuntimePlanSnapshot,
-) -> AppResult<ResolvedPublicationPolicy> {
-    runtime_plan.publication.resolved_policy().ok_or_else(|| {
-        AppError::config(format!(
-            "The selected recognition path and publication mode are incompatible ({}).",
-            runtime_plan
-                .publication
-                .incompatibility_code()
-                .unwrap_or("publication.incompatible")
-        ))
-    })
 }
 
 impl Default for RuntimeManager {
@@ -144,26 +152,30 @@ impl RuntimeManager {
         &self,
         app: AppHandle<R>,
         request: RuntimeStartRequest,
-        install_session: F,
+        install_generation: F,
     ) -> AppResult<RuntimeStartOutcome>
     where
-        F: FnOnce(RuntimeSessionSnapshot) -> AppResult<()>,
+        F: FnOnce(RuntimeGenerationSnapshot) -> AppResult<()>,
     {
         let RuntimeStartRequest {
             config,
             chatbox_pacer,
-            caption_session,
-            host_resolver,
+            caption_aggregate,
+            chatbox_host_resolver,
+            prepared_recognition,
             generation_id,
             config_revision,
-            openai_api_key,
-            credential,
             status_recorder,
             expected_stop_epoch,
         } = request;
+        let PreparedRecognition {
+            module: recognition_module,
+            credential,
+            uploads_microphone_audio,
+        } = prepared_recognition;
         config.validate()?;
-        let runtime_plan = plan_runtime(&config);
-        let publication_policy = resolve_runtime_publication_policy(&runtime_plan)?;
+        let caption_pipeline_plan = plan_caption_pipeline(&config);
+        let publication_timing = publication_timing_for_start(&caption_pipeline_plan)?;
 
         let mut guard = self
             .handle
@@ -188,24 +200,24 @@ impl RuntimeManager {
             ));
         }
 
-        let generation = RuntimeGeneration::activate(&app, generation_id, caption_session)?;
+        let generation = RuntimeGeneration::activate(&app, generation_id, caption_aggregate)?;
         let start_cancelled = || !self.stop_epoch_unchanged(expected_stop_epoch);
-        let publisher_init = initialize_runtime_publisher(
+        let publisher_init = initialize_chatbox_publication(
             &app,
             &config.osc,
-            publication_policy,
+            publication_timing,
             chatbox_pacer,
-            generation.clone(),
-            &host_resolver,
+            &generation,
+            &chatbox_host_resolver,
             &start_cancelled,
         );
         if start_cancelled() {
             match &publisher_init {
-                RuntimePublisherInit::Ready(publisher) => {
+                ChatboxPublicationInit::Ready(publisher) => {
                     let _ = generation.request_stop(Some(publisher));
                     let _ = publisher.join();
                 }
-                RuntimePublisherInit::Disabled | RuntimePublisherInit::Unavailable(_) => {
+                ChatboxPublicationInit::Disabled | ChatboxPublicationInit::Unavailable(_) => {
                     let _ = generation.request_stop(None);
                 }
             }
@@ -213,29 +225,29 @@ impl RuntimeManager {
         }
         let requested_host = config.osc.host.clone();
         let requested_port = config.osc.port;
-        let (publisher, chatbox) = match publisher_init {
-            RuntimePublisherInit::Disabled => (
+        let (publisher, chatbox_publication) = match publisher_init {
+            ChatboxPublicationInit::Disabled => (
                 None,
-                RuntimeChatboxSnapshot::Disabled {
+                ChatboxPublicationSnapshot::Disabled {
                     host: requested_host,
                     port: requested_port,
                 },
             ),
-            RuntimePublisherInit::Ready(publisher) => (
+            ChatboxPublicationInit::Ready(publisher) => (
                 Some(publisher),
-                RuntimeChatboxSnapshot::Ready {
+                ChatboxPublicationSnapshot::Ready {
                     host: requested_host,
                     port: requested_port,
                 },
             ),
-            RuntimePublisherInit::Unavailable(error) => {
+            ChatboxPublicationInit::Unavailable(error) => {
                 emit_diagnostic(
                     &app,
                     DiagnosticUpdate::from_error(&error, "Chatbox OSC output could not start"),
                 );
                 (
                     None,
-                    RuntimeChatboxSnapshot::Unavailable {
+                    ChatboxPublicationSnapshot::Unavailable {
                         host: requested_host,
                         port: requested_port,
                         reason_code: error.code().to_string(),
@@ -244,18 +256,18 @@ impl RuntimeManager {
             }
         };
 
-        let session = RuntimeSessionSnapshot {
-            generation: generation_id,
-            phase: RuntimeSessionPhase::Starting,
+        let generation_snapshot = RuntimeGenerationSnapshot {
+            id: generation_id,
+            phase: RuntimeGenerationPhase::Starting,
             started_from_config_revision: config_revision,
-            selected: RuntimeSelectedConfig::from(&config),
-            runtime_plan,
-            credential: Some(credential),
-            chatbox,
-            uploads_microphone_audio: true,
+            selection: RuntimeGenerationSelection::from(&config),
+            caption_pipeline_plan,
+            credential,
+            chatbox_publication,
+            uploads_microphone_audio,
         };
-        if let Err(error) = install_session(session) {
-            let _ = generation.request_stop(publisher_boundary(publisher.as_ref()));
+        if let Err(error) = install_generation(generation_snapshot) {
+            let _ = generation.request_stop(publisher.as_ref());
             if let Some(publisher) = &publisher {
                 let _ = publisher.join();
             }
@@ -266,11 +278,10 @@ impl RuntimeManager {
         let thread_publisher = publisher.clone();
         let execution = RuntimeExecution::new(
             app,
-            config,
-            openai_api_key,
+            config.audio,
+            recognition_module,
             thread_publisher,
             thread_generation,
-            host_resolver,
             status_recorder,
         );
         let join_handle = thread::Builder::new()
@@ -280,7 +291,7 @@ impl RuntimeManager {
         let join_handle = match join_handle {
             Ok(join_handle) => join_handle,
             Err(error) => {
-                let _ = generation.request_stop(publisher_boundary(publisher.as_ref()));
+                let _ = generation.request_stop(publisher.as_ref());
                 if let Some(publisher) = &publisher {
                     let _ = publisher.join();
                 }
@@ -324,21 +335,11 @@ impl RuntimeManager {
             return Ok(());
         };
 
-        if let Err(error) = handle
-            .generation
-            .request_stop(publisher_boundary(handle.publisher.as_ref()))
-        {
+        if let Err(error) = handle.generation.request_stop(handle.publisher.as_ref()) {
             handle.generation.cancel_work();
             emit_diagnostic(
                 app,
-                DiagnosticUpdate::from_error(
-                    &error,
-                    publisher_failure_message(
-                        handle.publisher.as_ref(),
-                        "Completed publisher could not close",
-                        "Live publisher could not close",
-                    ),
-                ),
+                DiagnosticUpdate::from_error(&error, "Runtime outputs could not close"),
             );
         }
         record_and_emit_runtime_status(
@@ -357,14 +358,7 @@ impl RuntimeManager {
         if let Err(error) = publisher_result {
             emit_diagnostic(
                 app,
-                DiagnosticUpdate::from_error(
-                    &error,
-                    publisher_failure_message(
-                        handle.publisher.as_ref(),
-                        "Completed publisher failed while stopping",
-                        "Live publisher failed while stopping",
-                    ),
-                ),
+                DiagnosticUpdate::from_error(&error, "Chatbox publication failed while stopping"),
             );
         }
 
@@ -416,36 +410,22 @@ fn clear_finished_runtime<R: Runtime>(
         return Ok(());
     };
 
-    if let Some(publisher) = &handle.publisher {
-        if let Err(error) = handle
-            .generation
-            .close_publisher_at_boundary(Some(publisher), PublisherCloseReason::RuntimeError)
-        {
-            emit_diagnostic(
-                app,
-                DiagnosticUpdate::from_error(
-                    &error,
-                    publisher_failure_message(
-                        Some(publisher),
-                        "Completed publisher could not close",
-                        "Live publisher could not close",
-                    ),
-                ),
-            );
-        }
-        if let Err(error) = publisher.join() {
-            emit_diagnostic(
-                app,
-                DiagnosticUpdate::from_error(
-                    &error,
-                    publisher_failure_message(
-                        Some(publisher),
-                        "Completed publisher failed while closing",
-                        "Live publisher failed while closing",
-                    ),
-                ),
-            );
-        }
+    if let Err(error) = handle
+        .generation
+        .close_outputs_for_runtime_error(handle.publisher.as_ref())
+    {
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate::from_error(&error, "Runtime outputs could not close"),
+        );
+    }
+    if let Some(publisher) = &handle.publisher
+        && let Err(error) = publisher.join()
+    {
+        emit_diagnostic(
+            app,
+            DiagnosticUpdate::from_error(&error, "Chatbox publication failed while closing"),
+        );
     }
 
     handle

@@ -1,7 +1,8 @@
 //! Generation-scoped OpenAI recognition driver.
 //!
 //! This Module owns application speech boundaries, connection attempts, and
-//! reconnect policy behind the provider-neutral active Recognition Interface.
+//! reconnect policy behind the provider-neutral active Recognition Module
+//! boundary.
 
 mod attempt;
 mod audio;
@@ -10,20 +11,19 @@ mod reconnect;
 mod segmenter;
 mod transport;
 
-use self::attempt::{RecognitionAttemptAudioChunk, RecognitionAttemptSession};
-use self::realtime::{OpenAiRealtimeSession, OpenAiRealtimeSessionContext};
-use self::reconnect::{ReconnectDecision, ReconnectSupervisor, reconnect_jitter_percent};
+use self::attempt::{RecognitionAttempt, RecognitionAttemptAudioChunk};
+use self::realtime::{OpenAiRealtimeAttempt, OpenAiRealtimeAttemptContext};
+use self::reconnect::{ReconnectDecision, ReconnectTracker, reconnect_jitter_percent};
 use self::segmenter::{SegmenterUpdate, SpeechSegmenter};
-use self::transport::{OpenAiWebSocketTransport, connect_openai_realtime_session};
+use self::transport::{OpenAiWebSocketTransport, connect_openai_realtime_attempt};
 use super::{
     OwnedRecognitionAudioFrame, RecognitionDriver, RecognitionDriverInput, RecognitionDriverIo,
     RecognitionModule,
 };
 use crate::audio::SPEECH_RMS_THRESHOLD;
-use crate::config::OpenAiTranscriptionModel;
 use crate::error::{AppError, AppResult};
-use crate::events::{next_caption_unit_id, now_ms};
 use crate::host_resolver::HostResolver;
+use crate::wall_clock::unix_timestamp_ms;
 use secrecy::SecretString;
 use std::time::{Duration, Instant};
 
@@ -35,7 +35,48 @@ const MIN_VOICED_SECONDS: f32 = 0.3;
 const MAX_SEGMENT_SECONDS: f32 = 30.0;
 const PREROLL_SECONDS: f32 = 0.25;
 
-pub(crate) fn openai_recognition_module(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenAiTranscriptionModel {
+    GptTranscribe,
+    GptLiveTranscribe,
+}
+
+impl OpenAiTranscriptionModel {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::GptTranscribe => "gpt-transcribe",
+            Self::GptLiveTranscribe => "gpt-live-transcribe",
+        }
+    }
+}
+
+pub(crate) fn openai_gpt_transcribe_module(
+    languages: Vec<String>,
+    api_key: SecretString,
+    resolver: HostResolver,
+) -> AppResult<RecognitionModule> {
+    openai_recognition_module(
+        OpenAiTranscriptionModel::GptTranscribe,
+        languages,
+        api_key,
+        resolver,
+    )
+}
+
+pub(crate) fn openai_gpt_live_transcribe_module(
+    languages: Vec<String>,
+    api_key: SecretString,
+    resolver: HostResolver,
+) -> AppResult<RecognitionModule> {
+    openai_recognition_module(
+        OpenAiTranscriptionModel::GptLiveTranscribe,
+        languages,
+        api_key,
+        resolver,
+    )
+}
+
+fn openai_recognition_module(
     model: OpenAiTranscriptionModel,
     languages: Vec<String>,
     api_key: SecretString,
@@ -44,7 +85,7 @@ pub(crate) fn openai_recognition_module(
     RecognitionModule::with_audio_budget(
         MAX_QUEUED_AUDIO,
         MAX_QUEUED_AUDIO_FRAMES,
-        OpenAiRecognitionDriver::new(OpenAiRecognitionAttempts {
+        OpenAiRecognitionDriver::new(OpenAiRealtimeAttemptFactory {
             model,
             languages,
             api_key,
@@ -53,22 +94,22 @@ pub(crate) fn openai_recognition_module(
     )
 }
 
-struct OpenAiRecognitionAttempts {
+struct OpenAiRealtimeAttemptFactory {
     model: OpenAiTranscriptionModel,
     languages: Vec<String>,
     api_key: SecretString,
     resolver: HostResolver,
 }
 
-impl OpenAiRecognitionAttemptFactory for OpenAiRecognitionAttempts {
-    type Session = OpenAiRealtimeSession<OpenAiWebSocketTransport>;
+impl OpenAiRecognitionAttemptFactory for OpenAiRealtimeAttemptFactory {
+    type Attempt = OpenAiRealtimeAttempt<OpenAiWebSocketTransport>;
 
     fn connect(
         &mut self,
-        context: OpenAiRealtimeSessionContext,
+        context: OpenAiRealtimeAttemptContext,
         is_cancelled: &dyn Fn() -> bool,
-    ) -> AppResult<Self::Session> {
-        connect_openai_realtime_session(
+    ) -> AppResult<Self::Attempt> {
+        connect_openai_realtime_attempt(
             context,
             self.model,
             self.languages.clone(),
@@ -80,22 +121,22 @@ impl OpenAiRecognitionAttemptFactory for OpenAiRecognitionAttempts {
 }
 
 trait OpenAiRecognitionAttemptFactory: Send + 'static {
-    type Session: RecognitionAttemptSession;
+    type Attempt: RecognitionAttempt;
 
     fn connect(
         &mut self,
-        context: OpenAiRealtimeSessionContext,
+        context: OpenAiRealtimeAttemptContext,
         is_cancelled: &dyn Fn() -> bool,
-    ) -> AppResult<Self::Session>;
+    ) -> AppResult<Self::Attempt>;
 }
 
 struct OpenAiRecognitionDriver<F> {
-    attempts: F,
+    attempt_factory: F,
 }
 
 impl<F> OpenAiRecognitionDriver<F> {
-    fn new(attempts: F) -> Self {
-        Self { attempts }
+    fn new(attempt_factory: F) -> Self {
+        Self { attempt_factory }
     }
 }
 
@@ -105,38 +146,46 @@ where
 {
     fn run(mut self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
         let mut last_sequence = None;
-        let mut reconnect = ReconnectSupervisor::default();
+        // Caption-unit identity belongs to the generation's stable caption
+        // stream, so replacing one protocol attempt must not reset it.
+        let mut next_stream_unit_sequence = 1_u64;
+        let mut reconnect_tracker = ReconnectTracker::default();
 
         loop {
             if io.is_stopped() {
                 return Ok(());
             }
 
-            let connection_epoch = reconnect.begin_connection_attempt();
-            let context = OpenAiRealtimeSessionContext {
+            let connection_epoch = reconnect_tracker.begin_connection_attempt();
+            let context = OpenAiRealtimeAttemptContext {
                 generation: io.scope().generation,
                 connection_epoch,
                 stream_id: io.scope().stream_id.clone(),
             };
-            let connection_result = self.attempts.connect(context, &|| io.is_stopped());
+            let connection_result = self.attempt_factory.connect(context, &|| io.is_stopped());
             let (attempt_result, connected_for) = match connection_result {
-                Ok(mut recognition) => {
+                Ok(mut attempt) => {
                     let connected_at = Instant::now();
-                    let recovered = reconnect.is_recovery();
+                    let recovered = reconnect_tracker.has_reached_running();
                     let ready_result = io.ready(recovered);
                     if ready_result.is_ok() {
-                        reconnect.mark_running();
+                        reconnect_tracker.mark_running();
                     }
                     let work_result = ready_result.and_then(|()| {
-                        run_connected_attempt(&io, &mut recognition, &mut last_sequence)
+                        run_connected_attempt(
+                            &io,
+                            &mut attempt,
+                            &mut last_sequence,
+                            &mut next_stream_unit_sequence,
+                        )
                     });
-                    let stop_result = recognition.stop();
+                    let stop_result = attempt.stop();
                     let result = if io.is_stopped() {
                         if let Err(stop_error) = stop_result {
                             tracing::warn!(
                                 code = stop_error.code(),
                                 error_message = %stop_error,
-                                "OpenAI recognition session failed while closing after Stop"
+                                "OpenAI recognition attempt failed while closing after Stop"
                             );
                         }
                         Ok(())
@@ -155,13 +204,15 @@ where
                 Ok(()) => return Ok(()),
                 Err(error) => error,
             };
-            let ReconnectDecision::Retry { attempt, delay } =
-                reconnect.on_failure(&error, connected_for, reconnect_jitter_percent())
+            let ReconnectDecision::Retry {
+                retry_number,
+                delay,
+            } = reconnect_tracker.on_failure(&error, connected_for, reconnect_jitter_percent())
             else {
                 return Err(error);
             };
 
-            if let Err(pause_error) = io.reconnecting(connection_epoch, attempt, delay) {
+            if let Err(pause_error) = io.reconnecting(connection_epoch, retry_number, delay) {
                 return if io.is_stopped() {
                     Ok(())
                 } else {
@@ -177,8 +228,9 @@ where
 
 fn run_connected_attempt(
     io: &RecognitionDriverIo,
-    recognition: &mut impl RecognitionAttemptSession,
+    attempt: &mut impl RecognitionAttempt,
     last_sequence: &mut Option<u64>,
+    next_stream_unit_sequence: &mut u64,
 ) -> AppResult<()> {
     let mut segmenter = None;
 
@@ -192,15 +244,16 @@ fn run_connected_attempt(
                         segmenter.get_or_insert_with(|| new_openai_segmenter(frame.sample_rate_hz));
                     if segmenter.sample_rate() != frame.sample_rate_hz {
                         return Err(AppError::audio(
-                            "Microphone sample rate changed during an active recognition session.",
+                            "Microphone sample rate changed during an active recognition attempt.",
                         ));
                     }
                     let started_at_ms = frame.captured_at_ms;
                     apply_segmenter_updates(
                         io,
-                        recognition,
+                        attempt,
                         frame.sample_rate_hz,
                         started_at_ms,
+                        next_stream_unit_sequence,
                         segmenter.push_samples(frame.samples.into_vec(), Instant::now()),
                     )?;
                 }
@@ -209,9 +262,10 @@ fn run_connected_attempt(
                         let sample_rate_hz = segmenter.sample_rate();
                         apply_segmenter_updates(
                             io,
-                            recognition,
+                            attempt,
                             sample_rate_hz,
-                            now_ms(),
+                            unix_timestamp_ms(),
+                            next_stream_unit_sequence,
                             [segmenter.tick(Instant::now())],
                         )?;
                     }
@@ -219,7 +273,7 @@ fn run_connected_attempt(
                 RecognitionDriverInput::Stopped => break,
             }
 
-            for event in recognition.drain_events(now_ms())? {
+            for event in attempt.drain_events(unix_timestamp_ms())? {
                 io.emit_event(event)?;
             }
         }
@@ -262,27 +316,39 @@ fn validate_frame_order(
 
 fn apply_segmenter_updates(
     io: &RecognitionDriverIo,
-    recognition: &mut impl RecognitionAttemptSession,
+    attempt: &mut impl RecognitionAttempt,
     sample_rate_hz: u32,
     started_at_ms: u64,
+    next_stream_unit_sequence: &mut u64,
     updates: impl IntoIterator<Item = SegmenterUpdate>,
 ) -> AppResult<()> {
     for update in updates {
         if update.speech_started {
-            let event = recognition.start_unit(next_caption_unit_id("speech"), started_at_ms)?;
+            let event = attempt.start_unit(
+                next_stream_unit_id(next_stream_unit_sequence)?,
+                started_at_ms,
+            )?;
             io.emit_event(event)?;
         }
         if !update.audio.is_empty() {
-            recognition.append_audio(RecognitionAttemptAudioChunk {
+            attempt.append_audio(RecognitionAttemptAudioChunk {
                 sample_rate_hz,
                 samples: &update.audio,
             })?;
         }
         if update.speech_ended {
-            recognition.end_input()?;
+            attempt.end_input()?;
         }
     }
     Ok(())
+}
+
+fn next_stream_unit_id(next_sequence: &mut u64) -> AppResult<String> {
+    let sequence = *next_sequence;
+    *next_sequence = sequence.checked_add(1).ok_or_else(|| {
+        AppError::recognition("OpenAI caption unit sequence exceeded the supported range.")
+    })?;
+    Ok(format!("unit-{sequence}"))
 }
 
 fn combine_work_and_stop(work: AppResult<()>, stop: AppResult<()>) -> AppResult<()> {
@@ -291,7 +357,7 @@ fn combine_work_and_stop(work: AppResult<()>, stop: AppResult<()>) -> AppResult<
             tracing::warn!(
                 code = stop_error.code(),
                 error_message = %stop_error,
-                "OpenAI recognition session also failed while closing after a driver error"
+                "OpenAI recognition attempt also failed while closing after a driver error"
             );
             Err(work_error)
         }

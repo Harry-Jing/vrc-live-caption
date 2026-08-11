@@ -5,13 +5,60 @@
 //! diagnostic vocabulary consumed by the runtime UI.
 
 use super::common::PublisherCloseReason;
-use super::completed::PublisherDiagnostic;
+use super::completed::CompletedPublisherDiagnostic;
 use super::live::LivePublisherDiagnostic;
+use crate::caption::{CaptionAggregateChange, CaptionAggregateUpdate, CaptionLane, CaptionState};
 use crate::events::{DiagnosticCategory, DiagnosticUpdate};
 
-pub(crate) fn completed_publisher_diagnostic(diagnostic: PublisherDiagnostic) -> DiagnosticUpdate {
+pub(super) fn completed_update_discarded_after_close(
+    update: &CaptionAggregateUpdate,
+    reason: PublisherCloseReason,
+) -> Option<DiagnosticUpdate> {
+    let CaptionAggregateChange::CaptionAccepted(caption) = &update.change else {
+        return None;
+    };
+    if caption.lane != CaptionLane::Source
+        || caption.state != CaptionState::Completed
+        || caption.unit_id.is_none()
+    {
+        return None;
+    }
+
+    Some(match reason {
+        PublisherCloseReason::Stop => DiagnosticUpdate::info(
+            DiagnosticCategory::Osc,
+            "osc.send_skipped_on_stop",
+            "Chatbox send skipped",
+            "Runtime stop was requested before this caption could be sent.",
+        ),
+        PublisherCloseReason::RuntimeError => DiagnosticUpdate::info(
+            DiagnosticCategory::Osc,
+            "osc.completed_unit_discarded_after_close",
+            "Completed Chatbox publication discarded",
+            "The runtime output worker closed before this completed caption could enter its queue. The App caption remains available.",
+        ),
+    })
+}
+
+pub(super) fn live_update_discarded_after_close(
+    reason: PublisherCloseReason,
+) -> Option<DiagnosticUpdate> {
+    match reason {
+        PublisherCloseReason::Stop => None,
+        PublisherCloseReason::RuntimeError => Some(DiagnosticUpdate::info(
+            DiagnosticCategory::Osc,
+            "osc.live_snapshot_discarded_after_close",
+            "Live Chatbox snapshot discarded",
+            "The Live publisher closed before this accepted App caption snapshot could be observed.",
+        )),
+    }
+}
+
+pub(crate) fn completed_publisher_diagnostic(
+    diagnostic: CompletedPublisherDiagnostic,
+) -> DiagnosticUpdate {
     match diagnostic {
-        PublisherDiagnostic::UnitPublished {
+        CompletedPublisherDiagnostic::UnitPublished {
             unit_id,
             page_count,
             byte_count,
@@ -24,7 +71,7 @@ pub(crate) fn completed_publisher_diagnostic(diagnostic: PublisherDiagnostic) ->
                 "Published {page_count} ordered page(s) for {unit_id} to {target} using {byte_count} encoded byte(s)."
             ),
         ),
-        PublisherDiagnostic::UnitDroppedOverload {
+        CompletedPublisherDiagnostic::UnitDroppedOverload {
             unit_id,
             page_count,
         } => DiagnosticUpdate::warning(
@@ -35,7 +82,7 @@ pub(crate) fn completed_publisher_diagnostic(diagnostic: PublisherDiagnostic) ->
                 "Dropped the oldest unstarted caption unit {unit_id} as one complete {page_count}-page publication because the Chatbox backlog was full. The App caption remains available."
             ),
         ),
-        PublisherDiagnostic::UnitRejectedOverload {
+        CompletedPublisherDiagnostic::UnitRejectedOverload {
             unit_id,
             page_count,
         } => DiagnosticUpdate::warning(
@@ -46,7 +93,7 @@ pub(crate) fn completed_publisher_diagnostic(diagnostic: PublisherDiagnostic) ->
                 "Rejected caption unit {unit_id} as one complete {page_count}-page publication because it could not fit safely within the bounded Chatbox backlog. No partial pages were queued; the App caption remains available."
             ),
         ),
-        PublisherDiagnostic::UnitExpired {
+        CompletedPublisherDiagnostic::UnitExpired {
             unit_id,
             page_count,
         } => DiagnosticUpdate::warning(
@@ -57,13 +104,15 @@ pub(crate) fn completed_publisher_diagnostic(diagnostic: PublisherDiagnostic) ->
                 "Discarded unstarted caption unit {unit_id} as one complete {page_count}-page publication after it exceeded the provisional backlog age. The App caption remains available."
             ),
         ),
-        PublisherDiagnostic::LayoutFailed { unit_id, reason } => DiagnosticUpdate::warning(
-            DiagnosticCategory::Osc,
-            "osc.completed_layout_failed",
-            "Completed caption could not be laid out for Chatbox",
-            format!("Caption unit {unit_id} was not published: {reason}"),
-        ),
-        PublisherDiagnostic::UnitSendFailed {
+        CompletedPublisherDiagnostic::LayoutFailed { unit_id, reason } => {
+            DiagnosticUpdate::warning(
+                DiagnosticCategory::Osc,
+                "osc.completed_layout_failed",
+                "Completed caption could not be laid out for Chatbox",
+                format!("Caption unit {unit_id} was not published: {reason}"),
+            )
+        }
+        CompletedPublisherDiagnostic::UnitSendFailed {
             unit_id,
             page_index,
             page_count,
@@ -75,7 +124,7 @@ pub(crate) fn completed_publisher_diagnostic(diagnostic: PublisherDiagnostic) ->
                 "Completed Chatbox publication failed for {unit_id} on page {page_index} of {page_count} after {pages_sent} successful page(s); the failed page was not retried and the unit's remaining pages were discarded"
             ),
         ),
-        PublisherDiagnostic::PagesDiscardedOnClose {
+        CompletedPublisherDiagnostic::PagesDiscardedOnClose {
             reason,
             unit_count,
             page_count,
@@ -100,14 +149,14 @@ pub(crate) fn completed_publisher_diagnostic(diagnostic: PublisherDiagnostic) ->
                 ),
             )
         }
-        PublisherDiagnostic::TypingFailed { is_typing, error } => {
+        CompletedPublisherDiagnostic::TypingFailed { is_typing, error } => {
             let transition = if is_typing { "on" } else { "off" };
             DiagnosticUpdate::from_error(
                 &error,
                 format!("Chatbox typing indicator could not turn {transition}"),
             )
         }
-        PublisherDiagnostic::WorkerFailed { reason } => DiagnosticUpdate::error(
+        CompletedPublisherDiagnostic::WorkerFailed { reason } => DiagnosticUpdate::error(
             DiagnosticCategory::Osc,
             "osc.completed_publisher_failed",
             "Completed Chatbox publisher stopped unexpectedly",

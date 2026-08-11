@@ -16,7 +16,8 @@ capture segmentation, WAV encoding, HTTP upload, model choice, and recognition
 semantics were coupled in one implementation.
 
 The release needs one honest OpenAI choice for Completed captions and one that
-can also drive Live captions. Future local STT must join the same recognition
+can also drive Live captions. Future local recognition must join the same
+Recognition Module
 pipeline without inheriting OpenAI transport concepts.
 
 OpenAI documents both [`gpt-transcribe`](https://developers.openai.com/api/docs/models/gpt-transcribe)
@@ -42,14 +43,14 @@ immutable until Stop. A transient failure may replace the provider connection
 under [ADR 0025](./0025-reconnect-within-one-runtime-generation.md), but the
 runtime does not combine or switch models.
 
-The general recognition Module owns a provider-independent active Interface:
+The general Recognition Module owns a path-independent active boundary:
 continuous audio and lifecycle control enter; normalized ongoing or completed
 full-text snapshots, lifecycle signals, and categorized errors leave. Provider
 endpoint names, JSON events, commits, and identifiers do not cross this seam.
 ADR 0026 later sharpened ownership of unitization, attempts, admission, and I/O
 without changing the two selected OpenAI paths.
 
-The OpenAI Module implements that Interface with behavior-specific Adapters.
+The OpenAI Module implements that boundary with a concrete Recognition Driver.
 It hides 24 kHz PCM append/commit operations, reconciles interleaved events by
 `item_id`, converts raw deltas to monotonic full snapshots, and configures both
 models with optional protocol language hints through `languages[]`. A committed
@@ -58,8 +59,9 @@ the only caption snapshot for that item. Input hints are not reported as
 detected language: a caption receives a singular language label only when the
 provider's completed event reports exactly one detected language.
 
-The capability catalog and planner are backend-owned. They accept only the two
-exact OpenAI model identifiers above and preserve an incompatible user request
+The application owns the capability catalog and resolution of the Caption
+Pipeline Plan. The release catalog accepts only the two exact OpenAI model
+identifiers above; the resulting plan preserves an incompatible user request
 while reporting alternatives. Legacy OpenAI model identifiers are rejected
 explicitly; there is no compatibility route or silent migration. If an
 existing settings file cannot be parsed as the current strict schema, the app
@@ -67,13 +69,13 @@ may load editable defaults but Start remains blocked until the user reviews
 and saves the current settings.
 
 The release has no REST/WAV recognition fallback and no production Mock
-provider. Deterministic scripted Adapters remain test-only. A failure is
+provider. Deterministic scripted Recognition Drivers remain test-only. A failure is
 surfaced instead of changing model, timing, or provider; explicitly transient
 failures may reconnect the same selection within the current generation.
 
-Future local recognizers implement the same active Recognition Interface
-through a local-worker driver. They do not emulate the OpenAI wire protocol
-and never fall back to OpenAI silently.
+Future local recognizers run behind the same active Recognition Module
+boundary through a local-worker driver. They do not emulate the OpenAI wire
+protocol and never fall back to OpenAI silently.
 
 ## Consequences
 
@@ -85,11 +87,12 @@ and never fall back to OpenAI silently.
 - A committed item cannot block the ordered output queue forever. A bound item
   that remains incomplete for 30 seconds ends explicitly with a visible
   per-item diagnostic so later completed items can advance; a commit that was
-  never assigned an `item_id` instead terminates the session and requires a
-  clean reconnect because later identities cannot be attached safely.
+  never assigned an `item_id` instead terminates the recognition attempt and
+  requires a clean reconnect because later identities cannot be attached
+  safely.
 - Reconnect never replays ambiguous audio. The old connection is retired,
   unconfirmed units end visibly, and capture resumes only after a fresh
-  provider session is ready ([ADR 0025](./0025-reconnect-within-one-runtime-generation.md)).
+  recognition attempt is ready ([ADR 0025](./0025-reconnect-within-one-runtime-generation.md)).
 - The WebSocket transport follows the selected system HTTP proxy without
   silently bypassing a failed or invalid proxy. Explicit environment proxy
   values, Windows protocol-mapped settings, and macOS manual proxy settings are
@@ -101,9 +104,9 @@ and never fall back to OpenAI silently.
   and its otherwise-unused direct HTTP/WAV dependencies are removed rather than
   retained as a fallback.
 - Protocol-level tests cover normalization, ordering, bounded queues, Stop,
-  proxy routing, and error mapping. An authenticated OpenAI adapter smoke has
+  proxy routing, and error mapping. An authenticated OpenAI Driver smoke test has
   covered both release models, and the maintainer completed the native
   Windows/VRChat validation matrix with a real microphone on 2026-08-10.
-- Adding another provider or local runtime requires a catalog entry and a
-  concrete Adapter with explicit capabilities; it does not widen the OpenAI
-  model field into an arbitrary string.
+- Adding another service provider or local runtime requires a recognition-path
+  catalog entry and a concrete Driver with explicit capabilities; it does not
+  widen the OpenAI model field into an arbitrary string.

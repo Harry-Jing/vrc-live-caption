@@ -5,7 +5,7 @@ const englishMessages = {
   "common.loading": "loading",
 
   "navigation.primary": "Primary",
-  "navigation.live": "Live",
+  "navigation.captioning": "Captioning",
   "navigation.settings": "Settings",
   "navigation.diagnostics": "Diagnostics",
 
@@ -22,12 +22,12 @@ const englishMessages = {
     rmsDbfs: number;
   }) => `RMS ${rmsDbfs.toFixed(1)} dBFS · Peak ${peakDbfs.toFixed(1)} dBFS`,
 
-  "stt.providers.openai": "OpenAI",
-  "stt.models.gptTranscribe": "GPT Transcribe",
-  "stt.models.gptLiveTranscribe": "GPT Live Transcribe",
-  "stt.models.gptTranscribe.description":
+  "serviceProvider.openai": "OpenAI",
+  "recognition.path.gptTranscribe": "GPT Transcribe",
+  "recognition.path.gptLiveTranscribe": "GPT Live Transcribe",
+  "recognition.path.gptTranscribe.description":
     "Transcription begins after each speech unit is committed. Supports Completed publication.",
-  "stt.models.gptLiveTranscribe.description":
+  "recognition.path.gptLiveTranscribe.description":
     "Low-latency transcription while you speak. Supports both Completed and Live publication.",
 
   "publication.mode.completed": "Completed",
@@ -36,8 +36,8 @@ const englishMessages = {
     "Send each caption only after its unit completes.",
   "publication.option.live.description":
     "Update the newest caption while speech continues, when the recognition path supports it.",
-  "publication.policy.completed": "Sends completed captions only.",
-  "publication.policy.liveUnit": ({ delayMs }: { delayMs: number }) =>
+  "publication.timing.completed": "Sends completed captions only.",
+  "publication.timing.liveUnit": ({ delayMs }: { delayMs: number }) =>
     `Observes the first ${String(delayMs)} ms, then updates the newest caption until its unit completes.`,
   "runtime.title": "Runtime",
   "runtime.status.idle": "Idle",
@@ -82,76 +82,77 @@ const englishMessages = {
   "diagnostics.category.config": "Config",
   "diagnostics.category.runtime": "Runtime",
   "diagnostics.category.audio": "Audio",
-  "diagnostics.category.stt": "STT",
+  "diagnostics.category.stt": "Recognition",
   "diagnostics.category.osc": "OSC",
 
-  "live.eyebrow": "Live caption",
-  "live.title": "Speak, preview, send captions",
-  "live.chatbox.on": "Chatbox on",
-  "live.chatbox.off": "Chatbox off",
-  "live.chatbox.unavailable": "Chatbox unavailable",
-  "live.currentSetup.title": "Current setup",
-  "live.currentSetup.activeSessionTitle": "Active session setup",
-  "live.currentSetup.failedSessionTitle": "Failed session setup",
-  "live.currentSetup.nextStartTitle": "Next Start setup",
-  "live.currentSetup.nextStartBadge": "Next Start",
-  "live.currentSetup.pendingChanges.title": "Saved changes are pending",
-  "live.currentSetup.pendingChanges.description":
-    "The active session is unchanged. Saved settings will apply after Stop and the next Start.",
-  "live.currentSetup.pendingChanges.failedDescription":
-    "The failed session is retained for diagnostics. Saved settings will be used on the next Start.",
-  "live.currentSetup.edit": "Edit",
-  "live.currentSetup.microphone": "Microphone",
-  "live.currentSetup.sttModel": "STT model",
-  "live.currentSetup.publication": "Publication",
-  "live.currentSetup.oscTarget": "OSC / Test target",
-  "live.publication.readyValue": ({
+  "captioning.eyebrow": "Captioning",
+  "captioning.title": "Speak, preview, send captions",
+  "captioning.chatbox.on": "Chatbox on",
+  "captioning.chatbox.off": "Chatbox off",
+  "captioning.chatbox.unavailable": "Chatbox unavailable",
+  "captioning.currentSetup.title": "Current setup",
+  "captioning.currentSetup.activeGenerationTitle": "Current run setup",
+  "captioning.currentSetup.failedGenerationTitle": "Failed run setup",
+  "captioning.currentSetup.nextStartTitle": "Next Start setup",
+  "captioning.currentSetup.nextStartBadge": "Next Start",
+  "captioning.currentSetup.pendingChanges.title": "Saved changes are pending",
+  "captioning.currentSetup.pendingChanges.description":
+    "The current run is unchanged. Saved settings will apply after Stop and the next Start.",
+  "captioning.currentSetup.pendingChanges.failedDescription":
+    "The failed runtime generation is retained for diagnostics. Saved settings will be used on the next Start.",
+  "captioning.currentSetup.edit": "Edit",
+  "captioning.currentSetup.microphone": "Microphone",
+  "captioning.currentSetup.recognitionPath": "Recognition path",
+  "captioning.currentSetup.publication": "Publication",
+  "captioning.currentSetup.oscTarget": "OSC / Test target",
+  "captioning.publication.readyValue": ({
     description,
     mode,
   }: {
     description: string;
     mode: string;
   }) => `${mode} · ${description}`,
-  "live.publication.incompatibleValue": ({ mode }: { mode: string }) =>
+  "captioning.publication.incompatibleValue": ({ mode }: { mode: string }) =>
     `${mode} · incompatible for next Start`,
-  "live.publication.blocked.title":
+  "captioning.publication.blocked.title":
     "Next Start needs a compatible publication plan",
-  "live.publication.blocked.description":
-    "The saved timing remains selected. In Settings, choose a supported timing or a different recognition provider/model.",
-  "live.publication.blocked.action": "Review Settings",
-  "live.publication.unavailable": "Loading",
-  "live.recentActivity.title": "Recent activity",
-  "live.recentActivity.open": "Open",
-  "live.recentActivity.latestCompletedCaption": "Latest completed caption",
-  "live.recentActivity.noCompletedCaption": "No completed caption yet.",
-  "live.recentActivity.latestDiagnostic": "Latest diagnostic",
-  "live.microphoneMeter.title": "Microphone level",
-  "live.microphoneMeter.accessibleLabel": "Live microphone level",
-  "live.microphoneMeter.accessibleValue": ({
+  "captioning.publication.blocked.description":
+    "The saved timing remains selected. In Settings, choose a supported timing or a different recognition service/path.",
+  "captioning.publication.blocked.action": "Review Settings",
+  "captioning.publication.unavailable": "Loading",
+  "captioning.recentActivity.title": "Recent activity",
+  "captioning.recentActivity.open": "Open",
+  "captioning.recentActivity.latestCompletedCaption":
+    "Latest completed caption",
+  "captioning.recentActivity.noCompletedCaption": "No completed caption yet.",
+  "captioning.recentActivity.latestDiagnostic": "Latest diagnostic",
+  "captioning.microphoneMeter.title": "Microphone level",
+  "captioning.microphoneMeter.accessibleLabel": "Live microphone level",
+  "captioning.microphoneMeter.accessibleValue": ({
     reading,
     status,
   }: {
     reading: string;
     status: string;
   }) => `${reading}. ${status}.`,
-  "live.microphoneMeter.accessibleStatuses": ({
+  "captioning.microphoneMeter.accessibleStatuses": ({
     clippingStatus,
     gateStatus,
   }: {
     clippingStatus: string;
     gateStatus: string;
   }) => `${gateStatus}. ${clippingStatus}`,
-  "live.microphoneMeter.waiting": "Waiting for microphone audio",
-  "live.microphoneMeter.reconnecting": "Paused while reconnecting",
-  "live.microphoneMeter.stopping": "Paused while the runtime stops",
-  "live.microphoneMeter.gateOpen": "Speech gate open",
-  "live.microphoneMeter.belowThreshold": "Below speech threshold",
-  "live.microphoneMeter.clipping": "Clipping detected",
+  "captioning.microphoneMeter.waiting": "Waiting for microphone audio",
+  "captioning.microphoneMeter.reconnecting": "Paused while reconnecting",
+  "captioning.microphoneMeter.stopping": "Paused while the runtime stops",
+  "captioning.microphoneMeter.gateOpen": "Speech gate open",
+  "captioning.microphoneMeter.belowThreshold": "Below speech threshold",
+  "captioning.microphoneMeter.clipping": "Clipping detected",
 
   "settings.title": "Settings",
-  "settings.page.title": "Capture, provider, and output",
+  "settings.page.title": "Capture, recognition, and output",
   "settings.description":
-    "Configure capture, provider credentials, and Chatbox output.",
+    "Configure capture, service credentials, and Chatbox output.",
   "settings.actions.refreshDevices": "Refresh devices",
   "settings.actions.save": "Save Settings",
   "settings.microphoneTest.action": "Test microphone",
@@ -176,20 +177,20 @@ const englishMessages = {
   }: {
     changes: string;
   }) =>
-    `The active session is unchanged. Saved changes to ${changes} will take effect after Stop and the next Start.`,
+    `The current run is unchanged. Saved changes to ${changes} will take effect after Stop and the next Start.`,
   "settings.feedback.nextStart.failedDescription": ({
     changes,
   }: {
     changes: string;
   }) =>
-    `The failed session is retained for diagnostics. Saved changes to ${changes} will be used on the next Start.`,
+    `The failed runtime generation is retained for diagnostics. Saved changes to ${changes} will be used on the next Start.`,
   "settings.feedback.nextStart.change.microphone": "microphone",
   "settings.feedback.nextStart.change.recognition": "speech recognition",
-  "settings.feedback.nextStart.change.credential": "provider credentials",
+  "settings.feedback.nextStart.change.credential": "service credential",
   "settings.feedback.nextStart.change.chatboxOutput": "Chatbox output",
   "settings.feedback.nextStart.change.publication": "publication timing",
   "settings.sections.audio": "Audio",
-  "settings.sections.speechProvider": "Speech recognition",
+  "settings.sections.recognition": "Speech recognition",
   "settings.sections.chatboxOutput": "Chatbox output",
   "settings.fields.microphone": "Microphone",
   "settings.fields.language": "Expected languages",
@@ -197,20 +198,20 @@ const englishMessages = {
     "Add one or more language hints, such as zh, en, or ja.",
   "settings.fields.language.required":
     "Add at least one non-empty language hint without duplicates.",
-  "settings.fields.sttModel": "OpenAI transcription model",
+  "settings.fields.recognitionPath": "Recognition path",
   "settings.fields.oscHost": "OSC host",
   "settings.fields.port": "Port",
   "settings.fields.chatboxOutput": "Chatbox output",
   "settings.fields.ongoingPreview": "App ongoing preview",
   "settings.fields.publicationMode": "Publication timing",
   "settings.publication.description":
-    "Choose when captions are sent. The backend validates compatibility when you Save.",
-  "settings.publication.loading": "Waiting for the backend publication plan.",
+    "Choose when captions are sent. The app validates compatibility when you Save.",
+  "settings.publication.loading": "Waiting for the caption pipeline plan.",
   "settings.publication.ready": ({ description }: { description: string }) =>
-    `Backend plan: ${description}`,
+    `Plan: ${description}`,
   "settings.publication.unverified.title": "Save to validate this timing",
   "settings.publication.unverified.description":
-    "This form has unsaved changes. After Save, the backend will validate the model and publication timing together.",
+    "This form has unsaved changes. After Save, the app will validate the recognition path and publication timing together.",
   "settings.publication.incompatible.title": ({ mode }: { mode: string }) =>
     `${mode} is not supported by this recognition path`,
   "settings.publication.incompatible.description":
@@ -221,7 +222,7 @@ const englishMessages = {
     mode,
   }: {
     mode: string;
-  }) => `Keep ${mode} · Change model`,
+  }) => `Keep ${mode} · Change recognition path`,
   "settings.loading": "Loading settings...",
   "settings.loadFailed": "Settings could not be loaded.",
   "settings.credentials.openai.title": "OpenAI credentials",
@@ -234,6 +235,7 @@ const englishMessages = {
   "settings.credentials.openai.errors.actionFailed": "API key action failed",
   "settings.credentials.openai.status.checking": "Checking",
   "settings.credentials.openai.status.notSaved": "Not saved",
+  "settings.credentials.openai.status.unavailable": "Unavailable",
   "settings.credentials.openai.status.environment": ({
     displaySuffix,
   }: {
@@ -247,14 +249,14 @@ const englishMessages = {
   "settings.credentials.openai.removeDialog.title": "Remove OpenAI API key?",
   "settings.credentials.openai.removeDialog.description":
     "The saved key will be removed from the system credential store. You can add it again later.",
-  "settings.credentials.openai.removeDialog.activeSessionDescription":
-    "The saved key will be removed from the system credential store. The active session keeps the credential captured at Start until you Stop the runtime.",
+  "settings.credentials.openai.removeDialog.currentGenerationDescription":
+    "The saved key will be removed from the system credential store. The current run keeps the credential captured at Start until you Stop the runtime.",
   "settings.credentials.openai.removeDialog.cancel": "Cancel",
   "settings.credentials.openai.removeDialog.confirm": "Remove API key",
 
   "notFound.eyebrow": "Page not found",
   "notFound.title": "This route does not exist",
-  "notFound.backToLive": "Back to Live",
+  "notFound.backToCaptioning": "Back to Captioning",
 } as const;
 
 type EnglishMessages = typeof englishMessages;

@@ -1,9 +1,9 @@
 import { onBeforeUnmount, onMounted } from "vue";
-import { createRuntimeBackend } from "../platform/runtimeBackend";
+import { createAppGateway } from "../platform/appGateway";
 import { createRuntimeStore } from "./store/runtimeStore";
 
 export function useRuntime() {
-  const store = createRuntimeStore(createRuntimeBackend());
+  const store = createRuntimeStore(createAppGateway());
 
   onMounted(() => store.connect());
   onBeforeUnmount(() => {

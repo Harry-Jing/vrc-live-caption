@@ -1,6 +1,8 @@
-use super::super::test_support::{receive_json_event, runtime_test_publisher};
+use super::super::test_support::{
+    inactive_caption_update, receive_json_event, runtime_test_publisher,
+};
 use super::*;
-use crate::chatbox::{CompletedPublisherEvent, PublisherSubmitOutcome};
+use crate::chatbox::PublisherSubmitOutcome;
 use crate::runtime_control::RuntimeControlStore;
 use std::thread;
 use std::time::Duration;
@@ -38,10 +40,7 @@ fn runtime_thread_panic_invalidates_generation_and_closes_publisher() -> AppResu
     assert!(!generation.commit_if_active(|| {})?);
     publisher.join()?;
     assert_eq!(
-        publisher.try_submit_completed_event(CompletedPublisherEvent::Completed {
-            unit_id: "late-after-panic".to_string(),
-            text: "late".to_string(),
-        })?,
+        publisher.try_submit(&inactive_caption_update(1))?,
         PublisherSubmitOutcome::Closed
     );
     assert!(matches!(
@@ -50,6 +49,9 @@ fn runtime_thread_panic_invalidates_generation_and_closes_publisher() -> AppResu
     ));
     let diagnostic = receive_json_event(&diagnostic_receiver, "Runtime panic diagnostic")?;
     assert_eq!(diagnostic["code"], "runtime.thread_panicked");
-    assert_eq!(control.snapshot()?.runtime.status, RuntimeStatus::Error);
+    assert_eq!(
+        control.snapshot()?.runtime_status.status,
+        RuntimeStatus::Error
+    );
     Ok(())
 }

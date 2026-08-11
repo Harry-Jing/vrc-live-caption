@@ -5,12 +5,12 @@ import {
   publicationSettingsView,
   publicationStartIsBlocked,
 } from "./presentation";
-import type { PublicationPlan, RuntimePlan } from "./types";
+import type { CaptionPipelinePlan, PublicationPlan } from "./captionPipeline";
 
-const recognition: RuntimePlan["recognition"] = {
-  path: "openAiGptTranscribe",
+const recognition: CaptionPipelinePlan["recognition"] = {
+  path: "openai/gpt-transcribe",
   inputShape: "continuousAudioFrames",
-  boundaryOwner: "application",
+  captionBoundaryOwner: "application",
   unitBehavior: "unitBased",
   lanes: [
     {
@@ -21,11 +21,13 @@ const recognition: RuntimePlan["recognition"] = {
   ],
 };
 
-function runtimePlan(publication: PublicationPlan): RuntimePlan {
+function captionPipelinePlan(
+  publication: PublicationPlan,
+): CaptionPipelinePlan {
   return { recognition, publication };
 }
 
-const incompatibleLivePlan = runtimePlan({
+const incompatibleLivePlan = captionPipelinePlan({
   state: "incompatible",
   requestedMode: "live",
   selectedLanes: ["source"],
@@ -33,10 +35,10 @@ const incompatibleLivePlan = runtimePlan({
   supportedModes: ["completed"],
 });
 
-const completedPlan = runtimePlan({
-  state: "ready",
+const completedPlan = captionPipelinePlan({
+  state: "compatible",
   mode: "completed",
-  policy: { policy: "completed" },
+  timing: { timing: "completed" },
   selectedLanes: ["source"],
 });
 
@@ -47,18 +49,18 @@ describe("publication plan presentation", () => {
     });
   });
 
-  test("preserves the backend-resolved unit policy and delay", () => {
-    const unitPlan = runtimePlan({
-      state: "ready",
+  test("preserves the application-resolved unit policy and delay", () => {
+    const unitPlan = captionPipelinePlan({
+      state: "compatible",
       mode: "live",
-      policy: { policy: "liveUnit", observationWindowMs: 750 },
+      timing: { timing: "liveUnit", observationWindowMs: 750 },
       selectedLanes: ["source"],
     });
 
     expect(publicationPlanView(unitPlan)).toEqual({
-      state: "ready",
+      state: "compatible",
       mode: "live",
-      policy: "liveUnit",
+      timing: "liveUnit",
       delayMs: 750,
     });
   });
@@ -81,9 +83,9 @@ describe("publication plan presentation", () => {
     expect(
       publicationDisplayPlanView(completedPlan, incompatibleLivePlan),
     ).toEqual({
-      state: "ready",
+      state: "compatible",
       mode: "completed",
-      policy: "completed",
+      timing: "completed",
       delayMs: null,
     });
     expect(publicationDisplayPlanView(null, incompatibleLivePlan)).toEqual({

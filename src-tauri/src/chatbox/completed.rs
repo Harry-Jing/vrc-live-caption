@@ -1,7 +1,7 @@
 //! Independent Completed publication for the VRChat Chatbox.
 //!
-//! Runtime producers submit whole caption-unit lifecycle events through a
-//! non-waiting in-memory seam. One dedicated worker owns pagination output,
+//! Runtime producers submit Source-unit recognition lifecycle changes through
+//! a non-waiting in-memory seam. One dedicated worker owns pagination output,
 //! typing transitions, queue order, process-wide pacing, OSC attempts, and
 //! diagnostics. No producer waits for a Chatbox pacing opportunity or network
 //! operation.
@@ -13,8 +13,9 @@ use super::common::{
 use super::layout::paginate_completed;
 use super::pacer::{ChatboxAttemptPermit, ChatboxPacer};
 use super::transport::ChatboxTransport;
+use crate::caption::{CaptionAggregateChange, CaptionAggregateUpdate, CaptionLane, CaptionState};
 use crate::error::{AppError, AppResult};
-use crate::runtime::RuntimeGeneration;
+use crate::generation_fence::GenerationCommitter;
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -24,10 +25,11 @@ use std::time::{Duration, Instant};
 const PROVISIONAL_MAX_RESIDENT_PAGES: usize = 32;
 const PROVISIONAL_MAX_UNSTARTED_AGE: Duration = Duration::from_secs(30);
 
-pub(crate) type PublisherReporter = Arc<dyn Fn(PublisherDiagnostic) + Send + Sync>;
+pub(crate) type CompletedPublisherReporter =
+    Arc<dyn Fn(CompletedPublisherDiagnostic) + Send + Sync>;
 
 #[derive(Debug)]
-pub(crate) enum PublisherDiagnostic {
+pub(crate) enum CompletedPublisherDiagnostic {
     UnitPublished {
         unit_id: String,
         page_count: usize,
@@ -72,7 +74,7 @@ pub(crate) enum PublisherDiagnostic {
     },
 }
 
-pub(crate) enum CompletedPublisherEvent {
+enum CompletedPublisherInput {
     Started { unit_id: String },
     Completed { unit_id: String, text: String },
     Aborted { unit_id: String },
@@ -96,8 +98,8 @@ struct PublisherShared {
     interrupt_text_wait: AtomicBool,
     transport: Arc<dyn ChatboxTransport>,
     pacer: ChatboxPacer,
-    generation: RuntimeGeneration,
-    reporter: PublisherReporter,
+    committer: GenerationCommitter,
+    reporter: CompletedPublisherReporter,
     limits: PublisherLimits,
 }
 
@@ -106,12 +108,12 @@ struct PublisherState {
     units: VecDeque<CompletedUnit>,
     resident_pages: usize,
     next_sequence: u64,
-    active_units: HashSet<String>,
+    open_source_units: HashSet<String>,
     typing_desired: bool,
     typing_epoch: u64,
     typing_attempted_epoch: Option<u64>,
     next_typing_reassert_at: Option<Instant>,
-    diagnostics: VecDeque<PublisherDiagnostic>,
+    diagnostics: VecDeque<CompletedPublisherDiagnostic>,
 }
 
 struct CompletedUnit {
@@ -138,7 +140,7 @@ enum WorkerItem {
         is_typing: bool,
     },
     CleanupTyping,
-    Diagnostic(PublisherDiagnostic),
+    Diagnostic(CompletedPublisherDiagnostic),
     Page {
         sequence: u64,
         page_index: usize,
@@ -151,13 +153,13 @@ impl CompletedChatboxPublisher {
     pub(crate) fn start(
         transport: Arc<dyn ChatboxTransport>,
         pacer: ChatboxPacer,
-        generation: RuntimeGeneration,
-        reporter: PublisherReporter,
+        committer: GenerationCommitter,
+        reporter: CompletedPublisherReporter,
     ) -> AppResult<Self> {
         Self::start_with_limits(
             transport,
             pacer,
-            generation,
+            committer,
             reporter,
             PublisherLimits {
                 max_resident_pages: PROVISIONAL_MAX_RESIDENT_PAGES,
@@ -169,8 +171,8 @@ impl CompletedChatboxPublisher {
     fn start_with_limits(
         transport: Arc<dyn ChatboxTransport>,
         pacer: ChatboxPacer,
-        generation: RuntimeGeneration,
-        reporter: PublisherReporter,
+        committer: GenerationCommitter,
+        reporter: CompletedPublisherReporter,
         limits: PublisherLimits,
     ) -> AppResult<Self> {
         if limits.max_resident_pages == 0 || limits.max_unstarted_age.is_zero() {
@@ -185,7 +187,7 @@ impl CompletedChatboxPublisher {
                 units: VecDeque::new(),
                 resident_pages: 0,
                 next_sequence: 1,
-                active_units: HashSet::new(),
+                open_source_units: HashSet::new(),
                 typing_desired: false,
                 typing_epoch: 0,
                 // Epoch zero represents the initial typing-off state; it does
@@ -198,7 +200,7 @@ impl CompletedChatboxPublisher {
             interrupt_text_wait: AtomicBool::new(false),
             transport,
             pacer,
-            generation,
+            committer,
             reporter,
             limits,
         });
@@ -240,29 +242,82 @@ impl CompletedChatboxPublisher {
         })
     }
 
-    /// Submits one complete lifecycle event without waiting for pacing or OSC.
-    pub(crate) fn try_submit(
+    /// Translates one accepted aggregate change into the existing lifecycle.
+    pub(crate) fn try_observe(
         &self,
-        event: CompletedPublisherEvent,
+        update: &CaptionAggregateUpdate,
     ) -> AppResult<PublisherSubmitOutcome> {
+        let input = match &update.change {
+            CaptionAggregateChange::SourceUnitOpened(unit) => {
+                Some(CompletedPublisherInput::Started {
+                    unit_id: unit.unit_id.clone(),
+                })
+            }
+            CaptionAggregateChange::SourceUnitAborted { unit_id } => {
+                Some(CompletedPublisherInput::Aborted {
+                    unit_id: unit_id.clone(),
+                })
+            }
+            CaptionAggregateChange::CaptionAccepted(caption)
+                if caption.lane == CaptionLane::Source
+                    && caption.state == CaptionState::Completed
+                    && update
+                        .snapshot
+                        .active_stream
+                        .as_ref()
+                        .is_some_and(|active| {
+                            caption.generation == active.generation
+                                && caption.stream_id == active.stream_id
+                        }) =>
+            {
+                caption
+                    .unit_id
+                    .as_ref()
+                    .map(|unit_id| CompletedPublisherInput::Completed {
+                        unit_id: unit_id.clone(),
+                        text: caption.text.clone(),
+                    })
+            }
+            CaptionAggregateChange::CaptionAccepted(_) => None,
+        };
+
+        match input {
+            Some(input) => self.try_submit(input),
+            None => {
+                let state = self.lock_state()?;
+                Ok(
+                    if state.lifecycle == PublisherLifecycle::Running
+                        && !self.shared.committer.is_closed()
+                    {
+                        PublisherSubmitOutcome::Handled
+                    } else {
+                        PublisherSubmitOutcome::Closed
+                    },
+                )
+            }
+        }
+    }
+
+    /// Submits one complete lifecycle event without waiting for pacing or OSC.
+    fn try_submit(&self, event: CompletedPublisherInput) -> AppResult<PublisherSubmitOutcome> {
         match event {
-            CompletedPublisherEvent::Started { unit_id } => {
+            CompletedPublisherInput::Started { unit_id } => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
-                    || self.shared.generation.is_hard_stop_requested()
+                    || self.shared.committer.is_closed()
                 {
                     return Ok(PublisherSubmitOutcome::Closed);
                 }
 
-                if state.active_units.insert(unit_id) {
+                if state.open_source_units.insert(unit_id) {
                     refresh_typing_desired(&mut state);
                     self.signal_worker_locked();
                 }
             }
-            CompletedPublisherEvent::Aborted { unit_id } => {
+            CompletedPublisherInput::Aborted { unit_id } => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
-                    || self.shared.generation.is_hard_stop_requested()
+                    || self.shared.committer.is_closed()
                 {
                     return Ok(PublisherSubmitOutcome::Closed);
                 }
@@ -270,7 +325,7 @@ impl CompletedChatboxPublisher {
                 resolve_activity(&mut state, &unit_id);
                 self.signal_worker_locked();
             }
-            CompletedPublisherEvent::Completed { unit_id, text } => {
+            CompletedPublisherInput::Completed { unit_id, text } => {
                 return self.try_submit_completed(unit_id, text);
             }
         }
@@ -375,14 +430,14 @@ impl CompletedChatboxPublisher {
             Err(error) => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
-                    || self.shared.generation.is_hard_stop_requested()
+                    || self.shared.committer.is_closed()
                 {
                     return Ok(PublisherSubmitOutcome::Closed);
                 }
                 resolve_activity(&mut state, &unit_id);
                 state
                     .diagnostics
-                    .push_back(PublisherDiagnostic::LayoutFailed {
+                    .push_back(CompletedPublisherDiagnostic::LayoutFailed {
                         unit_id,
                         reason: describe_layout_error(error),
                     });
@@ -392,9 +447,7 @@ impl CompletedChatboxPublisher {
         };
 
         let mut state = self.lock_state()?;
-        if state.lifecycle != PublisherLifecycle::Running
-            || self.shared.generation.is_hard_stop_requested()
-        {
+        if state.lifecycle != PublisherLifecycle::Running || self.shared.committer.is_closed() {
             return Ok(PublisherSubmitOutcome::Closed);
         }
 
@@ -420,7 +473,7 @@ impl CompletedChatboxPublisher {
             resolve_activity(&mut state, &unit_id);
             state
                 .diagnostics
-                .push_back(PublisherDiagnostic::UnitRejectedOverload {
+                .push_back(CompletedPublisherDiagnostic::UnitRejectedOverload {
                     unit_id,
                     page_count,
                 });
@@ -435,7 +488,7 @@ impl CompletedChatboxPublisher {
                 resolve_activity(&mut state, &unit_id);
                 state
                     .diagnostics
-                    .push_back(PublisherDiagnostic::UnitRejectedOverload {
+                    .push_back(CompletedPublisherDiagnostic::UnitRejectedOverload {
                         unit_id,
                         page_count,
                     });
@@ -455,7 +508,7 @@ impl CompletedChatboxPublisher {
             resolve_activity(&mut state, &dropped.unit_id);
             state
                 .diagnostics
-                .push_back(PublisherDiagnostic::UnitDroppedOverload {
+                .push_back(CompletedPublisherDiagnostic::UnitDroppedOverload {
                     unit_id: dropped.unit_id,
                     page_count: dropped_pages,
                 });
@@ -514,17 +567,12 @@ fn run_publisher_worker(shared: Arc<PublisherShared>) -> AppResult<()> {
                 let Some(permit) = permit else {
                     continue;
                 };
-                let mut attempt_result = None;
-                let committed = shared.generation.commit_if_active(|| {
-                    attempt_result = Some(attempt_selected_page(
-                        &shared, sequence, page_index, &text, permit,
-                    ));
+                let attempt_result = shared.committer.try_commit(|| {
+                    attempt_selected_page(&shared, sequence, page_index, &text, permit)
                 })?;
 
-                if committed {
-                    if let Some(result) = attempt_result {
-                        result?;
-                    }
+                if let Some(result) = attempt_result {
+                    result?;
                 } else {
                     thread::yield_now();
                 }
@@ -559,13 +607,13 @@ fn emergency_close_after_worker_failure(shared: &PublisherShared, failure_reason
     discard_resident_pages_on_close(&mut state, reason);
     state.lifecycle = PublisherLifecycle::Closed;
     let mut diagnostics = state.diagnostics.drain(..).collect::<Vec<_>>();
-    diagnostics.push(PublisherDiagnostic::WorkerFailed {
+    diagnostics.push(CompletedPublisherDiagnostic::WorkerFailed {
         reason: failure_reason,
     });
     drop(state);
 
     if !cleanup_already_attempted && let Err(error) = shared.transport.send_typing(false) {
-        diagnostics.push(PublisherDiagnostic::TypingFailed {
+        diagnostics.push(CompletedPublisherDiagnostic::TypingFailed {
             is_typing: false,
             error,
         });
@@ -670,38 +718,24 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
 }
 
 fn process_typing(shared: &PublisherShared, epoch: u64, is_typing: bool) -> AppResult<()> {
-    let mut transport_result = None;
-    let mut state_error = None;
-    let committed = shared.generation.commit_if_active(|| {
-        let should_attempt = match shared.state.lock() {
-            Ok(state) => {
-                state.lifecycle == PublisherLifecycle::Running
-                    && state.typing_epoch == epoch
-                    && state.typing_desired == is_typing
-            }
-            Err(_) => {
-                state_error = Some(AppError::state(
-                    "Completed publisher state lock was poisoned.",
-                ));
-                false
-            }
-        };
-
-        if should_attempt {
-            transport_result = Some(shared.transport.send_typing(is_typing));
-        }
+    let transport_result = shared.committer.try_commit(|| {
+        let state = shared
+            .state
+            .lock()
+            .map_err(|_| AppError::state("Completed publisher state lock was poisoned."))?;
+        let should_attempt = state.lifecycle == PublisherLifecycle::Running
+            && state.typing_epoch == epoch
+            && state.typing_desired == is_typing;
+        drop(state);
+        Ok(should_attempt.then(|| shared.transport.send_typing(is_typing)))
     })?;
 
-    if let Some(error) = state_error {
-        return Err(error);
-    }
-
-    if !committed {
+    let Some(transport_result) = transport_result else {
         thread::yield_now();
         return Ok(());
-    }
+    };
 
-    let Some(result) = transport_result else {
+    let Some(result) = transport_result? else {
         return Ok(());
     };
     let attempted_at = shared.pacer.now();
@@ -721,7 +755,7 @@ fn process_typing(shared: &PublisherShared, epoch: u64, is_typing: bool) -> AppR
     if let Err(error) = result {
         state
             .diagnostics
-            .push_back(PublisherDiagnostic::TypingFailed { is_typing, error });
+            .push_back(CompletedPublisherDiagnostic::TypingFailed { is_typing, error });
     }
     shared.wake.notify_all();
 
@@ -738,7 +772,7 @@ fn process_cleanup_typing(shared: &PublisherShared) -> AppResult<()> {
     if let Err(error) = result {
         state
             .diagnostics
-            .push_back(PublisherDiagnostic::TypingFailed {
+            .push_back(CompletedPublisherDiagnostic::TypingFailed {
                 is_typing: false,
                 error,
             });
@@ -755,7 +789,7 @@ fn discard_resident_pages_on_close(state: &mut PublisherState, reason: Publisher
 
     state.units.clear();
     state.resident_pages = 0;
-    state.active_units.clear();
+    state.open_source_units.clear();
     state.typing_desired = false;
     state.typing_epoch = state.typing_epoch.wrapping_add(1);
     state.typing_attempted_epoch = None;
@@ -764,7 +798,7 @@ fn discard_resident_pages_on_close(state: &mut PublisherState, reason: Publisher
     if page_count > 0 {
         state
             .diagnostics
-            .push_back(PublisherDiagnostic::PagesDiscardedOnClose {
+            .push_back(CompletedPublisherDiagnostic::PagesDiscardedOnClose {
                 reason,
                 unit_count,
                 page_count,
@@ -814,7 +848,7 @@ fn attempt_selected_page(
             resolve_activity(&mut state, &expired.unit_id);
             state
                 .diagnostics
-                .push_back(PublisherDiagnostic::UnitExpired {
+                .push_back(CompletedPublisherDiagnostic::UnitExpired {
                     unit_id: expired.unit_id,
                     page_count: expired_pages,
                 });
@@ -859,7 +893,7 @@ fn attempt_selected_page(
                 resolve_activity(&mut state, &completed.unit_id);
                 state
                     .diagnostics
-                    .push_back(PublisherDiagnostic::UnitPublished {
+                    .push_back(CompletedPublisherDiagnostic::UnitPublished {
                         unit_id: completed.unit_id,
                         page_count: completed.pages.len(),
                         byte_count: completed.sent_bytes,
@@ -879,7 +913,7 @@ fn attempt_selected_page(
             resolve_activity(&mut state, &failed.unit_id);
             state
                 .diagnostics
-                .push_back(PublisherDiagnostic::UnitSendFailed {
+                .push_back(CompletedPublisherDiagnostic::UnitSendFailed {
                     unit_id: failed.unit_id,
                     page_index: page_index + 1,
                     page_count: failed.pages.len(),
@@ -918,7 +952,7 @@ fn expire_unstarted_units(
         resolve_activity(state, &expired.unit_id);
         state
             .diagnostics
-            .push_back(PublisherDiagnostic::UnitExpired {
+            .push_back(CompletedPublisherDiagnostic::UnitExpired {
                 unit_id: expired.unit_id,
                 page_count: expired_pages,
             });
@@ -926,13 +960,13 @@ fn expire_unstarted_units(
 }
 
 fn resolve_activity(state: &mut PublisherState, unit_id: &str) {
-    if state.active_units.remove(unit_id) {
+    if state.open_source_units.remove(unit_id) {
         refresh_typing_desired(state);
     }
 }
 
 fn refresh_typing_desired(state: &mut PublisherState) {
-    let desired = !state.active_units.is_empty();
+    let desired = !state.open_source_units.is_empty();
     if desired != state.typing_desired {
         state.typing_desired = desired;
         state.typing_epoch = state.typing_epoch.wrapping_add(1);

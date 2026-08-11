@@ -1,5 +1,5 @@
-use super::attempt::{RecognitionAttemptAudioChunk, RecognitionAttemptSession};
-use super::realtime::OpenAiRealtimeSessionContext;
+use super::attempt::{RecognitionAttempt, RecognitionAttemptAudioChunk};
+use super::realtime::OpenAiRealtimeAttemptContext;
 use super::*;
 use crate::error::{AppError, AppResult};
 use crate::recognition::{
@@ -12,19 +12,19 @@ use std::time::{Duration, Instant};
 const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
-struct SessionProbe {
+struct AttemptProbe {
     appended_samples: usize,
     connect_attempts: usize,
     stopped: bool,
 }
 
-struct RecordingSession {
-    context: OpenAiRealtimeSessionContext,
-    probe: Arc<Mutex<SessionProbe>>,
+struct RecordingAttempt {
+    context: OpenAiRealtimeAttemptContext,
+    probe: Arc<Mutex<AttemptProbe>>,
     fail_next_drain: bool,
 }
 
-impl RecognitionAttemptSession for RecordingSession {
+impl RecognitionAttempt for RecordingAttempt {
     fn start_unit(&mut self, unit_id: String, started_at_ms: u64) -> AppResult<RecognitionEvent> {
         Ok(RecognitionEvent::UnitStarted {
             generation: self.context.generation,
@@ -50,7 +50,7 @@ impl RecognitionAttemptSession for RecordingSession {
     fn drain_events(&mut self, _received_at_ms: u64) -> AppResult<Vec<RecognitionEvent>> {
         if self.fail_next_drain {
             self.fail_next_drain = false;
-            return Err(AppError::stt_network_retryable(
+            return Err(AppError::recognition_network_retryable(
                 "The test connection was interrupted.",
             ));
         }
@@ -68,18 +68,18 @@ impl RecognitionAttemptSession for RecordingSession {
 }
 
 struct RecordingAttemptFactory {
-    probe: Arc<Mutex<SessionProbe>>,
+    probe: Arc<Mutex<AttemptProbe>>,
     fail_first_drain: bool,
 }
 
 impl OpenAiRecognitionAttemptFactory for RecordingAttemptFactory {
-    type Session = RecordingSession;
+    type Attempt = RecordingAttempt;
 
     fn connect(
         &mut self,
-        context: OpenAiRealtimeSessionContext,
+        context: OpenAiRealtimeAttemptContext,
         _is_cancelled: &dyn Fn() -> bool,
-    ) -> AppResult<Self::Session> {
+    ) -> AppResult<Self::Attempt> {
         let mut probe = self
             .probe
             .lock()
@@ -87,7 +87,7 @@ impl OpenAiRecognitionAttemptFactory for RecordingAttemptFactory {
         probe.connect_attempts = probe.connect_attempts.saturating_add(1);
         let attempt = probe.connect_attempts;
         drop(probe);
-        Ok(RecordingSession {
+        Ok(RecordingAttempt {
             context,
             probe: Arc::clone(&self.probe),
             fail_next_drain: self.fail_first_drain && attempt == 1,
@@ -131,7 +131,7 @@ fn openai_segmenter_hard_splits_continuous_speech_at_30_seconds() {
 
 #[test]
 fn continuous_audio_is_unitized_inside_the_openai_recognition_module() -> AppResult<()> {
-    let probe = Arc::new(Mutex::new(SessionProbe::default()));
+    let probe = Arc::new(Mutex::new(AttemptProbe::default()));
     let driver = OpenAiRecognitionDriver::new(RecordingAttemptFactory {
         probe: Arc::clone(&probe),
         fail_first_drain: false,
@@ -178,7 +178,7 @@ fn continuous_audio_is_unitized_inside_the_openai_recognition_module() -> AppRes
 
 #[test]
 fn retryable_failure_pauses_capture_before_opening_a_fresh_attempt() -> AppResult<()> {
-    let probe = Arc::new(Mutex::new(SessionProbe::default()));
+    let probe = Arc::new(Mutex::new(AttemptProbe::default()));
     let driver = OpenAiRecognitionDriver::new(RecordingAttemptFactory {
         probe: Arc::clone(&probe),
         fail_first_drain: true,
@@ -208,7 +208,7 @@ fn retryable_failure_pauses_capture_before_opening_a_fresh_attempt() -> AppResul
     let pause_epoch = match running.signals.recv_timeout(TEST_TIMEOUT) {
         Ok(RecognitionSignal::Reconnecting {
             epoch,
-            attempt: 1,
+            retry_number: 1,
             delay_ms,
         }) => {
             assert!((400..=600).contains(&delay_ms));
@@ -241,8 +241,84 @@ fn retryable_failure_pauses_capture_before_opening_a_fresh_attempt() -> AppResul
 }
 
 #[test]
+fn caption_unit_ids_remain_unique_across_reconnect_attempts() -> AppResult<()> {
+    let probe = Arc::new(Mutex::new(AttemptProbe::default()));
+    let driver = OpenAiRecognitionDriver::new(RecordingAttemptFactory {
+        probe,
+        fail_first_drain: true,
+    });
+    let module = RecognitionModule::with_audio_budget(Duration::from_millis(500), 8, driver)?;
+    let mut running = module.start(RecognitionGenerationScope {
+        generation: 13,
+        stream_id: "recognition-13-1".to_string(),
+    })?;
+
+    assert!(matches!(
+        running.signals.recv_timeout(TEST_TIMEOUT),
+        Ok(RecognitionSignal::Ready {
+            recovered: false,
+            ..
+        })
+    ));
+    running
+        .try_submit(OwnedRecognitionAudioFrame {
+            sequence: 1,
+            captured_at_ms: 100,
+            sample_rate_hz: 16_000,
+            samples: vec![0.25; 4_800].into_boxed_slice(),
+        })
+        .map_err(|error| AppError::state(format!("Test audio was rejected: {error:?}")))?;
+
+    let first_unit_id = match running.signals.recv_timeout(TEST_TIMEOUT) {
+        Ok(RecognitionSignal::Event(RecognitionEvent::UnitStarted { unit_id, .. })) => unit_id,
+        signal => {
+            return Err(AppError::state(format!(
+                "Expected the first caption unit, received {signal:?}."
+            )));
+        }
+    };
+    let pause_epoch = match running.signals.recv_timeout(TEST_TIMEOUT) {
+        Ok(RecognitionSignal::Reconnecting { epoch, .. }) => epoch,
+        signal => {
+            return Err(AppError::state(format!(
+                "Expected reconnect after the first caption unit, received {signal:?}."
+            )));
+        }
+    };
+    running.acknowledge_capture_paused(pause_epoch)?;
+    assert!(matches!(
+        running.signals.recv_timeout(Duration::from_secs(2)),
+        Ok(RecognitionSignal::Ready {
+            recovered: true,
+            ..
+        })
+    ));
+
+    running
+        .try_submit(OwnedRecognitionAudioFrame {
+            sequence: 2,
+            captured_at_ms: 200,
+            sample_rate_hz: 16_000,
+            samples: vec![0.25; 4_800].into_boxed_slice(),
+        })
+        .map_err(|error| AppError::state(format!("Test audio was rejected: {error:?}")))?;
+    let second_unit_id = match running.signals.recv_timeout(TEST_TIMEOUT) {
+        Ok(RecognitionSignal::Event(RecognitionEvent::UnitStarted { unit_id, .. })) => unit_id,
+        signal => {
+            return Err(AppError::state(format!(
+                "Expected a fresh caption unit after reconnect, received {signal:?}."
+            )));
+        }
+    };
+
+    assert_ne!(first_unit_id, second_unit_id);
+    running.stop()?;
+    Ok(())
+}
+
+#[test]
 fn stop_interrupts_the_reconnect_backoff() -> AppResult<()> {
-    let probe = Arc::new(Mutex::new(SessionProbe::default()));
+    let probe = Arc::new(Mutex::new(AttemptProbe::default()));
     let driver = OpenAiRecognitionDriver::new(RecordingAttemptFactory {
         probe: Arc::clone(&probe),
         fail_first_drain: true,

@@ -1,8 +1,8 @@
-use super::super::attempt::{RecognitionAttemptAudioChunk, RecognitionAttemptSession};
+use super::super::attempt::{RecognitionAttempt, RecognitionAttemptAudioChunk};
 use super::*;
-use crate::caption_session::{CaptionSnapshotV1, CaptionState};
+use crate::caption::{CaptionSnapshotV2, CaptionState};
 use crate::error::{AppError, AppResult, ProviderFailureClass, RetryDisposition};
-use crate::recognition::{RecognitionEndReason, RecognitionEvent};
+use crate::recognition::{RecognitionEvent, RecognitionUnitAbortReason};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::io::{self, Write};
@@ -150,13 +150,13 @@ impl MonotonicClock for ManualClock {
     }
 }
 
-fn session(
+fn attempt(
     model: OpenAiTranscriptionModel,
     languages: &[&str],
-) -> AppResult<(OpenAiRealtimeSession<FakeTransport>, FakeTransportProbe)> {
+) -> AppResult<(OpenAiRealtimeAttempt<FakeTransport>, FakeTransportProbe)> {
     let (transport, probe) = FakeTransport::new();
-    let session = OpenAiRealtimeSession::connect(
-        OpenAiRealtimeSessionContext {
+    let attempt = OpenAiRealtimeAttempt::connect(
+        OpenAiRealtimeAttemptContext {
             generation: 7,
             connection_epoch: 3,
             stream_id: "recognition-7-1".to_string(),
@@ -165,21 +165,21 @@ fn session(
         languages.iter().map(|value| (*value).to_string()).collect(),
         transport,
     )?;
-    Ok((session, probe))
+    Ok((attempt, probe))
 }
 
-fn session_with_manual_clock(
+fn attempt_with_manual_clock(
     model: OpenAiTranscriptionModel,
     languages: &[&str],
 ) -> AppResult<(
-    OpenAiRealtimeSession<FakeTransport>,
+    OpenAiRealtimeAttempt<FakeTransport>,
     FakeTransportProbe,
     ManualClock,
 )> {
     let (transport, probe) = FakeTransport::new();
     let clock = ManualClock::default();
-    let session = OpenAiRealtimeSession::connect_with_clock(
-        OpenAiRealtimeSessionContext {
+    let attempt = OpenAiRealtimeAttempt::connect_with_clock(
+        OpenAiRealtimeAttemptContext {
             generation: 7,
             connection_epoch: 3,
             stream_id: "recognition-7-1".to_string(),
@@ -189,15 +189,15 @@ fn session_with_manual_clock(
         transport,
         Box::new(clock.clone()),
     )?;
-    Ok((session, probe, clock))
+    Ok((attempt, probe, clock))
 }
 
 fn start_unit(
-    session: &mut impl RecognitionAttemptSession,
+    attempt: &mut impl RecognitionAttempt,
     unit_id: &str,
     started_at_ms: u64,
 ) -> AppResult<()> {
-    let event = session.start_unit(unit_id.to_string(), started_at_ms)?;
+    let event = attempt.start_unit(unit_id.to_string(), started_at_ms)?;
     assert!(matches!(
         event,
         RecognitionEvent::UnitStarted {
@@ -212,12 +212,12 @@ fn start_unit(
     Ok(())
 }
 
-fn captions(events: Vec<RecognitionEvent>) -> Vec<CaptionSnapshotV1> {
+fn captions(events: Vec<RecognitionEvent>) -> Vec<CaptionSnapshotV2> {
     events
         .into_iter()
         .filter_map(|event| match event {
             RecognitionEvent::Caption(caption) => Some(caption),
-            RecognitionEvent::UnitStarted { .. } | RecognitionEvent::UnitEnded { .. } => None,
+            RecognitionEvent::UnitStarted { .. } | RecognitionEvent::UnitAborted { .. } => None,
         })
         .collect()
 }
@@ -271,7 +271,7 @@ fn transcript_failed(item_id: &str, message: &str) -> Value {
 
 #[test]
 fn connection_configures_a_transcription_session_with_pcm_24k_and_languages() -> AppResult<()> {
-    let (_session, probe) = session(OpenAiTranscriptionModel::GptLiveTranscribe, &["en", "zh"])?;
+    let (_attempt, probe) = attempt(OpenAiTranscriptionModel::GptLiveTranscribe, &["en", "zh"])?;
     let sent = probe.sent_json()?;
 
     assert_eq!(
@@ -302,27 +302,27 @@ fn connection_configures_a_transcription_session_with_pcm_24k_and_languages() ->
 }
 
 #[test]
-fn session_is_not_ready_until_openai_confirms_the_update() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    assert!(!session.is_ready());
+fn attempt_is_not_ready_until_openai_confirms_the_session_update() -> AppResult<()> {
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    assert!(!attempt.is_ready());
 
     probe.push_server_event(json!({ "type": "session.updated", "session": {} }))?;
-    assert!(session.drain_events(10)?.is_empty());
+    assert!(attempt.drain_events(10)?.is_empty());
 
-    assert!(session.is_ready());
+    assert!(attempt.is_ready());
     Ok(())
 }
 
 #[test]
 fn append_encodes_mono_pcm16_at_24k_then_commit_is_a_separate_event() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
 
-    session.append_audio(RecognitionAttemptAudioChunk {
+    attempt.append_audio(RecognitionAttemptAudioChunk {
         sample_rate_hz: 24_000,
         samples: &[0.0, 1.0, -1.0],
     })?;
-    session.end_input()?;
+    attempt.end_input()?;
 
     let sent = probe.sent_json()?;
     assert_eq!(sent.len(), 3);
@@ -345,7 +345,7 @@ fn append_encodes_mono_pcm16_at_24k_then_commit_is_a_separate_event() -> AppResu
 
 #[test]
 fn provider_error_does_not_escape_through_app_error_display_or_serialization() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
     let canaries = [
         "provider-message-canary",
         "provider-type-canary",
@@ -364,7 +364,7 @@ fn provider_error_does_not_escape_through_app_error_display_or_serialization() -
         }
     }))?;
 
-    let error = session
+    let error = attempt
         .drain_events(100)
         .err()
         .ok_or_else(|| AppError::state("A provider error unexpectedly succeeded."))?;
@@ -389,7 +389,7 @@ fn provider_error_does_not_escape_through_app_error_display_or_serialization() -
 
 #[test]
 fn provider_error_classification_uses_structured_fields_not_message_text() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
     probe.push_server_event(json!({
         "type": "error",
         "error": {
@@ -401,7 +401,7 @@ fn provider_error_classification_uses_structured_fields_not_message_text() -> Ap
         }
     }))?;
 
-    let error = session
+    let error = attempt
         .drain_events(100)
         .err()
         .ok_or_else(|| AppError::state("A provider error unexpectedly succeeded."))?;
@@ -460,7 +460,7 @@ fn provider_error_classes_have_stable_retry_dispositions() -> AppResult<()> {
     ];
 
     for (kind, code, expected_class, expected_retry, expected_code) in cases {
-        let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+        let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
         probe.push_server_event(json!({
             "type": "error",
             "error": {
@@ -470,7 +470,7 @@ fn provider_error_classes_have_stable_retry_dispositions() -> AppResult<()> {
             }
         }))?;
 
-        let error = session
+        let error = attempt
             .drain_events(100)
             .err()
             .ok_or_else(|| AppError::state("A provider error unexpectedly succeeded."))?;
@@ -483,7 +483,7 @@ fn provider_error_classes_have_stable_retry_dispositions() -> AppResult<()> {
 
 #[test]
 fn provider_error_does_not_escape_through_tracing() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
     let canaries = [
         "trace-message-canary",
         "trace-type-canary",
@@ -510,7 +510,7 @@ fn provider_error_does_not_escape_through_tracing() -> AppResult<()> {
         .with_target(false)
         .with_writer(move || writer_capture.writer())
         .finish();
-    let result = tracing::subscriber::with_default(subscriber, || session.drain_events(100));
+    let result = tracing::subscriber::with_default(subscriber, || attempt.drain_events(100));
     assert!(result.is_err());
 
     let tracing_output = capture.contents()?;
@@ -523,7 +523,7 @@ fn provider_error_does_not_escape_through_tracing() -> AppResult<()> {
 
 #[test]
 fn malformed_provider_metadata_is_discarded_without_entering_parser_errors() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
     let numeric_canary = 31_415_926_535_u64;
     let nested_canary = "nested-provider-code-canary";
     probe.push_server_event(json!({
@@ -535,7 +535,7 @@ fn malformed_provider_metadata_is_discarded_without_entering_parser_errors() -> 
         }
     }))?;
 
-    let error = session
+    let error = attempt
         .drain_events(100)
         .err()
         .ok_or_else(|| AppError::state("A malformed provider error unexpectedly succeeded."))?;
@@ -553,11 +553,11 @@ fn malformed_provider_metadata_is_discarded_without_entering_parser_errors() -> 
 
 #[test]
 fn malformed_provider_error_shape_cannot_escape_through_the_json_decoder() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
     let canary = "provider-message-canary";
     probe.push_raw_server_event(format!(r#"{{"type":"error","error":"{canary}"}}"#))?;
 
-    let error = session
+    let error = attempt
         .drain_events(100)
         .err()
         .ok_or_else(|| AppError::state("A malformed provider event unexpectedly succeeded."))?;
@@ -574,23 +574,21 @@ fn malformed_provider_error_shape_cannot_escape_through_the_json_decoder() -> Ap
 
 #[test]
 fn gpt_transcribe_suppresses_deltas_and_emits_only_the_completed_snapshot() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
 
     probe.push_server_event(buffer_committed("item-a"))?;
     probe.push_server_event(transcript_delta("item-a", "not downstream"))?;
     probe.push_server_event(transcript_completed("item-a", "final transcript"))?;
 
-    let captions = captions(session.drain_events(180)?);
+    let captions = captions(attempt.drain_events(180)?);
     assert_eq!(captions.len(), 1);
     assert_eq!(captions[0].unit_id.as_deref(), Some("unit-a"));
     assert_eq!(captions[0].text, "final transcript");
     assert_eq!(captions[0].revision, 1);
     assert_eq!(captions[0].state, CaptionState::Completed);
     assert_eq!(captions[0].language, None);
-    assert_eq!(captions[0].provider, "openai");
-    assert_eq!(captions[0].model, "gpt-transcribe");
     assert_eq!(captions[0].unit_started_at_ms, Some(100));
     assert_eq!(captions[0].timestamp_ms, 180);
     Ok(())
@@ -598,12 +596,12 @@ fn gpt_transcribe_suppresses_deltas_and_emits_only_the_completed_snapshot() -> A
 
 #[test]
 fn gpt_live_transcribe_emits_full_ongoing_snapshots_before_commit_and_a_final() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptLiveTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-live", 200)?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptLiveTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-live", 200)?;
 
     probe.push_server_event(transcript_delta("item-live", "hello"))?;
     probe.push_server_event(transcript_delta("item-live", " world"))?;
-    let ongoing = captions(session.drain_events(240)?);
+    let ongoing = captions(attempt.drain_events(240)?);
     assert_eq!(
         ongoing
             .iter()
@@ -615,34 +613,33 @@ fn gpt_live_transcribe_emits_full_ongoing_snapshots_before_commit_and_a_final() 
         ]
     );
 
-    session.end_input()?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-live"))?;
     probe.push_server_event(transcript_completed("item-live", "Hello world."))?;
-    let completed = captions(session.drain_events(300)?);
+    let completed = captions(attempt.drain_events(300)?);
     assert_eq!(completed.len(), 1);
     assert_eq!(completed[0].text, "Hello world.");
     assert_eq!(completed[0].revision, 3);
     assert_eq!(completed[0].state, CaptionState::Completed);
-    assert_eq!(completed[0].model, "gpt-live-transcribe");
     assert_eq!(completed[0].language, None);
     Ok(())
 }
 
 #[test]
 fn live_item_binding_replays_earlier_delta_before_the_current_delta() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptLiveTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
-    start_unit(&mut session, "unit-b", 120)?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptLiveTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
+    start_unit(&mut attempt, "unit-b", 120)?;
 
     // Unit A is committed but not yet bound, so B's first early delta cannot
     // be attached safely and must wait for A's provider item binding.
     probe.push_server_event(transcript_delta("item-b", "hello"))?;
-    assert!(session.drain_events(130)?.is_empty());
+    assert!(attempt.drain_events(130)?.is_empty());
 
     probe.push_server_event(buffer_committed("item-a"))?;
     probe.push_server_event(transcript_delta("item-b", " world"))?;
-    let captions = captions(session.drain_events(140)?);
+    let captions = captions(attempt.drain_events(140)?);
 
     assert_eq!(captions.len(), 2);
     assert_eq!(captions[0].unit_id.as_deref(), Some("unit-b"));
@@ -655,9 +652,9 @@ fn live_item_binding_replays_earlier_delta_before_the_current_delta() -> AppResu
 
 #[test]
 fn gpt_transcribe_uses_provider_detection_instead_of_language_hints() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en", "fr"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en", "fr"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
     probe.push_server_event(transcript_completed_with_languages(
         "item-a",
@@ -665,7 +662,7 @@ fn gpt_transcribe_uses_provider_detection_instead_of_language_hints() -> AppResu
         &["fr"],
     ))?;
 
-    let captions = captions(session.drain_events(160)?);
+    let captions = captions(attempt.drain_events(160)?);
     assert_eq!(captions.len(), 1);
     assert_eq!(captions[0].language.as_deref(), Some("fr"));
     Ok(())
@@ -673,9 +670,9 @@ fn gpt_transcribe_uses_provider_detection_instead_of_language_hints() -> AppResu
 
 #[test]
 fn multiple_detected_languages_are_not_collapsed_into_a_singular_label() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["zh", "en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["zh", "en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
     probe.push_server_event(transcript_completed_with_languages(
         "item-a",
@@ -683,38 +680,38 @@ fn multiple_detected_languages_are_not_collapsed_into_a_singular_label() -> AppR
         &["zh", "en"],
     ))?;
 
-    let captions = captions(session.drain_events(160)?);
+    let captions = captions(attempt.drain_events(160)?);
     assert_eq!(captions.len(), 1);
     assert_eq!(captions[0].language, None);
     Ok(())
 }
 
 #[test]
-fn outstanding_turns_are_bounded_without_dropping_an_existing_turn() -> AppResult<()> {
-    let (mut session, _probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+fn outstanding_units_are_bounded_without_dropping_an_existing_unit() -> AppResult<()> {
+    let (mut attempt, _probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
 
-    for index in 0..MAX_OUTSTANDING_TURNS {
-        start_unit(&mut session, &format!("unit-{index}"), index as u64)?;
-        session.end_input()?;
+    for index in 0..MAX_OUTSTANDING_UNITS {
+        start_unit(&mut attempt, &format!("unit-{index}"), index as u64)?;
+        attempt.end_input()?;
     }
 
-    let error = session
+    let error = attempt
         .start_unit("unit-overflow".to_string(), 999)
         .err()
-        .ok_or_else(|| AppError::state("An unbounded recognition turn unexpectedly started."))?;
+        .ok_or_else(|| AppError::state("An unbounded recognition unit unexpectedly started."))?;
     assert!(error.to_string().contains("outstanding recognition units"));
     Ok(())
 }
 
 #[test]
 fn uncorrelated_provider_items_and_events_are_bounded() -> AppResult<()> {
-    let (mut item_session, item_probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let (mut item_attempt, item_probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
 
     for index in 0..MAX_PENDING_PROVIDER_ITEMS {
         item_probe.push_server_event(transcript_completed(&format!("item-{index}"), "pending"))?;
     }
     item_probe.push_server_event(transcript_completed("item-overflow", "pending"))?;
-    let item_error = item_session
+    let item_error = item_attempt
         .drain_events(100)
         .err()
         .ok_or_else(|| AppError::state("Unbounded provider items were unexpectedly accepted."))?;
@@ -724,13 +721,13 @@ fn uncorrelated_provider_items_and_events_are_bounded() -> AppResult<()> {
             .contains("uncorrelated provider items")
     );
 
-    let (mut event_session, event_probe) =
-        session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    let (mut event_attempt, event_probe) =
+        attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
     for _ in 0..=MAX_PENDING_EVENTS_PER_ITEM {
         event_probe.push_server_event(transcript_completed("item-a", "pending"))?;
     }
-    assert!(event_session.drain_events(120)?.is_empty());
-    let event_error = event_session
+    assert!(event_attempt.drain_events(120)?.is_empty());
+    let event_error = event_attempt
         .drain_events(121)
         .err()
         .ok_or_else(|| AppError::state("Unbounded provider events were unexpectedly accepted."))?;
@@ -743,41 +740,41 @@ fn uncorrelated_provider_items_and_events_are_bounded() -> AppResult<()> {
 }
 
 #[test]
-fn provider_transcript_text_is_bounded_per_turn() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+fn provider_transcript_text_is_bounded_per_unit() -> AppResult<()> {
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
     probe.push_server_event(transcript_completed(
         "item-a",
-        &"x".repeat(MAX_TRANSCRIPT_BYTES_PER_TURN + 1),
+        &"x".repeat(MAX_TRANSCRIPT_BYTES_PER_UNIT + 1),
     ))?;
 
-    let error = session
+    let error = attempt
         .drain_events(160)
         .err()
         .ok_or_else(|| AppError::state("An oversized transcript unexpectedly succeeded."))?;
-    assert!(error.to_string().contains("per-turn text limit"));
+    assert!(error.to_string().contains("per-unit text limit"));
     Ok(())
 }
 
 #[test]
-fn completed_items_are_released_in_local_turn_order_using_item_ids() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
-    start_unit(&mut session, "unit-b", 200)?;
-    session.end_input()?;
+fn completed_items_are_released_in_local_unit_order_using_item_ids() -> AppResult<()> {
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
+    start_unit(&mut attempt, "unit-b", 200)?;
+    attempt.end_input()?;
 
     probe.push_server_event(buffer_committed("item-a"))?;
     probe.push_server_event(buffer_committed("item-b"))?;
-    assert!(session.drain_events(220)?.is_empty());
+    assert!(attempt.drain_events(220)?.is_empty());
 
     probe.push_server_event(transcript_completed("item-b", "second"))?;
-    assert!(session.drain_events(260)?.is_empty());
+    assert!(attempt.drain_events(260)?.is_empty());
 
     probe.push_server_event(transcript_completed("item-a", "first"))?;
-    let completed = captions(session.drain_events(280)?);
+    let completed = captions(attempt.drain_events(280)?);
     assert_eq!(
         completed
             .iter()
@@ -790,33 +787,33 @@ fn completed_items_are_released_in_local_turn_order_using_item_ids() -> AppResul
 
 #[test]
 fn completion_can_arrive_before_its_item_binding() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
 
     probe.push_server_event(transcript_completed("item-a", "final"))?;
-    assert!(session.drain_events(140)?.is_empty());
+    assert!(attempt.drain_events(140)?.is_empty());
     probe.push_server_event(buffer_committed("item-a"))?;
-    let completed = captions(session.drain_events(160)?);
+    let completed = captions(attempt.drain_events(160)?);
     assert_eq!(completed.len(), 1);
     assert_eq!(completed[0].text, "final");
     Ok(())
 }
 
 #[test]
-fn empty_completion_ends_the_unit_as_no_speech() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+fn empty_completion_aborts_the_unit_as_no_speech() -> AppResult<()> {
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
     probe.push_server_event(transcript_completed("item-a", "  "))?;
 
-    let events = session.drain_events(160)?;
+    let events = attempt.drain_events(160)?;
     assert!(matches!(
         events.as_slice(),
-        [RecognitionEvent::UnitEnded {
+        [RecognitionEvent::UnitAborted {
             unit_id,
-            reason: RecognitionEndReason::NoSpeech,
+            reason: RecognitionUnitAbortReason::NoSpeech,
             ..
         }] if unit_id == "unit-a"
     ));
@@ -824,23 +821,23 @@ fn empty_completion_ends_the_unit_as_no_speech() -> AppResult<()> {
 }
 
 #[test]
-fn failed_first_item_ends_explicitly_then_releases_the_completed_second_item() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
-    start_unit(&mut session, "unit-b", 200)?;
-    session.end_input()?;
+fn failed_first_item_aborts_explicitly_then_releases_the_completed_second_item() -> AppResult<()> {
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
+    start_unit(&mut attempt, "unit-b", 200)?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
     probe.push_server_event(buffer_committed("item-b"))?;
     probe.push_server_event(transcript_completed("item-b", "second"))?;
     probe.push_server_event(transcript_failed("item-a", "recognition failed"))?;
 
-    let events = session.drain_events(280)?;
+    let events = attempt.drain_events(280)?;
     assert!(matches!(
         events.first(),
-        Some(RecognitionEvent::UnitEnded {
+        Some(RecognitionEvent::UnitAborted {
             unit_id,
-            reason: RecognitionEndReason::Failed { detail },
+            reason: RecognitionUnitAbortReason::Failed { detail },
             ..
         }) if unit_id == "unit-a" && detail == "OpenAI could not transcribe one audio item."
     ));
@@ -853,7 +850,7 @@ fn failed_first_item_ends_explicitly_then_releases_the_completed_second_item() -
 }
 
 #[test]
-fn structured_item_failures_promote_session_wide_conditions_to_clean_failure() -> AppResult<()> {
+fn structured_item_failures_promote_attempt_wide_conditions_to_clean_failure() -> AppResult<()> {
     for (kind, code, expected_class, expected_retry) in [
         (
             "rate_limit_error",
@@ -868,9 +865,9 @@ fn structured_item_failures_promote_session_wide_conditions_to_clean_failure() -
             RetryDisposition::Terminal,
         ),
     ] {
-        let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-        start_unit(&mut session, "unit-a", 100)?;
-        session.end_input()?;
+        let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+        start_unit(&mut attempt, "unit-a", 100)?;
+        attempt.end_input()?;
         probe.push_server_event(buffer_committed("item-a"))?;
         probe.push_server_event(json!({
             "type": "conversation.item.input_audio_transcription.failed",
@@ -882,8 +879,8 @@ fn structured_item_failures_promote_session_wide_conditions_to_clean_failure() -
             }
         }))?;
 
-        let error = session.drain_events(180).err().ok_or_else(|| {
-            AppError::state("A session-wide item failure unexpectedly succeeded.")
+        let error = attempt.drain_events(180).err().ok_or_else(|| {
+            AppError::state("A attempt-wide item failure unexpectedly succeeded.")
         })?;
         assert_eq!(error.provider_failure_class(), Some(expected_class));
         assert_eq!(error.retry_disposition(), expected_retry);
@@ -895,9 +892,9 @@ fn structured_item_failures_promote_session_wide_conditions_to_clean_failure() -
 
 #[test]
 fn item_failure_does_not_escape_through_recognition_events_or_tracing() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
     let canaries = [
         "item-id-canary",
         "item-message-canary",
@@ -927,13 +924,13 @@ fn item_failure_does_not_escape_through_recognition_events_or_tracing() -> AppRe
         .with_target(false)
         .with_writer(move || writer_capture.writer())
         .finish();
-    let events = tracing::subscriber::with_default(subscriber, || session.drain_events(180))?;
+    let events = tracing::subscriber::with_default(subscriber, || attempt.drain_events(180))?;
 
     assert!(matches!(
         events.as_slice(),
-        [RecognitionEvent::UnitEnded {
+        [RecognitionEvent::UnitAborted {
             unit_id,
-            reason: RecognitionEndReason::Failed { detail },
+            reason: RecognitionUnitAbortReason::Failed { detail },
             ..
         }] if unit_id == "unit-a"
             && detail == "OpenAI could not transcribe one audio item."
@@ -946,28 +943,28 @@ fn item_failure_does_not_escape_through_recognition_events_or_tracing() -> AppRe
 }
 
 #[test]
-fn a_timed_out_item_ends_explicitly_and_releases_later_completed_items() -> AppResult<()> {
-    let (mut session, probe, clock) =
-        session_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
-    start_unit(&mut session, "unit-b", 200)?;
-    session.end_input()?;
+fn a_timed_out_item_aborts_explicitly_and_releases_later_completed_items() -> AppResult<()> {
+    let (mut attempt, probe, clock) =
+        attempt_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
+    start_unit(&mut attempt, "unit-b", 200)?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
     probe.push_server_event(buffer_committed("item-b"))?;
     probe.push_server_event(transcript_completed("item-b", "second"))?;
 
-    assert!(session.drain_events(1_000)?.is_empty());
+    assert!(attempt.drain_events(1_000)?.is_empty());
     clock.advance_ms(29_999)?;
-    assert!(session.drain_events(1_001)?.is_empty());
+    assert!(attempt.drain_events(1_001)?.is_empty());
     clock.advance_ms(1)?;
-    let events = session.drain_events(1_002)?;
+    let events = attempt.drain_events(1_002)?;
 
     assert!(matches!(
         events.first(),
-        Some(RecognitionEvent::UnitEnded {
+        Some(RecognitionEvent::UnitAborted {
             unit_id,
-            reason: RecognitionEndReason::Failed { detail },
+            reason: RecognitionUnitAbortReason::Failed { detail },
             ..
         }) if unit_id == "unit-a" && detail.contains("did not complete")
     ));
@@ -981,33 +978,33 @@ fn a_timed_out_item_ends_explicitly_and_releases_later_completed_items() -> AppR
 
 #[test]
 fn wall_clock_jump_forward_does_not_expire_a_committed_item() -> AppResult<()> {
-    let (mut session, probe, _clock) =
-        session_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+    let (mut attempt, probe, _clock) =
+        attempt_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
 
-    assert!(session.drain_events(1_000)?.is_empty());
-    assert!(session.drain_events(u64::MAX)?.is_empty());
+    assert!(attempt.drain_events(1_000)?.is_empty());
+    assert!(attempt.drain_events(u64::MAX)?.is_empty());
     Ok(())
 }
 
 #[test]
 fn wall_clock_jump_backward_does_not_delay_a_committed_item_timeout() -> AppResult<()> {
-    let (mut session, probe, clock) =
-        session_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+    let (mut attempt, probe, clock) =
+        attempt_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
 
-    assert!(session.drain_events(u64::MAX)?.is_empty());
+    assert!(attempt.drain_events(u64::MAX)?.is_empty());
     clock.advance_ms(30_000)?;
-    let events = session.drain_events(0)?;
+    let events = attempt.drain_events(0)?;
     assert!(matches!(
         events.as_slice(),
-        [RecognitionEvent::UnitEnded {
+        [RecognitionEvent::UnitAborted {
             unit_id,
-            reason: RecognitionEndReason::Failed { detail },
+            reason: RecognitionUnitAbortReason::Failed { detail },
             ..
         }] if unit_id == "unit-a" && detail.contains("did not complete")
     ));
@@ -1016,13 +1013,13 @@ fn wall_clock_jump_backward_does_not_delay_a_committed_item_timeout() -> AppResu
 
 #[test]
 fn an_unacknowledged_commit_times_out_instead_of_misbinding_a_later_item() -> AppResult<()> {
-    let (mut session, _probe, clock) =
-        session_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+    let (mut attempt, _probe, clock) =
+        attempt_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
 
     clock.advance_ms(30_000)?;
-    let error = session
+    let error = attempt
         .drain_events(1_000)
         .err()
         .ok_or_else(|| AppError::state("An unacknowledged commit never timed out."))?;
@@ -1035,25 +1032,25 @@ fn an_unacknowledged_commit_times_out_instead_of_misbinding_a_later_item() -> Ap
 
 #[test]
 fn a_saturated_provider_stream_cannot_postpone_an_overdue_item_forever() -> AppResult<()> {
-    let (mut session, probe, clock) =
-        session_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+    let (mut attempt, probe, clock) =
+        attempt_with_manual_clock(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
-    assert!(session.drain_events(1_000)?.is_empty());
+    assert!(attempt.drain_events(1_000)?.is_empty());
 
     for _ in 0..(MAX_SERVER_FRAMES_PER_DRAIN * 2) {
         probe.push_server_event(json!({ "type": "provider.keepalive" }))?;
     }
     clock.advance_ms(30_000)?;
-    assert!(session.drain_events(1_001)?.is_empty());
-    let events = session.drain_events(1_002)?;
+    assert!(attempt.drain_events(1_001)?.is_empty());
+    let events = attempt.drain_events(1_002)?;
 
     assert!(matches!(
         events.as_slice(),
-        [RecognitionEvent::UnitEnded {
+        [RecognitionEvent::UnitAborted {
             unit_id,
-            reason: RecognitionEndReason::Failed { detail },
+            reason: RecognitionUnitAbortReason::Failed { detail },
             ..
         }] if unit_id == "unit-a"
             && detail.contains("did not complete")
@@ -1064,17 +1061,17 @@ fn a_saturated_provider_stream_cannot_postpone_an_overdue_item_forever() -> AppR
 
 #[test]
 fn stop_closes_once_and_permanently_suppresses_queued_provider_output() -> AppResult<()> {
-    let (mut session, probe) = session(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
-    start_unit(&mut session, "unit-a", 100)?;
-    session.end_input()?;
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.end_input()?;
     probe.push_server_event(buffer_committed("item-a"))?;
     probe.push_server_event(transcript_completed("item-a", "too late"))?;
 
-    session.stop()?;
-    session.stop()?;
+    attempt.stop()?;
+    attempt.stop()?;
 
-    assert!(session.drain_events(200)?.is_empty());
+    assert!(attempt.drain_events(200)?.is_empty());
     assert_eq!(probe.close_count()?, 1);
-    assert!(session.start_unit("unit-b".to_string(), 220).is_err());
+    assert!(attempt.start_unit("unit-b".to_string(), 220).is_err());
     Ok(())
 }

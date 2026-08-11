@@ -165,7 +165,13 @@ fn failed_temporary_write_preserves_existing_settings() -> AppResult<()> {
 fn default_config_serializes_schema_version() -> Result<(), serde_json::Error> {
     let value = serde_json::to_value(AppConfig::default())?;
 
-    assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(3)));
+    assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(4)));
+    assert_eq!(
+        value.pointer("/recognition/path"),
+        Some(&serde_json::json!("openai/gpt-transcribe"))
+    );
+    assert!(value.get("stt").is_none());
+    assert!(value.pointer("/ui/showPartial").is_none());
     assert_eq!(
         value.pointer("/publication/mode"),
         Some(&serde_json::json!("completed"))
@@ -179,8 +185,8 @@ fn default_config_serializes_schema_version() -> Result<(), serde_json::Error> {
 fn current_config_round_trips_without_compatibility_defaults() -> AppResult<()> {
     let mut config = AppConfig::default();
     config.audio.input_device_id = Some("saved-device".to_string());
-    config.stt.languages = vec!["zh".to_string(), "en".to_string()];
-    config.stt.model = crate::config::OpenAiTranscriptionModel::GptLiveTranscribe;
+    config.recognition.expected_languages = vec!["zh".to_string(), "en".to_string()];
+    config.recognition.path = crate::config::RecognitionPath::OpenAiGptLiveTranscribe;
     config.osc.enabled = false;
     config.publication.mode = crate::config::PublicationMode::Live;
     let serialized = serde_json::to_string(&config).map_err(|error| {
@@ -195,7 +201,7 @@ fn current_config_round_trips_without_compatibility_defaults() -> AppResult<()> 
 #[test]
 fn current_live_publication_round_trips() -> AppResult<()> {
     let mut config = AppConfig::default();
-    config.stt.model = crate::config::OpenAiTranscriptionModel::GptLiveTranscribe;
+    config.recognition.path = crate::config::RecognitionPath::OpenAiGptLiveTranscribe;
     config.publication.mode = crate::config::PublicationMode::Live;
     let serialized = serde_json::to_string(&config).map_err(|error| {
         AppError::config_io(format!("Failed to serialize test config: {error}"))
@@ -217,46 +223,38 @@ fn parse_valid_config_rejects_malformed_json() {
 }
 
 #[test]
-fn parse_valid_config_rejects_removed_singular_language() -> AppResult<()> {
+fn parse_valid_config_rejects_removed_recognition_aliases() -> AppResult<()> {
     let mut value = serde_json::to_value(AppConfig::default())
         .map_err(|error| AppError::config(format!("Failed to build test JSON: {error}")))?;
-    let stt = value
-        .get_mut("stt")
+    let recognition = value
+        .get_mut("recognition")
         .and_then(serde_json::Value::as_object_mut)
-        .ok_or_else(|| AppError::state("Test config is missing stt."))?;
-    stt.remove("languages");
-    stt.insert("language".to_string(), serde_json::json!("en"));
+        .ok_or_else(|| AppError::state("Test config is missing recognition."))?;
+    recognition.remove("expectedLanguages");
+    recognition.insert("languages".to_string(), serde_json::json!(["en"]));
 
     assert!(parse_valid_config(&value.to_string()).is_err());
     Ok(())
 }
 
 #[test]
-fn parse_valid_config_rejects_removed_mock_provider_and_arbitrary_model() -> AppResult<()> {
+fn parse_valid_config_rejects_arbitrary_recognition_path() -> AppResult<()> {
     let mut value = serde_json::to_value(AppConfig::default())
         .map_err(|error| AppError::config(format!("Failed to build test JSON: {error}")))?;
-    value["stt"]["provider"] = serde_json::json!("mock");
-    value["stt"]["model"] = serde_json::json!("saved-model");
+    value["recognition"]["path"] = serde_json::json!("mock/saved-model");
 
     assert!(parse_valid_config(&value.to_string()).is_err());
     Ok(())
 }
 
 #[test]
-fn parse_valid_config_ignores_only_the_removed_osc_interval() -> AppResult<()> {
+fn parse_valid_config_rejects_the_removed_osc_interval() -> AppResult<()> {
     let mut value = serde_json::to_value(AppConfig::default())
         .map_err(|error| AppError::config(format!("Failed to build test JSON: {error}")))?;
     value["osc"]["host"] = serde_json::json!("192.0.2.25");
     value["osc"]["minIntervalMs"] = serde_json::json!(750);
 
-    let config = parse_valid_config(&value.to_string())?;
-    assert_eq!(config.osc.host, "192.0.2.25");
-    assert!(
-        serde_json::to_value(config)
-            .map_err(|error| AppError::config(format!("Failed to serialize config: {error}")))?
-            .pointer("/osc/minIntervalMs")
-            .is_none()
-    );
+    assert!(parse_valid_config(&value.to_string()).is_err());
     Ok(())
 }
 
@@ -277,5 +275,63 @@ fn parse_valid_config_rejects_old_schema_version() -> AppResult<()> {
     value["schemaVersion"] = serde_json::json!(2);
 
     assert!(parse_valid_config(&value.to_string()).is_err());
+    Ok(())
+}
+
+#[test]
+fn v3_saved_settings_migrate_every_value_to_v4() -> AppResult<()> {
+    let v3 = serde_json::json!({
+        "schemaVersion": 3,
+        "audio": { "inputDeviceId": "saved-device" },
+        "stt": {
+            "provider": "openai",
+            "languages": ["zh", "en"],
+            "model": "gpt-live-transcribe"
+        },
+        "osc": { "host": "192.0.2.25", "port": 9012, "enabled": false },
+        "publication": { "mode": "live" },
+        "ui": { "showPartial": false }
+    });
+
+    let migrated = parse_valid_config(&v3.to_string())?;
+
+    assert_eq!(migrated.schema_version, 4);
+    assert_eq!(
+        migrated.audio.input_device_id.as_deref(),
+        Some("saved-device")
+    );
+    assert_eq!(
+        migrated.recognition.path,
+        crate::config::RecognitionPath::OpenAiGptLiveTranscribe
+    );
+    assert_eq!(migrated.recognition.expected_languages, ["zh", "en"]);
+    assert_eq!(migrated.osc.host, "192.0.2.25");
+    assert_eq!(migrated.osc.port, 9012);
+    assert!(!migrated.osc.enabled);
+    assert_eq!(
+        migrated.publication.mode,
+        crate::config::PublicationMode::Live
+    );
+    assert!(!migrated.ui.show_ongoing_preview);
+    Ok(())
+}
+
+#[test]
+fn v3_migration_fails_closed_on_unknown_fields() -> AppResult<()> {
+    let mut v3 = serde_json::json!({
+        "schemaVersion": 3,
+        "audio": { "inputDeviceId": null },
+        "stt": {
+            "provider": "openai",
+            "languages": ["en"],
+            "model": "gpt-transcribe"
+        },
+        "osc": { "host": "127.0.0.1", "port": 9000, "enabled": true },
+        "publication": { "mode": "completed" },
+        "ui": { "showPartial": true }
+    });
+    v3["stt"]["translationModel"] = serde_json::json!("must-not-be-accepted");
+
+    assert!(parse_valid_config(&v3.to_string()).is_err());
     Ok(())
 }

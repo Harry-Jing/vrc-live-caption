@@ -1,20 +1,20 @@
 //! Non-secret app configuration shared by Tauri commands and the runtime.
 //!
 //! This module intentionally stores only ordinary settings and non-sensitive
-//! metadata. Provider API keys must come from the environment or the system
-//! credential store, never this config file.
+//! metadata. Service-credential secrets must come from the environment or the
+//! system credential store, never this config file.
 
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const APP_CONFIG_SCHEMA_VERSION: u32 = 3;
+pub(crate) const APP_CONFIG_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AppConfig {
     pub(crate) schema_version: u32,
     pub(crate) audio: AudioConfig,
-    pub(crate) stt: SttConfig,
+    pub(crate) recognition: RecognitionConfig,
     pub(crate) osc: OscConfig,
     pub(crate) publication: PublicationConfig,
     pub(crate) ui: UiConfig,
@@ -25,7 +25,7 @@ impl Default for AppConfig {
         Self {
             schema_version: APP_CONFIG_SCHEMA_VERSION,
             audio: AudioConfig::default(),
-            stt: SttConfig::default(),
+            recognition: RecognitionConfig::default(),
             osc: OscConfig::default(),
             publication: PublicationConfig::default(),
             ui: UiConfig::default(),
@@ -42,23 +42,23 @@ impl AppConfig {
             )));
         }
 
-        if self.stt.languages.is_empty() {
+        if self.recognition.expected_languages.is_empty() {
             return Err(AppError::config(
-                "At least one expected STT language is required.",
+                "At least one expected recognition language is required.",
             ));
         }
 
         let mut normalized_languages = std::collections::HashSet::new();
-        for language in &self.stt.languages {
+        for language in &self.recognition.expected_languages {
             let normalized = language.trim().to_ascii_lowercase();
             if normalized.is_empty() {
                 return Err(AppError::config(
-                    "Expected STT languages cannot contain an empty value.",
+                    "Expected recognition languages cannot contain an empty value.",
                 ));
             }
             if !normalized_languages.insert(normalized) {
                 return Err(AppError::config(
-                    "Expected STT languages cannot contain duplicates.",
+                    "Expected recognition languages cannot contain duplicates.",
                 ));
             }
         }
@@ -79,46 +79,27 @@ pub(crate) struct AudioConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct SttConfig {
-    pub(crate) provider: SttProvider,
-    pub(crate) languages: Vec<String>,
-    pub(crate) model: OpenAiTranscriptionModel,
+pub(crate) struct RecognitionConfig {
+    pub(crate) path: RecognitionPath,
+    pub(crate) expected_languages: Vec<String>,
 }
 
-impl Default for SttConfig {
+impl Default for RecognitionConfig {
     fn default() -> Self {
         Self {
-            provider: SttProvider::OpenAi,
-            languages: default_languages(),
-            model: OpenAiTranscriptionModel::GptTranscribe,
+            path: RecognitionPath::OpenAiGptTranscribe,
+            expected_languages: default_languages(),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum SttProvider {
+pub(crate) enum RecognitionPath {
     #[default]
-    #[serde(rename = "openai")]
-    OpenAi,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum OpenAiTranscriptionModel {
-    #[default]
-    #[serde(rename = "gpt-transcribe")]
-    GptTranscribe,
-    #[serde(rename = "gpt-live-transcribe")]
-    GptLiveTranscribe,
-}
-
-impl OpenAiTranscriptionModel {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::GptTranscribe => "gpt-transcribe",
-            Self::GptLiveTranscribe => "gpt-live-transcribe",
-        }
-    }
+    #[serde(rename = "openai/gpt-transcribe")]
+    OpenAiGptTranscribe,
+    #[serde(rename = "openai/gpt-live-transcribe")]
+    OpenAiGptLiveTranscribe,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,14 +114,6 @@ pub(crate) enum PublicationMode {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PublicationConfig {
     pub(crate) mode: PublicationMode,
-}
-
-impl SttProvider {
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            Self::OpenAi => "openai",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,12 +137,14 @@ impl Default for OscConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct UiConfig {
-    pub(crate) show_partial: bool,
+    pub(crate) show_ongoing_preview: bool,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { show_partial: true }
+        Self {
+            show_ongoing_preview: true,
+        }
     }
 }
 

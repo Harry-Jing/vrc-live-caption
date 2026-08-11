@@ -2,7 +2,8 @@
 
 Date: 2026-06 (extended to translation 2026-07)
 
-Cloud STT is the current default, but the long-term default is local STT.
+Cloud recognition is the current default, but the long-term default is local
+recognition.
 Getting an OpenAI key requires an account, international payment, and often a
 proxy — a hard barrier for a large part of the target community, especially
 Chinese players. The default switches to local only after a local engine is

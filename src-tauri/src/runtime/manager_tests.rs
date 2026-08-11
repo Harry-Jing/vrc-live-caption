@@ -1,14 +1,146 @@
 use super::*;
-use crate::config::SttProvider;
+use crate::caption::CaptionAggregateStore;
+use crate::credentials::{CredentialId, CredentialStorage};
 use crate::host_resolver::{HostResolutionError, HostResolver};
+use crate::recognition::{
+    RecognitionDriver, RecognitionDriverIo, openai_gpt_live_transcribe_module,
+    openai_gpt_transcribe_module,
+};
 use crate::runtime_control::RuntimeControlStore;
-use crate::secrets::ProviderSecretStorage;
 use secrecy::SecretString;
 use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::Listener;
+
+fn test_recognition_module(config: &AppConfig) -> AppResult<RecognitionModule> {
+    match config.recognition.path {
+        crate::config::RecognitionPath::OpenAiGptTranscribe => openai_gpt_transcribe_module(
+            config.recognition.expected_languages.clone(),
+            SecretString::from("test-key".to_string()),
+            HostResolver::default(),
+        ),
+        crate::config::RecognitionPath::OpenAiGptLiveTranscribe => {
+            openai_gpt_live_transcribe_module(
+                config.recognition.expected_languages.clone(),
+                SecretString::from("test-key".to_string()),
+                HostResolver::default(),
+            )
+        }
+    }
+}
+
+struct WaitForRuntimeStopDriver {
+    started: mpsc::SyncSender<()>,
+    completed_runs: Arc<AtomicUsize>,
+}
+
+impl RecognitionDriver for WaitForRuntimeStopDriver {
+    fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
+        self.started
+            .send(())
+            .map_err(|_| AppError::state("Runtime test dropped its Driver-start receiver."))?;
+        io.wait_until_stopped()?;
+        self.completed_runs.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[test]
+fn prepared_cloud_recognition_binds_generation_disclosure_to_its_module() -> AppResult<()> {
+    let credential = RuntimeGenerationCredentialSnapshot {
+        id: CredentialId::OpenAi,
+        storage: CredentialStorage::Environment,
+        display_suffix: Some("test".to_string()),
+        revision: 7,
+    };
+    let prepared = PreparedRecognition::cloud(
+        test_recognition_module(&AppConfig::default())?,
+        credential.clone(),
+    );
+    let PreparedRecognition {
+        module,
+        credential: prepared_credential,
+        uploads_microphone_audio,
+    } = prepared;
+
+    drop(module);
+    let prepared_credential = prepared_credential
+        .ok_or_else(|| AppError::state("Prepared cloud recognition lost its credential."))?;
+    assert_eq!(prepared_credential.id, credential.id);
+    assert_eq!(prepared_credential.storage, credential.storage);
+    assert_eq!(
+        prepared_credential.display_suffix,
+        credential.display_suffix
+    );
+    assert_eq!(prepared_credential.revision, credential.revision);
+    assert!(uploads_microphone_audio);
+    Ok(())
+}
+
+#[test]
+fn runtime_starts_the_prepared_module_with_its_bound_generation_metadata() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
+    let manager = RuntimeManager::default();
+    let mut config = AppConfig::default();
+    config.osc.enabled = false;
+    let credential = RuntimeGenerationCredentialSnapshot {
+        id: CredentialId::OpenAi,
+        storage: CredentialStorage::Environment,
+        display_suffix: Some("bound".to_string()),
+        revision: 3,
+    };
+    let (driver_started, started) = mpsc::sync_channel(1);
+    let completed_runs = Arc::new(AtomicUsize::new(0));
+    let recognition_module = RecognitionModule::with_audio_budget(
+        Duration::from_millis(100),
+        1,
+        WaitForRuntimeStopDriver {
+            started: driver_started,
+            completed_runs: Arc::clone(&completed_runs),
+        },
+    )?;
+    let (snapshot_sender, snapshot_receiver) = mpsc::sync_channel(1);
+    let request = RuntimeStartRequest {
+        config,
+        chatbox_pacer: ChatboxPacer::default(),
+        caption_aggregate: CaptionAggregateStore::default(),
+        chatbox_host_resolver: HostResolver::default(),
+        prepared_recognition: PreparedRecognition::cloud(recognition_module, credential),
+        generation_id: 1,
+        config_revision: 2,
+        status_recorder: status_recorder.clone(),
+        expected_stop_epoch: manager.stop_epoch(),
+    };
+
+    assert_eq!(
+        manager.start(app.handle().clone(), request, |snapshot| {
+            snapshot_sender.send(snapshot).map_err(|_| {
+                AppError::state("Runtime test dropped its generation-snapshot receiver.")
+            })
+        })?,
+        RuntimeStartOutcome::Started
+    );
+    started
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::state("Prepared Recognition Driver did not start."))?;
+    let snapshot = snapshot_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::state("Prepared generation snapshot was not installed."))?;
+    let snapshot_credential = snapshot
+        .credential
+        .ok_or_else(|| AppError::state("Prepared generation omitted its credential metadata."))?;
+    assert_eq!(snapshot_credential.revision, 3);
+    assert!(snapshot.uploads_microphone_audio);
+
+    manager.stop(app.handle(), &status_recorder)?;
+    assert_eq!(completed_runs.load(Ordering::SeqCst), 1);
+    Ok(())
+}
 
 #[test]
 fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResult<()> {
@@ -55,7 +187,7 @@ fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResul
     let stopping_before_join = loop {
         if generation.is_hard_stop_requested()
             && !generation.commit_if_active(|| {})?
-            && control.snapshot()?.runtime.status == RuntimeStatus::Stopping
+            && control.snapshot()?.runtime_status.status == RuntimeStatus::Stopping
         {
             break true;
         }
@@ -71,7 +203,10 @@ fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResul
     stop.join()
         .map_err(|_| AppError::runtime("Runtime stop test thread panicked."))??;
     assert!(stopping_before_join);
-    assert_eq!(control.snapshot()?.runtime.status, RuntimeStatus::Stopped);
+    assert_eq!(
+        control.snapshot()?.runtime_status.status,
+        RuntimeStatus::Stopped
+    );
     Ok(())
 }
 
@@ -102,7 +237,10 @@ fn stop_records_error_when_the_runtime_thread_panicked() -> AppResult<()> {
         .ok_or_else(|| AppError::state("Stop ignored a panicked runtime thread."))?;
 
     assert_eq!(error.code(), "runtime.failed");
-    assert_eq!(control.snapshot()?.runtime.status, RuntimeStatus::Error);
+    assert_eq!(
+        control.snapshot()?.runtime_status.status,
+        RuntimeStatus::Error
+    );
     Ok(())
 }
 
@@ -159,9 +297,9 @@ fn stop_invalidates_an_uncommitted_start_epoch() -> AppResult<()> {
     manager.stop(app.handle(), &status_recorder)?;
     assert!(!manager.stop_epoch_unchanged(expected_stop_epoch));
     let snapshot = control.snapshot()?;
-    assert_eq!(snapshot.runtime.status, RuntimeStatus::Stopped);
+    assert_eq!(snapshot.runtime_status.status, RuntimeStatus::Stopped);
     assert_eq!(
-        snapshot.runtime.message.as_deref(),
+        snapshot.runtime_status.message.as_deref(),
         Some("Runtime is already stopped")
     );
     Ok(())
@@ -192,21 +330,24 @@ fn stop_supersedes_a_start_blocked_in_osc_hostname_resolution() -> AppResult<()>
     });
     let mut config = AppConfig::default();
     config.osc.host = "blocked.test".to_string();
+    let recognition_module = test_recognition_module(&config)?;
     let expected_stop_epoch = manager.stop_epoch();
     let request = RuntimeStartRequest {
         config,
         chatbox_pacer: ChatboxPacer::default(),
-        caption_session: CaptionSessionStore::default(),
-        host_resolver: resolver,
+        caption_aggregate: CaptionAggregateStore::default(),
+        chatbox_host_resolver: resolver,
+        prepared_recognition: PreparedRecognition::cloud(
+            recognition_module,
+            RuntimeGenerationCredentialSnapshot {
+                id: CredentialId::OpenAi,
+                storage: CredentialStorage::Environment,
+                display_suffix: None,
+                revision: 1,
+            },
+        ),
         generation_id: 1,
         config_revision: 1,
-        openai_api_key: SecretString::from("test-key".to_string()),
-        credential: RuntimeCredentialSnapshot {
-            provider: SttProvider::OpenAi,
-            storage: ProviderSecretStorage::Environment,
-            display_suffix: None,
-            revision: 1,
-        },
         status_recorder: status_recorder.clone(),
         expected_stop_epoch,
     };
@@ -335,20 +476,23 @@ fn runtime_start_fails_closed_when_its_derived_plan_is_incompatible() -> AppResu
     let manager = RuntimeManager::default();
     let mut config = AppConfig::default();
     config.publication.mode = crate::config::PublicationMode::Live;
+    let recognition_module = test_recognition_module(&config)?;
     let request = RuntimeStartRequest {
         config,
         chatbox_pacer: ChatboxPacer::default(),
-        caption_session: CaptionSessionStore::default(),
-        host_resolver: HostResolver::default(),
+        caption_aggregate: CaptionAggregateStore::default(),
+        chatbox_host_resolver: HostResolver::default(),
+        prepared_recognition: PreparedRecognition::cloud(
+            recognition_module,
+            RuntimeGenerationCredentialSnapshot {
+                id: CredentialId::OpenAi,
+                storage: CredentialStorage::Environment,
+                display_suffix: None,
+                revision: 1,
+            },
+        ),
         generation_id: 1,
         config_revision: 1,
-        openai_api_key: SecretString::from("test-key".to_string()),
-        credential: RuntimeCredentialSnapshot {
-            provider: SttProvider::OpenAi,
-            storage: ProviderSecretStorage::Environment,
-            display_suffix: None,
-            revision: 1,
-        },
         status_recorder: RuntimeControlStore::default().status_recorder(),
         expected_stop_epoch: manager.stop_epoch(),
     };

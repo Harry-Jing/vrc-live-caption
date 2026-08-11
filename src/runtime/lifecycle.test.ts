@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
-  isActiveRuntimeSessionPhase,
+  isActiveRuntimeGenerationPhase,
   isActiveRuntimeStatus,
   isStoppableRuntimeStatus,
 } from "./lifecycle";
-import type { RuntimeSessionPhase, RuntimeStatus } from "./types";
+import type { RuntimeGenerationPhase } from "./runtimeControl";
+import type { RuntimeStatus } from "./runtimeEvents";
 
 describe("runtime lifecycle predicates", () => {
-  it("keeps active session phases in one typed policy", () => {
-    const phases: RuntimeSessionPhase[] = [
+  it("keeps active generation phases in one typed policy", () => {
+    const phases: RuntimeGenerationPhase[] = [
       "starting",
       "running",
       "reconnecting",
@@ -16,13 +17,13 @@ describe("runtime lifecycle predicates", () => {
       "error",
     ];
 
-    expect(phases.filter(isActiveRuntimeSessionPhase)).toEqual([
+    expect(phases.filter(isActiveRuntimeGenerationPhase)).toEqual([
       "starting",
       "running",
       "reconnecting",
       "stopping",
     ]);
-    expect(isActiveRuntimeSessionPhase(null)).toBe(false);
+    expect(isActiveRuntimeGenerationPhase(null)).toBe(false);
   });
 
   it("distinguishes active from stoppable runtime statuses", () => {

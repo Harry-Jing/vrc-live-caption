@@ -1,12 +1,18 @@
 use super::super::pacer::Clock;
+use super::super::transport::ChatboxSendReceipt;
 use super::*;
-use crate::capability_planner::ResolvedPublicationPolicy;
-use crate::caption_session::{
-    CaptionActiveUnitV1, CaptionLane, CaptionSessionActiveV1, CaptionSessionStore,
-    CaptionSnapshotV1, CaptionState,
+use crate::caption::{
+    ActiveCaptionStreamV2, CaptionAggregateStore, CaptionLane, CaptionSnapshotV2, CaptionState,
+    OpenSourceUnitV2,
 };
+use crate::caption_pipeline::ResolvedPublicationTiming;
+use crate::generation_fence::{GenerationCommitter, GenerationFence};
 use std::collections::HashSet;
 use std::sync::Condvar;
+
+fn open_committer() -> GenerationCommitter {
+    GenerationFence::new().committer()
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TransportEvent {
@@ -278,8 +284,8 @@ fn recording_reporter() -> (
     (reporter, diagnostics)
 }
 
-fn active() -> CaptionSessionActiveV1 {
-    CaptionSessionActiveV1 {
+fn active() -> ActiveCaptionStreamV2 {
+    ActiveCaptionStreamV2 {
         generation: 1,
         stream_id: "recognition-1-1".to_string(),
     }
@@ -290,8 +296,8 @@ fn caption(
     revision: u64,
     text: &str,
     state: CaptionState,
-) -> CaptionSnapshotV1 {
-    CaptionSnapshotV1 {
+) -> CaptionSnapshotV2 {
+    CaptionSnapshotV2 {
         generation: 1,
         stream_id: "recognition-1-1".to_string(),
         unit_id: unit_id.map(str::to_string),
@@ -300,8 +306,7 @@ fn caption(
         text: text.to_string(),
         state,
         language: Some("en".to_string()),
-        provider: "fake".to_string(),
-        model: "scripted".to_string(),
+        source_ref: None,
         unit_started_at_ms: unit_id.map(|_| 100),
         timestamp_ms: 100 + revision,
     }
@@ -309,16 +314,16 @@ fn caption(
 
 fn snapshot(
     revision: u64,
-    active_units: &[&str],
-    captions: Vec<CaptionSnapshotV1>,
-) -> CaptionSessionSnapshotV1 {
-    CaptionSessionSnapshotV1 {
+    open_source_units: &[&str],
+    captions: Vec<CaptionSnapshotV2>,
+) -> CaptionAggregateSnapshotV2 {
+    CaptionAggregateSnapshotV2 {
         contract_version: 1,
         snapshot_revision: revision,
-        active: Some(active()),
-        active_units: active_units
+        active_stream: Some(active()),
+        open_source_units: open_source_units
             .iter()
-            .map(|unit_id| CaptionActiveUnitV1 {
+            .map(|unit_id| OpenSourceUnitV2 {
                 unit_id: (*unit_id).to_string(),
                 started_at_ms: 100,
             })
@@ -330,13 +335,14 @@ fn snapshot(
 fn start_publisher(
     clock: Arc<ManualClock>,
     transport: Arc<RecordingTransport>,
-    policy: ResolvedPublicationPolicy,
+    policy: ResolvedPublicationTiming,
 ) -> AppResult<(LiveChatboxPublisher, ChatboxPacer)> {
     let pacer = ChatboxPacer::with_clock(clock);
     let publisher = LiveChatboxPublisher::start(
         transport,
         pacer.clone(),
-        RuntimeGeneration::active(),
+        1,
+        open_committer(),
         policy,
         reporter(),
     )?;
@@ -358,7 +364,7 @@ fn start_unit_publisher_with_window(
     start_publisher(
         clock,
         transport,
-        ResolvedPublicationPolicy::LiveUnit {
+        ResolvedPublicationTiming::LiveUnit {
             observation_window_ms,
         },
     )
@@ -369,7 +375,10 @@ fn close(publisher: &LiveChatboxPublisher) -> AppResult<()> {
     publisher.join()
 }
 
-fn observe(publisher: &LiveChatboxPublisher, snapshot: &CaptionSessionSnapshotV1) -> AppResult<()> {
+fn observe(
+    publisher: &LiveChatboxPublisher,
+    snapshot: &CaptionAggregateSnapshotV2,
+) -> AppResult<()> {
     assert_eq!(
         publisher.try_observe(snapshot)?,
         PublisherSubmitOutcome::Handled
@@ -382,7 +391,7 @@ fn rejects_non_live_resolved_policy() {
     let result = start_publisher(
         Arc::new(ManualClock::new()),
         Arc::new(RecordingTransport::new([])),
-        ResolvedPublicationPolicy::Completed,
+        ResolvedPublicationTiming::Completed,
     );
 
     assert!(result.is_err());
@@ -393,7 +402,7 @@ fn rejects_zero_live_observation_delay() {
     let result = start_publisher(
         Arc::new(ManualClock::new()),
         Arc::new(RecordingTransport::new([])),
-        ResolvedPublicationPolicy::LiveUnit {
+        ResolvedPublicationTiming::LiveUnit {
             observation_window_ms: 0,
         },
     );
@@ -402,7 +411,8 @@ fn rejects_zero_live_observation_delay() {
 }
 
 #[test]
-fn active_unit_turns_typing_on_reasserts_at_four_seconds_and_cleans_up_once() -> AppResult<()> {
+fn open_source_unit_turns_typing_on_reasserts_at_four_seconds_and_cleans_up_once() -> AppResult<()>
+{
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, _) = start_unit_publisher(clock.clone(), transport.clone())?;
@@ -436,14 +446,14 @@ fn active_unit_turns_typing_on_reasserts_at_four_seconds_and_cleans_up_once() ->
 }
 
 #[test]
-fn live_viewport_uses_backend_unit_order_when_wall_clock_moves_backward() -> AppResult<()> {
+fn live_viewport_uses_aggregate_unit_order_when_wall_clock_moves_backward() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, _) = start_unit_publisher(clock.clone(), transport.clone())?;
-    let store = CaptionSessionStore::default();
+    let store = CaptionAggregateStore::default();
     let active = store
         .begin_generation(1)?
-        .active
+        .active_stream
         .ok_or_else(|| AppError::state("Test generation was not active."))?;
     assert!(
         store
@@ -498,7 +508,7 @@ fn unit_observation_window_comes_from_the_resolved_policy() -> AppResult<()> {
             vec![caption(
                 Some("unit-1"),
                 1,
-                "planner-timed draft",
+                "policy-timed draft",
                 CaptionState::Ongoing,
             )],
         ),
@@ -506,7 +516,7 @@ fn unit_observation_window_comes_from_the_resolved_policy() -> AppResult<()> {
     clock.advance(Duration::from_millis(250));
     publisher.shared.wake.notify_all();
 
-    assert_eq!(transport.wait_for_texts(1)?, ["planner-timed draft"]);
+    assert_eq!(transport.wait_for_texts(1)?, ["policy-timed draft"]);
     close(&publisher)
 }
 
@@ -766,8 +776,9 @@ fn successful_view_is_not_reported_as_a_discarded_draft_on_close() -> AppResult<
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        RuntimeGeneration::active(),
-        ResolvedPublicationPolicy::LiveUnit {
+        1,
+        open_committer(),
+        ResolvedPublicationTiming::LiveUnit {
             observation_window_ms: 1_000,
         },
         reporter,
@@ -886,12 +897,13 @@ fn close_discards_observed_draft_and_sends_one_typing_off_cleanup() -> AppResult
 
 #[test]
 fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResult<()> {
-    let generation = RuntimeGeneration::active();
-    let blocker_generation = generation.clone();
+    let fence = GenerationFence::new();
+    let committer = fence.committer();
+    let blocker_committer = committer.clone();
     let (gate_held_sender, gate_held_receiver) = std::sync::mpsc::channel();
     let (release_gate_sender, release_gate_receiver) = std::sync::mpsc::channel();
     let blocker = thread::spawn(move || {
-        blocker_generation.commit_if_active(|| {
+        blocker_committer.try_commit(|| {
             let _ = gate_held_sender.send(());
             let _ = release_gate_receiver.recv();
         })
@@ -906,8 +918,9 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        generation.clone(),
-        ResolvedPublicationPolicy::LiveUnit {
+        1,
+        committer.clone(),
+        ResolvedPublicationTiming::LiveUnit {
             observation_window_ms: 1_000,
         },
         reporter,
@@ -957,10 +970,13 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
         thread::yield_now();
     }
 
-    let stop_generation = generation.clone();
-    let stop = thread::spawn(move || stop_generation.request_stop(None));
+    let stop_fence = fence.clone();
+    let stop = thread::spawn(move || {
+        stop_fence.close_admission();
+        stop_fence.wait_for_commits()
+    });
     let deadline = Instant::now() + Duration::from_secs(1);
-    while !generation.is_hard_stop_requested() {
+    while !committer.is_closed() {
         if Instant::now() >= deadline {
             return Err(AppError::runtime(
                 "Stop did not establish its hard boundary.",
@@ -976,6 +992,7 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
         blocker
             .join()
             .map_err(|_| AppError::runtime("Generation test blocker panicked."))??
+            .is_some()
     );
     stop.join()
         .map_err(|_| AppError::runtime("Stop test thread panicked."))??;
@@ -1042,7 +1059,7 @@ fn ignores_out_of_order_and_other_generation_aggregates() -> AppResult<()> {
             CaptionState::Completed,
         )],
     );
-    other_generation.active = Some(CaptionSessionActiveV1 {
+    other_generation.active_stream = Some(ActiveCaptionStreamV2 {
         generation: 2,
         stream_id: "recognition-2-1".to_string(),
     });
@@ -1062,8 +1079,9 @@ fn worker_panic_discards_the_draft_cleans_typing_once_and_reports_failure() -> A
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        RuntimeGeneration::active(),
-        ResolvedPublicationPolicy::LiveUnit {
+        1,
+        open_committer(),
+        ResolvedPublicationTiming::LiveUnit {
             observation_window_ms: 1_000,
         },
         reporter,
@@ -1113,8 +1131,9 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        RuntimeGeneration::active(),
-        ResolvedPublicationPolicy::LiveUnit {
+        1,
+        open_committer(),
+        ResolvedPublicationTiming::LiveUnit {
             observation_window_ms: 1_000,
         },
         reporter,

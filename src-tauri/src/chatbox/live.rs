@@ -1,6 +1,6 @@
 //! Latest-wins Live publication for the VRChat Chatbox.
 //!
-//! The publisher observes backend-authoritative caption-session aggregates. It
+//! The publisher observes application-authoritative caption aggregates. It
 //! never reconstructs provider deltas and never queues historical Live
 //! revisions. One worker owns observation timing, process-wide pacing, OSC
 //! attempts, and the Stop cleanup; producers only replace in-memory state.
@@ -11,13 +11,11 @@ use super::common::{
 };
 use super::layout::render_live_viewport;
 use super::pacer::ChatboxPacer;
-use super::transport::{ChatboxSendReceipt, ChatboxTransport};
-use crate::capability_planner::ResolvedPublicationPolicy;
-use crate::caption_session::{
-    CaptionLane, CaptionSessionSnapshotV1, CaptionSnapshotV1, CaptionState,
-};
+use super::transport::ChatboxTransport;
+use crate::caption::{CaptionAggregateSnapshotV2, CaptionLane, CaptionSnapshotV2, CaptionState};
+use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::error::{AppError, AppResult};
-use crate::runtime::RuntimeGeneration;
+use crate::generation_fence::GenerationCommitter;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -74,7 +72,7 @@ struct LivePublisherShared {
     transport: Arc<dyn ChatboxTransport>,
     pacer: ChatboxPacer,
     generation_id: u64,
-    generation: RuntimeGeneration,
+    committer: GenerationCommitter,
     reporter: LivePublisherReporter,
     policy: LiveObservationPolicy,
 }
@@ -148,11 +146,11 @@ impl LiveChatboxPublisher {
     pub(crate) fn start(
         transport: Arc<dyn ChatboxTransport>,
         pacer: ChatboxPacer,
-        generation: RuntimeGeneration,
-        policy: ResolvedPublicationPolicy,
+        generation_id: u64,
+        committer: GenerationCommitter,
+        policy: ResolvedPublicationTiming,
         reporter: LivePublisherReporter,
     ) -> AppResult<Self> {
-        let generation_id = generation.generation_id();
         if generation_id == 0 {
             return Err(AppError::state(
                 "Live publisher generation must be greater than zero.",
@@ -160,19 +158,19 @@ impl LiveChatboxPublisher {
         }
 
         let policy = match policy {
-            ResolvedPublicationPolicy::LiveUnit {
+            ResolvedPublicationTiming::LiveUnit {
                 observation_window_ms: 0,
             } => {
                 return Err(AppError::state(
                     "Live publisher observation window must be greater than zero.",
                 ));
             }
-            ResolvedPublicationPolicy::LiveUnit {
+            ResolvedPublicationTiming::LiveUnit {
                 observation_window_ms,
             } => LiveObservationPolicy::Unit {
                 observation_window: Duration::from_millis(observation_window_ms),
             },
-            ResolvedPublicationPolicy::Completed => {
+            ResolvedPublicationTiming::Completed => {
                 return Err(AppError::state(
                     "Live publisher requires a resolved Live publication policy.",
                 ));
@@ -201,7 +199,7 @@ impl LiveChatboxPublisher {
             transport,
             pacer,
             generation_id,
-            generation,
+            committer,
             reporter,
             policy,
         });
@@ -244,16 +242,14 @@ impl LiveChatboxPublisher {
     /// Replaces the observed Live state without waiting for pacing or OSC.
     pub(crate) fn try_observe(
         &self,
-        snapshot: &CaptionSessionSnapshotV1,
+        snapshot: &CaptionAggregateSnapshotV2,
     ) -> AppResult<PublisherSubmitOutcome> {
         let mut state = self.lock_state()?;
-        if state.lifecycle != PublisherLifecycle::Running
-            || self.shared.generation.is_hard_stop_requested()
-        {
+        if state.lifecycle != PublisherLifecycle::Running || self.shared.committer.is_closed() {
             return Ok(PublisherSubmitOutcome::Closed);
         }
 
-        let Some(active) = snapshot.active.as_ref() else {
+        let Some(active) = snapshot.active_stream.as_ref() else {
             return Ok(PublisherSubmitOutcome::Handled);
         };
         if active.generation != self.shared.generation_id
@@ -272,15 +268,15 @@ impl LiveChatboxPublisher {
         }
         state.highest_snapshot_revision = snapshot.snapshot_revision;
 
-        let active_unit_ids = snapshot
-            .active_units
+        let open_source_unit_ids = snapshot
+            .open_source_units
             .iter()
             .map(|unit| unit.unit_id.as_str())
             .collect::<Vec<_>>();
         state
             .unit_first_seen
-            .retain(|unit_id, _| active_unit_ids.contains(&unit_id.as_str()));
-        for unit_id in active_unit_ids {
+            .retain(|unit_id, _| open_source_unit_ids.contains(&unit_id.as_str()));
+        for unit_id in open_source_unit_ids {
             state
                 .unit_first_seen
                 .entry(unit_id.to_string())
@@ -415,8 +411,8 @@ impl LiveChatboxPublisher {
     fn candidate_from_captions(
         &self,
         state: &mut LivePublisherState,
-        caption: &CaptionSnapshotV1,
-        source_captions: &[&CaptionSnapshotV1],
+        caption: &CaptionSnapshotV2,
+        source_captions: &[&CaptionSnapshotV2],
         recent_source_text: &str,
         now: Instant,
     ) -> Option<LiveCandidate> {
@@ -458,7 +454,7 @@ impl LiveChatboxPublisher {
     fn candidate_ready_at(
         &self,
         state: &mut LivePublisherState,
-        source_captions: &[&CaptionSnapshotV1],
+        source_captions: &[&CaptionSnapshotV2],
         now: Instant,
     ) -> Option<Instant> {
         let LiveObservationPolicy::Unit { observation_window } = self.shared.policy;
@@ -661,58 +657,41 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
         .output_gate
         .lock()
         .map_err(|_| AppError::state("Live publisher output gate was poisoned."))?;
-    let mut selection_result = None;
-    let mut send_result: Option<AppResult<ChatboxSendReceipt>> = None;
-    let committed = shared.generation.commit_if_active(|| {
-        let selected_is_current = shared
+    let send_result = shared.committer.try_commit(|| {
+        let mut state = shared
             .state
             .lock()
-            .map_err(|_| AppError::state("Live publisher state lock was poisoned."))
-            .map(|mut state| {
-                let is_current = state.lifecycle == PublisherLifecycle::Running
-                    && state.candidate.as_ref().is_some_and(|candidate| {
-                        candidate.identity == selected.identity && candidate.view == selected.view
-                    })
-                    && state
-                        .last_attempted
-                        .as_ref()
-                        .is_none_or(|attempt| !attempt.matches(&selected))
-                    && state.last_published.as_ref().is_none_or(|published| {
-                        published.scope != selected.identity.scope
-                            || published.view != selected.view
-                    })
-                    && shared.pacer.now() >= selected.ready_at;
-                if is_current {
-                    state.last_attempted = Some(LiveCandidateAttempt {
-                        identity: selected.identity.clone(),
-                        view: selected.view.clone(),
-                    });
-                }
-                is_current
+            .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?;
+        let is_current = state.lifecycle == PublisherLifecycle::Running
+            && state.candidate.as_ref().is_some_and(|candidate| {
+                candidate.identity == selected.identity && candidate.view == selected.view
+            })
+            && state
+                .last_attempted
+                .as_ref()
+                .is_none_or(|attempt| !attempt.matches(&selected))
+            && state.last_published.as_ref().is_none_or(|published| {
+                published.scope != selected.identity.scope || published.view != selected.view
             });
-        let should_send = matches!(selected_is_current, Ok(true));
-        selection_result = Some(selected_is_current);
-        if should_send {
-            send_result = Some(permit.attempt(|| shared.transport.send_text(&selected.view)));
+        if !is_current || shared.pacer.now() < selected.ready_at {
+            return Ok(None);
         }
+        state.last_attempted = Some(LiveCandidateAttempt {
+            identity: selected.identity.clone(),
+            view: selected.view.clone(),
+        });
+        drop(state);
+        Ok(Some(
+            permit.attempt(|| shared.transport.send_text(&selected.view)),
+        ))
     })?;
-    if !committed {
+    let Some(send_result) = send_result else {
         drop(output_guard);
         thread::yield_now();
         return Ok(());
-    }
-
-    let selected_is_current = selection_result.ok_or_else(|| {
-        AppError::state("Live publisher committed without validating its candidate.")
-    })??;
-    if !selected_is_current {
+    };
+    let Some(send_result) = send_result? else {
         return Ok(());
-    }
-
-    let Some(send_result) = send_result else {
-        return Err(AppError::state(
-            "Live publisher committed without a transport result.",
-        ));
     };
     let mut state = shared
         .state
@@ -768,20 +747,13 @@ fn process_typing(shared: &LivePublisherShared, epoch: u64, is_typing: bool) -> 
         return Ok(());
     }
 
-    let mut transport_result = None;
-    let committed = shared.generation.commit_if_active(|| {
-        transport_result = Some(shared.transport.send_typing(is_typing));
-    })?;
-    if !committed {
+    let transport_result = shared
+        .committer
+        .try_commit(|| shared.transport.send_typing(is_typing))?;
+    let Some(result) = transport_result else {
         drop(output_guard);
         thread::yield_now();
         return Ok(());
-    }
-
-    let Some(result) = transport_result else {
-        return Err(AppError::state(
-            "Live publisher committed typing without a transport result.",
-        ));
     };
     let attempted_at = shared.pacer.now();
     let mut state = shared
@@ -841,7 +813,7 @@ fn candidate_needs_publication(state: &LivePublisherState) -> bool {
     })
 }
 
-fn compose_recent_source(captions: &[&CaptionSnapshotV1]) -> String {
+fn compose_recent_source(captions: &[&CaptionSnapshotV2]) -> String {
     captions
         .iter()
         .rev()

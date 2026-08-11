@@ -1,9 +1,9 @@
 # Local Inference Notes
 
-Research snapshot for the planned single-pass local STT phases. Re-check model,
-runtime, size, license, and backend support before implementation or
-distribution; model capability and the capability exposed by a particular
-runtime are not always the same.
+Research snapshot for the planned single-pass local-recognition phases.
+Re-check model, runtime, size, license, and backend support before
+implementation or distribution; model capability and the capability exposed
+by a particular runtime are not always the same.
 
 ## Practical Meaning Of Rust-Native
 
@@ -31,8 +31,9 @@ not destabilize the Tauri process.
 
 ## Single-Pass Shapes
 
-The first local implementation does not use two-pass. A normal session loads
-one STT model whose concrete adapter has one of two useful shapes.
+The first local implementation does not use two-pass. One recognition attempt
+loads one recognition model whose concrete Driver has one of two useful
+shapes.
 
 ### Bounded recognition
 
@@ -108,27 +109,30 @@ In particular, a model repository advertising streaming does not prove that the
 selected sherpa-onnx Rust integration exposes streaming. Record capability for
 the full model/runtime/backend combination.
 
-## Normalized Adapter Contract
+## Normalized Recognition Driver Contract
 
 Do not build one implementation full of model-name branches. The worker exposes
-a small session seam and each behaviorally distinct model family owns a concrete
-adapter.
+a small recognition-attempt seam and each behaviorally distinct model family
+owns a concrete driver.
 
-Every adapter emits full snapshots containing at least:
+Every driver emits full snapshots containing at least:
 
-- session generation and caption-unit identity;
+- runtime-generation and caption-unit identity;
 - source lane;
 - monotonic revision;
 - full current text;
 - ongoing or completed state;
 - detected language, timestamps, and other metadata only when reliable;
-- provider/model/runtime/backend identity for diagnostics.
+
+Recognition path, runtime, and effective-backend identity belong in Runtime
+Control and diagnostics. They are not duplicated as unchecked free-form
+`provider` / `model` strings in every UI-facing caption snapshot.
 
 Raw deltas, SenseVoice tags, endpoint calls, VAD buffers, and recognizer reset
-rules remain inside the adapter. Same-family sizes may share an adapter when
-their lifecycle behavior is identical.
+rules remain inside the driver. Same-family sizes may share a driver when their
+lifecycle behavior is identical.
 
-Provider-specific stable-prefix information may guide adapter internals, but it
+Provider-specific stable-prefix information may guide driver internals, but it
 does not create a public `stable` caption state. Two-pass authority is not part
 of the first worker contract.
 
@@ -178,17 +182,17 @@ The worker plan also records the effective backend:
   lacks support;
 - on hardware without a compatible NVIDIA GPU, disable the CUDA choice; if a
   transferred configuration requests it, resolve CPU and show the reason;
-- if CUDA initialization fails before the session starts, CPU may be used only
+- if CUDA initialization fails before the runtime generation starts, CPU may be used only
   with a clear visible warning;
-- if a running worker crashes, stop the session and let the user explicitly
+- if a running worker crashes, end the runtime generation and let the user explicitly
   retry the same backend or choose CPU;
-- never switch backend during an active session;
+- never switch backend during an active runtime generation;
 - never turn a local failure into cloud upload without explicit user action.
 
 Aggregate CPU/GPU percentages are insufficient for recommendations. Measure at
 least first useful text, speech-end completion, real-time factor, CPU/RAM,
 GPU/VRAM, VRChat CPU/GPU frame time, dropped/reprojected frames where available,
-temperature/throttling, and long-session stability.
+temperature/throttling, and long-running stability.
 
 ## Component And Model Distribution
 
@@ -233,13 +237,13 @@ local recognition driver
   -> start worker
   -> health check
   -> load one model on one effective backend
-  -> create bounded or streaming recognition session
+  -> create a bounded or streaming recognition attempt
   -> exchange bounded audio/snapshot IPC
   -> emit normalized caption and lifecycle signals
   -> stop, unload, and report health
 ```
 
-- runtime uses the same active Recognition Interface as the cloud path; worker
+- runtime uses the same active Recognition Module boundary as the cloud path; worker
   commands, resampling windows, model-native frames, and backend state stay
   inside the local driver
   ([ADR 0026](../adr/0026-recognition-modules-own-attempt-execution.md));
@@ -261,7 +265,7 @@ local recognition driver
 ## Local Translation
 
 Local translation is a separate later component and may load a translation
-model alongside the one active STT model. That resource cost can be similar to
+model alongside the one active recognition model. That resource cost can be similar to
 running another AI model even though it is not two-pass recognition.
 
 The earlier research brief named the following starting points. They are not

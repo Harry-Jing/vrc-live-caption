@@ -4,7 +4,7 @@ import {
   reduceRuntimeState,
   selectRuntimeView,
 } from "./runtimeState";
-import type { DiagnosticEvent, RuntimeStatusEvent } from "./types";
+import type { DiagnosticEvent, RuntimeStatusEvent } from "./runtimeEvents";
 
 const idle: RuntimeStatusEvent = { status: "idle", timestampMs: 0 };
 
@@ -35,15 +35,15 @@ describe("runtime lifecycle state", () => {
       snapshot: status("running", 20),
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncStarted",
+      type: "runtimeStateSynchronizationStarted",
       requestId: 1,
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("running", 30) },
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncCompleted",
+      type: "runtimeStateSynchronizationCompleted",
       requestId: 1,
       controlRevision: 2,
       snapshot: status("running", 20),
@@ -70,7 +70,7 @@ describe("runtime lifecycle state", () => {
     expect(state.runtimeStatus).toEqual(status("error", 900));
 
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("running", 950) },
     });
 
@@ -85,15 +85,15 @@ describe("runtime lifecycle state", () => {
       snapshot: status("running", 1_000),
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncStarted",
+      type: "runtimeStateSynchronizationStarted",
       requestId: 1,
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("running", 1_100) },
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncCompleted",
+      type: "runtimeStateSynchronizationCompleted",
       requestId: 1,
       controlRevision: 5,
       snapshot: status("error", 900),
@@ -105,9 +105,9 @@ describe("runtime lifecycle state", () => {
   test("keeps an in-flight Start ahead of an inactive control snapshot", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 1_000,
     });
     state = reduceRuntimeState(state, {
@@ -117,7 +117,7 @@ describe("runtime lifecycle state", () => {
     });
 
     expect(state.runtimeStatus).toEqual(status("starting", 1_000));
-    expect(state.inFlightLifecycleCommand?.command).toBe("start_runtime");
+    expect(state.inFlightLifecycleAction?.action).toBe("start");
   });
 
   test.each(["starting", "running"] as const)(
@@ -125,9 +125,9 @@ describe("runtime lifecycle state", () => {
     (controlStatus) => {
       let state = createRuntimeState(idle);
       state = reduceRuntimeState(state, {
-        type: "runtimeCommandRequested",
+        type: "runtimeActionRequested",
         attemptId: 1,
-        command: "start_runtime",
+        action: "start",
         timestampMs: 1_000,
       });
       state = reduceRuntimeState(state, {
@@ -137,25 +137,25 @@ describe("runtime lifecycle state", () => {
       });
 
       expect(state.runtimeStatus).toEqual(status(controlStatus, 900));
-      expect(state.inFlightLifecycleCommand?.attemptId).toBe(1);
+      expect(state.inFlightLifecycleAction?.attemptId).toBe(1);
 
       state = reduceRuntimeState(state, {
-        type: "runtimeCommandSucceeded",
+        type: "runtimeActionSucceeded",
         attemptId: 1,
-        command: "start_runtime",
+        action: "start",
         timestampMs: 1_010,
       });
 
-      expect(state.inFlightLifecycleCommand).toBeNull();
+      expect(state.inFlightLifecycleAction).toBeNull();
     },
   );
 
-  test("keeps an authoritative Error when the in-flight Start command fails", () => {
+  test("keeps an authoritative Error when the in-flight Start action fails", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 1_000,
     });
     state = reduceRuntimeState(state, {
@@ -164,13 +164,13 @@ describe("runtime lifecycle state", () => {
       snapshot: status("error", 900),
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandFailed",
+      type: "runtimeActionFailed",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
     });
 
     expect(state.runtimeStatus).toEqual(status("error", 900));
-    expect(state.inFlightLifecycleCommand).toBeNull();
+    expect(state.inFlightLifecycleAction).toBeNull();
   });
 
   test("keeps a successful Start ahead of an older control revision", () => {
@@ -181,15 +181,15 @@ describe("runtime lifecycle state", () => {
       snapshot: idle,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 1_000,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandSucceeded",
+      type: "runtimeActionSucceeded",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 1_010,
     });
     state = reduceRuntimeState(state, {
@@ -209,9 +209,9 @@ describe("runtime lifecycle state", () => {
       snapshot: status("running", 800),
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "stop_runtime",
+      action: "stop",
       timestampMs: 1_000,
     });
     state = reduceRuntimeState(state, {
@@ -221,7 +221,7 @@ describe("runtime lifecycle state", () => {
     });
 
     expect(state.runtimeStatus).toEqual(status("stopping", 1_000));
-    expect(state.inFlightLifecycleCommand?.command).toBe("stop_runtime");
+    expect(state.inFlightLifecycleAction?.action).toBe("stop");
   });
 
   test("lets a newer control revision supersede an acknowledged Stop", () => {
@@ -232,15 +232,15 @@ describe("runtime lifecycle state", () => {
       snapshot: status("running", 800),
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "stop_runtime",
+      action: "stop",
       timestampMs: 1_000,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandSucceeded",
+      type: "runtimeActionSucceeded",
       attemptId: 1,
-      command: "stop_runtime",
+      action: "stop",
       timestampMs: 1_010,
     });
     state = reduceRuntimeState(state, {
@@ -263,15 +263,15 @@ describe("runtime lifecycle state", () => {
   test("restores the previous status when Start fails without newer evidence", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 10,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandFailed",
+      type: "runtimeActionFailed",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
     });
 
     expect(state.runtimeStatus).toBe(idle);
@@ -280,19 +280,19 @@ describe("runtime lifecycle state", () => {
   test("treats a successful Stop acknowledgement as authoritative", () => {
     let state = createRuntimeState(status("running", 10));
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "stop_runtime",
+      action: "stop",
       timestampMs: 20,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandSucceeded",
+      type: "runtimeActionSucceeded",
       attemptId: 1,
-      command: "stop_runtime",
+      action: "stop",
       timestampMs: 30,
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("stopping", 25) },
     });
 
@@ -300,22 +300,22 @@ describe("runtime lifecycle state", () => {
     expect(state.runtimeStatus.timestampMs).toBe(30);
   });
 
-  test("keeps newer backend evidence when Stop reports failure", () => {
+  test("keeps newer authoritative runtime evidence when Stop reports failure", () => {
     let state = createRuntimeState(status("running", 10));
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "stop_runtime",
+      action: "stop",
       timestampMs: 20,
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("stopped", 30) },
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandFailed",
+      type: "runtimeActionFailed",
       attemptId: 1,
-      command: "stop_runtime",
+      action: "stop",
     });
 
     expect(state.runtimeStatus.status).toBe("stopped");
@@ -324,37 +324,37 @@ describe("runtime lifecycle state", () => {
   test("does not let a stale terminal status from the previous run close a restart", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 10,
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("running", 20) },
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 2,
-      command: "stop_runtime",
+      action: "stop",
       timestampMs: 30,
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("stopped", 45) },
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 3,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 50,
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("stopped", 40) },
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("running", 60) },
     });
 
@@ -364,15 +364,15 @@ describe("runtime lifecycle state", () => {
   test("treats the synthetic initial status as non-authoritative during reload", () => {
     let state = createRuntimeState(status("idle", 100));
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncStarted",
+      type: "runtimeStateSynchronizationStarted",
       requestId: 1,
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("running", 90) },
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncCompleted",
+      type: "runtimeStateSynchronizationCompleted",
       requestId: 1,
       controlRevision: 1,
       snapshot: status("running", 90),
@@ -384,65 +384,65 @@ describe("runtime lifecycle state", () => {
   test("clears a matching cancelled runtime status synchronization", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncStarted",
+      type: "runtimeStateSynchronizationStarted",
       requestId: 7,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncCancelled",
+      type: "runtimeStateSynchronizationCancelled",
       requestId: 7,
     });
 
-    expect(state.inFlightStatusSync).toBeNull();
+    expect(state.inFlightRuntimeStateSynchronization).toBeNull();
   });
 
   test("keeps a newer runtime status synchronization after a stale cancellation", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncStarted",
+      type: "runtimeStateSynchronizationStarted",
       requestId: 7,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncStarted",
+      type: "runtimeStateSynchronizationStarted",
       requestId: 8,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncCancelled",
+      type: "runtimeStateSynchronizationCancelled",
       requestId: 7,
     });
 
-    expect(state.inFlightStatusSync).toEqual({ requestId: 8 });
+    expect(state.inFlightRuntimeStateSynchronization).toEqual({ requestId: 8 });
 
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncCompleted",
+      type: "runtimeStateSynchronizationCompleted",
       requestId: 8,
       controlRevision: 1,
       snapshot: status("running", 10),
     });
     expect(state.runtimeStatus).toEqual(status("running", 10));
-    expect(state.inFlightStatusSync).toBeNull();
+    expect(state.inFlightRuntimeStateSynchronization).toBeNull();
   });
 
   test("ignores a failed duplicate Start attempt", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 10,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 2,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 11,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandFailed",
+      type: "runtimeActionFailed",
       attemptId: 2,
-      command: "start_runtime",
+      action: "start",
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("running", 12) },
     });
 
@@ -452,17 +452,17 @@ describe("runtime lifecycle state", () => {
   test("gives a new Start intent precedence over an equal-time stopped status", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 300,
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("stopped", 300) },
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("running", 301) },
     });
 
@@ -472,23 +472,23 @@ describe("runtime lifecycle state", () => {
   test("accepts a genuine equal-time startup error from a later pull", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 300,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandSucceeded",
+      type: "runtimeActionSucceeded",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 301,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncStarted",
+      type: "runtimeStateSynchronizationStarted",
       requestId: 1,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncCompleted",
+      type: "runtimeStateSynchronizationCompleted",
       requestId: 1,
       controlRevision: 1,
       snapshot: status("error", 300),
@@ -500,23 +500,23 @@ describe("runtime lifecycle state", () => {
   test("does not let a late stopping push roll back a successful Stop", () => {
     let state = createRuntimeState(status("running", 20));
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "stop_runtime",
+      action: "stop",
       timestampMs: 30,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandSucceeded",
+      type: "runtimeActionSucceeded",
       attemptId: 1,
-      command: "stop_runtime",
+      action: "stop",
       timestampMs: 40,
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("stopping", 35) },
     });
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "status", payload: status("running", 40) },
     });
 
@@ -526,21 +526,21 @@ describe("runtime lifecycle state", () => {
   test("allows Stop to preempt a successful Start whose pushes were missed", () => {
     let state = createRuntimeState(idle);
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 10,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandSucceeded",
+      type: "runtimeActionSucceeded",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 20,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 2,
-      command: "stop_runtime",
+      action: "stop",
       timestampMs: 30,
     });
 
@@ -555,23 +555,23 @@ describe("runtime lifecycle state", () => {
       snapshot: idle,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandRequested",
+      type: "runtimeActionRequested",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 100,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeCommandSucceeded",
+      type: "runtimeActionSucceeded",
       attemptId: 1,
-      command: "start_runtime",
+      action: "start",
       timestampMs: 110,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncStarted",
+      type: "runtimeStateSynchronizationStarted",
       requestId: 1,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncCompleted",
+      type: "runtimeStateSynchronizationCompleted",
       requestId: 1,
       controlRevision: 1,
       snapshot: status("idle", 0),
@@ -579,11 +579,11 @@ describe("runtime lifecycle state", () => {
     expect(state.runtimeStatus.status).toBe("starting");
 
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncStarted",
+      type: "runtimeStateSynchronizationStarted",
       requestId: 2,
     });
     state = reduceRuntimeState(state, {
-      type: "runtimeStatusSyncCompleted",
+      type: "runtimeStateSynchronizationCompleted",
       requestId: 2,
       controlRevision: 2,
       snapshot: status("running", 120),
@@ -597,12 +597,12 @@ describe("runtime lifecycle state", () => {
 
     for (let index = 0; index < 55; index += 1) {
       state = reduceRuntimeState(state, {
-        type: "backendEvent",
+        type: "runtimeEventReceived",
         event: { type: "diagnostic", payload: diagnostic(String(index)) },
       });
     }
     state = reduceRuntimeState(state, {
-      type: "backendEvent",
+      type: "runtimeEventReceived",
       event: { type: "diagnostic", payload: diagnostic("54") },
     });
 

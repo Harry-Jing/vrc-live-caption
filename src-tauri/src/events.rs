@@ -1,9 +1,9 @@
 //! Normalized runtime events emitted to the Vue frontend.
 //!
-//! These events are the UI-facing contract for status, caption sessions, and
+//! These events are the UI-facing contract for status, caption aggregates, and
 //! diagnostics. Provider-specific raw events should be normalized before they
-//! reach this module so Vue components and output sinks do not depend on STT
-//! provider protocols.
+//! reach this module so Vue components and output sinks do not depend on
+//! recognition-provider protocols.
 //!
 //! Diagnostic `code` values are machine-readable and follow one naming
 //! convention: `<category>.<detail>` in snake case, where the prefix equals
@@ -15,49 +15,23 @@
 //! rather than propagated. The runtime's lifecycle never depends on whether
 //! an event reached the webview.
 
-use crate::caption_session::CaptionSessionSnapshotV1;
+use crate::caption::CaptionAggregateSnapshotV2;
 use crate::error::AppError;
 use crate::runtime_control::{
     RuntimeControlSnapshot, RuntimeStatus, RuntimeStatusEvent, RuntimeStatusRecorder,
 };
+use crate::wall_clock::unix_timestamp_ms;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Runtime};
 
 const EVENT_RUNTIME_STATUS: &str = "runtime-status";
 const EVENT_RUNTIME_CONTROL_CHANGED: &str = "runtime-control-changed";
-const EVENT_CAPTION_SESSION_CHANGED: &str = "caption-session-changed";
-const EVENT_UTTERANCE_STARTED: &str = "utterance-started";
-const EVENT_UTTERANCE_ENDED: &str = "utterance-ended";
+const EVENT_CAPTION_AGGREGATE_CHANGED: &str = "caption-aggregate-changed";
 const EVENT_AUDIO_LEVEL: &str = "audio-level";
 const EVENT_DIAGNOSTIC: &str = "diagnostic-event";
 
-static NEXT_EVENT_ID: AtomicU64 = AtomicU64::new(1);
-
-/// Start of a confirmed utterance. Emitted before any caption text exists, so
-/// caption snapshots never carry placeholder text such as a listening
-/// indicator.
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct UtteranceStartedEvent {
-    id: String,
-    generation: u64,
-    stream_id: String,
-    utterance_id: String,
-    timestamp_ms: u64,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct UtteranceEndedEvent {
-    id: String,
-    generation: u64,
-    stream_id: String,
-    utterance_id: String,
-    reason: UtteranceEndReason,
-    timestamp_ms: u64,
-}
+static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,17 +43,6 @@ pub(crate) struct AudioLevelEvent {
     pub(crate) clipping: bool,
     pub(crate) gate_open: bool,
     pub(crate) timestamp_ms: u64,
-}
-
-/// Why an utterance terminated without a completed caption. Successful
-/// utterances resolve through the caption-session aggregate instead.
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum UtteranceEndReason {
-    /// STT finished but recognized no words.
-    NoSpeech,
-    /// The STT request failed; details arrive as a diagnostic event.
-    SttFailed,
 }
 
 #[derive(Clone, Serialize)]
@@ -167,7 +130,8 @@ pub(crate) enum DiagnosticCategory {
     Config,
     Osc,
     Runtime,
-    Stt,
+    #[serde(rename = "stt")]
+    Recognition,
 }
 
 impl DiagnosticCategory {
@@ -185,10 +149,10 @@ impl DiagnosticCategory {
             | AppError::OscSend { .. }
             | AppError::OscSendIncomplete { .. } => Self::Osc,
             AppError::Runtime { .. } | AppError::State { .. } => Self::Runtime,
-            AppError::Stt { .. }
-            | AppError::SttProvider { .. }
-            | AppError::SttBackpressure { .. }
-            | AppError::SttNetwork { .. } => Self::Stt,
+            AppError::Recognition { .. }
+            | AppError::RecognitionProvider { .. }
+            | AppError::RecognitionBackpressure { .. }
+            | AppError::RecognitionNetwork { .. } => Self::Recognition,
         }
     }
 }
@@ -238,62 +202,20 @@ pub(crate) fn emit_runtime_control_changed<R: Runtime>(
     emit_event(app, EVENT_RUNTIME_CONTROL_CHANGED, snapshot);
 }
 
-pub(crate) fn emit_caption_session_changed<R: Runtime>(
+pub(crate) fn emit_caption_aggregate_changed<R: Runtime>(
     app: &AppHandle<R>,
-    snapshot: CaptionSessionSnapshotV1,
+    snapshot: CaptionAggregateSnapshotV2,
 ) {
-    emit_event(app, EVENT_CAPTION_SESSION_CHANGED, snapshot);
+    emit_event(app, EVENT_CAPTION_AGGREGATE_CHANGED, snapshot);
 }
 
 pub(crate) fn emit_runtime_control_and_status<R: Runtime>(
     app: &AppHandle<R>,
     snapshot: RuntimeControlSnapshot,
 ) {
-    let event = snapshot.runtime.clone();
+    let event = snapshot.runtime_status.clone();
     emit_runtime_control_changed(app, snapshot);
     emit_event(app, EVENT_RUNTIME_STATUS, event);
-}
-
-pub(crate) fn emit_utterance_started<R: Runtime>(
-    app: &AppHandle<R>,
-    generation: u64,
-    stream_id: String,
-    utterance_id: String,
-    timestamp_ms: u64,
-) {
-    emit_event(
-        app,
-        EVENT_UTTERANCE_STARTED,
-        UtteranceStartedEvent {
-            id: next_event_id("utterance-start"),
-            generation,
-            stream_id,
-            utterance_id,
-            timestamp_ms,
-        },
-    );
-}
-
-pub(crate) fn emit_utterance_ended<R: Runtime>(
-    app: &AppHandle<R>,
-    generation: u64,
-    stream_id: String,
-    utterance_id: String,
-    reason: UtteranceEndReason,
-    timestamp_ms: u64,
-) {
-    emit_event(
-        app,
-        EVENT_UTTERANCE_ENDED,
-        UtteranceEndedEvent {
-            id: next_event_id("utterance-end"),
-            generation,
-            stream_id,
-            utterance_id,
-            reason,
-            timestamp_ms,
-        },
-    );
 }
 
 pub(crate) fn emit_audio_level<R: Runtime>(app: &AppHandle<R>, event: AudioLevelEvent) {
@@ -305,19 +227,15 @@ pub(crate) fn emit_diagnostic<R: Runtime>(app: &AppHandle<R>, update: Diagnostic
         app,
         EVENT_DIAGNOSTIC,
         DiagnosticEvent {
-            id: next_event_id("diagnostic"),
+            id: next_diagnostic_id(),
             category: update.category,
             severity: update.severity,
             code: update.code,
             message: update.message,
             detail: update.detail,
-            timestamp_ms: now_ms(),
+            timestamp_ms: unix_timestamp_ms(),
         },
     );
-}
-
-pub(crate) fn next_caption_unit_id(prefix: &str) -> String {
-    next_event_id(prefix)
 }
 
 /// Emission is best-effort by design: Tauri events are at-most-once with no
@@ -334,17 +252,10 @@ fn emit_event<R: Runtime, P: Serialize + Clone>(app: &AppHandle<R>, event_name: 
     }
 }
 
-fn next_event_id(prefix: &str) -> String {
-    let sequence = NEXT_EVENT_ID.fetch_add(1, Ordering::Relaxed);
+fn next_diagnostic_id() -> String {
+    let sequence = NEXT_DIAGNOSTIC_ID.fetch_add(1, Ordering::Relaxed);
 
-    format!("{prefix}-{}-{sequence}", now_ms())
-}
-
-pub(crate) fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_millis() as u64
+    format!("diagnostic-{}-{sequence}", unix_timestamp_ms())
 }
 
 #[cfg(test)]

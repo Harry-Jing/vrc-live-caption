@@ -1,10 +1,28 @@
 use super::super::pacer::Clock;
 use super::super::transport::ChatboxSendReceipt;
 use super::*;
+use crate::generation_fence::{GenerationCommitter, GenerationFence};
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Condvar, mpsc};
+
+fn open_committer() -> GenerationCommitter {
+    GenerationFence::new().committer()
+}
+
+fn close_at_fence(fence: &GenerationFence, publisher: &CompletedChatboxPublisher) -> AppResult<()> {
+    fence.close_admission();
+    let close_result = publisher.request_close(PublisherCloseReason::Stop);
+    let commit_result = fence.wait_for_commits();
+    match (close_result, commit_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(close_error), Err(commit_error)) => Err(AppError::state(format!(
+            "Publisher and generation fence could not close: {close_error} {commit_error}"
+        ))),
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TransportEvent {
@@ -401,7 +419,7 @@ impl ChatboxTransport for ScriptedTransport {
 }
 
 struct RecordedDiagnostics {
-    diagnostics: Mutex<Vec<PublisherDiagnostic>>,
+    diagnostics: Mutex<Vec<CompletedPublisherDiagnostic>>,
     changed: Condvar,
 }
 
@@ -413,14 +431,17 @@ impl RecordedDiagnostics {
         }
     }
 
-    fn record(&self, diagnostic: PublisherDiagnostic) {
+    fn record(&self, diagnostic: CompletedPublisherDiagnostic) {
         if let Ok(mut diagnostics) = self.diagnostics.lock() {
             diagnostics.push(diagnostic);
             self.changed.notify_all();
         }
     }
 
-    fn contains(&self, predicate: impl Fn(&PublisherDiagnostic) -> bool) -> AppResult<bool> {
+    fn contains(
+        &self,
+        predicate: impl Fn(&CompletedPublisherDiagnostic) -> bool,
+    ) -> AppResult<bool> {
         self.diagnostics
             .lock()
             .map(|diagnostics| diagnostics.iter().any(predicate))
@@ -430,14 +451,14 @@ impl RecordedDiagnostics {
     fn wait_for(
         &self,
         expectation: &str,
-        predicate: impl Fn(&PublisherDiagnostic) -> bool,
+        predicate: impl Fn(&CompletedPublisherDiagnostic) -> bool,
     ) -> AppResult<()> {
         let diagnostics = self
             .diagnostics
             .lock()
             .map_err(|_| AppError::state("Publisher diagnostics lock was poisoned."))?;
         let contains_match =
-            |diagnostics: &[PublisherDiagnostic]| diagnostics.iter().any(&predicate);
+            |diagnostics: &[CompletedPublisherDiagnostic]| diagnostics.iter().any(&predicate);
         let (diagnostics, timeout) = self
             .changed
             .wait_timeout_while(diagnostics, Duration::from_secs(1), |diagnostics| {
@@ -456,10 +477,10 @@ impl RecordedDiagnostics {
     }
 }
 
-fn recording_reporter() -> (PublisherReporter, Arc<RecordedDiagnostics>) {
+fn recording_reporter() -> (CompletedPublisherReporter, Arc<RecordedDiagnostics>) {
     let diagnostics = Arc::new(RecordedDiagnostics::new());
     let recorded_diagnostics = Arc::clone(&diagnostics);
-    let reporter: PublisherReporter = Arc::new(move |diagnostic| {
+    let reporter: CompletedPublisherReporter = Arc::new(move |diagnostic| {
         recorded_diagnostics.record(diagnostic);
     });
 
@@ -468,7 +489,7 @@ fn recording_reporter() -> (PublisherReporter, Arc<RecordedDiagnostics>) {
 
 fn submit_handled(
     publisher: &CompletedChatboxPublisher,
-    event: CompletedPublisherEvent,
+    event: CompletedPublisherInput,
 ) -> AppResult<()> {
     assert_eq!(
         publisher.try_submit(event)?,
@@ -528,10 +549,10 @@ fn publishes_every_exact_page_in_order() -> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(AdvancingClock::new());
     let pacer = ChatboxPacer::with_clock(clock);
-    let generation = RuntimeGeneration::active();
+    let committer = open_committer();
     let diagnostics = Arc::new(Mutex::new(Vec::new()));
     let recorded_diagnostics = Arc::clone(&diagnostics);
-    let reporter: PublisherReporter = Arc::new(move |diagnostic| {
+    let reporter: CompletedPublisherReporter = Arc::new(move |diagnostic| {
         if let Ok(mut diagnostics) = recorded_diagnostics.lock() {
             diagnostics.push(diagnostic);
         }
@@ -539,7 +560,7 @@ fn publishes_every_exact_page_in_order() -> AppResult<()> {
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         pacer,
-        generation,
+        committer,
         reporter,
         PublisherLimits {
             max_resident_pages: 8,
@@ -552,13 +573,13 @@ fn publishes_every_exact_page_in_order() -> AppResult<()> {
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "unit-a".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "unit-a".to_string(),
             text,
         },
@@ -594,7 +615,7 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        RuntimeGeneration::active(),
+        open_committer(),
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 8,
@@ -604,13 +625,13 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "unit-a".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "unit-a".to_string(),
             text: "first".to_string(),
         },
@@ -624,13 +645,13 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
     let submitter = thread::spawn(move || -> AppResult<()> {
         submit_handled(
             &submitted_publisher,
-            CompletedPublisherEvent::Started {
+            CompletedPublisherInput::Started {
                 unit_id: "unit-b".to_string(),
             },
         )?;
         submit_handled(
             &submitted_publisher,
-            CompletedPublisherEvent::Completed {
+            CompletedPublisherInput::Completed {
                 unit_id: "unit-b".to_string(),
                 text: "second".to_string(),
             },
@@ -679,7 +700,7 @@ fn overload_drops_only_the_oldest_whole_unstarted_unit() -> AppResult<()> {
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         pacer,
-        RuntimeGeneration::active(),
+        open_committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 3,
@@ -694,13 +715,13 @@ fn overload_drops_only_the_oldest_whole_unstarted_unit() -> AppResult<()> {
     ] {
         submit_handled(
             &publisher,
-            CompletedPublisherEvent::Started {
+            CompletedPublisherInput::Started {
                 unit_id: unit_id.to_string(),
             },
         )?;
         submit_handled(
             &publisher,
-            CompletedPublisherEvent::Completed {
+            CompletedPublisherInput::Completed {
                 unit_id: unit_id.to_string(),
                 text,
             },
@@ -727,7 +748,7 @@ fn overload_drops_only_the_oldest_whole_unstarted_unit() -> AppResult<()> {
 
     assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
-        PublisherDiagnostic::UnitDroppedOverload {
+        CompletedPublisherDiagnostic::UnitDroppedOverload {
             unit_id,
             page_count: 2,
         } if unit_id == "unit-a"
@@ -753,7 +774,7 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         pacer,
-        RuntimeGeneration::active(),
+        open_committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 8,
@@ -768,13 +789,13 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
     for (unit_id, text) in [("unit-a", first_text), ("unit-b", "B".to_string())] {
         submit_handled(
             &publisher,
-            CompletedPublisherEvent::Started {
+            CompletedPublisherInput::Started {
                 unit_id: unit_id.to_string(),
             },
         )?;
         submit_handled(
             &publisher,
-            CompletedPublisherEvent::Completed {
+            CompletedPublisherInput::Completed {
                 unit_id: unit_id.to_string(),
                 text,
             },
@@ -817,7 +838,7 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
 
     assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
-        PublisherDiagnostic::UnitSendFailed {
+        CompletedPublisherDiagnostic::UnitSendFailed {
             unit_id,
             page_index: 2,
             page_count: 3,
@@ -844,7 +865,7 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
-        RuntimeGeneration::active(),
+        open_committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 3,
@@ -859,13 +880,13 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
     for (unit_id, text) in [("unit-a", first_text), ("unit-b", "B".to_string())] {
         submit_handled(
             &publisher,
-            CompletedPublisherEvent::Started {
+            CompletedPublisherInput::Started {
                 unit_id: unit_id.to_string(),
             },
         )?;
         submit_handled(
             &publisher,
-            CompletedPublisherEvent::Completed {
+            CompletedPublisherInput::Completed {
                 unit_id: unit_id.to_string(),
                 text,
             },
@@ -877,13 +898,13 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "unit-c".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "unit-c".to_string(),
             text: "中".repeat(136),
         },
@@ -906,7 +927,7 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
 
     assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
-        PublisherDiagnostic::UnitRejectedOverload {
+        CompletedPublisherDiagnostic::UnitRejectedOverload {
             unit_id,
             page_count: 2,
         } if unit_id == "unit-c"
@@ -930,7 +951,7 @@ fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> A
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         pacer,
-        RuntimeGeneration::active(),
+        open_committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 2,
@@ -941,13 +962,13 @@ fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> A
     for (unit_id, text) in [("kept", "A".to_string()), ("oversized", "中".repeat(271))] {
         submit_handled(
             &publisher,
-            CompletedPublisherEvent::Started {
+            CompletedPublisherInput::Started {
                 unit_id: unit_id.to_string(),
             },
         )?;
         submit_handled(
             &publisher,
-            CompletedPublisherEvent::Completed {
+            CompletedPublisherInput::Completed {
                 unit_id: unit_id.to_string(),
                 text,
             },
@@ -965,7 +986,7 @@ fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> A
     );
     assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
-        PublisherDiagnostic::UnitRejectedOverload {
+        CompletedPublisherDiagnostic::UnitRejectedOverload {
             unit_id,
             page_count: 3,
         } if unit_id == "oversized"
@@ -989,7 +1010,7 @@ fn stale_unstarted_unit_expires_as_one_complete_publication() -> AppResult<()> {
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         pacer,
-        RuntimeGeneration::active(),
+        open_committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
@@ -999,13 +1020,13 @@ fn stale_unstarted_unit_expires_as_one_complete_publication() -> AppResult<()> {
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "expired".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "expired".to_string(),
             text: "中".repeat(136),
         },
@@ -1015,13 +1036,13 @@ fn stale_unstarted_unit_expires_as_one_complete_publication() -> AppResult<()> {
     clock.advance(Duration::from_secs(30));
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "fresh".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "fresh".to_string(),
             text: "fresh".to_string(),
         },
@@ -1041,7 +1062,7 @@ fn stale_unstarted_unit_expires_as_one_complete_publication() -> AppResult<()> {
     );
     assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
-        PublisherDiagnostic::UnitExpired {
+        CompletedPublisherDiagnostic::UnitExpired {
             unit_id,
             page_count: 2,
         } if unit_id == "expired"
@@ -1058,7 +1079,7 @@ fn overlapping_activity_keeps_typing_on_until_the_last_unit_resolves() -> AppRes
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
-        RuntimeGeneration::active(),
+        open_committer(),
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
@@ -1068,26 +1089,26 @@ fn overlapping_activity_keeps_typing_on_until_the_last_unit_resolves() -> AppRes
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "unit-a".to_string(),
         },
     )?;
     transport.wait_for_events(1)?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "unit-b".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Aborted {
+        CompletedPublisherInput::Aborted {
             unit_id: "unit-a".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "unit-b".to_string(),
             text: "B".to_string(),
         },
@@ -1114,7 +1135,7 @@ fn active_typing_is_reasserted_before_vrchat_hides_it() -> AppResult<()> {
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(clock.clone()),
-        RuntimeGeneration::active(),
+        open_committer(),
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
@@ -1124,7 +1145,7 @@ fn active_typing_is_reasserted_before_vrchat_hides_it() -> AppResult<()> {
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "long-speech".to_string(),
         },
     )?;
@@ -1137,7 +1158,7 @@ fn active_typing_is_reasserted_before_vrchat_hides_it() -> AppResult<()> {
     let events = transport.wait_for_events(4)?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Aborted {
+        CompletedPublisherInput::Aborted {
             unit_id: "long-speech".to_string(),
         },
     )?;
@@ -1187,7 +1208,7 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(clock.clone()),
-        RuntimeGeneration::active(),
+        open_committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
@@ -1197,7 +1218,7 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "typing-refresh-failure".to_string(),
         },
     )?;
@@ -1219,7 +1240,7 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
     );
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Aborted {
+        CompletedPublisherInput::Aborted {
             unit_id: "typing-refresh-failure".to_string(),
         },
     )?;
@@ -1239,7 +1260,7 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
     diagnostics.wait_for("a failed typing-on diagnostic", |diagnostic| {
         matches!(
             diagnostic,
-            PublisherDiagnostic::TypingFailed {
+            CompletedPublisherDiagnostic::TypingFailed {
                 is_typing: true,
                 ..
             }
@@ -1254,11 +1275,11 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
 fn stop_cancels_a_pending_typing_reassertion() -> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(ControlledClock::new());
-    let generation = RuntimeGeneration::active();
+    let fence = GenerationFence::new();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(clock.clone()),
-        generation.clone(),
+        fence.committer(),
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
@@ -1268,7 +1289,7 @@ fn stop_cancels_a_pending_typing_reassertion() -> AppResult<()> {
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "stopped-before-refresh".to_string(),
         },
     )?;
@@ -1276,9 +1297,9 @@ fn stop_cancels_a_pending_typing_reassertion() -> AppResult<()> {
     wait_for_next_typing_reassert(clock.as_ref(), &publisher)?;
     advance_publisher_clock(clock.as_ref(), &publisher, Duration::from_secs(3));
 
-    generation.request_stop(Some(&publisher))?;
+    close_at_fence(&fence, &publisher)?;
     publisher.join()?;
-    generation.request_stop(Some(&publisher))?;
+    close_at_fence(&fence, &publisher)?;
     publisher.join()?;
 
     assert_eq!(
@@ -1297,11 +1318,12 @@ fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<
         release_receiver,
     ));
     let clock = Arc::new(ControlledClock::new());
-    let generation = RuntimeGeneration::active();
+    let fence = GenerationFence::new();
+    let committer = fence.committer();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(clock.clone()),
-        generation.clone(),
+        committer.clone(),
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
@@ -1311,7 +1333,7 @@ fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "typing-stop-race".to_string(),
         },
     )?;
@@ -1321,19 +1343,19 @@ fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| AppError::runtime("Typing reassertion did not reach transport."))?;
 
-    let stop_generation = generation.clone();
+    let stop_fence = fence.clone();
     let stop_publisher = publisher.clone();
     let (stop_finished_sender, stop_finished_receiver) = mpsc::channel();
     let stop = thread::spawn(move || {
-        let result = stop_generation.request_stop(Some(&stop_publisher));
+        let result = close_at_fence(&stop_fence, &stop_publisher);
         let _ = stop_finished_sender.send(());
         result
     });
 
     let stop_entered_deadline = Instant::now() + Duration::from_secs(1);
-    while !generation.is_hard_stop_requested() {
+    while !committer.is_closed() {
         if Instant::now() >= stop_entered_deadline {
-            return Err(AppError::runtime("Stop did not enter request_stop."));
+            return Err(AppError::runtime("Stop did not close generation commits."));
         }
         thread::sleep(Duration::from_millis(1));
     }
@@ -1376,7 +1398,7 @@ fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<(
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        RuntimeGeneration::active(),
+        open_committer(),
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: page_count,
@@ -1386,13 +1408,13 @@ fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<(
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "paced-around-typing".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "paced-around-typing".to_string(),
             text,
         },
@@ -1432,7 +1454,7 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
-        RuntimeGeneration::active(),
+        open_committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
@@ -1442,7 +1464,7 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "layout-failure".to_string(),
         },
     )?;
@@ -1450,7 +1472,7 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
     let oversized_grapheme = format!("a{}", "\u{301}".repeat(144));
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "layout-failure".to_string(),
             text: oversized_grapheme,
         },
@@ -1465,7 +1487,7 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
         |diagnostic| {
             matches!(
                 diagnostic,
-                PublisherDiagnostic::LayoutFailed { unit_id, .. }
+                CompletedPublisherDiagnostic::LayoutFailed { unit_id, .. }
                     if unit_id == "layout-failure"
             )
         },
@@ -1485,7 +1507,7 @@ fn failed_typing_on_is_diagnosed_and_still_followed_by_typing_off() -> AppResult
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(clock),
-        RuntimeGeneration::active(),
+        open_committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
@@ -1495,13 +1517,13 @@ fn failed_typing_on_is_diagnosed_and_still_followed_by_typing_off() -> AppResult
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "typing-failure".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "typing-failure".to_string(),
             text: "caption".to_string(),
         },
@@ -1521,7 +1543,7 @@ fn failed_typing_on_is_diagnosed_and_still_followed_by_typing_off() -> AppResult
     );
     assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
-        PublisherDiagnostic::TypingFailed {
+        CompletedPublisherDiagnostic::TypingFailed {
             is_typing: true,
             ..
         }
@@ -1542,12 +1564,12 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
         .wait_for_turn(None)?
         .ok_or_else(|| AppError::runtime("Initial pacing reservation was cancelled."))?
         .attempt(|| Ok(()))?;
-    let generation = RuntimeGeneration::active();
+    let fence = GenerationFence::new();
     let (reporter, diagnostics) = recording_reporter();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         pacer,
-        generation.clone(),
+        fence.committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
@@ -1557,13 +1579,13 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "stopped".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "stopped".to_string(),
             text: "must not send".to_string(),
         },
@@ -1571,9 +1593,9 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
     transport.wait_for_events(1)?;
     clock.wait_for_sleep_calls(1)?;
 
-    generation.request_stop(Some(&publisher))?;
+    close_at_fence(&fence, &publisher)?;
     assert_eq!(
-        publisher.try_submit(CompletedPublisherEvent::Completed {
+        publisher.try_submit(CompletedPublisherInput::Completed {
             unit_id: "late".to_string(),
             text: "late".to_string(),
         })?,
@@ -1581,7 +1603,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
     );
     clock.release_automatic();
     publisher.join()?;
-    generation.request_stop(Some(&publisher))?;
+    close_at_fence(&fence, &publisher)?;
     publisher.join()?;
 
     assert_eq!(
@@ -1591,7 +1613,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
     assert_eq!(clock.total_sleep()?, Duration::from_millis(100));
     assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
-        PublisherDiagnostic::PagesDiscardedOnClose {
+        CompletedPublisherDiagnostic::PagesDiscardedOnClose {
             reason: PublisherCloseReason::Stop,
             unit_count: 1,
             page_count: 1,
@@ -1610,12 +1632,12 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         entered_sender,
         release_receiver,
     ));
-    let generation = RuntimeGeneration::active();
+    let fence = GenerationFence::new();
     let (reporter, diagnostics) = recording_reporter();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
-        generation.clone(),
+        fence.committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
@@ -1627,13 +1649,13 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
 
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Started {
+        CompletedPublisherInput::Started {
             unit_id: "in-flight".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherEvent::Completed {
+        CompletedPublisherInput::Completed {
             unit_id: "in-flight".to_string(),
             text: "中".repeat(136),
         },
@@ -1642,7 +1664,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| AppError::runtime("OSC attempt did not reach transport."))?;
 
-    let stop_generation = generation.clone();
+    let stop_fence = fence.clone();
     let stop_publisher = publisher.clone();
     let (stop_started_sender, stop_started_receiver) = mpsc::channel();
     let (stop_finished_sender, stop_finished_receiver) = mpsc::channel();
@@ -1650,7 +1672,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         stop_started_sender
             .send(())
             .map_err(|_| AppError::runtime("Could not announce Stop."))?;
-        let result = stop_generation.request_stop(Some(&stop_publisher));
+        let result = close_at_fence(&stop_fence, &stop_publisher);
         let _ = stop_finished_sender.send(());
         result
     });
@@ -1662,7 +1684,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
     assert_eq!(
-        publisher.try_submit(CompletedPublisherEvent::Completed {
+        publisher.try_submit(CompletedPublisherInput::Completed {
             unit_id: "late".to_string(),
             text: "late".to_string(),
         })?,
@@ -1690,7 +1712,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
     );
     assert!(diagnostics.contains(|diagnostic| matches!(
         diagnostic,
-        PublisherDiagnostic::PagesDiscardedOnClose {
+        CompletedPublisherDiagnostic::PagesDiscardedOnClose {
             reason: PublisherCloseReason::Stop,
             page_count: 1,
             started_unit_count: 1,
@@ -1707,7 +1729,7 @@ fn concurrent_close_and_join_perform_one_cleanup() -> AppResult<()> {
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
-        RuntimeGeneration::active(),
+        open_committer(),
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
@@ -1744,7 +1766,7 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
-        RuntimeGeneration::active(),
+        open_committer(),
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
@@ -1762,12 +1784,10 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
     assert!(publisher.request_close(PublisherCloseReason::Stop).is_err());
     assert!(publisher.join().is_err());
     assert_eq!(transport.events()?, vec![TransportEvent::Typing(false)]);
-    assert!(
-        diagnostics.contains(|diagnostic| matches!(
-            diagnostic,
-            PublisherDiagnostic::WorkerFailed { .. }
-        ))?
-    );
+    assert!(diagnostics.contains(|diagnostic| matches!(
+        diagnostic,
+        CompletedPublisherDiagnostic::WorkerFailed { .. }
+    ))?);
 
     Ok(())
 }

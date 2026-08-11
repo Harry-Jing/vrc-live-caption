@@ -21,24 +21,24 @@ pub(crate) fn reconnect_jitter_percent() -> u32 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReconnectDecision {
-    Retry { attempt: u32, delay: Duration },
+    Retry { retry_number: u32, delay: Duration },
     Terminal,
 }
 
 #[derive(Default)]
-pub(crate) struct ReconnectSupervisor {
+pub(crate) struct ReconnectTracker {
     connection_epoch: u64,
     consecutive_failures: u32,
     has_reached_running: bool,
 }
 
-impl ReconnectSupervisor {
+impl ReconnectTracker {
     pub(crate) fn begin_connection_attempt(&mut self) -> u64 {
         self.connection_epoch = self.connection_epoch.saturating_add(1);
         self.connection_epoch
     }
 
-    pub(crate) fn is_recovery(&self) -> bool {
+    pub(crate) fn has_reached_running(&self) -> bool {
         self.has_reached_running
     }
 
@@ -78,7 +78,7 @@ impl ReconnectSupervisor {
             .min(MAX_RECONNECT_DELAY_MILLIS);
 
         ReconnectDecision::Retry {
-            attempt: self.consecutive_failures,
+            retry_number: self.consecutive_failures,
             delay: Duration::from_millis(delay_millis),
         }
     }

@@ -1,0 +1,42 @@
+{
+  "contractVersion": 2,
+  "snapshotRevision": 4,
+  "activeStream": {
+    "generation": 7,
+    "streamId": "recognition-7-1"
+  },
+  "openSourceUnits": [],
+  "captions": [
+    {
+      "generation": 7,
+      "streamId": "recognition-7-1",
+      "unitId": "speech-7-1",
+      "lane": "source",
+      "revision": 1,
+      "text": "Full bounded OpenAI transcript.",
+      "state": "completed",
+      "language": "en",
+      "sourceRef": null,
+      "unitStartedAtMs": 1000,
+      "timestampMs": 1200
+    },
+    {
+      "generation": 7,
+      "streamId": "recognition-7-1",
+      "unitId": "speech-7-1",
+      "lane": "translation",
+      "revision": 1,
+      "text": "完整的有界转写。",
+      "state": "completed",
+      "language": "zh",
+      "sourceRef": {
+        "generation": 7,
+        "streamId": "recognition-7-1",
+        "unitId": "speech-7-1",
+        "revision": 1
+      },
+      "unitStartedAtMs": 1000,
+      "timestampMs": 1201
+    }
+  ]
+}

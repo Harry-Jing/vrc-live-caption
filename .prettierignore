@@ -9,6 +9,7 @@ src-tauri/target/
 # Generated files
 src-tauri/gen/
 components.d.ts
+.pnpm-store/
 
 # Tool-managed or prose-heavy files
 pnpm-lock.yaml

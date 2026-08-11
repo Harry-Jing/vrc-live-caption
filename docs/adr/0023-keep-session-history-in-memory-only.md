@@ -1,4 +1,4 @@
-# Keep session history in memory only
+# Keep caption history in memory only
 
 Date: 2026-06
 
@@ -11,8 +11,8 @@ App still creates no persistent history or report file. That report excludes
 all free-text event fields and uses an explicit metadata allowlist: app version,
 normalized platform family, runtime status and timestamp, plus diagnostic
 category, severity, stable code, and timestamp. Caption text, configuration,
-device identifiers, network targets, paths, and provider-secret status are not
-serialized.
+device identifiers, network targets, paths, and service-credential status are
+not serialized.
 
 Reopen this when automatic persistence or file export is built; persistent
 history remains on the long-term feature list.

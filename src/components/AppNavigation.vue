@@ -4,7 +4,7 @@ import {
   runtimeStatusColor,
   runtimeStatusMessageKey,
 } from "../runtime/presentation";
-import type { RuntimeStatusEvent } from "../runtime/types";
+import type { RuntimeStatusEvent } from "../runtime/runtimeEvents";
 
 defineProps<{
   runtimeStatus: RuntimeStatusEvent;
@@ -12,7 +12,7 @@ defineProps<{
 
 const navItems = [
   {
-    labelKey: "navigation.live",
+    labelKey: "navigation.captioning",
     to: "/",
     icon: "i-lucide-radio-tower",
   },

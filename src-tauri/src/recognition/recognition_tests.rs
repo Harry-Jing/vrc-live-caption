@@ -1,5 +1,5 @@
 use super::*;
-use crate::caption_session::{CaptionLane, CaptionSnapshotV1, CaptionState};
+use crate::caption::{CaptionLane, CaptionSnapshotV2, CaptionState};
 use crate::error::{AppError, AppResult};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
@@ -49,7 +49,7 @@ impl RecognitionDriver for ReadyThenFailDriver {
         self.fail.recv_timeout(TEST_TIMEOUT).map_err(|error| {
             AppError::state(format!("Terminal driver trigger was not received: {error}"))
         })?;
-        Err(AppError::stt_provider(
+        Err(AppError::recognition_provider(
             crate::error::ProviderFailureClass::Authentication,
             "The recognition provider rejected the configured credential.",
         ))
@@ -77,7 +77,7 @@ impl RecognitionDriver for OngoingFloodThenControlDriver {
                 AppError::state(format!("Signal flood trigger was not received: {error}"))
             })?;
         for revision in 1..=128 {
-            io.emit_event(RecognitionEvent::Caption(CaptionSnapshotV1 {
+            io.emit_event(RecognitionEvent::Caption(CaptionSnapshotV2 {
                 generation: io.scope().generation,
                 stream_id: io.scope().stream_id.clone(),
                 unit_id: Some("ongoing-unit".to_string()),
@@ -86,8 +86,7 @@ impl RecognitionDriver for OngoingFloodThenControlDriver {
                 text: format!("draft-{revision}"),
                 state: CaptionState::Ongoing,
                 language: None,
-                provider: "test".to_string(),
-                model: "test".to_string(),
+                source_ref: None,
                 unit_started_at_ms: Some(1),
                 timestamp_ms: revision,
             }))?;
@@ -95,7 +94,7 @@ impl RecognitionDriver for OngoingFloodThenControlDriver {
         let control_sent = io
             .emit(RecognitionSignal::Reconnecting {
                 epoch: 9,
-                attempt: 1,
+                retry_number: 1,
                 delay_ms: 500,
             })
             .is_ok();
@@ -201,7 +200,7 @@ fn short_frame(sequence: u64) -> OwnedRecognitionAudioFrame {
 }
 
 fn ongoing_signal(unit_id: &str, revision: u64) -> RecognitionSignal {
-    RecognitionSignal::Event(RecognitionEvent::Caption(CaptionSnapshotV1 {
+    RecognitionSignal::Event(RecognitionEvent::Caption(CaptionSnapshotV2 {
         generation: 17,
         stream_id: "stream-17".to_string(),
         unit_id: Some(unit_id.to_string()),
@@ -210,15 +209,14 @@ fn ongoing_signal(unit_id: &str, revision: u64) -> RecognitionSignal {
         text: format!("draft-{revision}"),
         state: CaptionState::Ongoing,
         language: None,
-        provider: "test".to_string(),
-        model: "test".to_string(),
+        source_ref: None,
         unit_started_at_ms: Some(1),
         timestamp_ms: revision,
     }))
 }
 
 #[test]
-fn active_session_accepts_owned_audio_and_emits_generation_scoped_signals() -> AppResult<()> {
+fn active_recognition_accepts_owned_audio_and_emits_generation_scoped_signals() -> AppResult<()> {
     let module =
         RecognitionModule::with_audio_budget(Duration::from_millis(100), 1, EchoFirstFrameDriver)?;
     let mut running = module.start(scope())?;
@@ -322,7 +320,7 @@ fn reconnect_pauses_audio_until_capture_shutdown_is_acknowledged() -> AppResult<
     let reconnect_epoch = match running.signals.recv_timeout(TEST_TIMEOUT) {
         Ok(RecognitionSignal::Reconnecting {
             epoch,
-            attempt: 1,
+            retry_number: 1,
             delay_ms: 500,
         }) => epoch,
         Ok(other) => {
@@ -525,7 +523,7 @@ fn coalesced_ongoing_caption_keeps_its_latest_emission_position() -> AppResult<(
     assert!(matches!(
         received.try_recv(),
         Ok(RecognitionSignal::Event(RecognitionEvent::Caption(
-            CaptionSnapshotV1 { revision: 2, .. }
+            CaptionSnapshotV2 { revision: 2, .. }
         )))
     ));
     assert_eq!(received.try_recv(), Err(TryRecvError::Empty));
@@ -545,11 +543,11 @@ fn lifecycle_signals_use_reserved_capacity_after_ongoing_queue_saturates() -> Ap
 
     assert!(
         signals
-            .try_send(RecognitionSignal::Event(RecognitionEvent::UnitEnded {
+            .try_send(RecognitionSignal::Event(RecognitionEvent::UnitAborted {
                 generation: 17,
                 stream_id: "stream-17".to_string(),
                 unit_id: "durable-unit".to_string(),
-                reason: RecognitionEndReason::NoSpeech,
+                reason: RecognitionUnitAbortReason::NoSpeech,
             }))
             .is_ok()
     );
@@ -581,7 +579,7 @@ fn ongoing_flood_is_coalesced_without_blocking_lifecycle_control() -> AppResult<
     assert!(matches!(
         running.signals.recv_timeout(TEST_TIMEOUT),
         Ok(RecognitionSignal::Event(RecognitionEvent::Caption(
-            CaptionSnapshotV1 {
+            CaptionSnapshotV2 {
                 revision: 128,
                 state: CaptionState::Ongoing,
                 ..

@@ -3,7 +3,7 @@
 use super::RuntimeGeneration;
 use super::coordinator::RuntimeExecution;
 use super::output::finish_runtime_output;
-use crate::chatbox::{PublisherCloseReason, RuntimeChatboxPublisher};
+use crate::chatbox::{ChatboxPublication, PublisherCloseReason};
 use crate::error::AppResult;
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, record_and_emit_runtime_status,
@@ -29,7 +29,7 @@ pub(super) fn run_runtime_thread<R: Runtime>(execution: RuntimeExecution<R>) {
 fn supervise_runtime_thread<R: Runtime>(
     app: &AppHandle<R>,
     generation: &RuntimeGeneration,
-    publisher: Option<&RuntimeChatboxPublisher>,
+    publisher: Option<&ChatboxPublication>,
     status_recorder: &RuntimeStatusRecorder,
     run: impl FnOnce() -> AppResult<()>,
 ) {

@@ -26,7 +26,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
     });
     let diagnostics = vec![
         (
-            PublisherDiagnostic::UnitPublished {
+            CompletedPublisherDiagnostic::UnitPublished {
                 unit_id: "published".to_string(),
                 page_count: 2,
                 byte_count: 42,
@@ -36,7 +36,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "info",
         ),
         (
-            PublisherDiagnostic::UnitDroppedOverload {
+            CompletedPublisherDiagnostic::UnitDroppedOverload {
                 unit_id: "dropped".to_string(),
                 page_count: 2,
             },
@@ -44,7 +44,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "warning",
         ),
         (
-            PublisherDiagnostic::UnitRejectedOverload {
+            CompletedPublisherDiagnostic::UnitRejectedOverload {
                 unit_id: "rejected".to_string(),
                 page_count: 33,
             },
@@ -52,7 +52,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "warning",
         ),
         (
-            PublisherDiagnostic::UnitExpired {
+            CompletedPublisherDiagnostic::UnitExpired {
                 unit_id: "expired".to_string(),
                 page_count: 2,
             },
@@ -60,7 +60,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "warning",
         ),
         (
-            PublisherDiagnostic::LayoutFailed {
+            CompletedPublisherDiagnostic::LayoutFailed {
                 unit_id: "layout".to_string(),
                 reason: "test layout failure".to_string(),
             },
@@ -68,7 +68,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "warning",
         ),
         (
-            PublisherDiagnostic::UnitSendFailed {
+            CompletedPublisherDiagnostic::UnitSendFailed {
                 unit_id: "send".to_string(),
                 page_index: 2,
                 page_count: 3,
@@ -79,7 +79,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "error",
         ),
         (
-            PublisherDiagnostic::PagesDiscardedOnClose {
+            CompletedPublisherDiagnostic::PagesDiscardedOnClose {
                 reason: PublisherCloseReason::Stop,
                 unit_count: 2,
                 page_count: 3,
@@ -89,7 +89,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "info",
         ),
         (
-            PublisherDiagnostic::PagesDiscardedOnClose {
+            CompletedPublisherDiagnostic::PagesDiscardedOnClose {
                 reason: PublisherCloseReason::RuntimeError,
                 unit_count: 2,
                 page_count: 3,
@@ -99,7 +99,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "info",
         ),
         (
-            PublisherDiagnostic::TypingFailed {
+            CompletedPublisherDiagnostic::TypingFailed {
                 is_typing: false,
                 error: AppError::osc_send("test", "typing failure".to_string()),
             },
@@ -107,7 +107,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "error",
         ),
         (
-            PublisherDiagnostic::WorkerFailed {
+            CompletedPublisherDiagnostic::WorkerFailed {
                 reason: "worker failure".to_string(),
             },
             "osc.completed_publisher_failed",

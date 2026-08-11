@@ -12,7 +12,7 @@ one command with a synchronous WebSocket read. A nominal two-millisecond read
 timeout blocks for roughly 10–20 milliseconds on Windows Winsock, so ordinary
 capture outpaced the callback-count queue and stopped with `stt.backpressure`.
 Batching commands reduces that symptom but leaves runtime coupled to OpenAI
-commit semantics and gives a future local model the wrong Interface.
+commit semantics and gives a future local model the wrong boundary.
 
 ## Decision
 
@@ -20,7 +20,7 @@ Runtime owns microphone capture, the runtime-generation output fence, and
 publication. It starts one active **Recognition Module** and submits continuous,
 owned mono audio frames. The Module owns path-specific speech boundaries,
 caption-unit lifecycle, recognition attempts, reconnect/backoff, protocol or
-worker I/O, and normalization. Its external Interface is start, bounded
+worker I/O, and normalization. Its external interface is start, bounded
 non-blocking audio submission, ordered normalized signals, reconnect capture
 acknowledgement, and out-of-band hard Stop. Provider commands, JSON, commits,
 item IDs, local IPC messages, and model-native frame shapes remain internal.
@@ -35,6 +35,14 @@ cross into the new attempt. Stop closes admission out of band, wakes connect,
 ack, backoff, protocol, or worker waits, clears pending signals, and joins the
 owner.
 
+The desktop composition boundary prepares the concrete Module before Runtime
+starts and binds it to the non-secret credential snapshot and cloud-audio
+disclosure implied by that selection. Runtime receives this prepared value as
+one unit; it cannot independently pair a Module with contradictory generation
+metadata. A future local constructor may bind the same Module interface to no
+service credential and no cloud upload without adding path branches to the
+runtime coordinator.
+
 Normalized signals keep total order. Revisions of the same ongoing caption may
 coalesce latest-wins, while lifecycle control has reserved bounded capacity;
 completed captions and unit boundaries are never silently reclassified as an
@@ -43,12 +51,12 @@ connection without blocking capture: reads, writes, control frames, partial
 records, and pending output make independent bounded progress, and Stop can
 shut down the socket directly.
 
-A later local STT path implements the same active Interface with an
-out-of-process driver. That driver may choose different audio-duration and IPC
-budgets and owns model loading, resampling/windowing, inference cadence, and
-worker health. Runtime does not gain local-model branches or provider lifecycle
-commands. Translation remains a downstream Module over normalized source
-snapshots in Phase 5 and is not folded into recognition.
+A later local recognition path runs behind the same active Module boundary
+with an out-of-process driver. That driver may choose different audio-duration
+and IPC budgets and owns model loading, resampling/windowing, inference
+cadence, and worker health. Runtime does not gain local-model branches or
+provider lifecycle commands. Translation remains a downstream Module over
+normalized source snapshots in Phase 5 and is not folded into recognition.
 
 ## Considered Options
 
@@ -67,10 +75,10 @@ snapshots in Phase 5 and is not folded into recognition.
 
 - Windows callback bursts and socket scheduling no longer define recognition
   throughput through a fake read timeout.
-- OpenAI and future local recognition share one deep application Interface
+- OpenAI and future local recognition share one deep application boundary
   without pretending their internal attempts, boundaries, or budgets match.
 - Backpressure remains explicit and terminal when bounded audio or durable
   signal capacity is genuinely exhausted.
 - Runtime coordinator tests cover Ready, reconnect capture retirement, Stop,
-  and terminal failure; adapter tests cover unitization, attempt isolation,
+  and terminal failure; Driver tests cover unitization, attempt isolation,
   protocol progress, and provider normalization.

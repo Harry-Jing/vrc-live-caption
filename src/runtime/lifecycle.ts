@@ -1,6 +1,10 @@
-import type { RuntimeSessionPhase, RuntimeStatus } from "./types";
+import type { RuntimeGenerationPhase } from "./runtimeControl";
+import type { RuntimeStatus } from "./runtimeEvents";
 
-const ACTIVE_SESSION_PHASES: ReadonlySet<RuntimeSessionPhase> = new Set([
+export type RuntimeAction = "start" | "stop" | "testChatbox";
+export type RuntimeLifecycleAction = Extract<RuntimeAction, "start" | "stop">;
+
+const ACTIVE_GENERATION_PHASES: ReadonlySet<RuntimeGenerationPhase> = new Set([
   "starting",
   "running",
   "reconnecting",
@@ -21,11 +25,11 @@ const STOPPABLE_RUNTIME_STATUSES: ReadonlySet<RuntimeStatus> = new Set([
   "error",
 ]);
 
-export function isActiveRuntimeSessionPhase(
-  phase: RuntimeSessionPhase | null | undefined,
+export function isActiveRuntimeGenerationPhase(
+  phase: RuntimeGenerationPhase | null | undefined,
 ) {
   return (
-    phase !== null && phase !== undefined && ACTIVE_SESSION_PHASES.has(phase)
+    phase !== null && phase !== undefined && ACTIVE_GENERATION_PHASES.has(phase)
   );
 }
 

@@ -7,7 +7,7 @@ pub(crate) const REALTIME_PCM_SAMPLE_RATE_HZ: u32 = 24_000;
 /// Converts a fixed-rate mono capture stream into signed 16-bit little-endian
 /// PCM at exactly 24 kHz. Linear interpolation is intentionally kept behind
 /// this small boundary so it can later be replaced without leaking resampler
-/// details into the provider adapter.
+/// details into the OpenAI recognition driver.
 pub(crate) struct RealtimePcm16Encoder {
     input_sample_rate_hz: Option<u32>,
     pending_samples: Vec<f32>,
@@ -83,7 +83,7 @@ impl RealtimePcm16Encoder {
 
         match self.input_sample_rate_hz {
             Some(current) if current != sample_rate_hz => Err(AppError::audio(format!(
-                "Recognition audio sample rate changed from {current} Hz to {sample_rate_hz} Hz during one session."
+                "Recognition audio sample rate changed from {current} Hz to {sample_rate_hz} Hz during one attempt."
             ))),
             Some(_) => Ok(()),
             None => {

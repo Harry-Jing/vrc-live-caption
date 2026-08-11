@@ -20,15 +20,15 @@ accepted target architecture. Implementation status lives in
 Audio Sources
   -> capture / provider-independent audio
   -> Active Recognition Module
-  -> Normalized Caption Snapshots
-  -> Optional Translation
-  -> Publication Policy
-  -> Output Sink Publishers
+  -> Caption Aggregate
+  -> Optional Translation Module
+  -> Caption Pipeline Plan
+  -> UI and Output Sink Publishers
 ```
 
-A recognition Adapter produces the source lane. A translation path may consume
+A Recognition Driver produces the source lane. A translation path may consume
 normalized source text or audio directly; the architecture does not require
-every translation to wait behind STT.
+every translation topology to wait behind source recognition.
 
 ## Core boundaries
 
@@ -39,21 +39,23 @@ every translation to wait behind STT.
 - Provider raw events never reach UI-facing consumers or output sinks
   ([ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)).
 - Provider-authored error messages and metadata are discarded inside the
-  Adapter. Only an allowlisted application classification and stable,
+  concrete driver. Only an allowlisted application classification and stable,
   application-authored diagnostic text may cross the seam.
-- A provider adapter never publishes directly to Chatbox. Chatbox is an
+- A recognition or translation driver never publishes directly to Chatbox.
+  Chatbox is an
   output sink, not the center of the runtime.
 - Publication eligibility and sink pacing are separate decisions.
 - Translation never blocks capture or recognition.
 - Local inference runs out of process behind a Rust worker seam
   ([ADR 0020](./adr/0020-keep-local-inference-out-of-process.md)).
-- Runtime failures are categorized, visible, and never silently change
-  provider, model, backend, publication mode, or content selection.
+- Runtime failures are categorized, visible, and never silently change a
+  recognition path, translation path, effective backend, publication mode, or
+  content selection.
 
 ## Active recognition seam
 
-**Current implementation.** Runtime sees one deep, provider-neutral active
-Recognition Interface:
+**Current implementation.** Runtime sees one deep, path-neutral active
+Recognition Module:
 
 ```text
 runtime coordinator
@@ -63,20 +65,29 @@ runtime coordinator
   -> acknowledge capture retirement / hard Stop out of band
 
 Recognition Module
-  -> current OpenAI driver: unitization + attempts + Realtime protocol owner
-  -> future Local driver: model lifecycle + out-of-process worker protocol
+  -> selected Recognition Driver
+     -> current OpenAI driver: unitization + attempts + Realtime protocol owner
+     -> future local driver: model lifecycle + out-of-process worker protocol
 ```
 
-The Interface accepts an immutable, already-planned selection and continuous
+The Module accepts an immutable, already-planned selection and continuous
 provider-independent mono frames with capture sequence and timestamp. Runtime
 does not manufacture input-end, commit, item, or inference-window commands.
-The Module emits unit-started and unit-ended lifecycle events, zero or more
-ongoing full-text snapshots, at most one completed full-text snapshot per
-caption unit, and categorized recoverable or terminal errors. It does not
-expose a URL, JSON event, provider item identifier, worker message, resampling
-window, or model-native tensor.
+The desktop composition boundary resolves the selected path's credential,
+constructs the concrete Module, and binds it to the generation-facing
+credential snapshot and microphone-upload disclosure as one prepared
+recognition value. Runtime receives that value, not independently selectable
+metadata, an OpenAI key, a provider factory, or a recognition transport
+dependency.
+It emits unit-started and unit-aborted lifecycle signals, zero or more ongoing
+full-text snapshots, at most one completed full-text snapshot per caption unit,
+and categorized recoverable or terminal errors. A completed Source snapshot is
+the normal source-unit close; `unit-aborted` is reserved for no-speech or
+failure paths. The Module does not expose a URL, JSON event, provider item
+identifier, worker message, resampling window, or model-native tensor.
 
-One owner executes the selected Module for a runtime generation. Its input is
+One owner executes the selected Driver inside the Module for a runtime
+generation. Its input is
 bounded by represented audio duration plus a frame-count safety ceiling rather
 than capture callback count. An admitted frame carries an attempt epoch and an
 RAII budget permit. At reconnect, admission closes and advances before queued
@@ -93,30 +104,30 @@ silently losing speech or a completed unit.
 
 These invariants hold on both sides of the seam:
 
-- one runtime generation owns exactly one provider, Adapter selection, and
-  model; saved changes take effect only on a later Start. A generation may
-  replace a failed provider connection without changing that selection;
+- one runtime generation owns exactly one recognition-path selection; saved
+  changes take effect only on a later Start. A generation may replace a failed
+  recognition attempt without changing that selection;
 - each unit has one stable normalized identity, revisions increase within its
-  lane, and completion is terminal for that unit;
-- raw deltas are accumulated inside the Adapter and leave it only as full
+  lane, and completion is terminal only for that lane's revision chain;
+- raw deltas are accumulated inside the Driver and leave it only as full
   snapshots ([ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md));
 - provider events that complete out of order are correlated to their original
   units before admission; unit sequence follows input/commit order, and a
   missing or failed bound unit ends explicitly so later terminal results can
   advance without attaching to or overtaking the wrong unit; an unacknowledged
-  commit fails the whole session because its later provider identity cannot be
+  commit fails the attempt because its later provider identity cannot be
   attached safely;
 - recoverable item failure may end that item and keep the connection running;
   explicitly transient connection or provider availability failures enter a
   visible reconnect loop, while authentication, permission, invalid-request,
   usage-limit, proxy-policy, TLS-configuration, protocol, worker, and unknown
-  failures end the generation visibly. Neither kind changes provider, model,
-  or publication timing; and
+  failures end the generation visibly. Neither kind changes the recognition
+  path or publication timing; and
 - the runtime generation gate rejects all output after Stop, including a
   provider's drained tail or a local worker's late response.
 
-Concrete Adapters hide behaviorally different mechanisms. The OpenAI Module
-owns two release paths behind the same Interface:
+Concrete Drivers hide behaviorally different mechanisms. The OpenAI Module
+owns two release paths behind the same Module boundary:
 
 | Catalog entry | Hidden input/event behavior | Declared publication timing |
 |---|---|---|
@@ -133,16 +144,17 @@ The release decision is
 
 There is deliberately no generic WebSocket abstraction. Connection setup,
 authentication, system-proxy tunneling, JSON encoding, 24 kHz PCM conversion,
-append/commit sequencing, `item_id` bookkeeping, session-failure policy, and
-OpenAI error decoding are hidden implementation of the OpenAI Module. Its
+append/commit sequencing, `item_id` bookkeeping, recognition-attempt failure
+policy, and OpenAI error decoding are hidden implementation details of the
+OpenAI Module. Its
 Network Owner permanently uses non-blocking established I/O and independently
 advances bounded TLS reads, TLS writes, WebSocket data, Ping/Pong, Close, and
 partial records. Audio submission never performs a fake-timeout socket read.
 A future Local driver instead hides worker startup, model loading, bounded IPC,
-frame transport, and crash mapping behind the same semantic Interface.
+frame transport, and crash mapping behind the same Recognition Module boundary.
 
-Capabilities belong to the complete provider path — provider, endpoint or
-session mode, model, runtime, backend, and relevant configuration:
+Capabilities belong to the complete recognition path — provider, endpoint or
+protocol mode, model, runtime, effective backend, and relevant configuration:
 
 | Dimension | Example values |
 |---|---|
@@ -152,19 +164,20 @@ session mode, model, runtime, backend, and relevant configuration:
 | Revision behavior | revisable snapshot, append-only |
 | Produced lanes | source, translation, both |
 
-A backend-owned planner resolves each publication request against these
-facts. The release catalog uses exact path identifiers and capability records,
-not arbitrary model strings or model-name heuristics. An incompatible or
-removed selection preserves the request and reports the supported alternatives
+The application resolves a Caption Pipeline Plan for each publication request
+against these facts. The release catalog uses exact path identifiers and
+capability records, not arbitrary model strings or model-name heuristics. An
+incompatible or removed selection preserves the request and reports the
+supported alternatives
 ([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)).
 
 The implementation has no REST/WAV recognition fallback, legacy OpenAI model
-compatibility, or production Mock provider. Scripted recognition Adapters
+compatibility, or production Mock provider. Scripted Recognition Drivers
 remain test-only and are selected by dependency injection rather than
 configuration.
 
 Transport libraries are replaceable OpenAI-Module dependencies, not
-architecture Interfaces. The concrete WebSocket, TLS, Base64, and system-proxy
+architecture interfaces. The concrete WebSocket, TLS, Base64, and system-proxy
 libraries are private OpenAI-Module dependencies. The removed direct HTTP
 client and WAV encoder are not retained for hypothetical future translation.
 The current transport honors a selected manual system HTTP proxy, rejects
@@ -177,10 +190,12 @@ Unsupported SOCKS and PAC/WPAD selections fail visibly. The relay/base-URL
 option remains later work under
 [ADR 0019](./adr/0019-follow-system-proxy-plan-relay-api.md).
 
-Hostname resolution is a shared application boundary for OpenAI target/proxy
-hosts and OSC targets. It has a monotonic deadline and observes the relevant
-Stop cancellation signal, so Start and Stop do not wait indefinitely on name
-resolution. TCP connect, proxy CONNECT, and TLS/WebSocket handshakes retain
+Hostname resolution is an application boundary for OpenAI target/proxy hosts
+and OSC targets. Each of those two current network subsystems owns a separate
+bounded resolver worker, so a stuck operating-system lookup cannot become a
+shared failure domain. Resolution has a monotonic deadline and observes the
+relevant Stop cancellation signal, so Start and Stop do not wait indefinitely
+on a result. TCP connect, proxy CONNECT, and TLS/WebSocket handshakes retain
 their separate existing timeouts. OpenAI name resolution completes before the
 microphone is opened.
 
@@ -189,31 +204,38 @@ microphone is opened.
 | Semantic concept | Tauri event | Meaning |
 |---|---|---|
 | `runtime.status` | `runtime-status` | `idle`, `starting`, `running`, `reconnecting`, `stopping`, `stopped`, or `error` |
-| `runtime.control.changed` | `runtime-control-changed` | the newest revisioned, redacted `RuntimeControlSnapshot` after an authoritative control change |
-| `caption.session.changed` | `caption-session-changed` | the newest full `CaptionSessionSnapshotV1` aggregate |
+| `runtime.control.changed` | `runtime-control-changed` | the newest revisioned, redacted `RuntimeControlSnapshot` V4 after an authoritative control change |
+| `caption.aggregate.changed` | `caption-aggregate-changed` | the newest full `CaptionAggregateSnapshotV2` |
 | `audio.level` | `audio-level` | generation/revision-scoped 100 ms RMS/peak/gate/clipping scalars; never PCM |
 | `diagnostic` | `diagnostic-event` | categorized report with a stable code ([ADR 0014](./adr/0014-diagnostic-codes-are-category-detail.md)) |
 
-Rust still emits `utterance-started` and `utterance-ended` as internal
-recognition lifecycle signals, but Vue does not subscribe to them and they are
-not UI-facing compatibility contracts. The UI derives listening state from
-caption-session `activeUnits`; recognition failures remain visible through
-diagnostics.
+Caption-unit lifecycle is internal to the Recognition Module. The Caption
+Aggregate exposes only application-owned `openSourceUnits` and normalized
+snapshots; there are no separate Tauri utterance events. The UI derives
+listening state from `openSourceUnits`, while recognition failures remain
+visible through diagnostics.
 
 The Diagnostics page can copy a versioned, redacted JSON report containing
 only app metadata, a normalized platform family, runtime status and timestamp,
 and each bounded diagnostic's category, severity, stable code, and timestamp.
 The report is built through an explicit field allowlist: caption text,
 diagnostic messages and details, configuration, device identifiers, network
-targets, paths, and provider-secret status are not serialized. Clipboard
+targets, paths, and credential status are not serialized. Clipboard
 access is write-only, and the App does not create or retain a report file.
 
-Rust owns one versioned caption-session aggregate,
-`CaptionSessionSnapshotV1`: a monotonic aggregate revision, backend-assigned
-generation and stream identity, active units, and full-text caption snapshots
-with lane, per-scope revision, and ongoing/completed state
+Rust owns one versioned Caption Aggregate, `CaptionAggregateSnapshotV2`: a
+monotonic aggregate revision, the active application-assigned stream, open
+Source units, and bounded recent full-text snapshots with lane, per-scope
+revision, and ongoing/completed state
 ([ADR 0010](./adr/0010-adapters-emit-full-snapshots-not-deltas.md)).
-Unit-based captions are newest-unit-first by backend-accepted unit sequence;
+Translation snapshots additionally identify the exact completed Source
+snapshot they consumed. Lane completion is terminal for that lane's revision
+chain, not for the entire correlated unit
+([ADR 0027](./adr/0027-link-translations-to-exact-source-snapshots.md)). The
+aggregate may retain completed captions from older runtime generations, so it
+is deliberately not called a session.
+
+Unit-based captions are newest-unit-first by application-accepted unit sequence;
 later revisions keep their unit's position, and wall-clock timestamps are
 metadata rather than ordering keys.
 
@@ -222,7 +244,7 @@ the caption aggregate to resynchronize, and reducers ignore older revisions
 ([ADR 0013](./adr/0013-event-delivery-is-best-effort.md)). Audio level telemetry
 is deliberately ephemeral: the UI accepts only newer generation/revision pairs
 and hides stale readings outside Running. A shared JSON fixture pins the Rust
-caption serialization and TypeScript runtime decoder to the same V1 wire
+caption serialization and TypeScript runtime decoder to the same V2 wire
 shape. Admission, ordering, and reload-race handling live in reducers and
 their tests.
 
@@ -235,32 +257,43 @@ Caption text never contains presentation placeholders; the UI derives
 listening, translating, degraded, and failure states from lifecycle and
 health events.
 
+The frontend reaches caption-runtime, settings, audio, and OSC host
+capabilities through one typed `AppGateway`. Production Tauri IPC and the
+deterministic Preview are concrete adapters behind that boundary; frontend
+domain state does not import Tauri commands, wire decoders, or Preview behavior
+directly. Narrow UI-only services such as confirmation and diagnostic-report
+clipboard access use feature-specific host ports instead of inflating the
+runtime store. Host command failures are normalized into structured
+application failures that retain a stable code and fallback message.
+
 ## Runtime control snapshot
 
-Saved settings and the running session are separate state
+Saved settings and the active runtime generation are separate state
 ([ADR 0012](./adr/0012-saved-settings-are-not-the-running-session.md)). Rust
 owns one revisioned, redacted control snapshot: the desired configuration,
-the backend-derived publication plan, secret status, lifecycle status, and
-the immutable selection captured by the current generation. Control
-mutations return the resulting snapshot; pending-change indicators are
-derived by comparing desired and active state. The Stop-versus-Start
-ordering guarantees live in the runtime code and its tests.
+the application-resolved Caption Pipeline Plan, service-credential status,
+lifecycle status, and the immutable selection captured by the current
+generation. `RuntimeControlSnapshot` V4 names that generation explicitly and
+records its phase, selection, credential, Chatbox-publication state, and
+pending generation changes. Control mutations return the resulting snapshot;
+the frontend never reconstructs active state by shallow-merging saved config.
+The Stop-versus-Start ordering guarantees live in the runtime code and tests.
 
 ## Runtime lifecycle
 
 Start validates configuration, credentials, audio devices, and the requested
 plan before capture begins. An incompatible combination is explained with
-explicit alternatives, never adjusted silently. A safe per-unit provider,
-translation, or OSC failure emits a diagnostic and may leave the session
+explicit alternatives, never adjusted silently. A safe per-unit recognition,
+translation, or OSC failure emits a diagnostic and may leave the generation
 running. A classified transient recognition failure first closes audio
 admission. The coordinator then drops capture, ends unconfirmed units, and
 acknowledges the retired attempt; only then may the Recognition Module enter
 visible `reconnecting` backoff and open a fresh attempt in the same generation.
-The fresh attempt starts with no audio replay. A terminal session-level failure
+The fresh attempt starts with no audio replay. A terminal generation-level failure
 moves the runtime to an explicit error state
 ([ADR 0025](./adr/0025-reconnect-within-one-runtime-generation.md)).
 
-While Running, the backend derives fixed-window RMS/peak, gate, and clipping
+While Running, the application derives fixed-window RMS/peak, gate, and clipping
 scalars from the same mono capture frames used by recognition. Raw PCM never
 crosses IPC. Settings also offers a short, local-only microphone probe that is
 mutually exclusive with the runtime and does not open a provider, OSC, secret,
@@ -279,7 +312,7 @@ and stays outside the text pacer.
 
 ## Chatbox publication modes
 
-Provider path, publication mode, and content selection are independent
+Recognition/translation paths, publication mode, and content selection are independent
 ([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)):
 
 | Selected-lane behavior | Completed | Live |
@@ -299,6 +332,14 @@ Two independent workers sit behind one closed publication facade and share
 one process-wide pacer that enforces the 1000 ms actual-attempt interval
 ([ADR 0015](./adr/0015-pace-chatbox-sends-at-one-second.md)). Publisher
 instances are generation-scoped; only the pacer survives Stop/Start.
+
+Runtime submits one application-internal `CaptionAggregateUpdate` for every
+store-accepted change. It pairs the newest full aggregate with the exact
+accepted Source-unit or caption change; it is not a second wire contract or a
+replay journal. The Live worker consumes the full aggregate, while the
+Completed worker consumes the exact change. This keeps Runtime independent of
+publication timing without asking a bounded five-unit UI history to reconstruct
+events that may already have been trimmed.
 
 - The **Completed** worker paginates completed units and publishes an
   ordered, bounded queue without blocking producers. Under sustained overload
@@ -331,16 +372,23 @@ unstable ASR revision is rejected because it creates request amplification,
 races, cost, and visible rewrites. Stale target work can never overwrite a
 newer source revision or another caption unit.
 
+Admission of bounded translation work reserves its exact completed Source
+snapshot in the Caption Aggregate. Completion, failure, timeout, cancellation,
+and Stop all release that reservation; ordinary bounded-history trimming may
+remove only unreserved units. The reservation seam lands with the first real
+Translation Module so ownership follows a concrete scheduler rather than a
+speculative API ([ADR 0027](./adr/0027-link-translations-to-exact-source-snapshots.md)).
+
 ## Target local inference boundary
 
 Local inference is a Rust application and Rust worker using packaged native
 libraries, with no Python, PyTorch, or Conda
-([ADR 0020](./adr/0020-keep-local-inference-out-of-process.md)). One STT
-model and one effective backend are loaded per recognition session; the
-backend preference and effective-backend rules are
+([ADR 0020](./adr/0020-keep-local-inference-out-of-process.md)). One selected
+local recognition path and one effective backend are loaded per recognition
+attempt; the backend-preference and effective-backend rules are
 [ADR 0021](./adr/0021-users-choose-the-local-backend.md). A worker crash
-stops the session and waits for an explicit user decision. The local worker
-driver implements the same active Recognition Interface as OpenAI: runtime
+ends the runtime generation and waits for an explicit user decision. The local
+driver runs behind the same active Recognition Module boundary as OpenAI: Runtime
 still submits continuous owned mono frames and consumes normalized signals.
 The driver owns its audio-duration/IPC budgets, resampling or model windows,
 model loading, worker messages, native-runtime types, and model-specific

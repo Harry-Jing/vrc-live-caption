@@ -7,6 +7,7 @@ dist-ssr/
 
 # Generated files and caches
 .tmp/
+.pnpm-store/
 components.d.ts
 *.tsbuildinfo
 

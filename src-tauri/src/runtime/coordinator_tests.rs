@@ -1,5 +1,5 @@
 use super::*;
-use crate::caption_session::CaptionSessionStore;
+use crate::caption::{CaptionAggregateSnapshotV2, CaptionAggregateStore};
 use crate::recognition::{
     RecognitionDriver, RecognitionDriverIo, RecognitionEvent, RecognitionGenerationScope,
     RecognitionModule,
@@ -20,6 +20,24 @@ struct TerminalAfterCaptureOpensDriver {
     capture_opened: mpsc::Receiver<()>,
 }
 
+struct DropTrackedRecognitionDriver {
+    dropped: Arc<AtomicBool>,
+}
+
+impl Drop for DropTrackedRecognitionDriver {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+impl RecognitionDriver for DropTrackedRecognitionDriver {
+    fn run(self: Box<Self>, _io: RecognitionDriverIo) -> AppResult<()> {
+        Err(AppError::state(
+            "Drop-tracked Recognition Driver unexpectedly started.",
+        ))
+    }
+}
+
 impl RecognitionDriver for TerminalAfterCaptureOpensDriver {
     fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
         io.ready(false)?;
@@ -34,7 +52,7 @@ impl RecognitionDriver for TerminalAfterCaptureOpensDriver {
             unit_id: "terminal-active-unit".to_string(),
             started_at_ms: 321,
         })?;
-        Err(AppError::stt_provider(
+        Err(AppError::recognition_provider(
             crate::error::ProviderFailureClass::Authentication,
             "The recognition provider rejected the configured credential.",
         ))
@@ -78,12 +96,41 @@ impl Drop for DropAwareRecognitionCapture {
 }
 
 #[test]
+fn runtime_execution_owns_the_selected_recognition_module() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let generation =
+        RuntimeGeneration::activate(app.handle(), 1, CaptionAggregateStore::default())?;
+    let driver_dropped = Arc::new(AtomicBool::new(false));
+    let module = RecognitionModule::with_audio_budget(
+        Duration::from_millis(100),
+        1,
+        DropTrackedRecognitionDriver {
+            dropped: Arc::clone(&driver_dropped),
+        },
+    )?;
+
+    let execution = RuntimeExecution::new(
+        app.handle().clone(),
+        AudioConfig::default(),
+        module,
+        None,
+        generation,
+        control.status_recorder(),
+    );
+    drop(execution);
+
+    assert!(driver_dropped.load(Ordering::SeqCst));
+    Ok(())
+}
+
+#[test]
 fn coordinator_drops_capture_before_acknowledging_reconnect() -> AppResult<()> {
     let app = tauri::test::mock_app();
     let control = RuntimeControlStore::default();
     let status_recorder = control.status_recorder();
-    let caption_session = CaptionSessionStore::default();
-    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session)?;
+    let caption_aggregate = CaptionAggregateStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_aggregate)?;
     let (capture_opened, opened) = mpsc::sync_channel(1);
     let (pause_acknowledged, acknowledged) = mpsc::sync_channel(1);
     let module = RecognitionModule::with_audio_budget(
@@ -100,7 +147,7 @@ fn coordinator_drops_capture_before_acknowledging_reconnect() -> AppResult<()> {
     })?;
     let capture_dropped = Arc::new(AtomicBool::new(false));
     let opened_capture_dropped = Arc::clone(&capture_dropped);
-    let open_capture = move |_config: &crate::config::AudioConfig| {
+    let open_capture = move |_config: &AudioConfig| {
         capture_opened.send(()).map_err(|_| {
             AppError::state("Runtime test recognition owner stopped before capture opened.")
         })?;
@@ -127,7 +174,7 @@ fn coordinator_drops_capture_before_acknowledging_reconnect() -> AppResult<()> {
 
     coordinate_running_recognition_with_capture(
         app.handle(),
-        &AppConfig::default(),
+        &AudioConfig::default(),
         None,
         &generation,
         &mut recognition,
@@ -140,7 +187,7 @@ fn coordinator_drops_capture_before_acknowledging_reconnect() -> AppResult<()> {
     recognition.stop()?;
     assert!(capture_dropped.load(Ordering::SeqCst));
     assert_eq!(
-        control.snapshot()?.runtime.status,
+        control.snapshot()?.runtime_status.status,
         RuntimeStatus::Reconnecting
     );
     Ok(())
@@ -151,16 +198,19 @@ fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<(
     let app = tauri::test::mock_app();
     let control = RuntimeControlStore::default();
     let status_recorder = control.status_recorder();
-    let caption_session = CaptionSessionStore::default();
-    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_session.clone())?;
+    let caption_aggregate = CaptionAggregateStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_aggregate.clone())?;
     let capture_dropped = Arc::new(AtomicBool::new(false));
     let observed_capture_drop = Arc::clone(&capture_dropped);
-    let (ended_sender, ended_receiver) = mpsc::channel();
-    app.listen("utterance-ended", move |event| {
-        let _ = ended_sender.send((
-            observed_capture_drop.load(Ordering::SeqCst),
-            event.payload().to_string(),
-        ));
+    let (aggregate_closed_sender, aggregate_closed_receiver) = mpsc::channel();
+    app.listen("caption-aggregate-changed", move |event| {
+        let Ok(snapshot) = serde_json::from_str::<CaptionAggregateSnapshotV2>(event.payload())
+        else {
+            return;
+        };
+        if snapshot.open_source_units.is_empty() {
+            let _ = aggregate_closed_sender.send(observed_capture_drop.load(Ordering::SeqCst));
+        }
     });
     let (capture_opened, opened) = mpsc::sync_channel(1);
     let module = RecognitionModule::with_audio_budget(
@@ -175,7 +225,7 @@ fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<(
         stream_id: generation.stream_id().to_string(),
     })?;
     let opened_capture_dropped = Arc::clone(&capture_dropped);
-    let open_capture = move |_config: &crate::config::AudioConfig| {
+    let open_capture = move |_config: &AudioConfig| {
         capture_opened.send(()).map_err(|_| {
             AppError::state("Runtime test recognition owner stopped before capture opened.")
         })?;
@@ -186,7 +236,7 @@ fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<(
 
     let error = match coordinate_running_recognition_with_capture(
         app.handle(),
-        &AppConfig::default(),
+        &AudioConfig::default(),
         None,
         &generation,
         &mut recognition,
@@ -202,14 +252,18 @@ fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<(
     };
     assert_eq!(error.code(), "stt.provider_authentication_failed");
     assert!(capture_dropped.load(Ordering::SeqCst));
-    assert!(caption_session.snapshot()?.active_units.is_empty());
-    let (capture_was_dropped, ended_payload) = ended_receiver
+    assert!(caption_aggregate.snapshot()?.open_source_units.is_empty());
+    let capture_was_dropped = aggregate_closed_receiver
         .recv_timeout(Duration::from_secs(1))
-        .map_err(|_| AppError::state("Terminal active unit did not emit utterance-ended."))?;
+        .map_err(|_| {
+            AppError::state("Terminal open source unit did not close in the aggregate.")
+        })?;
     assert!(capture_was_dropped);
-    assert!(ended_payload.contains("sttFailed"));
     recognition.stop()?;
     generation.request_stop(None)?;
-    assert_eq!(control.snapshot()?.runtime.status, RuntimeStatus::Running);
+    assert_eq!(
+        control.snapshot()?.runtime_status.status,
+        RuntimeStatus::Running
+    );
     Ok(())
 }

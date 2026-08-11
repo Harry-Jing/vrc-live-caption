@@ -29,14 +29,14 @@ remain ready for at least 30 seconds before it resets the accumulated backoff,
 so a flapping endpoint cannot force a permanent 500 ms retry loop.
 Authentication, permission, invalid-request, usage-limit, proxy-policy,
 TLS-configuration, and unknown failures remain terminal. Provider-authored
-messages and metadata are discarded at the Adapter boundary; they never choose
+messages and metadata are discarded at the Driver boundary; they never choose
 retry policy or enter diagnostics. When an HTTP 429 handshake includes a
 recognized structured quota code, it is terminal rather than being mistaken
 for a transient rate limit.
 
-At a reconnect boundary the microphone and provider session are closed,
+At a reconnect boundary the microphone and current recognition attempt are closed,
 unconfirmed caption units end visibly, and buffered or ambiguous audio is
-discarded. Capture resumes only after a fresh provider session is ready. Audio
+discarded. Capture resumes only after a fresh recognition attempt is ready. Audio
 is never replayed, the model and language hints never change, and no fallback
 provider or transport is selected. The UI exposes `reconnecting` rather than
 pretending to be Running or ending the generation.

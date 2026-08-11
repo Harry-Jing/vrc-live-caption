@@ -5,10 +5,10 @@
 import "@tauri-apps/api/core";
 
 // eslint-disable-next-line no-restricted-imports -- Preview must not import the Tauri runtime adapter
-import "../../../src/platform/tauri/runtimeBackend.ts";
+import "../../../src/platform/tauri/appGateway.ts";
 
 // eslint-disable-next-line no-restricted-imports -- Preview must not import runtime composition
-import "../../../src/platform/runtimeBackend.ts";
+import "../../../src/platform/appGateway.ts";
 
 // eslint-disable-next-line no-restricted-imports -- Preview must not decode runtime wire payloads
 import "../../../src/runtime/wire/runtimeEventContract.ts";
@@ -17,10 +17,10 @@ import "../../../src/runtime/wire/runtimeEventContract.ts";
 void import("@tauri-apps/api/event");
 
 // eslint-disable-next-line no-restricted-syntax -- Preview dynamic imports must not expose the Tauri adapter
-void import("../../../src/platform/tauri/runtimeBackend");
+void import("../../../src/platform/tauri/appGateway");
 
 // eslint-disable-next-line no-restricted-syntax -- Preview dynamic imports must not expose runtime composition
-void import("../../../src/platform/runtimeBackend");
+void import("../../../src/platform/appGateway");
 
 // eslint-disable-next-line no-restricted-syntax -- Preview dynamic imports must not expose wire decoders
 void import("../../../src/runtime/wire/runtimeControlContract");
@@ -29,10 +29,10 @@ void import("../../../src/runtime/wire/runtimeControlContract");
 void import(`@tauri-apps/api/core`);
 
 // eslint-disable-next-line no-restricted-syntax -- Preview template imports must not expose the Tauri adapter
-void import(`../../../src/platform/tauri/runtimeBackend.ts`);
+void import(`../../../src/platform/tauri/appGateway.ts`);
 
 // eslint-disable-next-line no-restricted-syntax -- Preview template imports must not expose runtime composition
-void import(`../../../src/platform/runtimeBackend.ts`);
+void import(`../../../src/platform/appGateway.ts`);
 
 // eslint-disable-next-line no-restricted-syntax -- Preview template imports must not expose wire decoders
-void import(`../../../src/runtime/wire/captionSessionContract.ts`);
+void import(`../../../src/runtime/wire/captionAggregateContract.ts`);

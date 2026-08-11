@@ -29,11 +29,11 @@ const restrictedImports = {
     message: "The Tauri runtime adapter is internal to platform composition.",
   },
   runtimeFacade: {
-    regex: "(^|/)platform/runtimeBackend(\\.[cm]?[jt]sx?)?$",
-    message: "Only useRuntime may create the runtime backend.",
+    regex: "(^|/)platform/appGateway(\\.[cm]?[jt]sx?)?$",
+    message: "Only useRuntime may create the AppGateway.",
   },
   runtimeComposition: {
-    regex: "(^|/)(runtime/backend|platform/runtimeBackend)(\\.[cm]?[jt]sx?)?$",
+    regex: "(^|/)(runtime/gateway|platform/appGateway)(\\.[cm]?[jt]sx?)?$",
     message:
       "Runtime composition is internal. Use useRuntime or the runtime context instead.",
   },
@@ -87,25 +87,25 @@ const restrictedImportSyntax = {
   runtimeFacade: [
     {
       selector:
-        "ImportExpression[source.value=/(?:^|\\/)platform\\/runtimeBackend(?:\\.[cm]?[jt]sx?)?$/]",
-      message: "Only useRuntime may create the runtime backend.",
+        "ImportExpression[source.value=/(?:^|\\/)platform\\/appGateway(?:\\.[cm]?[jt]sx?)?$/]",
+      message: "Only useRuntime may create the AppGateway.",
     },
     {
       selector:
-        "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)platform\\/runtimeBackend(?:\\.[cm]?[jt]sx?)?$/]",
-      message: "Only useRuntime may create the runtime backend.",
+        "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)platform\\/appGateway(?:\\.[cm]?[jt]sx?)?$/]",
+      message: "Only useRuntime may create the AppGateway.",
     },
   ],
   runtimeComposition: [
     {
       selector:
-        "ImportExpression[source.value=/(?:^|\\/)(?:runtime\\/backend|platform\\/runtimeBackend)(?:\\.[cm]?[jt]sx?)?$/]",
+        "ImportExpression[source.value=/(?:^|\\/)(?:runtime\\/gateway|platform\\/appGateway)(?:\\.[cm]?[jt]sx?)?$/]",
       message:
         "Runtime composition is internal. Use useRuntime or the runtime context instead.",
     },
     {
       selector:
-        "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)(?:runtime\\/backend|platform\\/runtimeBackend)(?:\\.[cm]?[jt]sx?)?$/]",
+        "ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/(?:^|\\/)(?:runtime\\/gateway|platform\\/appGateway)(?:\\.[cm]?[jt]sx?)?$/]",
       message:
         "Runtime composition is internal. Use useRuntime or the runtime context instead.",
     },
@@ -281,7 +281,10 @@ export default defineConfigWithVueTs(
 
   {
     name: "app/preview-adapter-seam",
-    files: ["src/preview/**/*.{vue,ts}", "tests/eslint/preview/**/*.mjs"],
+    files: [
+      "src/platform/preview/**/*.{vue,ts}",
+      "tests/eslint/preview/**/*.mjs",
+    ],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -311,7 +314,6 @@ export default defineConfigWithVueTs(
     ignores: [
       "src/runtime/**",
       "src/platform/**",
-      "src/preview/**",
       "tests/eslint/runtime/**",
       "tests/eslint/preview/**",
       "tests/eslint/platform/**",

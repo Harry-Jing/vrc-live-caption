@@ -5,8 +5,12 @@
 //! editable defaults while carrying an explicit review requirement back to
 //! the desktop state; secrets never enter this module.
 
-use crate::config::AppConfig;
+use crate::config::{
+    APP_CONFIG_SCHEMA_VERSION, AppConfig, AudioConfig, OscConfig, PublicationConfig,
+    RecognitionConfig, RecognitionPath, UiConfig,
+};
 use crate::error::{AppError, AppResult};
+use serde::Deserialize;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -100,23 +104,102 @@ fn config_path<R: Runtime>(app: &AppHandle<R>) -> AppResult<PathBuf> {
 }
 
 fn parse_valid_config(contents: &str) -> AppResult<AppConfig> {
-    let mut value = serde_json::from_str::<serde_json::Value>(contents)
+    let value = serde_json::from_str::<serde_json::Value>(contents)
         .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?;
-    if let Some(osc) = value
-        .get_mut("osc")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        // This pacing knob was removed by ADR 0015. Ignoring only this known
-        // field preserves unrelated settings without restoring a configurable
-        // rate or weakening strict model/config decoding.
-        osc.remove("minIntervalMs");
-    }
-    let config = serde_json::from_value::<AppConfig>(value)
-        .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?;
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            AppError::config_io("Failed to parse app config: schemaVersion must be an integer.")
+        })?;
+    let config = match schema_version {
+        3 => migrate_v3(value)?,
+        version if version == u64::from(APP_CONFIG_SCHEMA_VERSION) => serde_json::from_value::<
+            AppConfig,
+        >(value)
+        .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?,
+        version => {
+            return Err(AppError::config_io(format!(
+                "Failed to parse app config: unsupported schema version {version}."
+            )));
+        }
+    };
 
     config.validate()?;
 
     Ok(config)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyAppConfigV3 {
+    schema_version: u32,
+    audio: AudioConfig,
+    stt: LegacySttConfigV3,
+    osc: OscConfig,
+    publication: PublicationConfig,
+    ui: LegacyUiConfigV3,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacySttConfigV3 {
+    provider: LegacySttProviderV3,
+    languages: Vec<String>,
+    model: LegacyOpenAiTranscriptionModelV3,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+enum LegacySttProviderV3 {
+    #[serde(rename = "openai")]
+    OpenAi,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+enum LegacyOpenAiTranscriptionModelV3 {
+    #[serde(rename = "gpt-transcribe")]
+    GptTranscribe,
+    #[serde(rename = "gpt-live-transcribe")]
+    GptLiveTranscribe,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyUiConfigV3 {
+    show_partial: bool,
+}
+
+fn migrate_v3(value: serde_json::Value) -> AppResult<AppConfig> {
+    let config = serde_json::from_value::<LegacyAppConfigV3>(value)
+        .map_err(|error| AppError::config_io(format!("Failed to parse app config V3: {error}.")))?;
+    if config.schema_version != 3 {
+        return Err(AppError::config_io(format!(
+            "Failed to migrate app config: expected schema version 3, got {}.",
+            config.schema_version
+        )));
+    }
+    let path = match (config.stt.provider, config.stt.model) {
+        (LegacySttProviderV3::OpenAi, LegacyOpenAiTranscriptionModelV3::GptTranscribe) => {
+            RecognitionPath::OpenAiGptTranscribe
+        }
+        (LegacySttProviderV3::OpenAi, LegacyOpenAiTranscriptionModelV3::GptLiveTranscribe) => {
+            RecognitionPath::OpenAiGptLiveTranscribe
+        }
+    };
+
+    Ok(AppConfig {
+        schema_version: APP_CONFIG_SCHEMA_VERSION,
+        audio: config.audio,
+        recognition: RecognitionConfig {
+            path,
+            expected_languages: config.stt.languages,
+        },
+        osc: config.osc,
+        publication: config.publication,
+        ui: UiConfig {
+            show_ongoing_preview: config.ui.show_partial,
+        },
+    })
 }
 
 #[cfg(test)]

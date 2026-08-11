@@ -1,17 +1,19 @@
 mod audio;
-mod capability_planner;
-mod caption_session;
+mod caption;
+mod caption_pipeline;
 mod chatbox;
 mod config;
+mod credentials;
 mod desktop;
 mod error;
 mod events;
+mod generation_fence;
 mod host_resolver;
 mod recognition;
 mod runtime;
 mod runtime_control;
 mod saved_settings;
-mod secrets;
+mod wall_clock;
 
 #[expect(
     clippy::expect_used,

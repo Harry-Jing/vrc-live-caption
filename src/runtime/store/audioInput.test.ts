@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
-import type { RuntimeBackend } from "../backend";
-import type { AudioLevelEvent } from "../types";
+import type { AudioLevelEvent } from "../audio";
+import type { AppGateway } from "../gateway";
 import { createAudioInputState } from "./audioInput";
 
 function level(
@@ -20,10 +20,10 @@ function level(
 }
 
 test("keeps the newest realtime audio level by generation and revision", () => {
-  const backend: Pick<RuntimeBackend, "probeAudioInput"> = {
+  const gateway: Pick<AppGateway, "probeAudioInput"> = {
     probeAudioInput: vi.fn(),
   };
-  const audio = createAudioInputState(backend);
+  const audio = createAudioInputState(gateway);
 
   audio.acceptAudioLevel(level(3, 2, -24));
   audio.acceptAudioLevel(level(3, 1, -40));
@@ -37,17 +37,17 @@ test("keeps the newest realtime audio level by generation and revision", () => {
 
 test("tracks an offline microphone probe from pending to result", async () => {
   let resolveProbe!: (
-    result: Awaited<ReturnType<RuntimeBackend["probeAudioInput"]>>,
+    result: Awaited<ReturnType<AppGateway["probeAudioInput"]>>,
   ) => void;
   const pendingProbe = new Promise<
-    Awaited<ReturnType<RuntimeBackend["probeAudioInput"]>>
+    Awaited<ReturnType<AppGateway["probeAudioInput"]>>
   >((resolve) => {
     resolveProbe = resolve;
   });
-  const backend: Pick<RuntimeBackend, "probeAudioInput"> = {
+  const gateway: Pick<AppGateway, "probeAudioInput"> = {
     probeAudioInput: vi.fn(() => pendingProbe),
   };
-  const audio = createAudioInputState(backend);
+  const audio = createAudioInputState(gateway);
   const request = { inputDeviceId: "usb-headset", durationMs: 3_000 };
   const expected = {
     sampleRate: 48_000,
@@ -66,14 +66,18 @@ test("tracks an offline microphone probe from pending to result", async () => {
   await expect(probe).resolves.toEqual(expected);
   expect(audio.isAudioProbeRunning.value).toBe(false);
   expect(audio.audioProbeResult.value).toEqual(expected);
-  expect(audio.audioProbeError.value).toBe("");
+  expect(audio.audioProbeFailure.value).toBeNull();
 });
 
 test("keeps an offline microphone probe failure in its own action state", async () => {
-  const backend: Pick<RuntimeBackend, "probeAudioInput"> = {
-    probeAudioInput: vi.fn(() => Promise.reject(new Error("Microphone busy"))),
+  const gateway: Pick<AppGateway, "probeAudioInput"> = {
+    probeAudioInput: vi.fn(() =>
+      Promise.reject(
+        Object.assign(new Error("Microphone busy"), { code: "audio.failed" }),
+      ),
+    ),
   };
-  const audio = createAudioInputState(backend);
+  const audio = createAudioInputState(gateway);
 
   await expect(
     audio.probeAudioInput({ inputDeviceId: null, durationMs: 2_000 }),
@@ -81,22 +85,28 @@ test("keeps an offline microphone probe failure in its own action state", async 
 
   expect(audio.isAudioProbeRunning.value).toBe(false);
   expect(audio.audioProbeResult.value).toBeNull();
-  expect(audio.audioProbeError.value).toBe("Microphone busy");
+  expect(audio.audioProbeFailure.value).toEqual({
+    code: "audio.failed",
+    message: "Microphone busy",
+  });
 });
 
 test("uses localized fallback copy for a non-error probe rejection", async () => {
-  const backend: Pick<RuntimeBackend, "probeAudioInput"> = {
+  const gateway: Pick<AppGateway, "probeAudioInput"> = {
     probeAudioInput: vi.fn(() => {
       // This test deliberately exercises the unknown rejection fallback.
       // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
       return Promise.reject();
     }),
   };
-  const audio = createAudioInputState(backend);
+  const audio = createAudioInputState(gateway);
 
   await expect(
     audio.probeAudioInput({ inputDeviceId: null, durationMs: 2_000 }),
   ).resolves.toBeNull();
 
-  expect(audio.audioProbeError.value).toBe("Microphone probe failed.");
+  expect(audio.audioProbeFailure.value).toEqual({
+    code: null,
+    message: "Microphone probe failed.",
+  });
 });

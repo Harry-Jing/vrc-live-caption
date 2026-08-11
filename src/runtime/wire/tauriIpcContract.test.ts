@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import tauriIpcFixture from "../../../contracts/tauri-ipc-v1.json?raw";
+import tauriIpcFixture from "../../../contracts/tauri-ipc-v2.json?raw";
 import {
   RUNTIME_CONTROL_EVENT,
   RUNTIME_EVENTS,
@@ -16,7 +16,7 @@ test("Tauri event and command names match the shared IPC manifest", () => {
     events: {
       runtimeStatus: RUNTIME_EVENTS.status,
       runtimeControlChanged: RUNTIME_CONTROL_EVENT,
-      captionSessionChanged: RUNTIME_EVENTS.captionSessionChanged,
+      captionAggregateChanged: RUNTIME_EVENTS.captionAggregateChanged,
       audioLevel: RUNTIME_EVENTS.audioLevel,
       diagnostic: RUNTIME_EVENTS.diagnostic,
     },

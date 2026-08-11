@@ -1,49 +1,40 @@
 //! Generation-scoped output admission and Chatbox publication ownership.
 //!
-//! This module owns the hard Stop fence, work cancellation, caption-session
-//! admission, linearized App/Chatbox commits, and publisher lifecycle.
+//! This module owns the hard Stop fence, work cancellation, caption-aggregate
+//! admission, linearized App/Chatbox commits, and publication lifecycle.
 
-use crate::capability_planner::ResolvedPublicationPolicy;
-use crate::caption_session::{CaptionSessionSnapshotV1, CaptionSessionStore, CaptionSnapshotV1};
+use crate::caption::{
+    CaptionAggregateSnapshotV2, CaptionAggregateStore, CaptionAggregateUpdate, CaptionSnapshotV2,
+};
+use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::chatbox::{
-    ChatboxOscSender, ChatboxPacer, ChatboxTransport, CompletedChatboxPublisher,
-    CompletedPublisherEvent, LiveChatboxPublisher, LivePublisherReporter, PublisherCloseReason,
-    PublisherReporter, PublisherSubmitOutcome, RuntimeChatboxPublisher,
-    completed_publisher_diagnostic, live_publisher_diagnostic,
+    ChatboxPacer, ChatboxPublication, ChatboxPublicationStart, PublisherCloseReason,
+    PublisherSubmitOutcome,
 };
 use crate::config::OscConfig;
 use crate::error::{AppError, AppResult};
 use crate::events::{
-    DiagnosticCategory, DiagnosticUpdate, UtteranceEndReason, emit_caption_session_changed,
-    emit_diagnostic, emit_utterance_ended, emit_utterance_started, now_ms,
+    DiagnosticCategory, DiagnosticUpdate, emit_caption_aggregate_changed, emit_diagnostic,
 };
+use crate::generation_fence::{GenerationCommitter, GenerationFence};
 use crate::host_resolver::HostResolver;
-use crate::recognition::{RecognitionEndReason, RecognitionEvent};
+use crate::recognition::{RecognitionEvent, RecognitionUnitAbortReason};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Runtime};
 
-type CaptionSessionReporter = Arc<dyn Fn(CaptionSessionSnapshotV1) + Send + Sync>;
+pub(super) use crate::chatbox::ChatboxPublicationInit;
 
-pub(crate) trait ChatboxPublisherBoundary {
-    fn request_close(&self, reason: PublisherCloseReason) -> AppResult<()>;
-}
+type CaptionAggregateReporter = Arc<dyn Fn(CaptionAggregateSnapshotV2) + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct RuntimeGeneration {
     generation_id: u64,
     stream_id: String,
-    caption_session: CaptionSessionStore,
-    caption_reporter: CaptionSessionReporter,
-    output_gate: Arc<Mutex<()>>,
-    hard_stop_requested: Arc<AtomicBool>,
+    caption_aggregate: CaptionAggregateStore,
+    caption_reporter: CaptionAggregateReporter,
+    generation_fence: GenerationFence,
     work_cancelled: Arc<AtomicBool>,
-}
-
-pub(super) enum RuntimePublisherInit {
-    Disabled,
-    Ready(RuntimeChatboxPublisher),
-    Unavailable(AppError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,154 +44,136 @@ pub(super) enum RecognitionEventSubmitOutcome {
     Stopped,
 }
 
-pub(super) fn publisher_boundary(
-    publisher: Option<&RuntimeChatboxPublisher>,
-) -> Option<&dyn ChatboxPublisherBoundary> {
-    publisher.map(|publisher| publisher as &dyn ChatboxPublisherBoundary)
-}
-
-pub(super) fn publisher_failure_message<'a>(
-    publisher: Option<&RuntimeChatboxPublisher>,
-    completed: &'a str,
-    live: &'a str,
-) -> &'a str {
-    match publisher {
-        Some(RuntimeChatboxPublisher::Live(_)) => live,
-        Some(RuntimeChatboxPublisher::Completed(_)) | None => completed,
-    }
-}
-
 impl RuntimeGeneration {
     pub(super) fn activate<R: Runtime>(
         app: &AppHandle<R>,
         generation_id: u64,
-        caption_session: CaptionSessionStore,
+        caption_aggregate: CaptionAggregateStore,
     ) -> AppResult<Self> {
-        let snapshot = caption_session.begin_generation(generation_id)?;
-        let active = snapshot.active.as_ref().ok_or_else(|| {
-            AppError::state("Caption session rejected a non-monotonic runtime generation.")
+        let snapshot = caption_aggregate.begin_generation(generation_id)?;
+        let active = snapshot.active_stream.as_ref().ok_or_else(|| {
+            AppError::state("Caption aggregate rejected a non-monotonic runtime generation.")
         })?;
         if active.generation != generation_id {
             return Err(AppError::state(
-                "Caption session activated a different runtime generation.",
+                "Caption aggregate activated a different runtime generation.",
             ));
         }
         let stream_id = active.stream_id.clone();
 
         let reporter_app = app.clone();
-        let caption_reporter: CaptionSessionReporter = Arc::new(move |snapshot| {
-            emit_caption_session_changed(&reporter_app, snapshot);
+        let caption_reporter: CaptionAggregateReporter = Arc::new(move |snapshot| {
+            emit_caption_aggregate_changed(&reporter_app, snapshot);
         });
         caption_reporter(snapshot);
 
         Ok(Self {
             generation_id,
             stream_id,
-            caption_session,
+            caption_aggregate,
             caption_reporter,
-            output_gate: Arc::new(Mutex::new(())),
-            hard_stop_requested: Arc::new(AtomicBool::new(false)),
+            generation_fence: GenerationFence::new(),
             work_cancelled: Arc::new(AtomicBool::new(false)),
         })
     }
 
     #[cfg(test)]
     pub(crate) fn active() -> Self {
-        let caption_session = CaptionSessionStore::default();
-        if let Err(error) = caption_session.begin_generation(1) {
-            tracing::error!(error_message = %error, "test caption session could not start");
+        let caption_aggregate = CaptionAggregateStore::default();
+        if let Err(error) = caption_aggregate.begin_generation(1) {
+            tracing::error!(error_message = %error, "test caption aggregate could not start");
         }
 
         Self {
             generation_id: 1,
             stream_id: "recognition-1-1".to_string(),
-            caption_session,
+            caption_aggregate,
             caption_reporter: Arc::new(|_| {}),
-            output_gate: Arc::new(Mutex::new(())),
-            hard_stop_requested: Arc::new(AtomicBool::new(false)),
+            generation_fence: GenerationFence::new(),
             work_cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
 
     #[cfg(test)]
-    pub(super) fn test_output_gate(&self) -> Arc<Mutex<()>> {
-        Arc::clone(&self.output_gate)
+    pub(super) fn poison_commit_gate_for_test(&self) {
+        self.generation_fence.poison_for_test();
     }
 
-    pub(crate) fn request_stop(
-        &self,
-        publisher: Option<&dyn ChatboxPublisherBoundary>,
-    ) -> AppResult<()> {
-        // Cancel capture and provider work before waiting for either sink.
-        // The explicit marker also prevents a new commit from overtaking Stop
-        // while an earlier App emit still owns the output gate.
-        self.hard_stop_requested.store(true, Ordering::SeqCst);
+    pub(crate) fn request_stop(&self, publication: Option<&ChatboxPublication>) -> AppResult<()> {
+        // Establish one shared App/Chatbox commit cutoff before cancelling
+        // capture and recognition work or waiting for either output sink. A commit
+        // that already crossed the fence may finish; every later one is rejected.
+        self.generation_fence.request_stop();
         self.cancel_work();
-
-        // Keep the App-output gate closed while the Chatbox gate is closed so
-        // Stop has one linearizable cutoff across both sinks. A commit that
-        // validated before the explicit marker belongs before Stop; every
-        // later commit is rejected by this generation forever.
-        let publisher_result =
-            self.close_publisher_at_boundary(publisher, PublisherCloseReason::Stop);
-        let caption_result = self.close_caption_session_at_boundary();
-
-        match (publisher_result, caption_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(publisher_error), Err(caption_error)) => Err(AppError::state(format!(
-                "Runtime outputs could not close cleanly: {publisher_error} {caption_error}"
-            ))),
-        }
+        self.close_outputs_at_boundary(publication, PublisherCloseReason::Stop)
     }
 
-    pub(super) fn close_publisher_at_boundary(
+    pub(super) fn close_publication_at_boundary(
         &self,
-        publisher: Option<&dyn ChatboxPublisherBoundary>,
+        publication: Option<&ChatboxPublication>,
         reason: PublisherCloseReason,
     ) -> AppResult<()> {
-        // Close admission before waiting on an older App/Chatbox commit. This
-        // keeps late STT results non-blocking while making them observe a
-        // closed Publisher immediately. An already-linearized transport call
-        // may finish; the gate below waits for it before returning.
-        let close_result = match publisher {
-            Some(publisher) => publisher.request_close(reason),
+        // Close generation-wide commit admission before asking Chatbox to close.
+        // This ordering also protects RuntimeError cleanup, which has no hard-Stop
+        // marker of its own. An already-linearized transport call may finish; the
+        // gate below waits for it before returning.
+        self.generation_fence.close_admission();
+        let close_result = match publication {
+            Some(publication) => publication.request_close(reason),
             None => Ok(()),
         };
 
         // Recover the guard even after a panic poisoned the gate. Normal
-        // commits already fail closed on poison, but Publisher admission must
+        // commits already fail closed on poison, but Chatbox admission must
         // still close so Stop cannot hang while joining an idle worker.
-        let (_output_gate, gate_was_poisoned) = match self.output_gate.lock() {
-            Ok(gate) => (gate, false),
-            Err(poisoned) => (poisoned.into_inner(), true),
-        };
-
-        if gate_was_poisoned {
+        if let Err(gate_error) = self.generation_fence.wait_for_commits() {
             let close_note = match close_result {
-                Ok(()) => " Publisher shutdown was still requested.".to_string(),
-                Err(error) => format!(" Publisher shutdown also failed: {error}"),
+                Ok(()) => " Chatbox shutdown was still requested.".to_string(),
+                Err(error) => format!(" Chatbox shutdown also failed: {error}"),
             };
-            Err(AppError::state(format!(
-                "Runtime generation lock was poisoned.{close_note}"
-            )))
+            Err(AppError::state(format!("{gate_error}{close_note}")))
         } else {
             close_result
         }
     }
 
-    pub(crate) fn commit_if_active(&self, commit: impl FnOnce()) -> AppResult<bool> {
-        let _output_gate = self
-            .output_gate
-            .lock()
-            .map_err(|_| AppError::state("Runtime generation lock was poisoned."))?;
+    pub(super) fn close_outputs_for_runtime_error(
+        &self,
+        publication: Option<&ChatboxPublication>,
+    ) -> AppResult<()> {
+        self.close_outputs_at_boundary(publication, PublisherCloseReason::RuntimeError)
+    }
 
-        if self.hard_stop_requested.load(Ordering::SeqCst) {
-            return Ok(false);
+    fn close_outputs_at_boundary(
+        &self,
+        publication: Option<&ChatboxPublication>,
+        reason: PublisherCloseReason,
+    ) -> AppResult<()> {
+        // Close and wake Chatbox admission before waiting for any commit that
+        // already crossed the generation fence. The aggregate closes only
+        // after those commits finish; worker join happens at the caller.
+        let publication_result = self.close_publication_at_boundary(publication, reason);
+        let aggregate_result = self.close_caption_aggregate_at_boundary();
+
+        match (publication_result, aggregate_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(publication_error), Err(aggregate_error)) => Err(AppError::state(format!(
+                "Runtime outputs could not close cleanly: {publication_error} {aggregate_error}"
+            ))),
         }
+    }
 
-        commit();
-        Ok(true)
+    pub(crate) fn commit_if_active(&self, commit: impl FnOnce()) -> AppResult<bool> {
+        self.try_commit(commit).map(|result| result.is_some())
+    }
+
+    pub(crate) fn try_commit<T>(&self, commit: impl FnOnce() -> T) -> AppResult<Option<T>> {
+        self.committer().try_commit(commit)
+    }
+
+    pub(crate) fn committer(&self) -> GenerationCommitter {
+        self.generation_fence.committer()
     }
 
     fn start_caption_unit(
@@ -209,54 +182,49 @@ impl RuntimeGeneration {
         stream_id: &str,
         unit_id: String,
         started_at_ms: u64,
-    ) -> AppResult<Option<CaptionSessionSnapshotV1>> {
-        self.caption_session
+    ) -> AppResult<Option<CaptionAggregateUpdate>> {
+        self.caption_aggregate
             .start_unit(generation, stream_id, unit_id, started_at_ms)
     }
 
-    fn end_caption_unit_without_caption(
+    fn abort_source_unit(
         &self,
         generation: u64,
         stream_id: &str,
         unit_id: &str,
-    ) -> AppResult<Option<CaptionSessionSnapshotV1>> {
-        self.caption_session
-            .end_unit_without_caption(generation, stream_id, unit_id)
+    ) -> AppResult<Option<CaptionAggregateUpdate>> {
+        self.caption_aggregate
+            .abort_source_unit(generation, stream_id, unit_id)
     }
 
     fn accept_caption(
         &self,
-        caption: CaptionSnapshotV1,
-    ) -> AppResult<Option<CaptionSessionSnapshotV1>> {
-        self.caption_session.accept_caption(caption)
+        caption: CaptionSnapshotV2,
+    ) -> AppResult<Option<CaptionAggregateUpdate>> {
+        self.caption_aggregate.accept_caption(caption)
     }
 
-    fn caption_snapshot(&self) -> AppResult<CaptionSessionSnapshotV1> {
-        self.caption_session.snapshot()
+    fn caption_snapshot(&self) -> AppResult<CaptionAggregateSnapshotV2> {
+        self.caption_aggregate.snapshot()
     }
 
-    fn report_caption_snapshot(&self, snapshot: CaptionSessionSnapshotV1) {
+    fn report_caption_snapshot(&self, snapshot: CaptionAggregateSnapshotV2) {
         (self.caption_reporter)(snapshot);
     }
 
-    fn close_caption_session_at_boundary(&self) -> AppResult<()> {
-        let (_output_gate, gate_was_poisoned) = match self.output_gate.lock() {
-            Ok(gate) => (gate, false),
-            Err(poisoned) => (poisoned.into_inner(), true),
-        };
-        let close_result = self.caption_session.close_generation(self.generation_id);
+    fn close_caption_aggregate_at_boundary(&self) -> AppResult<()> {
+        let gate_result = self.generation_fence.wait_for_commits();
+        let close_result = self.caption_aggregate.close_generation(self.generation_id);
         if let Ok(Some(snapshot)) = &close_result {
             (self.caption_reporter)(snapshot.clone());
         }
 
-        if gate_was_poisoned {
+        if let Err(gate_error) = gate_result {
             let close_note = match close_result {
-                Ok(_) => " Caption-session shutdown was still recorded.".to_string(),
-                Err(error) => format!(" Caption-session shutdown also failed: {error}"),
+                Ok(_) => " Caption-aggregate shutdown was still recorded.".to_string(),
+                Err(error) => format!(" Caption-aggregate shutdown also failed: {error}"),
             };
-            return Err(AppError::state(format!(
-                "Runtime generation lock was poisoned.{close_note}"
-            )));
+            return Err(AppError::state(format!("{gate_error}{close_note}")));
         }
 
         close_result.map(|_| ())
@@ -279,7 +247,7 @@ impl RuntimeGeneration {
     }
 
     pub(crate) fn is_hard_stop_requested(&self) -> bool {
-        self.hard_stop_requested.load(Ordering::SeqCst)
+        self.generation_fence.is_stop_requested()
     }
 
     pub(super) fn accepts_new_work(&self) -> bool {
@@ -292,26 +260,21 @@ impl RuntimeGeneration {
     pub(super) fn submit_recognition_event<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&RuntimeChatboxPublisher>,
+        publisher: Option<&ChatboxPublication>,
         event: RecognitionEvent,
     ) -> AppResult<RecognitionEventSubmitOutcome> {
-        let mut submit_result = None;
-        let committed = self.commit_if_active(|| {
-            submit_result = Some(self.submit_recognition_event_at_boundary(app, publisher, event));
-        })?;
-        if !committed {
+        let Some(submit_result) =
+            self.try_commit(|| self.submit_recognition_event_at_boundary(app, publisher, event))?
+        else {
             return Ok(RecognitionEventSubmitOutcome::Stopped);
-        }
-
-        submit_result.ok_or_else(|| {
-            AppError::state("Runtime recognition event commit did not produce a result.")
-        })?
+        };
+        submit_result
     }
 
     fn submit_recognition_event_at_boundary<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&RuntimeChatboxPublisher>,
+        publisher: Option<&ChatboxPublication>,
         event: RecognitionEvent,
     ) -> AppResult<RecognitionEventSubmitOutcome> {
         match event {
@@ -321,133 +284,90 @@ impl RuntimeGeneration {
                 unit_id,
                 started_at_ms,
             } => {
-                let Some(snapshot) = self.start_caption_unit(
-                    generation,
-                    &stream_id,
-                    unit_id.clone(),
-                    started_at_ms,
-                )?
+                let Some(update) =
+                    self.start_caption_unit(generation, &stream_id, unit_id, started_at_ms)?
                 else {
                     return Ok(RecognitionEventSubmitOutcome::Ignored);
                 };
-                self.report_accepted_snapshot(app, publisher, snapshot);
-                emit_utterance_started(app, generation, stream_id, unit_id.clone(), started_at_ms);
-
-                if let Some(publisher) = publisher
-                    && let Err(error) = publisher
-                        .try_submit_completed_event(CompletedPublisherEvent::Started { unit_id })
-                {
-                    emit_diagnostic(
-                        app,
-                        DiagnosticUpdate::from_error(&error, "Chatbox activity could not start"),
-                    );
-                }
+                self.report_accepted_update(app, publisher, update);
             }
-            RecognitionEvent::UnitEnded {
+            RecognitionEvent::UnitAborted {
                 generation,
                 stream_id,
                 unit_id,
                 reason,
             } => {
-                let (reason, failure_detail) = match reason {
-                    RecognitionEndReason::NoSpeech => (UtteranceEndReason::NoSpeech, None),
-                    RecognitionEndReason::Failed { detail } => {
-                        (UtteranceEndReason::SttFailed, Some(detail))
-                    }
+                let failure_detail = match reason {
+                    RecognitionUnitAbortReason::NoSpeech => None,
+                    RecognitionUnitAbortReason::Failed { detail } => Some(detail),
                 };
-                let Some(snapshot) =
-                    self.end_caption_unit_without_caption(generation, &stream_id, &unit_id)?
-                else {
+                let Some(update) = self.abort_source_unit(generation, &stream_id, &unit_id)? else {
                     return Ok(RecognitionEventSubmitOutcome::Ignored);
                 };
-                self.report_accepted_snapshot(app, publisher, snapshot);
-                emit_utterance_ended(
-                    app,
-                    generation,
-                    stream_id,
-                    unit_id.clone(),
-                    reason,
-                    now_ms(),
-                );
+                self.report_accepted_update(app, publisher, update);
                 if let Some(detail) = failure_detail {
                     emit_diagnostic(
                         app,
                         DiagnosticUpdate::error(
-                            DiagnosticCategory::Stt,
+                            DiagnosticCategory::Recognition,
                             "stt.item_failed",
-                            "One utterance could not be transcribed",
+                            "One caption unit could not be transcribed",
                             detail,
                         ),
                     );
                 }
-                if let Some(publisher) = publisher
-                    && let Err(error) = publisher
-                        .try_submit_completed_event(CompletedPublisherEvent::Aborted { unit_id })
-                {
-                    emit_diagnostic(
-                        app,
-                        DiagnosticUpdate::from_error(&error, "Chatbox activity could not resolve"),
-                    );
-                }
             }
             RecognitionEvent::Caption(caption) => {
-                let unit_id = caption.unit_id.clone();
-                let text = caption.text.clone();
-                let is_completed = caption.state == crate::caption_session::CaptionState::Completed;
-                let Some(snapshot) = self.accept_caption(caption)? else {
+                let Some(update) = self.accept_caption(caption)? else {
                     return Ok(RecognitionEventSubmitOutcome::Ignored);
                 };
-                self.report_accepted_snapshot(app, publisher, snapshot);
-
-                if is_completed && let (Some(publisher), Some(unit_id)) = (publisher, unit_id) {
-                    submit_completed_chatbox_candidate(app, publisher, self, unit_id, text);
-                }
+                self.report_accepted_update(app, publisher, update);
             }
         }
 
         Ok(RecognitionEventSubmitOutcome::Accepted)
     }
 
-    pub(super) fn abort_active_units_for_reconnect<R: Runtime>(
+    pub(super) fn abort_open_source_units_for_reconnect<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&RuntimeChatboxPublisher>,
+        publisher: Option<&ChatboxPublication>,
     ) -> AppResult<()> {
-        self.fail_active_units(
+        self.fail_open_source_units(
             app,
             publisher,
             "Speech was discarded because the recognition connection was interrupted.",
         )
     }
 
-    pub(super) fn abort_active_units_for_terminal_failure<R: Runtime>(
+    pub(super) fn abort_open_source_units_for_terminal_failure<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&RuntimeChatboxPublisher>,
+        publisher: Option<&ChatboxPublication>,
     ) -> AppResult<()> {
-        self.fail_active_units(
+        self.fail_open_source_units(
             app,
             publisher,
             "Speech was discarded because recognition stopped with a terminal error.",
         )
     }
 
-    fn fail_active_units<R: Runtime>(
+    fn fail_open_source_units<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&RuntimeChatboxPublisher>,
+        publisher: Option<&ChatboxPublication>,
         detail: &str,
     ) -> AppResult<()> {
         let snapshot = self.caption_snapshot()?;
-        for active_unit in snapshot.active_units {
+        for open_source_unit in snapshot.open_source_units {
             let _submit_outcome = self.submit_recognition_event(
                 app,
                 publisher,
-                RecognitionEvent::UnitEnded {
+                RecognitionEvent::UnitAborted {
                     generation: self.generation_id(),
                     stream_id: self.stream_id().to_string(),
-                    unit_id: active_unit.unit_id,
-                    reason: RecognitionEndReason::Failed {
+                    unit_id: open_source_unit.unit_id,
+                    reason: RecognitionUnitAbortReason::Failed {
                         detail: detail.to_string(),
                     },
                 },
@@ -456,179 +376,80 @@ impl RuntimeGeneration {
         Ok(())
     }
 
-    fn report_accepted_snapshot<R: Runtime>(
+    fn report_accepted_update<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&RuntimeChatboxPublisher>,
-        snapshot: CaptionSessionSnapshotV1,
+        publisher: Option<&ChatboxPublication>,
+        update: CaptionAggregateUpdate,
     ) {
-        // The App and Live publication observe the exact same store-accepted
-        // aggregate. Completed publication deliberately ignores this input and
-        // keeps its existing lossless lifecycle event path.
-        self.report_caption_snapshot(snapshot.clone());
+        // The App and Chatbox publication observe the exact same store-accepted
+        // update. The facade owns all timing-specific interpretation.
+        self.report_caption_snapshot(update.snapshot.clone());
         let Some(publisher) = publisher else {
             return;
         };
 
-        match publisher.observe_snapshot(&snapshot) {
+        match publisher.try_submit(&update) {
             Ok(PublisherSubmitOutcome::Handled) => {}
-            Ok(PublisherSubmitOutcome::Closed) => {
-                if !self.is_hard_stop_requested() {
-                    emit_diagnostic(
-                        app,
-                        DiagnosticUpdate::info(
-                            DiagnosticCategory::Osc,
-                            "osc.live_snapshot_discarded_after_close",
-                            "Live Chatbox snapshot discarded",
-                            "The Live publisher closed before this accepted App caption snapshot could be observed.",
-                        ),
-                    );
-                }
-            }
+            Ok(PublisherSubmitOutcome::Closed) => {}
             Err(error) => emit_diagnostic(
                 app,
-                DiagnosticUpdate::from_error(&error, "Live Chatbox snapshot could not be observed"),
+                DiagnosticUpdate::from_error(&error, "Chatbox snapshot could not be observed"),
             ),
         }
     }
 }
 
-pub(super) fn initialize_runtime_publisher<R: Runtime>(
+pub(super) fn initialize_chatbox_publication<R: Runtime>(
     app: &AppHandle<R>,
     config: &OscConfig,
-    policy: ResolvedPublicationPolicy,
+    timing: ResolvedPublicationTiming,
     chatbox_pacer: ChatboxPacer,
-    generation: RuntimeGeneration,
+    generation: &RuntimeGeneration,
     host_resolver: &HostResolver,
     is_cancelled: &dyn Fn() -> bool,
-) -> RuntimePublisherInit {
-    if !config.enabled {
-        return RuntimePublisherInit::Disabled;
-    }
-
-    let sender = match ChatboxOscSender::new(config, host_resolver, is_cancelled) {
-        Ok(sender) => sender,
-        Err(error) => return RuntimePublisherInit::Unavailable(error),
-    };
-    let transport: Arc<dyn ChatboxTransport> = Arc::new(sender);
-    let publisher = match policy {
-        ResolvedPublicationPolicy::Completed => {
-            let reporter_app = app.clone();
-            let reporter: PublisherReporter = Arc::new(move |diagnostic| {
-                emit_diagnostic(&reporter_app, completed_publisher_diagnostic(diagnostic));
-            });
-            CompletedChatboxPublisher::start(transport, chatbox_pacer, generation, reporter)
-                .map(RuntimeChatboxPublisher::Completed)
-        }
-        ResolvedPublicationPolicy::LiveUnit { .. } => {
-            let reporter_app = app.clone();
-            let reporter: LivePublisherReporter = Arc::new(move |diagnostic| {
-                emit_diagnostic(&reporter_app, live_publisher_diagnostic(diagnostic));
-            });
-            LiveChatboxPublisher::start(transport, chatbox_pacer, generation, policy, reporter)
-                .map(RuntimeChatboxPublisher::Live)
-        }
-    };
-
-    match publisher {
-        Ok(publisher) => RuntimePublisherInit::Ready(publisher),
-        Err(error) => RuntimePublisherInit::Unavailable(error),
-    }
+) -> ChatboxPublicationInit {
+    let reporter_app = app.clone();
+    let reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync> =
+        Arc::new(move |diagnostic| emit_diagnostic(&reporter_app, diagnostic));
+    ChatboxPublication::initialize(ChatboxPublicationStart {
+        config,
+        timing,
+        pacer: chatbox_pacer,
+        generation_id: generation.generation_id(),
+        committer: generation.committer(),
+        host_resolver,
+        is_cancelled,
+        reporter,
+    })
 }
 
 pub(super) fn finish_runtime_output<R: Runtime>(
     app: &AppHandle<R>,
     generation: &RuntimeGeneration,
-    publisher: Option<&RuntimeChatboxPublisher>,
+    publication: Option<&ChatboxPublication>,
     reason: PublisherCloseReason,
 ) {
     let close_result = match reason {
-        PublisherCloseReason::Stop => generation.request_stop(publisher_boundary(publisher)),
-        PublisherCloseReason::RuntimeError => match publisher {
-            Some(publisher) => generation
-                .close_publisher_at_boundary(Some(publisher), PublisherCloseReason::RuntimeError),
-            None => Ok(()),
-        },
+        PublisherCloseReason::Stop => generation.request_stop(publication),
+        PublisherCloseReason::RuntimeError => {
+            generation.close_outputs_for_runtime_error(publication)
+        }
     };
     if let Err(error) = close_result {
         emit_diagnostic(
             app,
-            DiagnosticUpdate::from_error(
-                &error,
-                publisher_failure_message(
-                    publisher,
-                    "Completed publisher could not close",
-                    "Live publisher could not close",
-                ),
-            ),
+            DiagnosticUpdate::from_error(&error, "Chatbox publication could not close"),
         );
     }
 
-    if let Some(publisher) = publisher
-        && let Err(error) = publisher.join()
+    if let Some(publication) = publication
+        && let Err(error) = publication.join()
     {
         emit_diagnostic(
             app,
-            DiagnosticUpdate::from_error(
-                &error,
-                publisher_failure_message(
-                    Some(publisher),
-                    "Completed publisher failed while closing",
-                    "Live publisher failed while closing",
-                ),
-            ),
+            DiagnosticUpdate::from_error(&error, "Chatbox publication failed while closing"),
         );
-    }
-
-    if let Err(error) = generation.close_caption_session_at_boundary() {
-        emit_diagnostic(
-            app,
-            DiagnosticUpdate::from_error(&error, "Caption session could not close"),
-        );
-    }
-}
-
-fn emit_chatbox_send_skipped_on_stop<R: Runtime>(app: &AppHandle<R>) {
-    emit_diagnostic(
-        app,
-        DiagnosticUpdate::info(
-            DiagnosticCategory::Osc,
-            "osc.send_skipped_on_stop",
-            "Chatbox send skipped",
-            "Runtime stop was requested before this caption could be sent.",
-        ),
-    );
-}
-
-fn submit_completed_chatbox_candidate<R: Runtime>(
-    app: &AppHandle<R>,
-    publisher: &RuntimeChatboxPublisher,
-    generation: &RuntimeGeneration,
-    unit_id: String,
-    text: String,
-) {
-    match publisher.try_submit_completed_event(CompletedPublisherEvent::Completed { unit_id, text })
-    {
-        Ok(PublisherSubmitOutcome::Handled) => {}
-        Ok(PublisherSubmitOutcome::Closed) => {
-            if generation.is_hard_stop_requested() {
-                emit_chatbox_send_skipped_on_stop(app);
-            } else {
-                emit_diagnostic(
-                    app,
-                    DiagnosticUpdate::info(
-                        DiagnosticCategory::Osc,
-                        "osc.completed_unit_discarded_after_close",
-                        "Completed Chatbox publication discarded",
-                        "The runtime output worker closed before this completed caption could enter its queue. The App caption remains available.",
-                    ),
-                );
-            }
-        }
-        Err(error) => emit_diagnostic(
-            app,
-            DiagnosticUpdate::from_error(&error, "Completed Chatbox publication was rejected"),
-        ),
     }
 }
 

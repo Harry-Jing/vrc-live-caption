@@ -2,5 +2,5 @@
 import "../../src/runtime/context.ts";
 import "../../src/platform/confirmation.ts";
 
-void import("../../src/runtime/types.ts");
-void import("../../src/platform/diagnosticReport.ts");
+void import("../../src/runtime/captionAggregate.ts");
+void import("../../src/features/diagnostics/diagnosticReport.ts");

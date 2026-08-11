@@ -1,94 +1,79 @@
 import { computed, ref, shallowRef } from "vue";
 import { uiText } from "../../i18n/uiText";
-import type { RuntimeBackend, Unsubscribe } from "../backend";
+import type { AppConfig } from "../appConfig";
+import { normalizeAppFailure, type AppFailure } from "../appFailure";
+import type { AudioInputDevice } from "../audio";
 import {
-  createCaptionSessionState,
-  reduceCaptionSessionState,
-  selectCaptionSessionView,
-  type CaptionSessionStateInput,
-} from "../captionSession";
-import { createLifecycleCommandQueue } from "../lifecycleCommandQueue";
+  createCaptionAggregateState,
+  reduceCaptionAggregateState,
+  selectCaptionAggregateView,
+  type CaptionAggregateStateInput,
+  type CaptionDisplay,
+} from "../captionAggregate";
+import type { AppGateway, Unsubscribe } from "../gateway";
+import { createLifecycleActionQueue } from "../lifecycleActionQueue";
+import type { RuntimeAction } from "../lifecycle";
 import {
   projectRuntimeControlSnapshot,
   runtimeStatusNeedsControlReconciliation,
   selectNewerRuntimeControlSnapshot,
+  type CredentialId,
+  type RuntimeControlSnapshot,
 } from "../runtimeControl";
 import {
-  createRuntimeReadinessGate,
-  type RuntimeReadinessSnapshot,
-} from "../runtimeReadiness";
+  createRuntimeSynchronizationGate,
+  type RuntimeSynchronizationSnapshot,
+} from "../runtimeSynchronization";
 import {
   createRuntimeState,
   reduceRuntimeState,
   selectRuntimeView,
   type RuntimeStateInput,
 } from "../runtimeState";
-import type {
-  AppConfig,
-  AudioInputDevice,
-  CaptionDisplay,
-  RuntimeCommand,
-  RuntimeControlSnapshot,
-  RuntimeStatusEvent,
-  SttProvider,
-} from "../types";
+import type { RuntimeStatusEvent } from "../runtimeEvents";
 import { createAudioInputState } from "./audioInput";
 
 const RUNTIME_CONTROL_RECONCILE_INTERVAL_MS = 500;
 
-function normalizeError(error: unknown) {
-  if (typeof error === "string") {
-    return error;
-  }
-
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-
-  return uiText("runtime.errors.unknownAction");
-}
-
-function assertUnreachableRuntimeCommand(command: never): never {
-  throw new Error(`Unsupported runtime command: ${String(command)}`);
+function assertUnreachableRuntimeAction(action: never): never {
+  throw new Error(`Unsupported runtime action: ${String(action)}`);
 }
 
 // One busy/error scope per action domain, so a slow settings save cannot
 // disable runtime controls or surface its error on an unrelated page.
 function createActionState() {
   const inFlightCount = ref(0);
-  const error = ref("");
+  const failure = shallowRef<AppFailure | null>(null);
   const isBusy = computed(() => inFlightCount.value > 0);
 
   async function run(action: () => Promise<void>) {
-    error.value = "";
+    failure.value = null;
     inFlightCount.value += 1;
 
     try {
       await action();
       return true;
     } catch (cause) {
-      error.value = normalizeError(cause);
+      failure.value = normalizeAppFailure(
+        cause,
+        uiText("runtime.errors.unknownAction"),
+      );
       return false;
     } finally {
       inFlightCount.value -= 1;
     }
   }
 
-  return { isBusy, error, run };
+  return { isBusy, failure, run };
 }
 
-export function createRuntimeStore(backend: RuntimeBackend) {
-  const audioInput = createAudioInputState(backend);
-  const runLifecycleCommand = createLifecycleCommandQueue(async (command) => {
+export function createRuntimeStore(gateway: AppGateway) {
+  const audioInput = createAudioInputState(gateway);
+  const runLifecycleAction = createLifecycleActionQueue(async (action) => {
     const snapshot =
-      command === "start_runtime"
-        ? await backend.startRuntime()
-        : await backend.stopRuntime();
+      action === "start"
+        ? await gateway.startRuntime()
+        : await gateway.stopRuntime();
     applyControlSnapshot(snapshot);
   });
   const audioInputDevices = ref<AudioInputDevice[]>([]);
@@ -99,28 +84,29 @@ export function createRuntimeStore(backend: RuntimeBackend) {
     timestampMs: Date.now(),
   };
   const runtimeState = shallowRef(createRuntimeState(initialRuntimeStatus));
-  const captionSessionState = shallowRef(createCaptionSessionState());
-  const inFlightRuntimeCommand = ref<RuntimeCommand | null>(null);
+  const captionAggregateState = shallowRef(createCaptionAggregateState());
+  const inFlightRuntimeAction = ref<RuntimeAction | null>(null);
   const runtimeAction = createActionState();
   const settingsAction = createActionState();
-  const secretsAction = createActionState();
-  const runtimeReadiness = shallowRef<RuntimeReadinessSnapshot>({
-    ready: false,
-    isBusy: false,
-    error: "",
+  const credentialAction = createActionState();
+  const runtimeSynchronization = shallowRef<RuntimeSynchronizationSnapshot>({
+    isSynchronized: false,
+    isSynchronizing: false,
+    failure: null,
   });
   let unsubscribeListeners: Unsubscribe | null = null;
   let isDisposed = false;
-  let nextLifecycleCommandAttemptId = 0;
+  let nextLifecycleActionAttemptId = 0;
   let nextStatusSyncRequestId = 0;
   let runtimeControlGapObserved = false;
   let runtimeControlPullsInFlight = 0;
   let runtimeControlReconcileTimer: ReturnType<typeof setTimeout> | null = null;
   let runtimeControlReconcileInFlight = false;
-  const runtimeReadinessGate = createRuntimeReadinessGate(
-    normalizeError,
+  const runtimeSynchronizationGate = createRuntimeSynchronizationGate(
+    (cause) =>
+      normalizeAppFailure(cause, uiText("runtime.errors.unknownAction")),
     (snapshot) => {
-      runtimeReadiness.value = snapshot;
+      runtimeSynchronization.value = snapshot;
       updateRuntimeControlReconciliation();
     },
   );
@@ -128,42 +114,47 @@ export function createRuntimeStore(backend: RuntimeBackend) {
   const controlView = computed(() =>
     projectRuntimeControlSnapshot(controlSnapshot.value),
   );
-  const config = computed(() => controlView.value.config);
-  const desiredRuntimePlan = computed(
-    () => controlView.value.desiredRuntimePlan,
+  const desiredConfig = computed(() => controlView.value.desiredConfig);
+  const desiredCaptionPipelinePlan = computed(
+    () => controlView.value.desiredCaptionPipelinePlan,
   );
-  const sessionRuntimePlan = computed(
-    () => controlView.value.sessionRuntimePlan,
+  const currentGenerationCaptionPipelinePlan = computed(
+    () => controlView.value.currentGenerationCaptionPipelinePlan,
   );
-  const currentSession = computed(() => controlView.value.currentSession);
-  const currentSetupConfig = computed(
-    () => controlView.value.currentSetupConfig,
+  const currentGeneration = computed(() => controlView.value.currentGeneration);
+  const currentGenerationSelection = computed(
+    () => controlView.value.currentGenerationSelection,
   );
-  const pendingSessionChanges = computed(
-    () => controlView.value.pendingSessionChanges,
+  const pendingGenerationChanges = computed(
+    () => controlView.value.pendingGenerationChanges,
   );
-  const sessionUploadsMicrophoneAudio = computed(
-    () => controlView.value.sessionUploadsMicrophoneAudio,
+  const currentGenerationUploadsMicrophoneAudio = computed(
+    () => controlView.value.currentGenerationUploadsMicrophoneAudio,
   );
-  const secretStatuses = computed(() => controlView.value.secretStatuses);
-  const runtimeError = computed(
-    () => runtimeReadiness.value.error || runtimeAction.error.value,
+  const credentialStatuses = computed(
+    () => controlView.value.credentialStatuses,
+  );
+  const runtimeFailure = computed(
+    () => runtimeSynchronization.value.failure ?? runtimeAction.failure.value,
   );
   const isRuntimeBusy = computed(
-    () => runtimeReadiness.value.isBusy || runtimeAction.isBusy.value,
+    () =>
+      runtimeSynchronization.value.isSynchronizing ||
+      runtimeAction.isBusy.value,
   );
-  const settingsError = computed(
-    () => settingsAction.error.value || runtimeReadiness.value.error,
+  const settingsFailure = computed(
+    () => settingsAction.failure.value ?? runtimeSynchronization.value.failure,
   );
-  const secretsError = computed(
-    () => secretsAction.error.value || runtimeReadiness.value.error,
+  const credentialFailure = computed(
+    () =>
+      credentialAction.failure.value ?? runtimeSynchronization.value.failure,
   );
 
   const runtimeView = computed(() => selectRuntimeView(runtimeState.value));
   const captionView = computed(() =>
-    selectCaptionSessionView(
-      captionSessionState.value,
-      config.value?.ui.showPartial ?? true,
+    selectCaptionAggregateView(
+      captionAggregateState.value,
+      desiredConfig.value?.ui.showOngoingPreview ?? true,
     ),
   );
   const runtimeStatus = computed(() => runtimeView.value.runtimeStatus);
@@ -199,10 +190,10 @@ export function createRuntimeStore(backend: RuntimeBackend) {
     return nextState !== previousState;
   }
 
-  function dispatchCaptionSessionState(input: CaptionSessionStateInput) {
-    const previousState = captionSessionState.value;
-    const nextState = reduceCaptionSessionState(previousState, input);
-    captionSessionState.value = nextState;
+  function dispatchCaptionAggregateState(input: CaptionAggregateStateInput) {
+    const previousState = captionAggregateState.value;
+    const nextState = reduceCaptionAggregateState(previousState, input);
+    captionAggregateState.value = nextState;
 
     return nextState !== previousState;
   }
@@ -229,7 +220,7 @@ export function createRuntimeStore(backend: RuntimeBackend) {
     dispatchRuntimeState({
       type: "runtimeControlStatusReceived",
       revision: snapshot.revision,
-      snapshot: snapshot.runtime,
+      snapshot: snapshot.runtimeStatus,
     });
     return true;
   }
@@ -264,7 +255,7 @@ export function createRuntimeStore(backend: RuntimeBackend) {
       runtimeControlReconcileTimer !== null ||
       runtimeControlReconcileInFlight ||
       runtimeControlPullsInFlight > 0 ||
-      runtimeReadiness.value.isBusy
+      runtimeSynchronization.value.isSynchronizing
     ) {
       return;
     }
@@ -295,7 +286,7 @@ export function createRuntimeStore(backend: RuntimeBackend) {
     runtimeControlReconcileInFlight = true;
 
     try {
-      await synchronizeRuntimeControl();
+      await synchronizeRuntimeState();
     } catch {
       // A later interval retries while the transition still needs a snapshot.
     } finally {
@@ -304,105 +295,97 @@ export function createRuntimeStore(backend: RuntimeBackend) {
     }
   }
 
-  async function runCommand(command: RuntimeCommand) {
-    if (!(await ensureRuntimeReady()) || isDisposed) {
+  async function runAction(action: RuntimeAction) {
+    if (!(await ensureRuntimeSynchronized()) || isDisposed) {
       return;
     }
 
-    inFlightRuntimeCommand.value = command;
-    let lifecycleCommandAttemptId: number | null = null;
+    inFlightRuntimeAction.value = action;
+    let lifecycleActionAttemptId: number | null = null;
 
-    if (command === "start_runtime" || command === "stop_runtime") {
-      nextLifecycleCommandAttemptId += 1;
-      lifecycleCommandAttemptId = nextLifecycleCommandAttemptId;
-      const commandAccepted = dispatchRuntimeState({
-        type: "runtimeCommandRequested",
-        attemptId: lifecycleCommandAttemptId,
-        command,
+    if (action === "start" || action === "stop") {
+      nextLifecycleActionAttemptId += 1;
+      lifecycleActionAttemptId = nextLifecycleActionAttemptId;
+      const actionAccepted = dispatchRuntimeState({
+        type: "runtimeActionRequested",
+        attemptId: lifecycleActionAttemptId,
+        action,
         timestampMs: Date.now(),
       });
 
-      if (!commandAccepted) {
-        inFlightRuntimeCommand.value = null;
+      if (!actionAccepted) {
+        inFlightRuntimeAction.value = null;
         return;
       }
 
-      if (command === "stop_runtime") {
-        dispatchCaptionSessionState({ type: "stopRequested" });
+      if (action === "stop") {
+        dispatchCaptionAggregateState({ type: "stopRequested" });
       }
     }
 
     try {
-      const commandSucceeded = await runtimeAction.run(async () => {
-        switch (command) {
-          case "start_runtime":
-          case "stop_runtime":
-            await runLifecycleCommand(command);
+      const actionSucceeded = await runtimeAction.run(async () => {
+        switch (action) {
+          case "start":
+          case "stop":
+            await runLifecycleAction(action);
             break;
-          case "send_osc_test_message":
-            await backend.sendOscTestMessage();
+          case "testChatbox":
+            await gateway.sendOscTestMessage();
             break;
           default:
-            assertUnreachableRuntimeCommand(command);
+            assertUnreachableRuntimeAction(action);
         }
       });
 
       if (
-        lifecycleCommandAttemptId !== null &&
-        (command === "start_runtime" || command === "stop_runtime")
+        lifecycleActionAttemptId !== null &&
+        (action === "start" || action === "stop")
       ) {
         const lifecycleResultAccepted = dispatchRuntimeState(
-          commandSucceeded
+          actionSucceeded
             ? {
-                type: "runtimeCommandSucceeded",
-                attemptId: lifecycleCommandAttemptId,
-                command,
+                type: "runtimeActionSucceeded",
+                attemptId: lifecycleActionAttemptId,
+                action,
                 timestampMs: Date.now(),
               }
             : {
-                type: "runtimeCommandFailed",
-                attemptId: lifecycleCommandAttemptId,
-                command,
+                type: "runtimeActionFailed",
+                attemptId: lifecycleActionAttemptId,
+                action,
               },
         );
 
-        if (
-          lifecycleResultAccepted &&
-          commandSucceeded &&
-          command === "start_runtime"
-        ) {
-          dispatchCaptionSessionState({ type: "startSucceeded" });
+        if (lifecycleResultAccepted && actionSucceeded && action === "start") {
+          dispatchCaptionAggregateState({ type: "startSucceeded" });
         }
-        if (
-          lifecycleResultAccepted &&
-          !commandSucceeded &&
-          command === "stop_runtime"
-        ) {
-          dispatchCaptionSessionState({ type: "stopFailed" });
+        if (lifecycleResultAccepted && !actionSucceeded && action === "stop") {
+          dispatchCaptionAggregateState({ type: "stopFailed" });
         }
 
         try {
-          dispatchCaptionSessionState({
+          dispatchCaptionAggregateState({
             type: "snapshotReceived",
-            snapshot: await backend.getCaptionSessionSnapshot(),
+            snapshot: await gateway.getCaptionAggregateSnapshot(),
           });
         } catch {
           // The best-effort push channel or a later control reconciliation can
-          // still converge after this command-level caption pull fails.
+          // still converge after this action-level caption pull fails.
         }
 
-        if (!commandSucceeded) {
+        if (!actionSucceeded) {
           try {
-            await synchronizeRuntimeControl();
+            await synchronizeRuntimeState();
           } catch {
-            // Keep the command failure visible if the authoritative pull also
+            // Keep the action failure visible if the authoritative pull also
             // fails. A later control event or reload can still resynchronize.
           }
         }
       }
     } finally {
-      if (inFlightRuntimeCommand.value === command) {
-        inFlightRuntimeCommand.value = null;
+      if (inFlightRuntimeAction.value === action) {
+        inFlightRuntimeAction.value = null;
       }
     }
   }
@@ -411,7 +394,7 @@ export function createRuntimeStore(backend: RuntimeBackend) {
     let didSave = false;
 
     await settingsAction.run(async () => {
-      applyControlSnapshot(await backend.saveConfig(nextConfig));
+      applyControlSnapshot(await gateway.saveAppConfig(nextConfig));
       didSave = true;
     });
 
@@ -420,19 +403,19 @@ export function createRuntimeStore(backend: RuntimeBackend) {
 
   async function loadAudioInputDevices() {
     await settingsAction.run(async () => {
-      audioInputDevices.value = await backend.listAudioInputDevices();
+      audioInputDevices.value = await gateway.listAudioInputDevices();
     });
   }
 
-  async function saveProviderSecret(provider: SttProvider, secret: string) {
-    await secretsAction.run(async () => {
-      applyControlSnapshot(await backend.saveProviderSecret(provider, secret));
+  async function saveCredential(id: CredentialId, secret: string) {
+    await credentialAction.run(async () => {
+      applyControlSnapshot(await gateway.saveCredential(id, secret));
     });
   }
 
-  async function deleteProviderSecret(provider: SttProvider) {
-    await secretsAction.run(async () => {
-      applyControlSnapshot(await backend.deleteProviderSecret(provider));
+  async function deleteCredential(id: CredentialId) {
+    await credentialAction.run(async () => {
+      applyControlSnapshot(await gateway.deleteCredential(id));
     });
   }
 
@@ -444,14 +427,14 @@ export function createRuntimeStore(backend: RuntimeBackend) {
     let unsubscribe: Unsubscribe | null = null;
 
     try {
-      unsubscribe = await backend.listen((event) => {
+      unsubscribe = await gateway.subscribeRuntimeEvents((event) => {
         if (event.type === "audioLevel") {
           audioInput.acceptAudioLevel(event.payload);
           return;
         }
 
-        if (event.type === "captionSessionChanged") {
-          dispatchCaptionSessionState({
+        if (event.type === "captionAggregateChanged") {
+          dispatchCaptionAggregateState({
             type: "snapshotReceived",
             snapshot: event.payload,
           });
@@ -459,7 +442,7 @@ export function createRuntimeStore(backend: RuntimeBackend) {
         }
 
         const eventAccepted = dispatchRuntimeState({
-          type: "backendEvent",
+          type: "runtimeEventReceived",
           event,
         });
 
@@ -471,10 +454,12 @@ export function createRuntimeStore(backend: RuntimeBackend) {
           updateRuntimeControlReconciliation();
         }
       });
-      const unsubscribeControl = await backend.listenControl((snapshot) => {
-        applyControlSnapshot(snapshot);
-        runtimeReadinessGate.markReady();
-      });
+      const unsubscribeControl = await gateway.subscribeRuntimeControlSnapshots(
+        (snapshot) => {
+          applyControlSnapshot(snapshot);
+          runtimeSynchronizationGate.markSynchronized();
+        },
+      );
 
       if (isDisposed) {
         unsubscribe();
@@ -492,41 +477,44 @@ export function createRuntimeStore(backend: RuntimeBackend) {
     }
   }
 
-  function beginRuntimeStatusSync() {
+  function beginRuntimeStateSynchronization() {
     nextStatusSyncRequestId += 1;
     const requestId = nextStatusSyncRequestId;
-    dispatchRuntimeState({ type: "runtimeStatusSyncStarted", requestId });
+    dispatchRuntimeState({
+      type: "runtimeStateSynchronizationStarted",
+      requestId,
+    });
 
     return requestId;
   }
 
-  async function completeRuntimeControlSync(requestId: number) {
+  async function completeRuntimeStateSynchronization(requestId: number) {
     runtimeControlPullsInFlight += 1;
 
     try {
       const [incoming, captions] = await Promise.all([
-        backend.getControlSnapshot(),
-        backend.getCaptionSessionSnapshot(),
+        gateway.getRuntimeControlSnapshot(),
+        gateway.getCaptionAggregateSnapshot(),
       ]);
       storeControlSnapshot(incoming);
-      dispatchCaptionSessionState({
+      dispatchCaptionAggregateState({
         type: "snapshotReceived",
         snapshot: captions,
       });
       const snapshot = controlSnapshot.value ?? incoming;
       dispatchRuntimeState({
-        type: "runtimeStatusSyncCompleted",
+        type: "runtimeStateSynchronizationCompleted",
         requestId,
         controlRevision: snapshot.revision,
-        snapshot: snapshot.runtime,
+        snapshot: snapshot.runtimeStatus,
       });
 
       if (unsubscribeListeners !== null) {
-        runtimeReadinessGate.markReady();
+        runtimeSynchronizationGate.markSynchronized();
       }
     } catch (error) {
       dispatchRuntimeState({
-        type: "runtimeStatusSyncCancelled",
+        type: "runtimeStateSynchronizationCancelled",
         requestId,
       });
       throw error;
@@ -536,34 +524,38 @@ export function createRuntimeStore(backend: RuntimeBackend) {
     }
   }
 
-  async function synchronizeRuntimeControl() {
-    await completeRuntimeControlSync(beginRuntimeStatusSync());
+  async function synchronizeRuntimeState() {
+    await completeRuntimeStateSynchronization(
+      beginRuntimeStateSynchronization(),
+    );
   }
 
-  async function establishRuntimeReadiness() {
-    const requestId = beginRuntimeStatusSync();
+  async function establishRuntimeSynchronization() {
+    const requestId = beginRuntimeStateSynchronization();
 
     try {
       // Open the reload buffer before registering listeners. Otherwise an event
       // emitted between the last listener registration and the pull snapshot
       // could be rejected against the synthetic initial status.
       await registerRuntimeListeners();
-      await completeRuntimeControlSync(requestId);
+      await completeRuntimeStateSynchronization(requestId);
     } catch (error) {
       dispatchRuntimeState({
-        type: "runtimeStatusSyncCancelled",
+        type: "runtimeStateSynchronizationCancelled",
         requestId,
       });
       throw error;
     }
   }
 
-  function ensureRuntimeReady() {
-    return runtimeReadinessGate.ensure(establishRuntimeReadiness);
+  function ensureRuntimeSynchronized() {
+    return runtimeSynchronizationGate.ensureSynchronized(
+      establishRuntimeSynchronization,
+    );
   }
 
   async function connect() {
-    await ensureRuntimeReady();
+    await ensureRuntimeSynchronized();
 
     if (!isDisposed) {
       await loadAudioInputDevices();
@@ -586,35 +578,35 @@ export function createRuntimeStore(backend: RuntimeBackend) {
     dispose,
     runtime: {
       audioInputDevices,
-      audioProbeError: audioInput.audioProbeError,
+      audioProbeFailure: audioInput.audioProbeFailure,
       audioProbeResult: audioInput.audioProbeResult,
       captionPreviewStatus,
       completedCaptions,
-      config,
-      currentSession,
-      currentSetupConfig,
-      deleteProviderSecret,
+      credentialFailure,
+      credentialStatuses,
+      currentGeneration,
+      currentGenerationCaptionPipelinePlan,
+      currentGenerationSelection,
+      currentGenerationUploadsMicrophoneAudio,
+      deleteCredential,
+      desiredCaptionPipelinePlan,
+      desiredConfig,
       diagnostics,
-      desiredRuntimePlan,
       isRuntimeBusy,
       isAudioProbeRunning: audioInput.isAudioProbeRunning,
-      isSecretsBusy: secretsAction.isBusy,
+      isCredentialBusy: credentialAction.isBusy,
       isSettingsBusy: settingsAction.isBusy,
       loadAudioInputDevices,
       latestAudioLevel: audioInput.latestAudioLevel,
-      inFlightRuntimeCommand,
-      pendingSessionChanges,
+      inFlightRuntimeAction,
+      pendingGenerationChanges,
       probeAudioInput: audioInput.probeAudioInput,
-      runCommand,
-      runtimeError,
+      runAction,
+      runtimeFailure,
       runtimeStatus,
       saveConfig,
-      saveProviderSecret,
-      secretStatuses,
-      sessionRuntimePlan,
-      sessionUploadsMicrophoneAudio,
-      secretsError,
-      settingsError,
+      saveCredential,
+      settingsFailure,
       visibleCaptionText,
     },
   };

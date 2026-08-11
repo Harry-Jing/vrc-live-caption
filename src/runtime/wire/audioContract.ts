@@ -1,5 +1,9 @@
 import { createDecoders } from "./contractDecoding";
-import type { AudioLevelEvent, AudioProbeResult } from "../types";
+import type {
+  AudioInputDevice,
+  AudioLevelEvent,
+  AudioProbeResult,
+} from "../audio";
 
 export class AudioContractError extends Error {
   constructor(path: string, expectation: string) {
@@ -8,8 +12,21 @@ export class AudioContractError extends Error {
   }
 }
 
-const { exactRecord, safeInteger, finiteNumber, boolean } =
+const { exactRecord, array, string, safeInteger, finiteNumber, boolean } =
   createDecoders(AudioContractError);
+
+export function decodeAudioInputDevices(value: unknown): AudioInputDevice[] {
+  return array(value, "$").map((device, index) => {
+    const path = `$[${String(index)}]`;
+    const input = exactRecord(device, path, ["id", "name", "isDefault"]);
+
+    return {
+      id: string(input["id"], `${path}.id`),
+      name: string(input["name"], `${path}.name`),
+      isDefault: boolean(input["isDefault"], `${path}.isDefault`),
+    };
+  });
+}
 
 export function decodeAudioLevelEvent(value: unknown): AudioLevelEvent {
   const input = exactRecord(value, "$", [

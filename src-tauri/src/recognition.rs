@@ -1,14 +1,14 @@
-//! Provider-neutral active recognition boundary.
+//! Path-independent active recognition boundary.
 //!
 //! Runtime submits continuous owned audio to a generation-scoped Module and
 //! consumes normalized signals. Concrete drivers own speech boundaries,
 //! attempts, transport or worker I/O, reconnect, and hard-stop cleanup.
 
-#[cfg(test)]
-mod fakes;
 mod openai;
+#[cfg(test)]
+mod scripted_events;
 
-use crate::caption_session::{CaptionSnapshotV1, CaptionState};
+use crate::caption::{CaptionSnapshotV2, CaptionState};
 use crate::error::{AppError, AppResult};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,9 +17,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+pub(crate) use openai::{openai_gpt_live_transcribe_module, openai_gpt_transcribe_module};
 #[cfg(test)]
-pub(crate) use fakes::{ScriptedRecognitionAdapter, ScriptedRecognitionContext, ScriptedText};
-pub(crate) use openai::openai_recognition_module;
+pub(crate) use scripted_events::{
+    ScriptedRecognitionContext, ScriptedRecognitionEvents, ScriptedText,
+};
 
 const RECOGNITION_SIGNAL_QUEUE_CAPACITY: usize = 128;
 const RECOGNITION_SIGNAL_CONTROL_RESERVE: usize = 8;
@@ -32,17 +34,20 @@ pub(crate) enum RecognitionEvent {
         unit_id: String,
         started_at_ms: u64,
     },
-    UnitEnded {
+    /// The source unit closed without an accepted Completed caption. Normal
+    /// completion is represented by `CaptionState::Completed`, not this event.
+    UnitAborted {
         generation: u64,
         stream_id: String,
         unit_id: String,
-        reason: RecognitionEndReason,
+        reason: RecognitionUnitAbortReason,
     },
-    Caption(CaptionSnapshotV1),
+    Caption(CaptionSnapshotV2),
 }
 
+/// Why a confirmed source unit produced no Completed caption.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RecognitionEndReason {
+pub(crate) enum RecognitionUnitAbortReason {
     NoSpeech,
     Failed { detail: String },
 }
@@ -70,7 +75,7 @@ pub(crate) enum RecognitionSignal {
     },
     Reconnecting {
         epoch: u64,
-        attempt: u32,
+        retry_number: u32,
         delay_ms: u64,
     },
     Event(RecognitionEvent),
@@ -243,7 +248,7 @@ fn same_ongoing_caption(existing: &RecognitionSignal, incoming: &RecognitionSign
 fn is_ongoing_caption(signal: &RecognitionSignal) -> bool {
     matches!(
         signal,
-        RecognitionSignal::Event(RecognitionEvent::Caption(CaptionSnapshotV1 {
+        RecognitionSignal::Event(RecognitionEvent::Caption(CaptionSnapshotV2 {
             state: CaptionState::Ongoing,
             ..
         }))
@@ -315,7 +320,7 @@ impl RecognitionModule {
             })
             .map_err(|error| {
                 AppError::runtime(format!(
-                    "Failed to start the recognition session owner: {error}"
+                    "Failed to start the Recognition Module owner: {error}"
                 ))
             })?;
 
@@ -411,7 +416,7 @@ impl RunningRecognition {
             Some(worker) => match worker.join() {
                 Ok(result) => result,
                 Err(_) => Err(AppError::runtime(
-                    "Recognition session owner thread panicked.",
+                    "Recognition Module owner thread panicked.",
                 )),
             },
             None => Ok(()),
@@ -436,7 +441,7 @@ impl Drop for RunningRecognition {
         if let Some(worker) = self.worker.take()
             && worker.join().is_err()
         {
-            tracing::warn!("Recognition session owner thread panicked during Drop");
+            tracing::warn!("Recognition Module owner thread panicked during Drop");
         }
         while self.signals.try_recv().is_ok() {}
     }
@@ -496,13 +501,13 @@ impl RecognitionDriverIo {
     pub(crate) fn emit(&self, signal: RecognitionSignal) -> AppResult<()> {
         if self.stopped.is_requested() {
             return Err(AppError::state(
-                "Recognition session has stopped accepting signals.",
+                "Recognition Module has stopped accepting signals.",
             ));
         }
 
         match self.signals.try_send(signal) {
             Ok(()) => Ok(()),
-            Err(RecognitionSignalSendError::Full) => Err(AppError::stt_backpressure(
+            Err(RecognitionSignalSendError::Full) => Err(AppError::recognition_backpressure(
                 "The bounded recognition signal queue filled.",
             )),
             Err(RecognitionSignalSendError::Disconnected) => {
@@ -528,13 +533,18 @@ impl RecognitionDriverIo {
         self.emit(RecognitionSignal::Event(event))
     }
 
-    pub(crate) fn reconnecting(&self, epoch: u64, attempt: u32, delay: Duration) -> AppResult<()> {
+    pub(crate) fn reconnecting(
+        &self,
+        epoch: u64,
+        retry_number: u32,
+        delay: Duration,
+    ) -> AppResult<()> {
         self.stopped.begin_capture_pause(epoch)?;
         self.discard_pending_audio();
         let delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
         self.emit(RecognitionSignal::Reconnecting {
             epoch,
-            attempt,
+            retry_number,
             delay_ms,
         })?;
         self.stopped.wait_for_capture_pause(epoch)

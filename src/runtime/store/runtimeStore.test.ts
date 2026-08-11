@@ -1,17 +1,15 @@
 import { afterEach, expect, test, vi } from "vitest";
-import captionSessionFixture from "../../../contracts/caption-session-snapshot-v1.json?raw";
-import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v3.json?raw";
+import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v2.json?raw";
+import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v4.json?raw";
+import type { CaptionAggregateSnapshotV2 } from "../captionAggregate";
 import type {
-  RuntimeBackend,
-  RuntimeControlListener,
+  AppGateway,
+  RuntimeControlSnapshotListener,
   RuntimeEventListener,
-} from "../backend";
-import type {
-  CaptionSessionSnapshotV1,
-  RuntimeControlSnapshot,
-} from "../types";
-import { decodeCaptionSessionSnapshotV1 } from "../wire/captionSessionContract";
-import { decodeRuntimeControlSnapshotV3 } from "../wire/runtimeControlContract";
+} from "../gateway";
+import type { RuntimeControlSnapshot } from "../runtimeControl";
+import { decodeCaptionAggregateSnapshotV2 } from "../wire/captionAggregateContract";
+import { decodeRuntimeControlSnapshotV4 } from "../wire/runtimeControlContract";
 import { createRuntimeStore } from "./runtimeStore";
 
 function deferred<T>() {
@@ -25,43 +23,43 @@ function deferred<T>() {
 }
 
 function createRuntimeStoreHarness() {
-  const fixtureControl = decodeRuntimeControlSnapshotV3(
+  const fixtureControl = decodeRuntimeControlSnapshotV4(
     JSON.parse(runtimeControlFixture) as unknown,
   );
-  const fixtureCaption = decodeCaptionSessionSnapshotV1(
-    JSON.parse(captionSessionFixture) as unknown,
+  const fixtureCaption = decodeCaptionAggregateSnapshotV2(
+    JSON.parse(captionAggregateFixture) as unknown,
   );
-  if (fixtureControl.session === null) {
-    throw new Error("The runtime control fixture must contain a session.");
+  if (fixtureControl.generation === null) {
+    throw new Error("The runtime control fixture must contain a generation.");
   }
 
   const initialControl: RuntimeControlSnapshot = {
     ...fixtureControl,
     revision: 1,
-    runtime: { status: "idle", timestampMs: 100 },
-    session: null,
+    runtimeStatus: { status: "idle", timestampMs: 100 },
+    generation: null,
   };
   const runningControl: RuntimeControlSnapshot = {
     ...fixtureControl,
     revision: 2,
-    runtime: { status: "running", timestampMs: 200 },
-    session: {
-      ...fixtureControl.session,
-      generation: 8,
+    runtimeStatus: { status: "running", timestampMs: 200 },
+    generation: {
+      ...fixtureControl.generation,
+      id: 8,
       phase: "running",
     },
   };
-  const initialCaption: CaptionSessionSnapshotV1 = {
+  const initialCaption: CaptionAggregateSnapshotV2 = {
     ...fixtureCaption,
     snapshotRevision: 1,
-    active: null,
-    activeUnits: [],
+    activeStream: null,
+    openSourceUnits: [],
     captions: [],
   };
-  const runningCaption: CaptionSessionSnapshotV1 = {
+  const runningCaption: CaptionAggregateSnapshotV2 = {
     ...initialCaption,
     snapshotRevision: 2,
-    active: { generation: 8, streamId: "recognition-8-1" },
+    activeStream: { generation: 8, streamId: "recognition-8-1" },
   };
   const pendingStart = deferred<RuntimeControlSnapshot>();
   const unsubscribeEvents = vi.fn();
@@ -70,33 +68,34 @@ function createRuntimeStoreHarness() {
   let currentControl = initialControl;
   let currentCaption = initialCaption;
   let eventListener: RuntimeEventListener = () => undefined;
-  let controlListener: RuntimeControlListener = () => undefined;
+  let controlListener: RuntimeControlSnapshotListener = () => undefined;
 
   const startRuntime = vi.fn(() => pendingStart.promise);
-  const getControlSnapshot = vi.fn(() => {
-    callOrder.push("getControlSnapshot");
+  const sendOscTestMessage = vi.fn(() => Promise.resolve());
+  const getRuntimeControlSnapshot = vi.fn(() => {
+    callOrder.push("getRuntimeControlSnapshot");
     return Promise.resolve(currentControl);
   });
-  const backend: RuntimeBackend = {
-    listen(listener) {
-      callOrder.push("listen");
+  const gateway: AppGateway = {
+    subscribeRuntimeEvents(listener) {
+      callOrder.push("subscribeRuntimeEvents");
       eventListener = listener;
       return Promise.resolve(unsubscribeEvents);
     },
-    listenControl(listener) {
-      callOrder.push("listenControl");
+    subscribeRuntimeControlSnapshots(listener) {
+      callOrder.push("subscribeRuntimeControlSnapshots");
       controlListener = listener;
       return Promise.resolve(unsubscribeControl);
     },
-    sendOscTestMessage: () => Promise.resolve(),
+    sendOscTestMessage,
     startRuntime,
     stopRuntime: () => Promise.resolve(initialControl),
-    getControlSnapshot,
-    getCaptionSessionSnapshot() {
-      callOrder.push("getCaptionSessionSnapshot");
+    getRuntimeControlSnapshot,
+    getCaptionAggregateSnapshot() {
+      callOrder.push("getCaptionAggregateSnapshot");
       return Promise.resolve(currentCaption);
     },
-    saveConfig: () => Promise.resolve(currentControl),
+    saveAppConfig: () => Promise.resolve(currentControl),
     listAudioInputDevices() {
       callOrder.push("listAudioInputDevices");
       return Promise.resolve([
@@ -112,20 +111,21 @@ function createRuntimeStoreHarness() {
         clipping: false,
         gateOpen: true,
       }),
-    saveProviderSecret: () => Promise.resolve(currentControl),
-    deleteProviderSecret: () => Promise.resolve(currentControl),
+    saveCredential: () => Promise.resolve(currentControl),
+    deleteCredential: () => Promise.resolve(currentControl),
   };
 
   return {
     callOrder,
     controlListener,
     eventListener,
-    getControlSnapshot,
+    getRuntimeControlSnapshot,
     pendingStart,
     runningCaption,
     runningControl,
     startRuntime,
-    store: createRuntimeStore(backend),
+    sendOscTestMessage,
+    store: createRuntimeStore(gateway),
     unsubscribeControl,
     unsubscribeEvents,
     useRunningSnapshots() {
@@ -149,17 +149,17 @@ test("connects listeners before synchronizing state and loading devices", async 
     { id: "usb-headset", name: "USB Headset", isDefault: true },
   ]);
   expect(harness.callOrder).toEqual([
-    "listen",
-    "listenControl",
-    "getControlSnapshot",
-    "getCaptionSessionSnapshot",
+    "subscribeRuntimeEvents",
+    "subscribeRuntimeControlSnapshots",
+    "getRuntimeControlSnapshot",
+    "getCaptionAggregateSnapshot",
     "listAudioInputDevices",
   ]);
 
   harness.store.dispose();
 });
 
-test("disposes both backend subscriptions exactly once", async () => {
+test("disposes both gateway subscriptions exactly once", async () => {
   const harness = createRuntimeStoreHarness();
   await harness.store.connect();
 
@@ -176,17 +176,35 @@ test("reconciles an unresolved Start from the authoritative control pull", async
   await harness.store.connect();
   harness.useRunningSnapshots();
 
-  const start = harness.store.runtime.runCommand("start_runtime");
+  const start = harness.store.runtime.runAction("start");
   await vi.advanceTimersByTimeAsync(0);
   expect(harness.startRuntime).toHaveBeenCalledOnce();
   expect(harness.store.runtime.runtimeStatus.value.status).toBe("starting");
 
   await vi.advanceTimersByTimeAsync(500);
 
-  expect(harness.getControlSnapshot).toHaveBeenCalledTimes(2);
+  expect(harness.getRuntimeControlSnapshot).toHaveBeenCalledTimes(2);
   expect(harness.store.runtime.runtimeStatus.value.status).toBe("running");
 
   harness.pendingStart.resolve(harness.runningControl);
   await start;
+  harness.store.dispose();
+});
+
+test("retains a structured runtime action failure", async () => {
+  const harness = createRuntimeStoreHarness();
+  await harness.store.connect();
+  harness.sendOscTestMessage.mockRejectedValueOnce(
+    Object.assign(new Error("Chatbox send failed."), {
+      code: "osc.send_failed",
+    }),
+  );
+
+  await harness.store.runtime.runAction("testChatbox");
+
+  expect(harness.store.runtime.runtimeFailure.value).toEqual({
+    code: "osc.send_failed",
+    message: "Chatbox send failed.",
+  });
   harness.store.dispose();
 });

@@ -13,9 +13,9 @@ use std::fmt;
 
 pub(crate) type AppResult<T> = Result<T, AppError>;
 
-/// Stable, provider-neutral classification for a provider-originated STT
+/// Stable, provider-neutral classification for a provider-originated recognition
 /// failure. Provider wire strings are mapped to this closed set inside the
-/// concrete adapter and never cross into `AppError`.
+/// concrete driver and never cross into `AppError`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProviderFailureClass {
     Authentication,
@@ -71,20 +71,20 @@ pub(crate) enum AppError {
     State {
         message: String,
     },
-    Stt {
+    Recognition {
         message: String,
     },
-    SttProvider {
+    RecognitionProvider {
         class: ProviderFailureClass,
         /// Compile-time text authored by this application. Keeping this
         /// `&'static str` prevents provider strings from entering the error by
         /// accident.
         message: &'static str,
     },
-    SttBackpressure {
+    RecognitionBackpressure {
         message: String,
     },
-    SttNetwork {
+    RecognitionNetwork {
         message: String,
         retry_disposition: RetryDisposition,
     },
@@ -154,31 +154,31 @@ impl AppError {
         }
     }
 
-    pub(crate) fn stt(message: impl Into<String>) -> Self {
-        Self::Stt {
+    pub(crate) fn recognition(message: impl Into<String>) -> Self {
+        Self::Recognition {
             message: message.into(),
         }
     }
 
-    pub(crate) fn stt_provider(class: ProviderFailureClass, message: &'static str) -> Self {
-        Self::SttProvider { class, message }
+    pub(crate) fn recognition_provider(class: ProviderFailureClass, message: &'static str) -> Self {
+        Self::RecognitionProvider { class, message }
     }
 
-    pub(crate) fn stt_backpressure(message: impl Into<String>) -> Self {
-        Self::SttBackpressure {
+    pub(crate) fn recognition_backpressure(message: impl Into<String>) -> Self {
+        Self::RecognitionBackpressure {
             message: message.into(),
         }
     }
 
-    pub(crate) fn stt_network_terminal(message: impl Into<String>) -> Self {
-        Self::SttNetwork {
+    pub(crate) fn recognition_network_terminal(message: impl Into<String>) -> Self {
+        Self::RecognitionNetwork {
             message: message.into(),
             retry_disposition: RetryDisposition::Terminal,
         }
     }
 
-    pub(crate) fn stt_network_retryable(message: impl Into<String>) -> Self {
-        Self::SttNetwork {
+    pub(crate) fn recognition_network_retryable(message: impl Into<String>) -> Self {
+        Self::RecognitionNetwork {
             message: message.into(),
             retry_disposition: RetryDisposition::Retryable,
         }
@@ -200,8 +200,8 @@ impl AppError {
             Self::Runtime { .. } => "runtime.failed",
             Self::Secret { .. } => "config.secret_failed",
             Self::State { .. } => "runtime.state_failed",
-            Self::Stt { .. } => "stt.failed",
-            Self::SttProvider { class, .. } => match class {
+            Self::Recognition { .. } => "stt.failed",
+            Self::RecognitionProvider { class, .. } => match class {
                 ProviderFailureClass::Authentication => "stt.provider_authentication_failed",
                 ProviderFailureClass::PermissionDenied => "stt.provider_permission_denied",
                 ProviderFailureClass::InvalidRequest => "stt.provider_invalid_request",
@@ -210,24 +210,24 @@ impl AppError {
                 ProviderFailureClass::ServiceUnavailable => "stt.provider_unavailable",
                 ProviderFailureClass::Unknown => "stt.provider_failed",
             },
-            Self::SttBackpressure { .. } => "stt.backpressure",
-            Self::SttNetwork { .. } => "stt.network_unreachable",
+            Self::RecognitionBackpressure { .. } => "stt.backpressure",
+            Self::RecognitionNetwork { .. } => "stt.network_unreachable",
         }
     }
 
     pub(crate) fn provider_failure_class(&self) -> Option<ProviderFailureClass> {
         match self {
-            Self::SttProvider { class, .. } => Some(*class),
+            Self::RecognitionProvider { class, .. } => Some(*class),
             _ => None,
         }
     }
 
     pub(crate) fn retry_disposition(&self) -> RetryDisposition {
         match self {
-            Self::SttNetwork {
+            Self::RecognitionNetwork {
                 retry_disposition, ..
             } => *retry_disposition,
-            Self::SttProvider {
+            Self::RecognitionProvider {
                 class: ProviderFailureClass::RateLimited | ProviderFailureClass::ServiceUnavailable,
                 ..
             } => RetryDisposition::Retryable,
@@ -257,10 +257,10 @@ impl AppError {
             Self::Runtime { message } => message.clone(),
             Self::Secret { message } => message.clone(),
             Self::State { message } => message.clone(),
-            Self::Stt { message } => message.clone(),
-            Self::SttProvider { message, .. } => (*message).to_string(),
-            Self::SttBackpressure { message } => message.clone(),
-            Self::SttNetwork { message, .. } => message.clone(),
+            Self::Recognition { message } => message.clone(),
+            Self::RecognitionProvider { message, .. } => (*message).to_string(),
+            Self::RecognitionBackpressure { message } => message.clone(),
+            Self::RecognitionNetwork { message, .. } => message.clone(),
         }
     }
 }
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn network_error_serializes_with_actionable_stt_code() {
-        let error = AppError::stt_network_terminal(
+        let error = AppError::recognition_network_terminal(
             "Could not reach OpenAI. Check your network connection or system proxy settings.",
         );
         let value = serde_json::to_value(&error).unwrap_or_else(|serialization_error| {
@@ -323,8 +323,9 @@ mod tests {
 
     #[test]
     fn network_retryability_must_be_selected_explicitly() {
-        let terminal = AppError::stt_network_terminal("A proxy or TLS configuration is invalid.");
-        let retryable = AppError::stt_network_retryable("The connection was reset.");
+        let terminal =
+            AppError::recognition_network_terminal("A proxy or TLS configuration is invalid.");
+        let retryable = AppError::recognition_network_retryable("The connection was reset.");
 
         assert_eq!(terminal.retry_disposition(), RetryDisposition::Terminal);
         assert_eq!(retryable.retry_disposition(), RetryDisposition::Retryable);
@@ -334,8 +335,8 @@ mod tests {
 
     #[test]
     fn backpressure_error_serializes_with_actionable_stt_code() {
-        let error = AppError::stt_backpressure(
-            "The recognition backend could not keep up with microphone audio; the session stopped instead of silently dropping audio.",
+        let error = AppError::recognition_backpressure(
+            "The active recognizer could not keep up with microphone audio; captioning stopped instead of silently dropping audio.",
         );
         let value = serde_json::to_value(&error).unwrap_or_else(|serialization_error| {
             serde_json::json!({ "serializationError": serialization_error.to_string() })

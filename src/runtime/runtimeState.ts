@@ -1,18 +1,20 @@
 import type {
   DiagnosticEvent,
   RuntimeEvent,
-  RuntimeLifecycleCommand,
   RuntimeStatus,
   RuntimeStatusEvent,
-} from "./types";
-import { isActiveRuntimeStatus } from "./lifecycle";
+} from "./runtimeEvents";
+import {
+  isActiveRuntimeStatus,
+  type RuntimeLifecycleAction,
+} from "./lifecycle";
 
 const DIAGNOSTIC_LIMIT = 50;
 
-type InFlightLifecycleCommand = Readonly<{
+type InFlightLifecycleAction = Readonly<{
   attemptId: number;
-  command: RuntimeLifecycleCommand;
-  previousLifecycleIntentCommand: RuntimeLifecycleCommand | null;
+  action: RuntimeLifecycleAction;
+  previousLifecycleIntentAction: RuntimeLifecycleAction | null;
   previousLifecycleIntentAtMs: number;
   previousRuntimeStatus: RuntimeStatusEvent;
   previousStopAcknowledgedAtMs: number;
@@ -20,33 +22,33 @@ type InFlightLifecycleCommand = Readonly<{
 }>;
 
 export type RuntimeStateInput =
-  | { type: "backendEvent"; event: RuntimeEvent }
+  | { type: "runtimeEventReceived"; event: RuntimeEvent }
   | {
       type: "runtimeControlStatusReceived";
       revision: number;
       snapshot: RuntimeStatusEvent;
     }
   | {
-      type: "runtimeCommandRequested";
+      type: "runtimeActionRequested";
       attemptId: number;
-      command: RuntimeLifecycleCommand;
+      action: RuntimeLifecycleAction;
       timestampMs: number;
     }
   | {
-      type: "runtimeCommandFailed";
+      type: "runtimeActionFailed";
       attemptId: number;
-      command: RuntimeLifecycleCommand;
+      action: RuntimeLifecycleAction;
     }
   | {
-      type: "runtimeCommandSucceeded";
+      type: "runtimeActionSucceeded";
       attemptId: number;
-      command: RuntimeLifecycleCommand;
+      action: RuntimeLifecycleAction;
       timestampMs: number;
     }
-  | { type: "runtimeStatusSyncStarted"; requestId: number }
-  | { type: "runtimeStatusSyncCancelled"; requestId: number }
+  | { type: "runtimeStateSynchronizationStarted"; requestId: number }
+  | { type: "runtimeStateSynchronizationCancelled"; requestId: number }
   | {
-      type: "runtimeStatusSyncCompleted";
+      type: "runtimeStateSynchronizationCompleted";
       requestId: number;
       controlRevision: number;
       snapshot: RuntimeStatusEvent;
@@ -54,15 +56,15 @@ export type RuntimeStateInput =
 
 export type RuntimeState = Readonly<{
   runtimeStatus: RuntimeStatusEvent;
-  latestLifecycleIntentCommand: RuntimeLifecycleCommand | null;
+  latestLifecycleIntentAction: RuntimeLifecycleAction | null;
   latestLifecycleIntentAtMs: number;
   stopAcknowledgedAtMs: number;
   diagnostics: readonly DiagnosticEvent[];
-  inFlightLifecycleCommand: InFlightLifecycleCommand | null;
+  inFlightLifecycleAction: InFlightLifecycleAction | null;
   runtimeControlRevision: number;
   statusTimestampWatermarkMs: number;
   statusObservationVersion: number;
-  inFlightStatusSync: Readonly<{
+  inFlightRuntimeStateSynchronization: Readonly<{
     requestId: number;
   }> | null;
 }>;
@@ -90,7 +92,7 @@ function statusPredatesLifecycleIntent(
   }
 
   return (
-    state.latestLifecycleIntentCommand === "start_runtime" &&
+    state.latestLifecycleIntentAction === "start" &&
     isInactiveStatus(runtimeStatus.status) &&
     runtimeStatus.status !== "error" &&
     runtimeStatus.timestampMs === state.latestLifecycleIntentAtMs
@@ -108,10 +110,10 @@ function controlStatusConflictsWithLifecycleTransition(
   state: RuntimeState,
   runtimeStatus: RuntimeStatusEvent,
 ) {
-  const inFlightCommand = state.inFlightLifecycleCommand?.command;
+  const inFlightAction = state.inFlightLifecycleAction?.action;
 
   if (
-    inFlightCommand === "start_runtime" &&
+    inFlightAction === "start" &&
     isInactiveStatus(runtimeStatus.status) &&
     runtimeStatus.status !== "error"
   ) {
@@ -119,7 +121,7 @@ function controlStatusConflictsWithLifecycleTransition(
   }
 
   return (
-    inFlightCommand === "stop_runtime" &&
+    inFlightAction === "stop" &&
     (runtimeStatus.status === "starting" ||
       runtimeStatus.status === "running" ||
       runtimeStatus.status === "reconnecting")
@@ -156,18 +158,18 @@ function applyRuntimeStatus(
   state: RuntimeState,
   runtimeStatus: RuntimeStatusEvent,
 ): RuntimeState {
-  const inFlight = state.inFlightLifecycleCommand;
-  const inFlightLifecycleCommand =
+  const inFlight = state.inFlightLifecycleAction;
+  const inFlightLifecycleAction =
     inFlight === null
       ? null
-      : inFlight.command === "start_runtime"
+      : inFlight.action === "start"
         ? inFlight
         : isInactiveStatus(runtimeStatus.status) &&
             runtimeStatus.status !== "stopping"
           ? null
           : inFlight;
 
-  return { ...state, runtimeStatus, inFlightLifecycleCommand };
+  return { ...state, runtimeStatus, inFlightLifecycleAction };
 }
 
 export function createRuntimeState(
@@ -175,15 +177,15 @@ export function createRuntimeState(
 ): RuntimeState {
   return {
     runtimeStatus,
-    latestLifecycleIntentCommand: null,
+    latestLifecycleIntentAction: null,
     latestLifecycleIntentAtMs: Number.NEGATIVE_INFINITY,
     stopAcknowledgedAtMs: Number.NEGATIVE_INFINITY,
     diagnostics: [],
-    inFlightLifecycleCommand: null,
+    inFlightLifecycleAction: null,
     runtimeControlRevision: Number.NEGATIVE_INFINITY,
     statusTimestampWatermarkMs: Number.NEGATIVE_INFINITY,
     statusObservationVersion: 0,
-    inFlightStatusSync: null,
+    inFlightRuntimeStateSynchronization: null,
   };
 }
 
@@ -191,21 +193,21 @@ export function reduceRuntimeState(
   state: RuntimeState,
   input: RuntimeStateInput,
 ): RuntimeState {
-  if (input.type === "runtimeCommandRequested") {
+  if (input.type === "runtimeActionRequested") {
     if (
-      (input.command === "start_runtime" &&
-        (state.inFlightLifecycleCommand !== null ||
+      (input.action === "start" &&
+        (state.inFlightLifecycleAction !== null ||
           isActiveRuntimeStatus(state.runtimeStatus.status))) ||
-      (input.command === "stop_runtime" &&
-        state.inFlightLifecycleCommand?.command === "stop_runtime")
+      (input.action === "stop" &&
+        state.inFlightLifecycleAction?.action === "stop")
     ) {
       return state;
     }
 
-    const inFlightLifecycleCommand: InFlightLifecycleCommand = {
+    const inFlightLifecycleAction: InFlightLifecycleAction = {
       attemptId: input.attemptId,
-      command: input.command,
-      previousLifecycleIntentCommand: state.latestLifecycleIntentCommand,
+      action: input.action,
+      previousLifecycleIntentAction: state.latestLifecycleIntentAction,
       previousLifecycleIntentAtMs: state.latestLifecycleIntentAtMs,
       previousRuntimeStatus: state.runtimeStatus,
       previousStopAcknowledgedAtMs: state.stopAcknowledgedAtMs,
@@ -215,29 +217,29 @@ export function reduceRuntimeState(
     return {
       ...state,
       runtimeStatus: {
-        status: input.command === "start_runtime" ? "starting" : "stopping",
+        status: input.action === "start" ? "starting" : "stopping",
         timestampMs: input.timestampMs,
       },
-      latestLifecycleIntentCommand: input.command,
+      latestLifecycleIntentAction: input.action,
       latestLifecycleIntentAtMs: Math.max(
         state.latestLifecycleIntentAtMs,
         input.timestampMs,
       ),
       stopAcknowledgedAtMs:
-        input.command === "start_runtime"
+        input.action === "start"
           ? Number.NEGATIVE_INFINITY
           : state.stopAcknowledgedAtMs,
-      inFlightLifecycleCommand,
+      inFlightLifecycleAction,
     };
   }
 
-  if (input.type === "runtimeCommandFailed") {
-    const inFlight = state.inFlightLifecycleCommand;
+  if (input.type === "runtimeActionFailed") {
+    const inFlight = state.inFlightLifecycleAction;
 
     if (
       inFlight === null ||
       inFlight.attemptId !== input.attemptId ||
-      inFlight.command !== input.command
+      inFlight.action !== input.action
     ) {
       return state;
     }
@@ -246,46 +248,46 @@ export function reduceRuntimeState(
       state.statusObservationVersion !==
       inFlight.statusObservationVersionAtRequest;
 
-    if (input.command === "stop_runtime") {
+    if (input.action === "stop") {
       return {
         ...state,
         runtimeStatus: receivedStatusEvidence
           ? state.runtimeStatus
           : inFlight.previousRuntimeStatus,
-        inFlightLifecycleCommand: null,
+        inFlightLifecycleAction: null,
       };
     }
 
     if (receivedStatusEvidence) {
-      return { ...state, inFlightLifecycleCommand: null };
+      return { ...state, inFlightLifecycleAction: null };
     }
 
     return {
       ...state,
       runtimeStatus: inFlight.previousRuntimeStatus,
-      latestLifecycleIntentCommand: inFlight.previousLifecycleIntentCommand,
+      latestLifecycleIntentAction: inFlight.previousLifecycleIntentAction,
       latestLifecycleIntentAtMs: inFlight.previousLifecycleIntentAtMs,
       stopAcknowledgedAtMs: inFlight.previousStopAcknowledgedAtMs,
-      inFlightLifecycleCommand: null,
+      inFlightLifecycleAction: null,
     };
   }
 
-  if (input.type === "runtimeCommandSucceeded") {
-    const inFlight = state.inFlightLifecycleCommand;
+  if (input.type === "runtimeActionSucceeded") {
+    const inFlight = state.inFlightLifecycleAction;
 
     if (
       inFlight === null ||
       inFlight.attemptId !== input.attemptId ||
-      inFlight.command !== input.command
+      inFlight.action !== input.action
     ) {
       return state;
     }
 
-    if (input.command === "stop_runtime") {
+    if (input.action === "stop") {
       return {
         ...state,
         runtimeStatus: { status: "stopped", timestampMs: input.timestampMs },
-        inFlightLifecycleCommand: null,
+        inFlightLifecycleAction: null,
         stopAcknowledgedAtMs: Math.max(
           state.stopAcknowledgedAtMs,
           input.timestampMs,
@@ -297,34 +299,38 @@ export function reduceRuntimeState(
       };
     }
 
-    return { ...state, inFlightLifecycleCommand: null };
+    return { ...state, inFlightLifecycleAction: null };
   }
 
-  if (input.type === "runtimeStatusSyncStarted") {
+  if (input.type === "runtimeStateSynchronizationStarted") {
     return {
       ...state,
-      inFlightStatusSync: {
+      inFlightRuntimeStateSynchronization: {
         requestId: input.requestId,
       },
     };
   }
 
-  if (input.type === "runtimeStatusSyncCancelled") {
-    return state.inFlightStatusSync?.requestId === input.requestId
-      ? { ...state, inFlightStatusSync: null }
+  if (input.type === "runtimeStateSynchronizationCancelled") {
+    return state.inFlightRuntimeStateSynchronization?.requestId ===
+      input.requestId
+      ? { ...state, inFlightRuntimeStateSynchronization: null }
       : state;
   }
 
-  if (input.type === "runtimeStatusSyncCompleted") {
-    const inFlight = state.inFlightStatusSync;
+  if (input.type === "runtimeStateSynchronizationCompleted") {
+    const inFlight = state.inFlightRuntimeStateSynchronization;
 
     if (inFlight === null || inFlight.requestId !== input.requestId) {
       return state;
     }
 
-    const withoutInFlightStatusSync = { ...state, inFlightStatusSync: null };
+    const withoutInFlightRuntimeStateSynchronization = {
+      ...state,
+      inFlightRuntimeStateSynchronization: null,
+    };
     return applyRuntimeControlStatus(
-      withoutInFlightStatusSync,
+      withoutInFlightRuntimeStateSynchronization,
       input.controlRevision,
       input.snapshot,
     );

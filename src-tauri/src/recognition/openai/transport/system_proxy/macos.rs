@@ -18,12 +18,12 @@ pub(super) fn system_proxy_matcher(target_url: &str) -> AppResult<Matcher> {
     let store = SCDynamicStoreBuilder::new("vrc-live-caption")
         .build()
         .ok_or_else(|| {
-            AppError::stt_network_terminal(
+            AppError::recognition_network_terminal(
                 "macOS system proxy settings could not be opened; refusing a direct OpenAI connection.",
             )
         })?;
     let proxies = store.get_proxies().ok_or_else(|| {
-        AppError::stt_network_terminal(
+        AppError::recognition_network_terminal(
             "macOS system proxy settings could not be read; refusing a direct OpenAI connection.",
         )
     })?;
@@ -55,7 +55,7 @@ fn route_for(target_url: &str, proxies: &MacProxyDictionary) -> AppResult<MacPro
             Ok(MacProxyRoute::HttpConnect(authority_with_port(&host, port)))
         }
         cfnetwork::ResolvedProxy::Unsupported(proxy_type) => {
-            Err(AppError::stt_network_terminal(format!(
+            Err(AppError::recognition_network_terminal(format!(
                 "macOS selected unsupported proxy type '{proxy_type}' for OpenAI Realtime; configure a manual HTTP CONNECT proxy."
             )))
         }
@@ -68,7 +68,7 @@ fn settings_from_dictionary(proxies: &MacProxyDictionary) -> AppResult<MacProxyS
     if let Some(exceptions) = proxies.find(&exceptions_key)
         && !cfnetwork::is_string_array(&exceptions)
     {
-        return Err(AppError::stt_network_terminal(
+        return Err(AppError::recognition_network_terminal(
             "macOS system proxy field ExceptionsList must be an array containing only strings; refusing a direct OpenAI connection.",
         ));
     }
@@ -76,7 +76,7 @@ fn settings_from_dictionary(proxies: &MacProxyDictionary) -> AppResult<MacProxyS
     if let Some(value) = number(proxies, "ExcludeSimpleHostnames")?
         && !matches!(value, 0 | 1)
     {
-        return Err(AppError::stt_network_terminal(format!(
+        return Err(AppError::recognition_network_terminal(format!(
             "macOS system proxy field ExcludeSimpleHostnames has invalid value {value}; refusing a direct OpenAI connection."
         )));
     }
@@ -102,7 +102,7 @@ fn number(proxies: &MacProxyDictionary, key: &str) -> AppResult<Option<i32>> {
         .and_then(|number| number.to_i32())
         .map(Some)
         .ok_or_else(|| {
-            AppError::stt_network_terminal(format!(
+            AppError::recognition_network_terminal(format!(
                 "macOS system proxy field {key} has an invalid type or value; refusing a direct OpenAI connection."
             ))
         })
@@ -118,7 +118,7 @@ fn string(proxies: &MacProxyDictionary, key: &str) -> AppResult<Option<String>> 
         .downcast::<CFString>()
         .map(|value| Some(value.to_string()))
         .ok_or_else(|| {
-            AppError::stt_network_terminal(format!(
+            AppError::recognition_network_terminal(format!(
                 "macOS system proxy field {key} has an invalid type; refusing a direct OpenAI connection."
             ))
         })
@@ -149,19 +149,19 @@ fn configured_proxy_for_settings(settings: &MacProxySettings) -> AppResult<Optio
         ("ProxyAutoDiscoveryEnable", settings.auto_discovery_enabled),
     ] {
         if !matches!(value, 0 | 1) {
-            return Err(AppError::stt_network_terminal(format!(
+            return Err(AppError::recognition_network_terminal(format!(
                 "macOS system proxy field {name} has invalid value {value}; refusing a direct OpenAI connection."
             )));
         }
     }
     if settings.pac_enabled == 1 || settings.auto_discovery_enabled == 1 {
-        return Err(AppError::stt_network_terminal(
+        return Err(AppError::recognition_network_terminal(
             "macOS selected PAC or automatic proxy discovery, which is not supported for OpenAI Realtime; configure a manual HTTP CONNECT proxy.",
         ));
     }
     if settings.https_enabled == 0 {
         if settings.socks_enabled == 1 {
-            return Err(AppError::stt_network_terminal(
+            return Err(AppError::recognition_network_terminal(
                 "macOS selected a SOCKS system proxy, which is not supported for OpenAI Realtime; configure a manual HTTP CONNECT proxy.",
             ));
         }
@@ -174,12 +174,12 @@ fn configured_proxy_for_settings(settings: &MacProxySettings) -> AppResult<Optio
         .map(str::trim)
         .filter(|host| !host.is_empty())
         .ok_or_else(|| {
-            AppError::stt_network_terminal(
+            AppError::recognition_network_terminal(
                 "macOS has an HTTPS proxy enabled but its host is missing; refusing a direct OpenAI connection.",
             )
         })?;
     let port = settings.https_port.ok_or_else(|| {
-        AppError::stt_network_terminal(
+        AppError::recognition_network_terminal(
             "macOS has an HTTPS proxy enabled but its port is missing; refusing a direct OpenAI connection.",
         )
     })?;
@@ -187,7 +187,7 @@ fn configured_proxy_for_settings(settings: &MacProxySettings) -> AppResult<Optio
         .ok()
         .filter(|port| *port != 0)
         .ok_or_else(|| {
-            AppError::stt_network_terminal(
+            AppError::recognition_network_terminal(
                 "macOS has an HTTPS proxy enabled but its port is invalid; refusing a direct OpenAI connection.",
             )
         })?;
@@ -258,7 +258,7 @@ mod cfnetwork {
             )
         };
         if target_ref.is_null() {
-            return Err(AppError::stt_network_terminal(
+            return Err(AppError::recognition_network_terminal(
                 "The OpenAI Realtime target URL could not be represented for macOS proxy routing.",
             ));
         }
@@ -271,7 +271,7 @@ mod cfnetwork {
             CFNetworkCopyProxiesForURL(target.as_concrete_TypeRef(), settings.as_concrete_TypeRef())
         };
         if proxies_ref.is_null() {
-            return Err(AppError::stt_network_terminal(
+            return Err(AppError::recognition_network_terminal(
                 "macOS could not resolve system proxy routing for OpenAI Realtime; refusing a direct connection.",
             ));
         }
@@ -280,7 +280,7 @@ mod cfnetwork {
         let proxies: CFArray<CFDictionary<CFString, CFType>> =
             unsafe { CFArray::wrap_under_create_rule(proxies_ref) };
         let proxy = proxies.get(0).ok_or_else(|| {
-            AppError::stt_network_terminal(
+            AppError::recognition_network_terminal(
                 "macOS returned no system proxy route for OpenAI Realtime; refusing a direct connection.",
             )
         })?;
@@ -298,7 +298,7 @@ mod cfnetwork {
             .find(&type_key)
             .and_then(|value| value.downcast::<CFString>())
             .ok_or_else(|| {
-                AppError::stt_network_terminal(
+                AppError::recognition_network_terminal(
                     "macOS returned a system proxy route without a valid type; refusing a direct connection.",
                 )
             })?;
@@ -315,7 +315,7 @@ mod cfnetwork {
             .map(|value| value.to_string())
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
-                AppError::stt_network_terminal(
+                AppError::recognition_network_terminal(
                     "macOS returned an HTTP CONNECT proxy without a valid host; refusing a direct connection.",
                 )
             })?;
@@ -326,7 +326,7 @@ mod cfnetwork {
             .and_then(|value| u16::try_from(value).ok())
             .filter(|value| *value != 0)
             .ok_or_else(|| {
-                AppError::stt_network_terminal(
+                AppError::recognition_network_terminal(
                     "macOS returned an HTTP CONNECT proxy without a valid port; refusing a direct connection.",
                 )
             })?;

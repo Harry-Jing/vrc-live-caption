@@ -5,8 +5,8 @@ export const router = createRouter({
   routes: [
     {
       path: "/",
-      name: "live",
-      component: () => import("./pages/LivePage.vue"),
+      name: "captioning",
+      component: () => import("./features/captioning/CaptioningPage.vue"),
     },
     {
       path: "/settings",
@@ -16,7 +16,7 @@ export const router = createRouter({
     {
       path: "/diagnostics",
       name: "diagnostics",
-      component: () => import("./pages/DiagnosticsPage.vue"),
+      component: () => import("./features/diagnostics/DiagnosticsPage.vue"),
     },
     {
       path: "/:pathMatch(.*)*",
