@@ -124,14 +124,16 @@ in [ADR 0018](./adr/0018-use-openai-realtime-transcription.md). Both paths use
 Realtime transcription behind the same Module boundary; no REST/WAV or product
 Mock fallback exists.
 
+Expected-language hints are Driver inputs, not detected-language results. A
+detected language is exposed only when a provider completion reports one.
+
 A retryable recognition failure may replace an attempt inside the same runtime
 generation. The retired attempt cannot publish again, ambiguous audio is not
 replayed, capture resumes only for a fresh ready attempt, and the UI remains in a
-visible reconnecting state. Terminal and retryable policy is based on structured
-application classifications, never provider-authored prose
+visible reconnecting state. Retry policy uses structured application
+classifications; provider-authored messages and metadata stay inside the Driver
+and neither choose policy nor enter application diagnostics
 ([ADR 0019](./adr/0019-reconnect-within-one-runtime-generation.md)).
-Provider-authored error messages and metadata stay inside the Driver; they
-neither select retry policy nor enter application diagnostics.
 
 ### Caption Aggregate
 
@@ -140,10 +142,11 @@ contains the active caption stream, open Source units, and bounded recent
 snapshots. Unit identity follows application correlation rather than provider
 item identifiers or wall-clock order.
 
-Each lane has its own monotonic revision chain. Completion is terminal for that
-lane, not for the whole caption unit. A Translation snapshot identifies the
-exact completed Source snapshot it consumed, preventing timing or display order
-from becoming a correlation contract
+The current Aggregate contract represents both lanes even though no Translation
+Module is implemented. Each lane has its own monotonic revision chain, and
+completion is terminal for that lane, not the whole caption unit. A Translation
+snapshot identifies the exact completed Source snapshot it consumed, preventing
+timing or display order from becoming a correlation contract
 ([ADR 0022](./adr/0022-link-translations-to-exact-source-snapshots.md)).
 
 The Aggregate may retain bounded completed captions from older runtime
@@ -156,12 +159,10 @@ Capabilities belong to a complete path, not a model name. A path declares the
 input shape, boundary ownership, update and revision behavior, produced lanes,
 and supported publication timing.
 
-The current plan resolves source-only publication. The same planning boundary
-combines path capabilities, publication mode, and output constraints, and is
-ready to include explicit content selection when translation paths arrive.
-Translation-only and bilingual requests will use that boundary rather than a
-separate planner. An incompatible request remains explicit instead of causing a
-silent path or mode change
+Current planning resolves source-only publication. Translation content selection
+must extend the same planner for path capabilities, publication mode, and output
+constraints rather than introduce a separate one. An incompatible request
+remains explicit instead of causing a silent path or mode change
 ([ADR 0007](./adr/0007-publication-timing-is-completed-or-live.md)).
 
 ### Chatbox publication
@@ -178,9 +179,8 @@ Publisher instances are generation-scoped. Stop discards their queued caption
 text rather than draining it. Typing indication is lifecycle control outside the
 text-send pacer.
 
-All OSC, pacing, layout, wrapping, clipping, and validation constraints come
-from the [VRChat Chatbox reference](./research/vrchat-chatbox-reference.md); this
-document does not duplicate those measured values.
+OSC, pacing, layout, wrapping, clipping, and validation constraints are defined
+by the [VRChat Chatbox reference](./research/vrchat-chatbox-reference.md).
 
 ### Network and secrets
 
@@ -223,4 +223,4 @@ backends, packaging choices, and benchmarks are in the
 
 System or VRChat audio may later enter a separate incoming pipeline with its own
 capture, caption lanes, and publication policy. It does not share outgoing
-microphone assumptions, and it does not gate the first release.
+microphone assumptions.

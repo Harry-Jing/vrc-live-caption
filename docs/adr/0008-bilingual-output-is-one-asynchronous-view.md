@@ -1,7 +1,5 @@
 # Bilingual output is one asynchronous view
 
-Date: 2026-07
-
 Bilingual Chatbox messages render source above translation in a single
 message. The measured Chatbox budget is shared flexibly rather than split
 50/50, and spare capacity leans toward the translation: if you chose bilingual,
@@ -14,7 +12,5 @@ internally. The current layout evidence lives in the
 Consequences: normal delay may leave the translation one unit behind. If
 translation fails, the bilingual selection stays, the app shows a degraded
 state, and stale translations are dropped rather than shown under newer
-source text.
-
-Revisit if observer testing shows loose alignment confuses more than
-alignment latency would.
+source text. Observer testing must confirm that loose alignment is less
+confusing than strict-alignment latency.

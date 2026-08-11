@@ -1,9 +1,6 @@
 # Local Recognition Evaluation
 
-Status: decision preparation for roadmap Phases 8 and 9.
-
-External model and runtime facts were last reviewed on 2026-07-15. This document
-was reorganized on 2026-08-11 without revalidating those facts. Re-check every
+External model and runtime facts were last reviewed on 2026-07-15. Re-check every
 artifact, version, size, license, backend, and redistribution claim before
 implementation or distribution.
 
@@ -81,9 +78,8 @@ The evaluation order is not a product ranking. SenseVoiceSmall comes first only
 because a bounded worker is the smallest path that tests packaging, isolation,
 and Completed output. Streaming candidates must be measured independently.
 
-Later accuracy or language comparisons may include FireRedASR2, Fun-ASR-Nano,
-Qwen ASR, offline Paraformer, Whisper, and Omnilingual ASR. A repository claim
-of streaming does not prove that the selected Rust runtime exposes streaming.
+A repository claim of streaming does not prove that the selected Rust runtime
+exposes streaming.
 
 ## Windows compute backends
 
@@ -110,9 +106,8 @@ benchmark for every supported model/runtime/backend combination.
 ### Other GPU backends
 
 The July 2026 review did not verify a maintainable sherpa-onnx Rust distribution
-for DirectML. DirectML and other non-CUDA paths remain later candidates; do not
-advertise one until runtime artifacts, model coverage, packaging, and real
-Windows behavior have been verified. TensorRT is outside the current plan.
+for DirectML. Do not advertise DirectML or another non-CUDA backend until runtime
+artifacts, model coverage, packaging, and real Windows behavior are verified.
 
 ## Distribution decision
 
@@ -150,14 +145,14 @@ latency, and stability matter while VRChat is running.
 
 ## Decision gates
 
-Before Phase 8 implementation:
+Before the first CPU implementation:
 
 - pin the sherpa-onnx crate and native artifact versions;
 - identify exact model artifacts and verify their licenses and redistribution;
 - choose the first distribution shape;
 - define the Windows benchmark machines and acceptance thresholds.
 
-Before Phase 9 or any default change:
+Before CUDA, local Live, or any default change:
 
 - validate at least one local Live path on native Windows with VRChat;
 - validate the packaged CUDA dependency chain on clean machines;

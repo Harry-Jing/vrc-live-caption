@@ -23,10 +23,7 @@ real Windows/VRChat validation. Incoming captions do not gate the first release.
 
 Phase 4 passed authenticated provider smoke tests for both selected OpenAI paths
 and a native Windows/VRChat real-microphone matrix on 2026-08-10, including long
-speech and mixed English/Chinese speech. No release-blocking issue was observed.
-
-Compatibility cutoff, versioning rules, and current shared artifacts live in
-[contracts/](../contracts/).
+speech and mixed English/Chinese speech.
 
 ## Phase 5: Completed translation
 
@@ -93,7 +90,7 @@ no silent cloud fallback.
 - choose installer-bundled, on-demand, or managed-component distribution;
 - pin and license the selected runtime/model artifacts;
 - implement a bounded Rust worker protocol behind the Recognition Module;
-- evaluate sherpa-onnx and SenseVoiceSmall as the first CPU path;
+- select and evaluate the first CPU path from the research candidates;
 - benchmark English, Chinese, mixed speech, latency, resources, and VRChat frame
   time on native Windows;
 - diagnose missing, incompatible, corrupt, overloaded, and crashed components.
@@ -113,7 +110,8 @@ Goal: validate the explicit local backend choice and at least one true local
 Live path.
 
 - package and test the complete CUDA runtime chain on clean Windows machines;
-- evaluate Streaming Paraformer and Streaming Zipformer independently;
+- evaluate independent local Live candidates from the
+  [local-recognition research](./research/local-recognition-evaluation.md);
 - bring every supported model/backend through the Phase 8 component lifecycle;
 - compare accuracy, latency, resources, VRChat frame time, and stability;
 - switch the long-term default only after recorded thresholds are met.
@@ -123,9 +121,9 @@ Windows/VRChat testing, with evidence-backed hardware guidance.
 
 ## Phase 10: Windows public release
 
-Status: **release work not started; build groundwork exists**. CI already creates
-Windows, macOS arm64, and Linux AppImage test artifacts. They are not supported
-releases, and Windows remains the user platform.
+Status: **release work not started; cross-platform build groundwork exists**.
+Test artifacts are not supported releases, and Windows remains the first
+supported release target.
 
 Goal: ship an installable and supportable Windows release containing only paths
 that passed their gates.

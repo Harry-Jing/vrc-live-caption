@@ -21,18 +21,14 @@ without leaving VRChat.
 - Show connection and runtime failures, reconnect from supported transient
   failures, and stop without publishing late captions.
 
-The current cloud paths have been exercised with a real microphone and VRChat on
-Windows, including long and mixed English/Chinese speech. This is validation of
-the current development build, not a promise of release stability.
+The current cloud paths have been tested with a real microphone and VRChat on
+Windows.
 
 ## What is still being built
 
 Translation, bilingual output, local/offline recognition, a Chinese interface,
-and a supported Windows installer are not available yet. The next major step is
-reliable completed translation; later work evaluates Live translation, adds
-localization and local recognition, and prepares a public Windows build. The
-[roadmap](./docs/roadmap.md) is the authoritative record of current progress and
-sequencing.
+and a supported Windows installer are not available yet. See the
+[roadmap](./docs/roadmap.md) for current progress and sequencing.
 
 ## Cloud audio and credentials
 

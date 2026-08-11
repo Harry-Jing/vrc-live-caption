@@ -27,21 +27,9 @@ maintaining another copy.
 | [roadmap.md](./roadmap.md) | The only implementation-status and sequencing record. |
 | [architecture.md](./architecture.md) | Runtime boundaries, ownership, data flow, and cross-boundary invariants. |
 | [adr/](./adr/) | Accepted decisions whose trade-offs and reasoning need to survive the implementation. |
-| [research/](./research/) | External facts, measurements, experiments, candidate evaluations, and evidence-backed integration constraints. Product intent belongs in `product.md`, accepted decisions in ADRs, and implementation status in the roadmap. |
-| [contracts/](../contracts/) | Serialized fixtures and manifests that pin Rust/TypeScript compatibility boundaries. |
+| [research/](./research/) | External facts, measurements, experiments, candidate evaluations, and evidence-backed integration constraints. |
+| [contracts/](../contracts/) | Shared fixtures and manifests plus the V1 cutoff and versioning rules; the cutoff is the merge to `main`, not the first packaged release. |
 | Code, tests, and configuration | Exact current mechanics, commands, versions, module names, protocol handling, and executable behavior. |
-
-When a detail is easy to verify in code or configuration and does not explain a
-project-wide boundary or rationale, keep it there. Prose should explain the
-product, boundaries, decisions, and evidence that readers cannot recover
-quickly from an implementation file.
-
-## Compatibility baseline
-
-Compatibility cutoff and versioning rules live in
-[`contracts/README.md`](../contracts/README.md). Review them before changing
-persisted configuration or a cross-language contract; this project does not use
-the first packaged release as an implicit substitute for those rules.
 
 ## Research library
 
@@ -55,7 +43,5 @@ the first packaged release as an implicit substitute for those rules.
   project's frontend, Rust, Tauri hook, and packaging boundaries, including the
   reasons behind the current build commands.
 
-Research findings should name their evidence and review date when the facts can
-age. Once research produces an accepted direction, record the decision in an
-ADR and the implementation status in the roadmap instead of turning the
-research note into both.
+Add a review date to findings that can become stale; promote accepted decisions
+to ADRs and implementation progress to the roadmap.

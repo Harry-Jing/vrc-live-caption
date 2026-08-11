@@ -28,8 +28,5 @@ Persisted settings use `schemaVersion`. UI-facing payloads use their own
 `contractVersion`. Diagnostic reports use `reportVersion`, and a future worker
 protocol will need its own version if it becomes independently deployed.
 
-Runtime `generation`, aggregate `snapshotRevision`, caption revisions,
-credential revisions, ADR numbers, roadmap phases, application SemVer, and
-dependency versions are ordering or identity values, not contract versions.
-Scenario fixtures deliberately use different non-trivial values so tests cannot
-couple those concepts accidentally.
+Scenario fixture versions are deliberately distinct from runtime revisions,
+application SemVer, and dependency versions so tests cannot couple them.

@@ -1,7 +1,5 @@
 # Keep local inference out of process
 
-Date: 2026-05
-
 Local recognition and translation run behind Rust workers or sidecars, never inside
 the main app process. Users should not need Python, PyTorch, or CUDA Toolkit
 installs, and a model or GPU crash must not take down the app.

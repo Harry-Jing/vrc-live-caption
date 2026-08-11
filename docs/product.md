@@ -16,15 +16,14 @@ default becomes local only after a local path is validated for accuracy,
 latency, stability, and resource use while VRChat is running
 ([ADR 0004](./adr/0004-local-inference-is-the-long-term-default.md)).
 
-Implementation status belongs in the [roadmap](./roadmap.md).
-
 ## Product principles
 
 - **User choices stay explicit.** The app explains incompatible combinations;
   it does not silently change a recognition path, translation path, publication
   mode, content selection, or local backend.
-- **Stop means stop.** No caption from a stopped runtime reaches the app or
-  Chatbox afterward ([ADR 0011](./adr/0011-stop-is-a-hard-cutoff.md)).
+- **Stop means stop.** Stop discards current and queued work rather than
+  finishing the current utterance; no later caption reaches the app or Chatbox
+  ([ADR 0011](./adr/0011-stop-is-a-hard-cutoff.md)).
 - **Failures are visible.** Recovery may discard uncertain speech, but it must
   not duplicate, mis-correlate, or secretly reroute it.
 - **Cloud use is honest.** Settings disclose when microphone audio is uploaded,
@@ -101,35 +100,19 @@ A retryable recognition outage may reconnect within the same runtime generation
 without replaying ambiguous audio or changing the selected path. Speech near the
 outage may be lost, but not duplicated ([ADR 0019](./adr/0019-reconnect-within-one-runtime-generation.md)).
 
-### Stop
+## User-facing requirements
 
-Stop releases capture, discards queued work, rejects late results, and clears
-publication state. Finishing the current utterance is not implicit.
-
-## Requirements
-
-- Recognition and translation are normalized before reaching UI or output
-  sinks ([ADR 0010](./adr/0010-drivers-emit-full-snapshots-not-deltas.md)).
-- Capture, recognition, and translation never wait on Chatbox pacing.
-- Chatbox text is paced, coalesced, length-limited, layout-aware, and lossless
-  for ordered Completed pages.
-- Recognition, translation, worker, backend, network, audio, config, and OSC
-  failures have stable application classifications.
 - A local microphone probe never contacts a recognition or translation service.
 - The UI is localizable; caption language, UI locale, and translation target are
   independent choices.
 - Caption and diagnostic history stays bounded and in memory unless a future
   persistence design explicitly changes that privacy boundary
   ([ADR 0006](./adr/0006-keep-caption-history-in-memory-only.md)).
-- Local inference runs outside the desktop process and never falls back to cloud
-  without explicit user action
-  ([ADR 0020](./adr/0020-keep-local-inference-out-of-process.md)).
 
 ## Scope
 
 The first public release is an outgoing-caption product: microphone speech to
-VRChat Chatbox. Incoming captions do not gate it
-([ADR 0002](./adr/0002-build-outgoing-captions-first.md)).
+VRChat Chatbox. Incoming captions do not gate it.
 
 System-audio capture, speaker diarization, TTS, virtual microphone output,
 plugins, mobile support, and persistent searchable history are outside the

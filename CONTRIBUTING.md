@@ -18,9 +18,7 @@ small fixes:
 4. Link the issue from the pull request.
 
 A pull request is not a substitute for an issue and may be closed when its scope
-was not discussed first. Do not put secrets, private microphone recordings, or
-unredacted diagnostics in an issue. For a suspected vulnerability, disclose no
-sensitive details publicly and ask the maintainer to arrange a private channel.
+was not discussed first.
 
 ## Development setup
 
@@ -88,11 +86,8 @@ the generated changes required by the issue.
 
 ## Documentation and contracts
 
-Read the [documentation guide](./docs/README.md) before deciding where a fact
-belongs. Update the authoritative document and link to it instead of copying the
-same implementation status, command, or rule into several files. Exact
-mechanics that are clear from code, tests, or configuration generally belong
-there rather than in prose.
+Use the [documentation guide](./docs/README.md) to update one authoritative
+source instead of copying status, commands, or rules.
 
 Changes to persisted configuration or cross-language contracts require extra
 care. Follow the cutoff and versioning rules in
@@ -110,6 +105,9 @@ tests, and do not make an incompatible V1 change in place.
   issues.
 - Use synthetic data in fixtures and screenshots. Review screenshots for names,
   paths, keys, and other identifying information before attaching them.
+
+For a suspected vulnerability, disclose no sensitive details publicly and ask
+the maintainer to arrange a private channel.
 
 ## Pull request checklist
 

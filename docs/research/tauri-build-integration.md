@@ -8,19 +8,6 @@ for current commands, paths, and resolved versions.
 Frontend package scripts own Vite assets and Vue typechecking. The Tauri CLI
 runs those scripts, compiles Rust, and creates bundles; Cargo owns only Rust.
 
-```text
-pnpm tauri dev
-  -> beforeDevCommand: pnpm dev
-  -> Vite at devUrl
-  -> Tauri compiles and runs the Rust app
-
-pnpm tauri build
-  -> beforeBuildCommand: pnpm build
-  -> vite build -> dist -> vue-tsc --build
-  -> Tauri embeds frontendDist
-  -> Cargo release build -> native bundles
-```
-
 Tauri documents `dev` as running `beforeDevCommand` and loading `devUrl`, while
 `build` runs `beforeBuildCommand`, consumes `frontendDist`, and creates bundles
 ([`dev`](https://v2.tauri.app/reference/cli/#dev),
@@ -75,9 +62,9 @@ before the Rust build and packaging phases.
 
 ## Assets, Rust, and packaging
 
-`frontendDist: "../dist"` is relative to `src-tauri/tauri.conf.json` and points
-to Vite's root-level output. Tauri recursively embeds a directory-form
-`frontendDist` and uses its `index.html` as the default entry point
+`frontendDist` is resolved relative to `tauri.conf.json`. Tauri recursively
+embeds a directory-form value and uses its `index.html` as the default entry
+point
 ([Tauri configuration reference](https://v2.tauri.app/reference/config/#frontenddist)).
 
 A Tauri build owns the frontend hook, asset validation, Cargo release build, and
@@ -85,19 +72,16 @@ native bundling. A direct Cargo build, check, or test does not run frontend
 hooks, validate `dist`, or create Tauri bundles; it is a Rust-only check, not a
 packaging check.
 
-Supported local commands and quality gates live in
-[CONTRIBUTING.md](../../CONTRIBUTING.md) and
-[`package.json`](../../package.json). Do not duplicate their expansions here.
+Local commands and quality gates are defined in
+[CONTRIBUTING.md](../../CONTRIBUTING.md) and [`package.json`](../../package.json).
 
 ## CI ownership
 
-The quality workflow checks frontend and Rust separately. The native-build
-workflow is the integration and packaging gate: `tauri-action` invokes the
-Tauri build path, so the frontend hook runs again before platform bundling. It
-uploads build artifacts but does not create a project release. Workflow files
-own the current matrices, arguments, and artifact paths. Tauri Action defines
-its `args` as additional arguments to `tauri build`
-([Tauri Action](https://github.com/tauri-apps/tauri-action#usage)).
+Separate frontend and Rust checks do not exercise packaging. The native build is
+the integration gate because Tauri Action invokes the Tauri build path, including
+the frontend hook, before platform bundling
+([Tauri Action](https://github.com/tauri-apps/tauri-action#usage)). Workflow files
+own current matrices, arguments, and artifact paths.
 
 ## Revalidation
 

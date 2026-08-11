@@ -1,7 +1,5 @@
 # Drivers emit full snapshots, not deltas
 
-Date: 2026-07
-
 Recognition and translation drivers reconcile raw deltas, appends, and
 replacements into full-text caption snapshots with a monotonic revision and one
 state: ongoing or completed. Snapshots identify their lane (source or

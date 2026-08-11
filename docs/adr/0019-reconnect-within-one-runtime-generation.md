@@ -1,7 +1,5 @@
 # Reconnect transient recognition failures within one runtime generation
 
-Date: 2026-08
-
 A user Start creates one runtime generation with an immutable path selection and
 one hard Stop boundary. A structured transient failure may replace the current
 recognition attempt inside that generation and remains visibly reconnecting;

@@ -1,7 +1,5 @@
 # Recognition Modules own path execution
 
-Date: 2026-08
-
 Runtime owns microphone capture, the runtime-generation output fence, and
 publication. It submits continuous provider-independent audio to one active
 Recognition Module. The Module owns the selected path's speech boundaries,

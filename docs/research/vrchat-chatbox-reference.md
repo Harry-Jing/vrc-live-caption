@@ -36,7 +36,7 @@ The endpoint shape, `144`-character limit, and `9`-line limit are documented in
 
 An [official 2022 client update](https://ask.vrchat.com/t/developer-update-19-august-2022/12775)
 documented that the typing indicator automatically hides after five seconds of
-inactive input. A July 2026 Phase 1 real-client test reproduced that behavior:
+inactive input. A July 2026 real-client test reproduced that behavior:
 one `/chatbox/typing true` packet disappeared after about five seconds while the
 speaker continued talking for roughly twenty seconds.
 
@@ -134,7 +134,6 @@ These values are high-confidence extracted values for both normal and mirrored `
 Notes:
 
 - Treat wrapping as enabled in practice. `enableWordWrapping` was not independently confirmed as a separate field, but runtime behavior wraps text and `textWrappingMode = Normal` was extracted directly.
-- Canvas/container scaling should not be included in the wrap-width formula. Wrapping is driven by the local `ChatText` rectangle plus TMP settings.
 
 ### ChatText RectTransform
 
@@ -154,13 +153,6 @@ These values apply to both normal and mirrored `ChatText`.
 - `Canvas` local scale is `(2, 2, 2)`.
 - parent `ChatBubble` local scale is `(0.5, 0.5, 0.5)`.
 - These scales should not be included in the wrap-width formula. Wrapping is driven by the local `ChatText` rectangle plus TMP settings.
-
-### Derived layout limits
-
-- fixed rect: `300 × 265`
-- margin: `(10, 10, 10, 10)`
-- usable size: `280 × 245`
-- max visible lines: `9`
 
 ### TypingIndicator parameters
 
@@ -303,7 +295,7 @@ Key observed anchors are explained by the fixed model:
 
 Additional confirmed validation:
 
-- the later `a..z` and `A..H` sample set matched the model `34 / 34`
+- the `a..z` and `A..H` sample set matched the model `34 / 34`
 - `中 × 144` showing only `135` visible characters is explained by `15 × 9 = 135`
 
 ## Implementation rules
@@ -342,7 +334,11 @@ Additional confirmed validation:
 - Local-sender and remote-observer behavior may differ and must be measured
   independently.
 - The full custom MonoBehaviour typetree was not recovered, so some non-critical fields remain inferred rather than directly dumped.
-- The short-text chat bubble background resize logic is still not the authoritative model. The inspected object chain did not expose clearly named `ContentSizeFitter`, `LayoutElement`, `HorizontalLayoutGroup`, or `VerticalLayoutGroup` components, which suggests the width change is likely driven by custom script logic. This does not affect long-text wrapping and clipping inside `ChatText`.
+- Short-text bubble background sizing remains unverified. The inspected object
+  chain did not expose `ContentSizeFitter`, `LayoutElement`,
+  `HorizontalLayoutGroup`, or `VerticalLayoutGroup`, so custom script logic
+  remains the leading explanation. This does not affect long-text wrapping and
+  clipping inside `ChatText`.
 - Small non-critical field differences between normal and mirrored objects, including possible `overflowMode` differences, should not be used as primary implementation inputs unless re-verified.
 
 ## Verification appendix
