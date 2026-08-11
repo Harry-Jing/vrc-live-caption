@@ -12,9 +12,9 @@
   dependencies are insufficient.
 - After substantive project-documentation changes, summarize the result in
   Chinese so the maintainer can review it quickly.
-- Use Conventional Commits. For a non-trivial commit, write a body that explains
-  the motivation, important behavior or contract changes, and verification;
-  do not merely repeat the subject.
+- Use Conventional Commits. Review the staged diff before committing and
+  pre-wrap every commit-message line to at most 100 characters (`git commit -m`
+  does not wrap text). Keep any body concise and limited to non-obvious context.
 
 ## Read by task
 
