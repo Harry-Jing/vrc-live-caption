@@ -1,3 +1,6 @@
+// Reconciles optimistic Start/Stop actions with authoritative revisioned control
+// status and best-effort status events. Revisions and lifecycle watermarks keep
+// stale async observations from undoing newer evidence, especially Stop.
 import type {
   DiagnosticEvent,
   RuntimeEvent,

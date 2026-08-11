@@ -11,8 +11,8 @@ use super::contract::{
 use crate::error::{AppError, AppResult};
 
 const COMPLETED_UNIT_LIMIT: usize = 5;
-// Unit IDs are application-authoritative and must be unique. Keep a bounded recent
-// per-lane replay guard so invalid duplicates cannot grow aggregate memory.
+// Unit identity is generation + stream + unit ID. Keep a bounded recent per-lane
+// replay guard so terminal duplicates cannot re-enter history after trimming.
 const TERMINAL_LANE_REPLAY_LIMIT: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

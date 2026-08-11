@@ -1,3 +1,8 @@
+//! Rust serialization types for the versioned Caption Aggregate wire contract.
+//!
+//! This module defines payload shape only. Aggregate admission, revision
+//! ordering, retention, and snapshot construction live in `aggregate`.
+
 use serde::{Deserialize, Serialize};
 
 pub(crate) const CAPTION_AGGREGATE_CONTRACT_VERSION: u32 = 1;

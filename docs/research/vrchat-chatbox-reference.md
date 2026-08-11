@@ -125,7 +125,7 @@ local socket accepted the packet, not that VRChat displayed or relayed it.
 
 ### Current Completed publisher policy
 
-The current Phase 1 implementation publishes whole Completed caption units
+The current Completed publisher publishes whole Completed caption units
 through a dedicated non-blocking worker. Its queue behavior is:
 
 - keep at most `32` resident pages that have not yet been sent successfully;
@@ -142,8 +142,8 @@ through a dedicated non-blocking worker. Its queue behavior is:
   page without draining caption text, then attempt one typing-off cleanup.
 
 The `32`-page and `30`-second values are internal provisional safety limits, not
-user settings or settled product limits. Phase 1 real-machine VRChat validation
-must measure backlog and readability and adjust them as needed.
+user settings or settled product limits. Their adjustment remains release-phase
+work based on measured backlog and readability.
 
 ## Verified layout contract
 
@@ -392,10 +392,11 @@ Additional confirmed validation:
 - If one grapheme alone exceeds the `144` UTF-16-unit budget, no compliant page
   can both preserve and avoid splitting it. Return an explicit layout error
   rather than splitting, dropping, or sending an over-limit grapheme.
-- Limit each page to at most `9` visible lines after wrapping. The pure
-  Completed layout returns all remaining text as later ordered pages instead of
-  clipping it. The implemented Completed publisher consumes those pages in
-  order; Live viewport and translation-aware rendering remain later stages.
+- Limit each result to at most `9` visible lines after wrapping. Completed layout
+  returns all remaining text as later ordered pages instead of clipping it, and
+  the Completed publisher consumes those pages in order. Live layout instead
+  returns one safe viewport retaining the newest text. Translation-aware
+  rendering remains a later stage.
 
 ## Known unknowns
 

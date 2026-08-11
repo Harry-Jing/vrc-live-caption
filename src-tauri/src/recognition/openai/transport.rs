@@ -225,8 +225,8 @@ fn handshake_timeout_error() -> AppError {
     AppError::recognition_network_retryable("OpenAI Realtime TLS or WebSocket handshake timed out.")
 }
 
-/// Runtime wiring entry point: credentials and transport stay inside the
-/// OpenAI Module, while callers receive the provider-neutral attempt behavior.
+/// Connects one production OpenAI Realtime attempt while keeping the credential
+/// and concrete WebSocket transport inside the OpenAI Module.
 pub(crate) fn connect_openai_realtime_attempt(
     context: OpenAiRealtimeAttemptContext,
     model: OpenAiTranscriptionModel,

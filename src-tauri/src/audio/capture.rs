@@ -19,9 +19,9 @@ use std::time::Duration;
 
 const CAPTURE_CHUNK_QUEUE_CAPACITY: usize = 16;
 
-// CPAL treats `None` as an unbounded backend initialization wait. A finite
+// CPAL treats `None` as an unbounded stream-initialization wait. A finite
 // request keeps Start/Stop from deliberately opting into an infinite wait;
-// some platform backends may still be unable to honor it.
+// some platform audio implementations may still be unable to honor it.
 const STREAM_INIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Serialize)]
@@ -310,8 +310,8 @@ fn route_stream_error(
         ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied | ErrorKind::Xrun
     );
     if recoverable {
-        // Repeated warnings may be coalesced; they must never block the audio
-        // backend or consume the fatal-error slot.
+        // Repeated warnings may be coalesced; they must never block the capture
+        // callback or consume the fatal-error slot.
         let _ = notification_sender.try_send(error);
     } else {
         // The first fatal error is enough to end this generation. Full means a

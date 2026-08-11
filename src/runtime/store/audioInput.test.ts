@@ -94,8 +94,7 @@ test("keeps an offline microphone probe failure in its own action state", async 
 test("uses localized fallback copy for a non-error probe rejection", async () => {
   const gateway: Pick<AppGateway, "probeAudioInput"> = {
     probeAudioInput: vi.fn(() => {
-      // This test deliberately exercises the unknown rejection fallback.
-      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Exercise the non-Error rejection fallback.
       return Promise.reject();
     }),
   };

@@ -1,3 +1,5 @@
+// Decodes Rust-owned Runtime Control payloads at the Tauri IPC boundary. Exact
+// field sets and cross-field checks turn contract drift into an explicit failure.
 import { createDecoders } from "./contractDecoding";
 import { APP_CONFIG_SCHEMA_VERSION, type AppConfig } from "../appConfig";
 import { CAPTION_LANES, type CaptionLane } from "../captionAggregate";

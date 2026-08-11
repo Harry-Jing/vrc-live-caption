@@ -1,12 +1,13 @@
-//! Pure text layout for VRChat Chatbox Completed pages.
+//! Pure text layout for VRChat Chatbox Completed pages and Live viewports.
 //!
 //! The module has no runtime, pacing, OSC, or queue dependencies. It simulates
 //! VRChat's fixed 280 px TextMeshPro width, nine visible lines, and conservative
-//! 144 UTF-16 input budget, then returns every page in source order. Soft wraps
-//! choose page boundaries but are not inserted into the returned text; explicit
-//! source line breaks and all other graphemes remain unchanged. Unsupported
-//! Unicode graphemes conservatively reserve a whole line. Every candidate page
-//! is revalidated from start-of-text context before it is returned.
+//! 144 UTF-16 input budget. Completed layout returns every page in source order;
+//! Live layout returns one safe viewport retaining the newest source text. Soft
+//! wraps choose boundaries but are not inserted into returned text; explicit
+//! source line breaks and other graphemes remain unchanged. Unsupported Unicode
+//! graphemes conservatively reserve a whole line. Every returned page or
+//! viewport is revalidated from start-of-text context.
 
 use std::collections::HashMap;
 use unicode_linebreak::{BreakOpportunity, linebreaks};

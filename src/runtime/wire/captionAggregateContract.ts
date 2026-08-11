@@ -1,3 +1,5 @@
+// Decodes Rust-owned Caption Aggregate payloads at the Tauri IPC boundary. Exact
+// shape and correlation checks reject contract drift before it reaches UI state.
 import {
   CAPTION_LANES,
   CAPTION_STATES,

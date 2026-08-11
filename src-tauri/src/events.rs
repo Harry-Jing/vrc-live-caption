@@ -1,9 +1,9 @@
 //! Normalized runtime events emitted to the Vue frontend.
 //!
-//! These events are the UI-facing contract for status, caption aggregates, and
-//! diagnostics. Provider-specific raw events should be normalized before they
-//! reach this module so Vue components and output sinks do not depend on
-//! recognition-provider protocols.
+//! These events are the UI-facing contract for runtime status and control,
+//! caption aggregates, audio levels, and diagnostics. Provider-specific raw
+//! events should be normalized before they reach this module so Vue components
+//! and output sinks do not depend on recognition-provider protocols.
 //!
 //! Diagnostic `code` values are machine-readable and follow one naming
 //! convention: `<category>.<detail>` in snake case, where the prefix equals

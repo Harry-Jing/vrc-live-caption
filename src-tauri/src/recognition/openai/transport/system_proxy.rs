@@ -140,8 +140,9 @@ mod windows;
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn system_proxy_matcher_without_explicit_https(_target: &Uri) -> AppResult<Matcher> {
-    // Linux has no additional system source, so reaching this branch means
-    // HTTPS_PROXY/ALL_PROXY explicitly selected no proxy.
+    // Linux has no additional supported system-proxy source. Reaching this branch
+    // means no non-empty environment proxy was selected, so connect directly;
+    // NO_PROXY alone does not select an environment route.
     Ok(direct_matcher(None))
 }
 

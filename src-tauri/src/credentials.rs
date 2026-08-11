@@ -2,7 +2,9 @@
 //!
 //! Secrets are stored in the operating system credential store when available.
 //! The frontend can save, delete, and inspect status, but it cannot read back
-//! plaintext secrets. Runtime code retrieves secrets internally when needed.
+//! plaintext secrets. During Start, the desktop composition boundary resolves a
+//! plaintext secret and binds it inside the prepared Recognition Module. Runtime
+//! control state and frontend-facing snapshots expose only non-secret metadata.
 
 use crate::error::{AppError, AppResult};
 use keyring_core::{Entry, Error as KeyringError};

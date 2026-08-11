@@ -2,8 +2,9 @@
 //!
 //! This module is a transport-independent deep module: it owns the OpenAI JSON
 //! protocol, item correlation, model-specific output semantics, completion
-//! ordering, and the hard Stop fence. Runtime only supplies a WebSocket
-//! transport and consumes normalized `RecognitionEvent`s.
+//! ordering, and the hard Stop fence. The OpenAI attempt factory supplies its
+//! transport, and the state machine emits normalized `RecognitionEvent`s back
+//! to the OpenAI driver.
 
 use super::OpenAiTranscriptionModel;
 use super::attempt::{RecognitionAttempt, RecognitionAttemptAudioChunk};
@@ -30,9 +31,9 @@ const MAX_TRANSCRIPT_BYTES_PER_UNIT: usize = 256 * 1024;
 const MAX_PENDING_TRANSCRIPT_BYTES: usize = 1024 * 1024;
 const ITEM_COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Narrow external seam implemented by the eventual WebSocket connector and
-/// by deterministic tests. It intentionally deals only in text frames because
-/// Realtime audio is base64 inside JSON client events.
+/// Narrow attempt-level seam implemented by the production WebSocket transport
+/// and deterministic test transports. It intentionally deals only in text
+/// frames because Realtime audio is base64 inside JSON client events.
 pub(crate) trait RealtimeTransport: Send {
     fn send_text(&mut self, message: String) -> AppResult<()>;
     fn try_receive_text(&mut self) -> AppResult<Option<String>>;

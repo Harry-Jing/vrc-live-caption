@@ -1,9 +1,10 @@
 //! Closed facade over the policy-specific Chatbox publishers.
 //!
-//! Runtime forwards application-authoritative caption aggregates without
-//! learning which publisher owns the selected publication timing. Each
-//! concrete publisher remains the sole owner of its aggregate interpretation,
-//! worker state, diagnostics, and publication behavior.
+//! Runtime forwards each application-authoritative `CaptionAggregateUpdate`—the
+//! newest full aggregate paired with its exact accepted change—without learning
+//! which publisher owns the selected publication timing. Live consumes the full
+//! aggregate; Completed consumes the exact change. Each concrete publisher
+//! remains the sole owner of worker state, diagnostics, and publication behavior.
 
 mod common;
 mod completed;
