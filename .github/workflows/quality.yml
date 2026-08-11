@@ -2,6 +2,7 @@ name: Quality
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     # All branches; naming a branch pattern also keeps tag pushes from
     # triggering a duplicate run.
@@ -38,6 +39,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Check pull request title
+        if: github.event_name == 'pull_request' && runner.os == 'Linux'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | pnpm commitlint
 
       - name: Run frontend quality gate
         run: pnpm check:frontend
@@ -84,8 +91,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           install: false
 
-      # pnpm verifies workspace dependencies before running package scripts.
-      # Keep that prerequisite explicit and locked for the Rust gate too.
+      # Keep dependency resolution explicit and locked for the Rust gate too.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -137,3 +143,21 @@ jobs:
       - name: Audit Cargo dependencies
         working-directory: src-tauri
         run: cargo audit
+
+  quality_gate:
+    name: Quality Gate
+    if: ${{ always() }}
+    needs: [frontend, rust, audit_pnpm, audit_cargo]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every quality job to succeed
+        if: >-
+          ${{
+            needs.frontend.result != 'success' ||
+            needs.rust.result != 'success' ||
+            needs.audit_pnpm.result != 'success' ||
+            needs.audit_cargo.result != 'success'
+          }}
+        run: exit 1

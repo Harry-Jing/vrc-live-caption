@@ -51,12 +51,14 @@ The package scripts are the supported entry points for checks:
 | `pnpm check:frontend` | Formatting, lint, frontend tests, type checking, and the Vite build |
 | `pnpm check:rust` | Rust formatting, compilation, Clippy, and tests |
 | `pnpm check` | Normal full local gate |
-| `pnpm check:ci` | Locked, locally reproducible CI-style gate |
+| `pnpm check:ci` | Locked CI-style gate; run after `pnpm install --frozen-lockfile` |
 
 Run focused checks while iterating and `pnpm check` before opening a pull
-request. Use `pnpm check:ci` when reproducing CI or validating locked dependency
-resolution. Changes to platform integration or user-visible runtime behavior
-may also need manual Windows/VRChat testing; record exactly what you tested.
+request. Run a frozen pnpm install before `pnpm check:ci` when reproducing CI.
+Pre-commit checks formatting, lint, and frontend/Rust buildability; pre-push
+runs the complete frontend gate and the locked Rust gate. Changes to platform
+integration or user-visible runtime behavior may also need manual Windows/VRChat
+testing; record exactly what you tested.
 
 For documentation-only changes, build checks are unnecessary unless the change
 alters a command, configuration, or description of runtime behavior. State that
@@ -113,9 +115,12 @@ the maintainer to arrange a private channel.
 
 Before requesting review:
 
+- use a Conventional Commit pull-request title; it becomes the commit subject
+  when the project squash-merges the pull request;
 - link the accepted issue and explain what changed and why;
 - describe automated and manual validation, including anything not run;
 - include screenshots for user-interface changes;
-- update the one authoritative source for affected documentation; and
+- update the one authoritative source for affected documentation;
+- wait for the required `Quality Gate` and `Native Build Gate` checks; and
 - confirm that the diff contains no secrets, unrelated changes, or hand-edited
   generated files.

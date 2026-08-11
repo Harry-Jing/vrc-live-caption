@@ -27,5 +27,5 @@ pre-push:
     - name: frontend quality gate
       run: pnpm check:frontend
 
-    - name: rust quality gate
-      run: pnpm check:rust
+    - name: locked Rust quality gate
+      run: pnpm check:rust:locked

@@ -3,18 +3,6 @@ name: Native Build
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - ".github/workflows/native-build.yml"
-      - "index.html"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - "public/**"
-      - "rust-toolchain.toml"
-      - "src/**"
-      - "src-tauri/**"
-      - "tsconfig*.json"
-      - "vite.config.ts"
   push:
     branches:
       - main
@@ -131,3 +119,15 @@ jobs:
           name: tauri-${{ matrix.artifact-name }}
           path: ${{ matrix.artifact-path }}
           if-no-files-found: error
+
+  native_build_gate:
+    name: Native Build Gate
+    if: ${{ always() }}
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every native build to succeed
+        if: needs.build.result != 'success'
+        run: exit 1
