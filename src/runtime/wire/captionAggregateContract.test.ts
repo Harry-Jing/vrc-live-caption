@@ -5,6 +5,11 @@ import {
   decodeCaptionAggregateSnapshot,
 } from "./captionAggregateContract";
 
+type DecodedAggregate = ReturnType<typeof decodeCaptionAggregateSnapshot>;
+type DecodedSourceRef = NonNullable<
+  DecodedAggregate["captions"][number]["sourceRef"]
+>;
+
 describe("caption aggregate contract", () => {
   test("decodes the shared Caption Aggregate fixture", () => {
     const decoded = decodeCaptionAggregateSnapshot(
@@ -109,21 +114,6 @@ describe("caption aggregate contract", () => {
       }),
       /sourceRef/u,
     ],
-    [
-      "a translation linked to a stale source revision",
-      (fixture: ReturnType<typeof decodeCaptionAggregateSnapshot>) => ({
-        ...fixture,
-        captions: fixture.captions.map((caption, index) =>
-          index === 1 && caption.sourceRef !== null
-            ? {
-                ...caption,
-                sourceRef: { ...caption.sourceRef, revision: 2 },
-              }
-            : caption,
-        ),
-      }),
-      /sourceRef/u,
-    ],
   ] as const)("rejects %s", (_name, mutate, path) => {
     const fixture = decodeCaptionAggregateSnapshot(
       JSON.parse(captionAggregateFixture) as unknown,
@@ -131,6 +121,137 @@ describe("caption aggregate contract", () => {
 
     expect(() => decodeCaptionAggregateSnapshot(mutate(fixture))).toThrow(path);
   });
+
+  test.each([
+    [
+      "an orphan open source unit",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        activeStream: null,
+        openSourceUnits: [{ unitId: "speech-orphan", startedAtMs: 1300 }],
+      }),
+      /openSourceUnits/u,
+    ],
+    [
+      "duplicate open source unit identities",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        openSourceUnits: [
+          { unitId: "speech-duplicate", startedAtMs: 1300 },
+          { unitId: "speech-duplicate", startedAtMs: 1400 },
+        ],
+      }),
+      /openSourceUnits/u,
+    ],
+    [
+      "an ongoing caption in the wrong active stream",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        captions: fixture.captions.map((caption) =>
+          caption.lane === "source"
+            ? {
+                ...caption,
+                streamId: "recognition-7-stale",
+                state: "ongoing",
+              }
+            : caption,
+        ),
+      }),
+      /active caption stream/u,
+    ],
+    [
+      "an ongoing source without an open unit",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        captions: fixture.captions.map((caption) =>
+          caption.lane === "source"
+            ? { ...caption, state: "ongoing" }
+            : caption,
+        ),
+      }),
+      /openSourceUnits/u,
+    ],
+    [
+      "a completed source whose unit remains open",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        openSourceUnits: [{ unitId: "speech-7-1", startedAtMs: 1000 }],
+      }),
+      /completed source caption units cannot remain open/u,
+    ],
+    [
+      "a duplicate lane correlation scope",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        captions: fixture.captions.flatMap((caption) =>
+          caption.lane === "source"
+            ? [caption, { ...caption, revision: caption.revision + 1 }]
+            : [caption],
+        ),
+      }),
+      /caption lane correlation scopes must be unique/u,
+    ],
+  ] as const)("rejects %s", (_name, mutate, expectation) => {
+    const fixture = decodeCaptionAggregateSnapshot(
+      JSON.parse(captionAggregateFixture) as unknown,
+    );
+
+    expect(() => decodeCaptionAggregateSnapshot(mutate(fixture))).toThrow(
+      expectation,
+    );
+  });
+
+  test.each([
+    [
+      "generation",
+      (sourceRef: DecodedSourceRef) => ({
+        ...sourceRef,
+        generation: sourceRef.generation + 1,
+      }),
+    ],
+    [
+      "stream",
+      (sourceRef: DecodedSourceRef) => ({
+        ...sourceRef,
+        streamId: `${sourceRef.streamId}-stale`,
+      }),
+    ],
+    [
+      "unit",
+      (sourceRef: DecodedSourceRef) => ({
+        ...sourceRef,
+        unitId: `${sourceRef.unitId}-stale`,
+      }),
+    ],
+    [
+      "revision",
+      (sourceRef: DecodedSourceRef) => ({
+        ...sourceRef,
+        revision: sourceRef.revision + 1,
+      }),
+    ],
+  ] as const)(
+    "rejects a translation sourceRef with a mismatched %s",
+    (_dimension, mutateSourceRef) => {
+      const fixture = decodeCaptionAggregateSnapshot(
+        JSON.parse(captionAggregateFixture) as unknown,
+      );
+
+      expect(() =>
+        decodeCaptionAggregateSnapshot({
+          ...fixture,
+          captions: fixture.captions.map((caption) =>
+            caption.lane === "translation" && caption.sourceRef !== null
+              ? {
+                  ...caption,
+                  sourceRef: mutateSourceRef(caption.sourceRef),
+                }
+              : caption,
+          ),
+        }),
+      ).toThrow(/sourceRef/u);
+    },
+  );
 
   test("preserves the aggregate contract error type", () => {
     expect(() => decodeCaptionAggregateSnapshot(null)).toThrow(

@@ -1,6 +1,11 @@
 use super::super::contract::SourceSnapshotRef;
 use super::*;
 
+struct SourceRefMismatch {
+    dimension: &'static str,
+    mutate: fn(&mut SourceSnapshotRef),
+}
+
 fn source_caption(
     generation: u64,
     stream_id: &str,
@@ -94,7 +99,7 @@ fn completed_source_lane_does_not_close_the_correlated_translation_lane()
 }
 
 #[test]
-fn translation_must_reference_the_exact_completed_source_revision() -> crate::error::AppResult<()> {
+fn translation_must_reference_the_exact_completed_source_snapshot() -> crate::error::AppResult<()> {
     let store = CaptionAggregateStore::default();
     let active = store
         .begin_generation(1)?
@@ -112,14 +117,46 @@ fn translation_must_reference_the_exact_completed_source_revision() -> crate::er
     );
     assert!(store.accept_caption(source.clone())?.is_some());
 
-    let mut translated = translation_caption(&source, "translation", CaptionState::Completed)?;
-    translated
-        .source_ref
-        .as_mut()
-        .ok_or_else(|| crate::error::AppError::state("Translation did not reference source."))?
-        .revision = source.revision.saturating_add(1);
+    let mismatches = [
+        SourceRefMismatch {
+            dimension: "generation",
+            mutate: |source_ref| {
+                source_ref.generation = source_ref.generation.saturating_add(1);
+            },
+        },
+        SourceRefMismatch {
+            dimension: "stream",
+            mutate: |source_ref| {
+                source_ref.stream_id.push_str("-stale");
+            },
+        },
+        SourceRefMismatch {
+            dimension: "unit",
+            mutate: |source_ref| {
+                source_ref.unit_id.push_str("-stale");
+            },
+        },
+        SourceRefMismatch {
+            dimension: "revision",
+            mutate: |source_ref| {
+                source_ref.revision = source_ref.revision.saturating_add(1);
+            },
+        },
+    ];
 
-    assert!(store.accept_caption(translated)?.is_none());
+    for mismatch in mismatches {
+        let mut translated = translation_caption(&source, "translation", CaptionState::Completed)?;
+        let source_ref = translated.source_ref.as_mut().ok_or_else(|| {
+            crate::error::AppError::state("Translation did not reference source.")
+        })?;
+        (mismatch.mutate)(source_ref);
+
+        assert!(
+            store.accept_caption(translated)?.is_none(),
+            "translation with a mismatched sourceRef {} was accepted",
+            mismatch.dimension
+        );
+    }
 
     Ok(())
 }
