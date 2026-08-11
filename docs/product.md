@@ -14,7 +14,7 @@ priorities. Windows is the primary platform.
 Cloud recognition establishes the product experience first. The long-term
 default becomes local only after a local path is validated for accuracy,
 latency, stability, and resource use while VRChat is running
-([ADR 0004](./adr/0004-local-inference-is-the-long-term-default.md)).
+([ADR 0003](./adr/0003-local-inference-is-the-long-term-default.md)).
 
 ## Product principles
 
@@ -23,7 +23,7 @@ latency, stability, and resource use while VRChat is running
   mode, content selection, or local backend.
 - **Stop means stop.** Stop discards current and queued work rather than
   finishing the current utterance; no later caption reaches the app or Chatbox
-  ([ADR 0011](./adr/0011-stop-is-a-hard-cutoff.md)).
+  ([ADR 0010](./adr/0010-stop-is-a-hard-cutoff.md)).
 - **Failures are visible.** Recovery may discard uncertain speech, but it must
   not duplicate, mis-correlate, or secretly reroute it.
 - **Cloud use is honest.** Settings disclose when microphone audio is uploaded,
@@ -45,7 +45,7 @@ mutate a running generation. A removed or unsupported path remains visible as a
 choice that needs attention; the app does not silently migrate it.
 
 The supported catalog is closed and capability-driven rather than accepting
-arbitrary model strings ([ADR 0018](./adr/0018-use-openai-realtime-transcription.md)).
+arbitrary model strings ([ADR 0016](./adr/0016-use-openai-realtime-transcription.md)).
 
 ### Publication timing
 
@@ -55,20 +55,20 @@ arbitrary model strings ([ADR 0018](./adr/0018-use-openai-realtime-transcription
 
 Model capability and publication timing are independent choices. When they are
 incompatible, the app offers explicit alternatives instead of selecting one
-([ADR 0007](./adr/0007-publication-timing-is-completed-or-live.md)).
+([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)).
 
 ### Content
 
 The target choices are source-only, translation-only, and bilingual output.
 Bilingual output places source and translation in one asynchronous view, with
 space leaning toward the translation rather than a fixed 50/50 split
-([ADR 0008](./adr/0008-bilingual-output-is-one-asynchronous-view.md)).
+([ADR 0007](./adr/0007-bilingual-output-is-one-asynchronous-view.md)).
 
 ### Local backend
 
 Local inference will use an explicit CPU or prefer-NVIDIA-CUDA preference. The
 app will show the effective backend and the reason whenever it differs from
-that preference ([ADR 0021](./adr/0021-users-choose-the-local-backend.md)).
+that preference ([ADR 0019](./adr/0019-users-choose-the-local-backend.md)).
 
 ## Target behavior by scenario
 
@@ -98,7 +98,7 @@ path-specific benchmark parameter, not a user setting.
 
 A retryable recognition outage may reconnect within the same runtime generation
 without replaying ambiguous audio or changing the selected path. Speech near the
-outage may be lost, but not duplicated ([ADR 0019](./adr/0019-reconnect-within-one-runtime-generation.md)).
+outage may be lost, but not duplicated ([ADR 0017](./adr/0017-reconnect-within-one-runtime-generation.md)).
 
 ## User-facing requirements
 
@@ -107,7 +107,7 @@ outage may be lost, but not duplicated ([ADR 0019](./adr/0019-reconnect-within-o
   independent choices.
 - Caption and diagnostic history stays bounded and in memory unless a future
   persistence design explicitly changes that privacy boundary
-  ([ADR 0006](./adr/0006-keep-caption-history-in-memory-only.md)).
+  ([ADR 0005](./adr/0005-keep-caption-history-in-memory-only.md)).
 
 ## Scope
 

@@ -36,7 +36,7 @@ Planned:
 - Capture produces provider-independent audio; recognition paths own their
   protocol, boundary, buffering, and model-specific behavior.
 - Recognition and translation produce normalized full snapshots, not raw deltas
-  ([ADR 0010](./adr/0010-drivers-emit-full-snapshots-not-deltas.md)).
+  ([ADR 0009](./adr/0009-drivers-emit-full-snapshots-not-deltas.md)).
 - A provider or worker never publishes directly to Chatbox. Output sinks consume
   application-owned caption state.
 - Publication eligibility and sink pacing are separate decisions.
@@ -44,7 +44,7 @@ Planned:
 - Failures are application-classified and cannot silently change a selected
   path, publication mode, content selection, or local backend.
 - Stop is the final output boundary for one runtime generation
-  ([ADR 0011](./adr/0011-stop-is-a-hard-cutoff.md)).
+  ([ADR 0010](./adr/0010-stop-is-a-hard-cutoff.md)).
 
 ## Current architecture
 
@@ -58,7 +58,7 @@ transport directly.
 Rust is authoritative for runtime and caption state. The frontend receives
 revisioned snapshots, rejects older revisions, and can pull the current snapshot
 after reload or missed best-effort events
-([ADR 0013](./adr/0013-event-delivery-is-best-effort.md)). UI-only capabilities,
+([ADR 0012](./adr/0012-event-delivery-is-best-effort.md)). UI-only capabilities,
 such as confirmation and clipboard output, stay in narrow host ports rather than
 expanding the runtime gateway.
 
@@ -72,7 +72,7 @@ UI placeholders.
 Saved configuration is desired state for the next Start. A Start captures an
 immutable recognition selection, credential identity, publication request, and
 audio/OSC settings into a new runtime generation. Saving later does not mutate
-that generation ([ADR 0012](./adr/0012-saved-settings-are-not-the-runtime-generation.md)).
+that generation ([ADR 0011](./adr/0011-saved-settings-are-not-the-runtime-generation.md)).
 
 Start validates the requested combination before opening capture. Incompatible
 choices remain visible with supported alternatives; the app does not rewrite
@@ -115,12 +115,12 @@ Recognition Module
 
 This ownership keeps provider commits, identifiers, JSON, worker messages,
 model-native frames, and inference windows out of Runtime
-([ADR 0016](./adr/0016-recognition-modules-own-path-execution.md)). A concrete
+([ADR 0014](./adr/0014-recognition-modules-own-path-execution.md)). A concrete
 Driver may be cloud or local without pretending that its internal attempts,
 budgets, or speech boundaries are identical.
 
 The current cloud Module exposes the closed OpenAI recognition catalog selected
-in [ADR 0018](./adr/0018-use-openai-realtime-transcription.md). Both paths use
+in [ADR 0016](./adr/0016-use-openai-realtime-transcription.md). Both paths use
 Realtime transcription behind the same Module boundary; no REST/WAV or product
 Mock fallback exists.
 
@@ -133,7 +133,7 @@ replayed, capture resumes only for a fresh ready attempt, and the UI remains in 
 visible reconnecting state. Retry policy uses structured application
 classifications; provider-authored messages and metadata stay inside the Driver
 and neither choose policy nor enter application diagnostics
-([ADR 0019](./adr/0019-reconnect-within-one-runtime-generation.md)).
+([ADR 0017](./adr/0017-reconnect-within-one-runtime-generation.md)).
 
 ### Caption Aggregate
 
@@ -147,7 +147,7 @@ Module is implemented. Each lane has its own monotonic revision chain, and
 completion is terminal for that lane, not the whole caption unit. A Translation
 snapshot identifies the exact completed Source snapshot it consumed, preventing
 timing or display order from becoming a correlation contract
-([ADR 0022](./adr/0022-link-translations-to-exact-source-snapshots.md)).
+([ADR 0020](./adr/0020-link-translations-to-exact-source-snapshots.md)).
 
 The Aggregate may retain bounded completed captions from older runtime
 generations for the app view. Stop removes ongoing work and rejects late output
@@ -163,7 +163,7 @@ Current planning resolves source-only publication. Translation content selection
 must extend the same planner for path capabilities, publication mode, and output
 constraints rather than introduce a separate one. An incompatible request
 remains explicit instead of causing a silent path or mode change
-([ADR 0007](./adr/0007-publication-timing-is-completed-or-live.md)).
+([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)).
 
 ### Chatbox publication
 
@@ -191,7 +191,7 @@ frontend. Config and diagnostics carry only redacted credential status.
 Cloud connections follow the user's selected system or explicit environment
 proxy route. Unsupported or malformed selected proxy configurations fail closed;
 the app does not silently bypass them with a direct connection
-([ADR 0017](./adr/0017-cloud-connections-honor-the-selected-proxy-route.md)).
+([ADR 0015](./adr/0015-cloud-connections-honor-the-selected-proxy-route.md)).
 Network targets use bounded, cancellable resolution so Start and Stop cannot
 wait indefinitely on an operating-system lookup.
 
@@ -210,7 +210,7 @@ strategy because it amplifies requests, races, cost, and visible rewrites.
 ### Local recognition
 
 Local inference runs in a Rust worker outside the desktop process
-([ADR 0020](./adr/0020-keep-local-inference-out-of-process.md)). Its Driver sits
+([ADR 0018](./adr/0018-keep-local-inference-out-of-process.md)). Its Driver sits
 behind the same Recognition Module boundary while owning model loading,
 resampling, inference cadence, IPC, backend state, and worker health.
 

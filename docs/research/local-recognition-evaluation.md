@@ -10,10 +10,10 @@ This note compares local speech-recognition shapes, runtimes, models, backends,
 distribution options, and benchmark criteria. It does not define the runtime
 contract or product policy:
 
-- the process boundary is [ADR 0020](../adr/0020-keep-local-inference-out-of-process.md);
-- backend choice is [ADR 0021](../adr/0021-users-choose-the-local-backend.md);
+- the process boundary is [ADR 0018](../adr/0018-keep-local-inference-out-of-process.md);
+- backend choice is [ADR 0019](../adr/0019-users-choose-the-local-backend.md);
 - Recognition Module ownership is
-  [ADR 0016](../adr/0016-recognition-modules-own-path-execution.md);
+  [ADR 0014](../adr/0014-recognition-modules-own-path-execution.md);
 - implementation order and status are in the [roadmap](../roadmap.md).
 
 For this project, a local path is Rust-native when the app and worker are Rust
