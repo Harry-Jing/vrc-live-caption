@@ -370,6 +370,41 @@ fn start_unit_publisher_with_window(
     )
 }
 
+fn wait_for_next_typing_reassert(
+    clock: &ManualClock,
+    publisher: &LiveChatboxPublisher,
+) -> AppResult<Instant> {
+    let state = publisher
+        .shared
+        .state
+        .lock()
+        .map_err(|_| AppError::state("Publisher state lock was poisoned."))?;
+    let (state, _) = publisher
+        .shared
+        .wake
+        .wait_timeout_while(state, Duration::from_secs(1), |state| {
+            state
+                .next_typing_reassert_at
+                .is_none_or(|deadline| deadline <= clock.now())
+        })
+        .map_err(|_| AppError::state("Publisher state lock was poisoned."))?;
+    state
+        .next_typing_reassert_at
+        .ok_or_else(|| AppError::runtime("Publisher did not schedule the next typing reassertion."))
+}
+
+fn advance_to_next_typing_reassert(
+    clock: &ManualClock,
+    publisher: &LiveChatboxPublisher,
+) -> AppResult<()> {
+    let deadline = wait_for_next_typing_reassert(clock, publisher)?;
+    let remaining = deadline.saturating_duration_since(clock.now());
+    assert_eq!(remaining, Duration::from_secs(4));
+    clock.advance(remaining);
+    publisher.shared.wake.notify_all();
+    Ok(())
+}
+
 fn close(publisher: &LiveChatboxPublisher) -> AppResult<()> {
     publisher.request_close(PublisherCloseReason::Stop)?;
     publisher.join()
@@ -408,8 +443,8 @@ fn rejects_zero_live_observation_delay() {
 }
 
 #[test]
-fn open_source_unit_turns_typing_on_reasserts_at_four_seconds_and_cleans_up_once() -> AppResult<()>
-{
+fn open_source_unit_reasserts_typing_four_seconds_after_typing_attempt_and_cleans_up_once()
+-> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, _) = start_unit_publisher(clock.clone(), transport.clone())?;
@@ -417,8 +452,7 @@ fn open_source_unit_turns_typing_on_reasserts_at_four_seconds_and_cleans_up_once
     observe(&publisher, &snapshot(1, &["unit-1"], vec![]))?;
     transport.wait_for_typing_attempts(true, 1)?;
 
-    clock.advance(Duration::from_secs(4));
-    publisher.shared.wake.notify_all();
+    advance_to_next_typing_reassert(clock.as_ref(), &publisher)?;
     transport.wait_for_typing_attempts(true, 2)?;
 
     publisher.request_close(PublisherCloseReason::Stop)?;

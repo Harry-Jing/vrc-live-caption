@@ -24,6 +24,17 @@ fn close_at_fence(fence: &GenerationFence, publisher: &CompletedChatboxPublisher
     }
 }
 
+fn wait_for_commits_closed(committer: &GenerationCommitter) -> AppResult<()> {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !committer.is_closed() {
+        if Instant::now() >= deadline {
+            return Err(AppError::runtime("Stop did not close generation commits."));
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TransportEvent {
     Text(String),
@@ -1352,13 +1363,7 @@ fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<
         result
     });
 
-    let stop_entered_deadline = Instant::now() + Duration::from_secs(1);
-    while !committer.is_closed() {
-        if Instant::now() >= stop_entered_deadline {
-            return Err(AppError::runtime("Stop did not close generation commits."));
-        }
-        thread::sleep(Duration::from_millis(1));
-    }
+    wait_for_commits_closed(&committer)?;
     assert!(matches!(
         stop_finished_receiver.recv_timeout(Duration::from_millis(50)),
         Err(mpsc::RecvTimeoutError::Timeout)
@@ -1633,11 +1638,12 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         release_receiver,
     ));
     let fence = GenerationFence::new();
+    let committer = fence.committer();
     let (reporter, diagnostics) = recording_reporter();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
-        fence.committer(),
+        committer.clone(),
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
@@ -1666,19 +1672,14 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
 
     let stop_fence = fence.clone();
     let stop_publisher = publisher.clone();
-    let (stop_started_sender, stop_started_receiver) = mpsc::channel();
     let (stop_finished_sender, stop_finished_receiver) = mpsc::channel();
     let stop = thread::spawn(move || -> AppResult<()> {
-        stop_started_sender
-            .send(())
-            .map_err(|_| AppError::runtime("Could not announce Stop."))?;
         let result = close_at_fence(&stop_fence, &stop_publisher);
         let _ = stop_finished_sender.send(());
         result
     });
-    stop_started_receiver
-        .recv_timeout(Duration::from_secs(1))
-        .map_err(|_| AppError::runtime("Stop test thread did not start."))?;
+
+    wait_for_commits_closed(&committer)?;
     assert!(matches!(
         stop_finished_receiver.recv_timeout(Duration::from_millis(50)),
         Err(mpsc::RecvTimeoutError::Timeout)

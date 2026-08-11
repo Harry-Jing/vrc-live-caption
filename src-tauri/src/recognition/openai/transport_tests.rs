@@ -95,12 +95,14 @@ fn test_tls_configs() -> AppResult<(Arc<ClientConfig>, Arc<ServerConfig>)> {
         PrivateKeyDer::from_pem_slice(TEST_TLS_PRIVATE_KEY_PEM.as_bytes()).map_err(|error| {
             AppError::state(format!("Failed to parse the test TLS private key: {error}"))
         })?;
-    let server = ServerConfig::builder()
+    let mut server = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(chain, private_key)
         .map_err(|error| {
             AppError::state(format!("Failed to configure the test TLS server: {error}"))
         })?;
+    // Readiness probes must observe only the application record owned by each test.
+    server.send_tls13_tickets = 0;
 
     Ok((Arc::new(client), Arc::new(server)))
 }
@@ -186,6 +188,68 @@ fn plain_client_stream(transport: &mut OpenAiWebSocketTransport) -> AppResult<&m
     }
 }
 
+fn wait_for_plain_client_readable(
+    transport: &OpenAiWebSocketTransport,
+    minimum_bytes: usize,
+    deadline: Instant,
+) -> AppResult<()> {
+    if transport.tls_pump.is_some() {
+        return Err(AppError::state(
+            "Test expected a plain WebSocket transport without a TLS owner.",
+        ));
+    }
+    let client = match transport.socket.get_ref() {
+        MaybeTlsStream::Plain(client) => client,
+        _ => {
+            return Err(AppError::state(
+                "Test transport was unexpectedly encrypted.",
+            ));
+        }
+    };
+    wait_for_socket_readable(client, minimum_bytes, deadline)
+}
+
+fn wait_for_socket_readable(
+    socket: &TcpStream,
+    minimum_bytes: usize,
+    deadline: Instant,
+) -> AppResult<()> {
+    let mut available = [0_u8; 1_024];
+    loop {
+        match socket.peek(&mut available) {
+            Ok(0) => {
+                return Err(AppError::state(
+                    "Test socket closed before it became readable.",
+                ));
+            }
+            Ok(available_bytes) if available_bytes >= minimum_bytes => return Ok(()),
+            Ok(_) => {
+                if Instant::now() >= deadline {
+                    return Err(AppError::state(format!(
+                        "Test socket did not expose {minimum_bytes} readable byte(s) before the deadline."
+                    )));
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(error)
+                if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
+            {
+                if Instant::now() >= deadline {
+                    return Err(AppError::state(
+                        "Test socket did not become readable before the deadline.",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => {
+                return Err(AppError::state(format!(
+                    "Failed while waiting for the test socket: {error}"
+                )));
+            }
+        }
+    }
+}
+
 fn fill_plain_client_send_buffer(transport: &mut OpenAiWebSocketTransport) -> AppResult<()> {
     let client = plain_client_stream(transport)?;
     let filler = [0_u8; 16 * 1024];
@@ -217,6 +281,7 @@ fn fill_plain_client_send_buffer(transport: &mut OpenAiWebSocketTransport) -> Ap
 
 struct LocalTlsHarness {
     transport: OpenAiWebSocketTransport,
+    client_probe: TcpStream,
     peer_connection: ServerConnection,
     peer_stream: TcpStream,
 }
@@ -272,6 +337,9 @@ impl LocalTlsHarness {
         let (peer_connection, peer_stream) = peer
             .join()
             .map_err(|_| AppError::state("Test TLS server thread panicked."))??;
+        let client_probe = client.try_clone().map_err(|error| {
+            AppError::state(format!("Failed to clone the test TLS client: {error}"))
+        })?;
 
         let socket = WebSocket::from_raw_socket(
             MaybeTlsStream::Rustls(StreamOwned::new(client_connection, client)),
@@ -280,6 +348,7 @@ impl LocalTlsHarness {
         );
         Ok(Self {
             transport: OpenAiWebSocketTransport::from_established_socket(socket)?,
+            client_probe,
             peer_connection,
             peer_stream,
         })
@@ -642,11 +711,27 @@ fn peer_close_is_acknowledged_before_the_transport_reports_it() -> AppResult<()>
     close_sent_receiver
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| AppError::state("Test WebSocket peer did not send Close."))?;
+    wait_for_plain_client_readable(&transport, 1, Instant::now() + Duration::from_secs(1))?;
 
-    let error = transport
-        .try_receive_text()
-        .err()
-        .ok_or_else(|| AppError::state("Peer Close was not reported as an attempt failure."))?;
+    let close_deadline = Instant::now() + Duration::from_secs(1);
+    let error = loop {
+        match transport.try_receive_text() {
+            Err(error) => break error,
+            Ok(None) if Instant::now() < close_deadline => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Ok(None) => {
+                return Err(AppError::state(
+                    "Peer Close was not reported as an attempt failure before the deadline.",
+                ));
+            }
+            Ok(Some(message)) => {
+                return Err(AppError::state(format!(
+                    "Peer Close poll returned unexpected text: {message}"
+                )));
+            }
+        }
+    };
     server
         .join()
         .map_err(|_| AppError::state("Test WebSocket peer thread panicked."))??;
@@ -724,8 +809,34 @@ fn backpressured_peer_close_is_reported_only_after_its_acknowledgement_flushes()
     close_sent_receiver
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| AppError::state("Test WebSocket peer did not send Close."))?;
+    wait_for_plain_client_readable(&transport, 1, Instant::now() + Duration::from_secs(1))?;
 
-    assert_eq!(transport.try_receive_text()?, None);
+    let pending_close_deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match transport.try_receive_text() {
+            Ok(None) if matches!(&transport.state, OpenAiWebSocketState::PeerClosePending(_)) => {
+                break;
+            }
+            Ok(None) if Instant::now() < pending_close_deadline => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Ok(None) => {
+                return Err(AppError::state(
+                    "Peer Close did not enter acknowledgement-pending state before the deadline.",
+                ));
+            }
+            Err(error) => {
+                return Err(AppError::state(format!(
+                    "Peer Close was reported before its acknowledgement could flush: {error}"
+                )));
+            }
+            Ok(Some(message)) => {
+                return Err(AppError::state(format!(
+                    "Peer Close poll returned unexpected text: {message}"
+                )));
+            }
+        }
+    }
     allow_read_sender
         .send(())
         .map_err(|_| AppError::state("Could not release the test WebSocket peer."))?;
@@ -771,23 +882,22 @@ fn control_frame_flood_yields_between_polls_and_acknowledges_each_ping() -> AppR
         })?;
     let (messages_sent_sender, messages_sent_receiver) = mpsc::channel();
     let server = thread::spawn(move || -> AppResult<()> {
-        let mut socket = plain_server_websocket(server_stream);
+        let mut server_stream = server_stream;
+        let mut inbound = Vec::new();
         for index in 0..PING_COUNT {
-            socket
-                .send(Message::Ping(vec![index as u8].into()))
-                .map_err(|error| {
-                    AppError::state(format!("Test WebSocket peer could not send Ping: {error}"))
-                })?;
+            inbound.extend(server_websocket_frame(0x09, &[index as u8])?);
         }
-        socket
-            .send(Message::text("after-control-frames"))
-            .map_err(|error| {
-                AppError::state(format!("Test WebSocket peer could not send text: {error}"))
-            })?;
+        inbound.extend(server_websocket_frame(0x01, b"after-control-frames")?);
+        server_stream.write_all(&inbound).map_err(|error| {
+            AppError::state(format!(
+                "Test WebSocket peer could not send messages: {error}"
+            ))
+        })?;
         messages_sent_sender
-            .send(())
+            .send(inbound.len())
             .map_err(|_| AppError::state("Could not report the test peer messages."))?;
 
+        let mut socket = plain_server_websocket(server_stream);
         let mut pong_payloads = Vec::with_capacity(PING_COUNT);
         while pong_payloads.len() < PING_COUNT {
             match socket.read() {
@@ -815,9 +925,14 @@ fn control_frame_flood_yields_between_polls_and_acknowledges_each_ping() -> AppR
         }
         Ok(())
     });
-    messages_sent_receiver
+    let inbound_bytes = messages_sent_receiver
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| AppError::state("Test WebSocket peer did not send its messages."))?;
+    wait_for_plain_client_readable(
+        &transport,
+        inbound_bytes,
+        Instant::now() + Duration::from_secs(1),
+    )?;
 
     assert_eq!(transport.try_receive_text()?, None);
     let deadline = Instant::now() + Duration::from_secs(1);
@@ -857,19 +972,7 @@ fn transport_poll_is_nonblocking_and_preserves_partial_frame_state() -> AppResul
     server
         .write_all(&[0x81, 0x02, b'o'])
         .map_err(|error| AppError::state(format!("Failed to send a partial frame: {error}")))?;
-    let mut available = [0_u8; 3];
-    let available_bytes = match transport.socket.get_ref() {
-        MaybeTlsStream::Plain(client) => client.peek(&mut available),
-        _ => Err(io::Error::other(
-            "Test transport was unexpectedly encrypted.",
-        )),
-    }
-    .map_err(|error| {
-        AppError::state(format!(
-            "Failed while waiting for the partial test frame: {error}"
-        ))
-    })?;
-    assert!(available_bytes > 0);
+    wait_for_plain_client_readable(&transport, 1, Instant::now() + Duration::from_secs(1))?;
     let partial_started_at = Instant::now();
     assert_eq!(transport.try_receive_text()?, None);
     assert!(
@@ -900,6 +1003,7 @@ fn transport_poll_is_nonblocking_and_preserves_partial_frame_state() -> AppResul
 fn transport_poll_is_nonblocking_and_preserves_partial_tls_record_state() -> AppResult<()> {
     let LocalTlsHarness {
         mut transport,
+        client_probe,
         peer_connection: mut tls,
         peer_stream: mut server_stream,
     } = LocalTlsHarness::connect(WebSocketConfig::default(), Duration::from_secs(2))?;
@@ -956,6 +1060,7 @@ fn transport_poll_is_nonblocking_and_preserves_partial_tls_record_state() -> App
     first_fragment_receiver
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| AppError::state("Test TLS server did not send its first fragment."))?;
+    wait_for_socket_readable(&client_probe, 1, Instant::now() + Duration::from_secs(1))?;
 
     let partial_started_at = Instant::now();
     assert_eq!(transport.try_receive_text()?, None);
@@ -998,6 +1103,7 @@ fn tls_inbound_text_ping_and_close_progress_while_outbound_is_backpressured() ->
 
     let LocalTlsHarness {
         mut transport,
+        client_probe: _,
         peer_connection: mut tls,
         peer_stream: mut server_stream,
     } = LocalTlsHarness::connect(backpressure_websocket_config(), Duration::from_secs(5))?;
