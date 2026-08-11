@@ -17,7 +17,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 cpal = "0.18.1"
 keyring-core = "1.0.0"
 mio = { version = "1.2.2", features = ["net", "os-poll"] }
