@@ -31,7 +31,7 @@ After merging to `main`, ADR numbers are stable identifiers.
 
 ## Cloud recognition
 
-- [0015 — Cloud connections honor the selected proxy route](./0015-cloud-connections-honor-the-selected-proxy-route.md)
+- [0015 — Cloud connections honor explicit routes and endpoints](./0015-cloud-connections-honor-explicit-routes-and-endpoints.md)
 - [0016 — Use OpenAI Realtime transcription](./0016-use-openai-realtime-transcription.md)
 - [0017 — Reconnect transient recognition failures within one runtime generation](./0017-reconnect-within-one-runtime-generation.md)
 

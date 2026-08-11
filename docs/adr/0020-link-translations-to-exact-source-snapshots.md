@@ -14,5 +14,9 @@ Admitting translation work pins that exact completed Source snapshot until the
 work reaches a terminal outcome or its runtime generation Stops. Ordinary
 history trimming cannot remove the unit while a reservation remains.
 
+The reservation interface lands with the first real Translation Module, so its
+ownership and cancellation semantics are defined by a real consumer rather than
+a speculative API.
+
 This lets source and translation progress independently while preventing late
 or retried work from attaching to newer or unrelated speech.

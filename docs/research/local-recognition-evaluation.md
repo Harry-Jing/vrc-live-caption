@@ -81,6 +81,14 @@ and Completed output. Streaming candidates must be measured independently.
 A repository claim of streaming does not prove that the selected Rust runtime
 exposes streaming.
 
+### Additional candidate watchlist
+
+Candidates to re-evaluate include FireRedASR2 CTC/AED, Fun-ASR-Nano, Qwen3-ASR,
+offline Paraformer, Whisper, and Omnilingual ASR. This is a discovery list, not a
+ranking or compatibility claim; verify the exact model/runtime/backend
+combination, exposed streaming behavior, quantization, license and redistribution
+terms, and resource cost before selection.
+
 ## Windows compute backends
 
 ### CPU

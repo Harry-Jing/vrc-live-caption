@@ -119,6 +119,10 @@ model-native frames, and inference windows out of Runtime
 Driver may be cloud or local without pretending that its internal attempts,
 budgets, or speech boundaries are identical.
 
+Normalized-signal admission is likewise bounded and non-blocking. Saturation
+fails visibly rather than stalling the Module owner or silently losing lifecycle
+or completed-caption state.
+
 The current cloud Module exposes the closed OpenAI recognition catalog selected
 in [ADR 0016](./adr/0016-use-openai-realtime-transcription.md). Both paths use
 Realtime transcription behind the same Module boundary; no REST/WAV or product
@@ -191,9 +195,13 @@ frontend. Config and diagnostics carry only redacted credential status.
 Cloud connections follow the user's selected system or explicit environment
 proxy route. Unsupported or malformed selected proxy configurations fail closed;
 the app does not silently bypass them with a direct connection
-([ADR 0015](./adr/0015-cloud-connections-honor-the-selected-proxy-route.md)).
+([ADR 0015](./adr/0015-cloud-connections-honor-explicit-routes-and-endpoints.md)).
 Network targets use bounded, cancellable resolution so Start and Stop cannot
 wait indefinitely on an operating-system lookup.
+
+For cloud recognition, Runtime opens microphone capture only after the Module
+reports its connection ready; hostname resolution therefore completes before
+capture begins.
 
 ## Planned extension seams
 
@@ -202,6 +210,10 @@ wait indefinitely on an operating-system lookup.
 The first Translation Module consumes completed Source snapshots and emits
 correlated Translation snapshots. Work is bounded and cancellable; a stale,
 timed-out, or late result cannot overwrite another source revision or unit.
+
+Admitting translation work must pin its exact completed Source snapshot until a
+terminal outcome or Stop, so bounded history trimming cannot remove that Source
+snapshot while translation work is in flight.
 
 Transcript-driven and direct-audio translation remain different path shapes.
 Repeatedly translating every unstable source revision is not the default Live
