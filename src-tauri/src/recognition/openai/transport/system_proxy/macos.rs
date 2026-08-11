@@ -229,6 +229,9 @@ mod cfnetwork {
         typed.iter().all(|entry| entry.instance_of::<CFString>())
     }
 
+    // These declarations mirror <CFNetwork/CFProxySupport.h>. The Copy result
+    // and exported constants are wrapped with their Core Foundation ownership
+    // rules below.
     #[link(name = "CFNetwork", kind = "framework")]
     unsafe extern "C" {
         fn CFNetworkCopyProxiesForURL(url: CFURLRef, proxy_settings: CFDictionaryRef)
@@ -285,14 +288,18 @@ mod cfnetwork {
             )
         })?;
 
-        // SAFETY: these are process-lifetime CFString constants exported by
-        // CFNetwork; get-rule wrappers retain them for the local value lifetime.
-        let type_key = unsafe { CFString::wrap_under_get_rule(kCFProxyTypeKey) };
-        let host_key = unsafe { CFString::wrap_under_get_rule(kCFProxyHostNameKey) };
-        let port_key = unsafe { CFString::wrap_under_get_rule(kCFProxyPortNumberKey) };
-        let direct_type = unsafe { CFString::wrap_under_get_rule(kCFProxyTypeNone) };
-        let http_type = unsafe { CFString::wrap_under_get_rule(kCFProxyTypeHTTP) };
-        let https_type = unsafe { CFString::wrap_under_get_rule(kCFProxyTypeHTTPS) };
+        // SAFETY: CFNetwork exports these process-lifetime CFString constants,
+        // and get-rule wrappers retain them for each local value's lifetime.
+        let (type_key, host_key, port_key, direct_type, http_type, https_type) = unsafe {
+            (
+                CFString::wrap_under_get_rule(kCFProxyTypeKey),
+                CFString::wrap_under_get_rule(kCFProxyHostNameKey),
+                CFString::wrap_under_get_rule(kCFProxyPortNumberKey),
+                CFString::wrap_under_get_rule(kCFProxyTypeNone),
+                CFString::wrap_under_get_rule(kCFProxyTypeHTTP),
+                CFString::wrap_under_get_rule(kCFProxyTypeHTTPS),
+            )
+        };
 
         let proxy_type = proxy
             .find(&type_key)
