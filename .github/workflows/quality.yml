@@ -80,7 +80,14 @@ jobs:
       - name: Set up pnpm and Node
         uses: pnpm/setup@4700d737c3d7a2e7199f3d42a920f0bf7f34e411 # v2.0.1
         with:
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
           install: false
+
+      # pnpm verifies workspace dependencies before running package scripts.
+      # Keep that prerequisite explicit and locked for the Rust gate too.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       # Keep this version in sync with rust-toolchain.toml.
       - name: Set up Rust
