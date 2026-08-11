@@ -48,6 +48,20 @@
 - Do not change publication, pacing, Stop, secret-handling, or
   backend-selection behavior without reading the matching ADR first.
 
+## Comment Rules
+- Comment non-obvious intent, invariants, ownership, concurrency, safety, and
+  external constraints. Use module docs for boundary intent; prefer clear names
+  and tests for mechanics.
+- Keep project-wide behavior in `CONTEXT.md`, `docs/product.md`,
+  `docs/architecture.md`, the relevant research doc, or an ADR. Keep local
+  comments scoped to their code boundary and update them whenever that
+  boundary's behavior or ownership changes.
+- Keep suppressions narrow and reasoned: use
+  `eslint-disable-next-line ... -- reason`, Rust lint attributes with `reason`,
+  and a local `// SAFETY:` immediately before every `unsafe` block.
+- Track deferred work in GitHub Issues. Workaround comments cite the issue and
+  state when the workaround can be removed.
+
 ## Rust Rules
 - Prefer safe Rust in app/runtime code. Do not introduce `unsafe` without a
   narrow technical reason and prior discussion.
