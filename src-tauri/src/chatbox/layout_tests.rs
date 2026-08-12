@@ -1,6 +1,7 @@
 use super::{
     CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, fits_chatbox_width, grapheme_advance_units,
-    is_break_space_grapheme, paginate_completed, render_live_viewport,
+    is_break_space_grapheme, paginate_bilingual_completed, paginate_completed,
+    render_live_viewport,
 };
 use proptest::prelude::*;
 use std::collections::HashSet;
@@ -138,6 +139,196 @@ fn representative_grapheme_text() -> impl Strategy<Value = String> {
     ];
 
     prop::collection::vec(atom, 0..=MAX_GENERATED_GRAPHEME_ATOMS).prop_map(|atoms| atoms.concat())
+}
+
+fn assert_bilingual_pages(
+    source: &str,
+    translation: &str,
+    expected_source: Option<&str>,
+    expected_translation: Option<&str>,
+) -> Result<(), String> {
+    let pages =
+        paginate_bilingual_completed(source, translation).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(
+        pages
+            .iter()
+            .map(|page| page.source_text())
+            .collect::<String>(),
+        source
+    );
+    assert_eq!(
+        pages
+            .iter()
+            .map(|page| page.translation_text())
+            .collect::<String>(),
+        translation
+    );
+    if let Some(expected_source) = expected_source {
+        assert_eq!(pages[0].source_text(), expected_source);
+    }
+    if let Some(expected_translation) = expected_translation {
+        assert_eq!(pages[0].translation_text(), expected_translation);
+    }
+
+    for page in &pages {
+        let rendered = page.rendered_text();
+        assert!(!rendered.is_empty());
+        assert!(rendered.encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS);
+        assert_eq!(paginate_completed(&rendered), Ok(vec![rendered.clone()]));
+        match (
+            page.source_text().is_empty(),
+            page.translation_text().is_empty(),
+        ) {
+            (false, false) => assert_eq!(
+                rendered,
+                format!("{}\n{}", page.source_text(), page.translation_text())
+            ),
+            (false, true) => assert_eq!(rendered, page.source_text()),
+            (true, false) => assert_eq!(rendered, page.translation_text()),
+            (true, true) => return Err("bilingual layout emitted an empty page".to_string()),
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn bilingual_layout_matches_pairing_and_budget_fixtures() -> Result<(), String> {
+    let cases = [
+        ("short pair", "Hello!", "你好！"),
+        (
+            "long Source token",
+            X_144,
+            "翻译会先共享页面，然后较长的原文继续。",
+        ),
+        ("long Translation token", "Short source.", X_144),
+        (
+            "mixed English and Chinese",
+            "VRChat 中的 mixed caption 42.",
+            "VRChat mixed 字幕，第 42 条。",
+        ),
+        (
+            "punctuation",
+            "Source (exact): ‘hello’ — done.",
+            "翻译（精确）：‘你好’——完成。",
+        ),
+        (
+            "emoji graphemes",
+            "Family 👨‍👩‍👧‍👦 and coder 🧑‍💻",
+            "一家人 👨‍👩‍👧‍👦 和开发者 🧑‍💻 👍🏽",
+        ),
+        ("boundary-sized inputs", X_144, CJK_135),
+    ];
+
+    for (name, source, translation) in cases {
+        assert_bilingual_pages(source, translation, None, None)
+            .map_err(|error| format!("{name}: {error}"))?;
+        let first = paginate_bilingual_completed(source, translation)
+            .map_err(|error| format!("{error:?}"))?;
+        let second = paginate_bilingual_completed(source, translation)
+            .map_err(|error| format!("{error:?}"))?;
+        assert_eq!(first, second, "{name} was not deterministic");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn bilingual_layout_leans_toward_translation_then_donates_spare_lines() -> Result<(), String> {
+    let long_source = "中".repeat(180);
+    let long_translation = "文".repeat(180);
+    assert_bilingual_pages(
+        &long_source,
+        &long_translation,
+        Some(&"中".repeat(60)),
+        Some(&"文".repeat(75)),
+    )?;
+
+    let short_source = "源";
+    let pages = paginate_bilingual_completed(short_source, &long_translation)
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(pages[0].source_text(), short_source);
+    assert_eq!(pages[0].translation_text(), "文".repeat(120));
+
+    let short_translation = "译";
+    let pages = paginate_bilingual_completed(&long_source, short_translation)
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(pages[0].source_text(), "中".repeat(120));
+    assert_eq!(pages[0].translation_text(), short_translation);
+
+    Ok(())
+}
+
+#[test]
+fn bilingual_layout_stops_repeating_an_exhausted_lane() -> Result<(), String> {
+    let translation = "文".repeat(180);
+    let pages = paginate_bilingual_completed("source", &translation)
+        .map_err(|error| format!("{error:?}"))?;
+    let first_translation_tail = pages
+        .iter()
+        .position(|page| page.source_text().is_empty())
+        .ok_or_else(|| "expected Translation-only tail pages".to_string())?;
+    assert!(
+        pages[first_translation_tail..]
+            .iter()
+            .all(|page| page.source_text().is_empty())
+    );
+
+    let source = "中".repeat(180);
+    let pages = paginate_bilingual_completed(&source, "translation")
+        .map_err(|error| format!("{error:?}"))?;
+    let first_source_tail = pages
+        .iter()
+        .position(|page| page.translation_text().is_empty())
+        .ok_or_else(|| "expected Source-only tail pages".to_string())?;
+    assert!(
+        pages[first_source_tail..]
+            .iter()
+            .all(|page| page.translation_text().is_empty())
+    );
+
+    Ok(())
+}
+
+#[test]
+fn bilingual_layout_handles_empty_lanes_without_adding_a_separator() -> Result<(), String> {
+    assert_eq!(paginate_bilingual_completed("", ""), Ok(Vec::new()));
+
+    let source_pages =
+        paginate_bilingual_completed(X_144, "").map_err(|error| format!("{error:?}"))?;
+    assert_eq!(source_pages.len(), 1);
+    assert_eq!(source_pages[0].rendered_text(), X_144);
+
+    let translation_pages =
+        paginate_bilingual_completed("", CJK_135).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(translation_pages.len(), 1);
+    assert_eq!(translation_pages[0].rendered_text(), CJK_135);
+
+    Ok(())
+}
+
+#[test]
+fn bilingual_layout_separates_graphemes_that_cannot_share_the_input_budget() -> Result<(), String> {
+    let blocking_source = format!("s{}", "\u{301}".repeat(71));
+    let blocking_translation = format!("t{}", "\u{301}".repeat(71));
+    let source = format!("{blocking_source}S");
+    let translation = format!("{blocking_translation}T");
+    assert_eq!(blocking_source.graphemes(true).count(), 1);
+    assert_eq!(blocking_translation.graphemes(true).count(), 1);
+    assert_eq!(blocking_source.encode_utf16().count(), 72);
+    assert_eq!(blocking_translation.encode_utf16().count(), 72);
+
+    let pages = paginate_bilingual_completed(&source, &translation)
+        .map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].source_text(), blocking_source);
+    assert!(pages[0].translation_text().is_empty());
+    assert_eq!(pages[1].source_text(), "S");
+    assert_eq!(pages[1].translation_text(), translation);
+
+    Ok(())
 }
 
 #[test]
@@ -627,6 +818,48 @@ proptest! {
                 let contains_oversized_grapheme = input.graphemes(true).any(|grapheme| {
                     grapheme.encode_utf16().count() > CHATBOX_MAX_UTF16_UNITS
                 });
+                prop_assert!(contains_oversized_grapheme);
+            }
+        }
+    }
+
+    #[test]
+    fn bilingual_pagination_reconstructs_each_lane_once_and_every_page_is_safe(
+        source in representative_grapheme_text(),
+        translation in representative_grapheme_text(),
+    ) {
+        let first = paginate_bilingual_completed(&source, &translation);
+        let second = paginate_bilingual_completed(&source, &translation);
+
+        prop_assert_eq!(&first, &second);
+        match first {
+            Ok(pages) => {
+                prop_assert_eq!(pages.is_empty(), source.is_empty() && translation.is_empty());
+                let reconstructed_source = pages
+                    .iter()
+                    .map(|page| page.source_text())
+                    .collect::<String>();
+                let reconstructed_translation = pages
+                    .iter()
+                    .map(|page| page.translation_text())
+                    .collect::<String>();
+                prop_assert_eq!(reconstructed_source, source);
+                prop_assert_eq!(reconstructed_translation, translation);
+                for page in pages {
+                    let rendered = page.rendered_text();
+                    prop_assert!(!rendered.is_empty());
+                    prop_assert!(rendered.encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS);
+                    prop_assert_eq!(paginate_completed(&rendered), Ok(vec![rendered]));
+                }
+            }
+            Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units }) => {
+                prop_assert!(utf16_units > CHATBOX_MAX_UTF16_UNITS);
+                let contains_oversized_grapheme = source
+                    .graphemes(true)
+                    .chain(translation.graphemes(true))
+                    .any(|grapheme| {
+                        grapheme.encode_utf16().count() > CHATBOX_MAX_UTF16_UNITS
+                    });
                 prop_assert!(contains_oversized_grapheme);
             }
         }

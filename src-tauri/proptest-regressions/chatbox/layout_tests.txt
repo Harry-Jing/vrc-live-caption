@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 108aede4c115ce806f9587f6f42512738ca11d92a4901608b5410c196b112b6c # shrinks to source = "a👨\u{200d}👩\u{200d}👧\u{200d}👦a👨\u{200d}👩\u{200d}👧\u{200d}👦)👨\u{200d}👩\u{200d}👧\u{200d}👦a👨\u{200d}👩\u{200d}👧\u{200d}👦a👨\u{200d}👩\u{200d}👧\u{200d}👦a\na—a aaaaaaaaaaaaa👨\u{200d}👩\u{200d}👧\u{200d}👦 ", translation = "(\u{2028}\r\ne\u{301}👍🏽a👍🏽 \u{fe0f}—。 \u{fe0f}\u{2028})’「’\nW\n\n—e\u{301}—W )👍🏽。a \u{fe0f}(「「語。#\u{301}\u{2028}。a’。\u{2028}🧑\u{200d}💻a語a\u{2028}#\u{301}\nW\u{2028}\r\n’「 。#\u{301}🧑\u{200d}💻語)’語語"

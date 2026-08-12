@@ -15,6 +15,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) const CHATBOX_MAX_UTF16_UNITS: usize = 144;
 const CHATBOX_MAX_VISIBLE_LINES: usize = 9;
+const BILINGUAL_SOURCE_BASE_LINES: usize = 4;
+const BILINGUAL_TRANSLATION_BASE_LINES: usize = 5;
+const BILINGUAL_SEPARATOR: &str = "\n";
 const FONT_UNITS_PER_EM: u32 = 1_000;
 const FONT_SIZE_PX: u32 = 18;
 const CHATBOX_WIDTH_PX: u32 = 280;
@@ -57,6 +60,44 @@ pub(crate) enum ChatboxLayoutError {
     GraphemeExceedsInputBudget { utf16_units: usize },
 }
 
+/// One lossless bilingual page, retaining each lane separately from rendering.
+///
+/// Keeping lane fragments explicit lets publication preserve exact correlation
+/// and lets tests reconstruct both inputs without parsing a presentation
+/// separator back out of user-authored text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "GitHub issue #25 will connect bilingual pages to publication"
+)]
+pub(crate) struct BilingualCompletedPage {
+    source: String,
+    translation: String,
+}
+
+#[allow(
+    dead_code,
+    reason = "GitHub issue #25 will connect bilingual pages to publication"
+)]
+impl BilingualCompletedPage {
+    pub(crate) fn source_text(&self) -> &str {
+        &self.source
+    }
+
+    pub(crate) fn translation_text(&self) -> &str {
+        &self.translation
+    }
+
+    pub(crate) fn rendered_text(&self) -> String {
+        match (self.source.is_empty(), self.translation.is_empty()) {
+            (false, false) => format!("{}{BILINGUAL_SEPARATOR}{}", self.source, self.translation),
+            (false, true) => self.source.clone(),
+            (true, false) => self.translation.clone(),
+            (true, true) => String::new(),
+        }
+    }
+}
+
 /// Returns every safe Completed page in source order.
 ///
 /// An empty caption has no pages. A single grapheme that is itself larger than
@@ -79,6 +120,234 @@ pub(crate) fn paginate_completed(text: &str) -> Result<Vec<String>, ChatboxLayou
     }
 
     Ok(pages)
+}
+
+/// Returns deterministic, lossless pages for one exact Completed pair.
+///
+/// Shared pages reserve four visible lines for Source and five for Translation.
+/// If either remaining lane fits in fewer lines, its spare lines are donated to
+/// the other lane; otherwise Translation keeps the extra line. The shared
+/// UTF-16 budget follows the same 4:5 baseline and donates unused capacity to
+/// Translation first. Once one lane is exhausted, the other uses unchanged
+/// single-lane Completed pagination.
+#[allow(
+    dead_code,
+    reason = "GitHub issue #25 will connect bilingual pages to publication"
+)]
+pub(crate) fn paginate_bilingual_completed(
+    source: &str,
+    translation: &str,
+) -> Result<Vec<BilingualCompletedPage>, ChatboxLayoutError> {
+    let source_prepared = PreparedText::new(source)?;
+    let translation_prepared = PreparedText::new(translation)?;
+    let mut source_start = 0;
+    let mut translation_start = 0;
+    let mut pages = Vec::new();
+
+    'shared_pages: while source_start < source_prepared.graphemes.len()
+        && translation_start < translation_prepared.graphemes.len()
+    {
+        let separator_units = BILINGUAL_SEPARATOR.encode_utf16().count();
+        let content_units = CHATBOX_MAX_UTF16_UNITS - separator_units;
+        let source_minimum_units = source_prepared.utf16_units(source_start, source_start + 1);
+        let translation_minimum_units =
+            translation_prepared.utf16_units(translation_start, translation_start + 1);
+
+        // Two individually representable graphemes can still be too large to
+        // share one message with the separator. Preserve both losslessly by
+        // advancing only the blocking Source grapheme on a standalone page,
+        // then resume shared layout so the remaining lanes can share space.
+        if source_minimum_units + translation_minimum_units > content_units {
+            let source_end = source_start + 1;
+            pages.push(BilingualCompletedPage {
+                source: source_prepared.text_between(source_start, source_end),
+                translation: String::new(),
+            });
+            source_start = source_end;
+            continue;
+        }
+
+        let (source_lines, translation_lines) = bilingual_line_budgets(
+            &source_prepared,
+            source_start,
+            &translation_prepared,
+            translation_start,
+            content_units,
+        )?;
+        let source_baseline_units =
+            content_units * BILINGUAL_SOURCE_BASE_LINES / CHATBOX_MAX_VISIBLE_LINES;
+        let translation_baseline_units = content_units - source_baseline_units;
+        let mut source_units = source_baseline_units.max(source_minimum_units);
+        let mut translation_units = translation_baseline_units.max(translation_minimum_units);
+        let mut overflow = source_units
+            .saturating_add(translation_units)
+            .saturating_sub(content_units);
+
+        // Translation owns the tie-breaking preference, so shrink Source's
+        // discretionary share first when large graphemes exceed the baseline.
+        let source_reducible = source_units - source_minimum_units;
+        let source_reduction = overflow.min(source_reducible);
+        source_units -= source_reduction;
+        overflow -= source_reduction;
+        let translation_reduction = overflow.min(translation_units - translation_minimum_units);
+        translation_units -= translation_reduction;
+
+        let mut source_end =
+            source_prepared.fragment_end_with_limits(source_start, source_lines, source_units)?;
+        let mut translation_end = translation_prepared.fragment_end_with_limits(
+            translation_start,
+            translation_lines,
+            translation_units,
+        )?;
+        let mut used_source_units = source_prepared.utf16_units(source_start, source_end);
+        let mut used_translation_units =
+            translation_prepared.utf16_units(translation_start, translation_end);
+        let mut spare_units = content_units - used_source_units - used_translation_units;
+
+        // Width and natural break constraints often leave part of a nominal
+        // share unused. Donate that capacity rather than enforcing a fixed
+        // split, with Translation receiving the first opportunity.
+        translation_end = translation_prepared.fragment_end_with_limits(
+            translation_start,
+            translation_lines,
+            used_translation_units + spare_units,
+        )?;
+        used_translation_units =
+            translation_prepared.utf16_units(translation_start, translation_end);
+        spare_units = content_units - used_source_units - used_translation_units;
+        source_end = source_prepared.fragment_end_with_limits(
+            source_start,
+            source_lines,
+            used_source_units + spare_units,
+        )?;
+        used_source_units = source_prepared.utf16_units(source_start, source_end);
+        debug_assert!(
+            used_source_units + used_translation_units <= content_units,
+            "bilingual fragments exceeded the shared input budget"
+        );
+
+        // Lane-local budgets do not fully predict the combined result when a
+        // fragment contains explicit Unicode line breaks. Revalidate the exact
+        // rendered page and retreat at standalone-safe lane boundaries. Source
+        // yields first so the deterministic tie-break continues to favor
+        // Translation.
+        while !bilingual_page_is_standalone_safe(
+            &source_prepared,
+            source_start,
+            source_end,
+            &translation_prepared,
+            translation_start,
+            translation_end,
+        )? {
+            if source_end > source_start + 1 {
+                source_end = source_prepared
+                    .standalone_safe_fragment(
+                        source_start,
+                        source_end - 1,
+                        source_lines,
+                        source_units,
+                    )?
+                    .0;
+            } else if translation_end > translation_start + 1 {
+                translation_end = translation_prepared
+                    .standalone_safe_fragment(
+                        translation_start,
+                        translation_end - 1,
+                        translation_lines,
+                        translation_units,
+                    )?
+                    .0;
+            } else {
+                pages.push(BilingualCompletedPage {
+                    source: source_prepared.text_between(source_start, source_end),
+                    translation: String::new(),
+                });
+                source_start = source_end;
+                continue 'shared_pages;
+            }
+        }
+
+        pages.push(BilingualCompletedPage {
+            source: source_prepared.text_between(source_start, source_end),
+            translation: translation_prepared.text_between(translation_start, translation_end),
+        });
+        source_start = source_end;
+        translation_start = translation_end;
+    }
+
+    if source_start < source_prepared.graphemes.len() {
+        let remaining = source_prepared.text_between(source_start, source_prepared.graphemes.len());
+        pages.extend(paginate_completed(&remaining)?.into_iter().map(|source| {
+            BilingualCompletedPage {
+                source,
+                translation: String::new(),
+            }
+        }));
+    }
+    if translation_start < translation_prepared.graphemes.len() {
+        let remaining = translation_prepared
+            .text_between(translation_start, translation_prepared.graphemes.len());
+        pages.extend(
+            paginate_completed(&remaining)?
+                .into_iter()
+                .map(|translation| BilingualCompletedPage {
+                    source: String::new(),
+                    translation,
+                }),
+        );
+    }
+
+    Ok(pages)
+}
+
+fn bilingual_page_is_standalone_safe(
+    source: &PreparedText<'_>,
+    source_start: usize,
+    source_end: usize,
+    translation: &PreparedText<'_>,
+    translation_start: usize,
+    translation_end: usize,
+) -> Result<bool, ChatboxLayoutError> {
+    let rendered = format!(
+        "{}{BILINGUAL_SEPARATOR}{}",
+        source.text_between(source_start, source_end),
+        translation.text_between(translation_start, translation_end)
+    );
+    let prepared = PreparedText::new(&rendered)?;
+
+    Ok(prepared.next_page_end(0) == prepared.graphemes.len())
+}
+
+fn bilingual_line_budgets(
+    source: &PreparedText<'_>,
+    source_start: usize,
+    translation: &PreparedText<'_>,
+    translation_start: usize,
+    content_units: usize,
+) -> Result<(usize, usize), ChatboxLayoutError> {
+    let source_need = source.smallest_line_budget_that_fits(
+        source_start,
+        BILINGUAL_SOURCE_BASE_LINES,
+        content_units,
+    )?;
+    let translation_need = translation.smallest_line_budget_that_fits(
+        translation_start,
+        BILINGUAL_TRANSLATION_BASE_LINES,
+        content_units,
+    )?;
+
+    Ok(match (source_need, translation_need) {
+        (Some(source_lines), Some(translation_lines)) => (source_lines, translation_lines),
+        (Some(source_lines), None) => (source_lines, CHATBOX_MAX_VISIBLE_LINES - source_lines),
+        (None, Some(translation_lines)) => (
+            CHATBOX_MAX_VISIBLE_LINES - translation_lines,
+            translation_lines,
+        ),
+        (None, None) => (
+            BILINGUAL_SOURCE_BASE_LINES,
+            BILINGUAL_TRANSLATION_BASE_LINES,
+        ),
+    })
 }
 
 /// Returns one safe Live viewport that always retains the newest source text.
@@ -219,6 +488,19 @@ impl<'text> PreparedText<'text> {
     }
 
     fn next_page_end(&self, page_start: usize) -> usize {
+        self.next_page_end_with_limits(
+            page_start,
+            CHATBOX_MAX_VISIBLE_LINES,
+            CHATBOX_MAX_UTF16_UNITS,
+        )
+    }
+
+    fn next_page_end_with_limits(
+        &self,
+        page_start: usize,
+        max_visible_lines: usize,
+        max_utf16_units: usize,
+    ) -> usize {
         let mut cursor = page_start;
         let mut line_start = page_start;
         let mut line_width = 0;
@@ -228,14 +510,14 @@ impl<'text> PreparedText<'text> {
 
         while cursor < self.graphemes.len() {
             let grapheme = &self.graphemes[cursor];
-            if self.utf16_units(page_start, cursor + 1) > CHATBOX_MAX_UTF16_UNITS {
+            if self.utf16_units(page_start, cursor + 1) > max_utf16_units {
                 return last_legal_page_break
                     .filter(|boundary| *boundary > page_start)
                     .unwrap_or(cursor);
             }
 
             if grapheme.explicit_line_break {
-                if line_count == CHATBOX_MAX_VISIBLE_LINES {
+                if line_count == max_visible_lines {
                     return cursor;
                 }
 
@@ -272,7 +554,7 @@ impl<'text> PreparedText<'text> {
                 (cursor + 1, false)
             };
 
-            if line_count == CHATBOX_MAX_VISIBLE_LINES {
+            if line_count == max_visible_lines {
                 return if line_end_is_legal {
                     line_end
                 } else {
@@ -300,6 +582,21 @@ impl<'text> PreparedText<'text> {
         page_start: usize,
         proposed_end: usize,
     ) -> Result<(usize, String), ChatboxLayoutError> {
+        self.standalone_safe_fragment(
+            page_start,
+            proposed_end,
+            CHATBOX_MAX_VISIBLE_LINES,
+            CHATBOX_MAX_UTF16_UNITS,
+        )
+    }
+
+    fn standalone_safe_fragment(
+        &self,
+        page_start: usize,
+        proposed_end: usize,
+        max_visible_lines: usize,
+        max_utf16_units: usize,
+    ) -> Result<(usize, String), ChatboxLayoutError> {
         let mut page_end = proposed_end;
 
         loop {
@@ -309,7 +606,8 @@ impl<'text> PreparedText<'text> {
                 .collect();
             let safe_byte_len = {
                 let standalone = PreparedText::new(&candidate)?;
-                let standalone_end = standalone.next_page_end(0);
+                let standalone_end =
+                    standalone.next_page_end_with_limits(0, max_visible_lines, max_utf16_units);
                 (standalone_end != standalone.graphemes.len()).then(|| {
                     standalone.graphemes[..standalone_end]
                         .iter()
@@ -358,6 +656,38 @@ impl<'text> PreparedText<'text> {
 
     fn utf16_units(&self, start: usize, end: usize) -> usize {
         self.utf16_prefix[end] - self.utf16_prefix[start]
+    }
+
+    fn fragment_end_with_limits(
+        &self,
+        start: usize,
+        max_visible_lines: usize,
+        max_utf16_units: usize,
+    ) -> Result<usize, ChatboxLayoutError> {
+        let proposed_end =
+            self.next_page_end_with_limits(start, max_visible_lines, max_utf16_units);
+        if proposed_end == start {
+            return Ok(start);
+        }
+
+        self.standalone_safe_fragment(start, proposed_end, max_visible_lines, max_utf16_units)
+            .map(|(end, _)| end)
+    }
+
+    fn smallest_line_budget_that_fits(
+        &self,
+        start: usize,
+        maximum: usize,
+        max_utf16_units: usize,
+    ) -> Result<Option<usize>, ChatboxLayoutError> {
+        for lines in 1..=maximum {
+            if self.fragment_end_with_limits(start, lines, max_utf16_units)? == self.graphemes.len()
+            {
+                return Ok(Some(lines));
+            }
+        }
+
+        Ok(None)
     }
 
     fn suffix_is_standalone_safe(&self, start: usize) -> Result<bool, ChatboxLayoutError> {
