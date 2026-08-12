@@ -20,6 +20,7 @@ fn generation_snapshot(config: &AppConfig, generation: u64) -> RuntimeGeneration
             host: config.osc.host.clone(),
             port: config.osc.port,
         },
+        translation_state: crate::runtime_control::RuntimeGenerationTranslationState::Inactive,
         uploads_microphone_audio: false,
         uploads_source_text: false,
     }
@@ -211,6 +212,37 @@ fn incompatible_publication_fails_before_openai_credentials_are_resolved() -> Ap
         crate::config::PublicationMode::Live
     );
 
+    Ok(())
+}
+
+#[test]
+fn desktop_keeps_active_translation_behind_the_production_start_gate() -> AppResult<()> {
+    let app = tauri::test::mock_builder()
+        .manage(AppState::default())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .map_err(|error| AppError::runtime(format!("Failed to build test app: {error}")))?;
+    let state = app.state::<AppState>();
+    let mut config = AppConfig {
+        translation: Some(crate::config::TranslationConfig {
+            path: crate::config::TranslationPath::OpenAiResponsesCompletedText,
+            target: crate::config::TranslationTarget::SimplifiedChinese,
+            endpoint: crate::config::TranslationEndpoint::Official,
+        }),
+        ..AppConfig::default()
+    };
+    config.publication.content = crate::config::ContentSelection::TranslationOnly;
+    state.control.replace_saved_config(config)?;
+
+    let error = state
+        .start_runtime(app.handle())
+        .err()
+        .ok_or_else(|| AppError::state("Desktop Start bypassed the Translation gate."))?;
+    let snapshot = state.runtime_control_snapshot()?;
+
+    assert_eq!(error.code(), "config.invalid");
+    assert!(error.to_string().contains("translation.module_unavailable"));
+    assert!(snapshot.generation.is_none());
+    assert_eq!(snapshot.runtime_status.status, RuntimeStatus::Error);
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
-import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v1.json?raw";
-import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v2.json?raw";
+import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v2.json?raw";
+import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v3.json?raw";
 import type { CaptionAggregateSnapshot } from "../captionAggregate";
 import type {
   AppGateway,
@@ -55,6 +55,7 @@ function createRuntimeStoreHarness() {
     activeStream: null,
     openSourceUnits: [],
     captions: [],
+    translationUnits: [],
   };
   const runningCaption: CaptionAggregateSnapshot = {
     ...initialCaption,

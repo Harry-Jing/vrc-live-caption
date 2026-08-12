@@ -1,9 +1,10 @@
 import type { AppConfig } from "./appConfig";
 import type { AppFailure } from "./appFailure";
+import type { TranslationFailureReason } from "./captionAggregate";
 import type { CaptionPipelinePlan } from "./captionPipeline";
 import type { RuntimeStatusEvent } from "./runtimeEvents";
 
-export const RUNTIME_CONTROL_CONTRACT_VERSION = 2 as const;
+export const RUNTIME_CONTROL_CONTRACT_VERSION = 3 as const;
 
 export const CREDENTIAL_IDS = ["openai", "customTranslation"] as const;
 export type CredentialId = (typeof CREDENTIAL_IDS)[number];
@@ -57,6 +58,20 @@ export const RUNTIME_GENERATION_PHASES = [
 ] as const;
 export type RuntimeGenerationPhase = (typeof RUNTIME_GENERATION_PHASES)[number];
 
+export const RUNTIME_GENERATION_TRANSLATION_STATES = [
+  "inactive",
+  "active",
+  "degraded",
+] as const;
+
+export type RuntimeGenerationTranslationState =
+  | Readonly<{ state: "inactive" }>
+  | Readonly<{ state: "active" }>
+  | Readonly<{
+      state: "degraded";
+      reasonCode: TranslationFailureReason;
+    }>;
+
 export const CHATBOX_PUBLICATION_STATES = [
   "disabled",
   "ready",
@@ -101,6 +116,7 @@ export type RuntimeGenerationSnapshot = Readonly<{
   captionPipelinePlan: CaptionPipelinePlan;
   credentials: readonly RuntimeGenerationCredentialSnapshot[];
   chatboxPublication: ChatboxPublicationSnapshot;
+  translationState: RuntimeGenerationTranslationState;
   uploadsMicrophoneAudio: boolean;
   uploadsSourceText: boolean;
 }>;

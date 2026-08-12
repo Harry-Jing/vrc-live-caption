@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import captionAggregateFixture from "../../contracts/caption-aggregate-snapshot-v1.json?raw";
+import captionAggregateFixture from "../../contracts/caption-aggregate-snapshot-v2.json?raw";
 import {
   createCaptionAggregateState,
   reduceCaptionAggregateState,
@@ -8,9 +8,24 @@ import {
 import { decodeCaptionAggregateSnapshot } from "./wire/captionAggregateContract";
 
 function fixture() {
-  return decodeCaptionAggregateSnapshot(
+  const decoded = decodeCaptionAggregateSnapshot(
     JSON.parse(captionAggregateFixture) as unknown,
   );
+  const source = decoded.captions.find(
+    (caption) => caption.lane === "source" && caption.unitId === "speech-7-1",
+  );
+  if (source === undefined) {
+    throw new Error(
+      "The Caption Aggregate fixture must contain its first Source unit.",
+    );
+  }
+
+  return decodeCaptionAggregateSnapshot({
+    ...decoded,
+    snapshotRevision: 4,
+    captions: [{ ...source, text: "Full bounded OpenAI transcript." }],
+    translationUnits: [],
+  });
 }
 
 describe("caption aggregate state", () => {
@@ -43,7 +58,7 @@ describe("caption aggregate state", () => {
     const source = fixture().captions[0];
     expect(source).toBeDefined();
     const active = decodeCaptionAggregateSnapshot({
-      contractVersion: 1,
+      contractVersion: 2,
       snapshotRevision: 10,
       activeStream: { generation: 8, streamId: "recognition-8-1" },
       openSourceUnits: [{ unitId: "speech-8-1", startedAtMs: 2000 }],
@@ -60,6 +75,7 @@ describe("caption aggregate state", () => {
           timestampMs: 2100,
         },
       ],
+      translationUnits: [],
     });
     let state = reduceCaptionAggregateState(createCaptionAggregateState(), {
       type: "snapshotReceived",
@@ -101,7 +117,6 @@ describe("caption aggregate state", () => {
           timestampMs: 1400,
         },
         completed,
-        aggregate.captions[1],
       ],
     });
     let state = reduceCaptionAggregateState(createCaptionAggregateState(), {
@@ -141,7 +156,6 @@ describe("caption aggregate state", () => {
           timestampMs: 1400,
         },
         completed,
-        aggregate.captions[1],
       ],
     });
     const state = reduceCaptionAggregateState(createCaptionAggregateState(), {

@@ -1,0 +1,98 @@
+{
+  "contractVersion": 2,
+  "snapshotRevision": 9,
+  "activeStream": {
+    "generation": 7,
+    "streamId": "recognition-7-1"
+  },
+  "openSourceUnits": [],
+  "captions": [
+    {
+      "generation": 7,
+      "streamId": "recognition-7-1",
+      "unitId": "speech-7-3",
+      "lane": "source",
+      "revision": 1,
+      "text": "Source whose translation failed.",
+      "state": "completed",
+      "language": "en",
+      "sourceRef": null,
+      "unitStartedAtMs": 1400,
+      "timestampMs": 1600
+    },
+    {
+      "generation": 7,
+      "streamId": "recognition-7-1",
+      "unitId": "speech-7-2",
+      "lane": "source",
+      "revision": 1,
+      "text": "Source awaiting translation.",
+      "state": "completed",
+      "language": "en",
+      "sourceRef": null,
+      "unitStartedAtMs": 1200,
+      "timestampMs": 1400
+    },
+    {
+      "generation": 7,
+      "streamId": "recognition-7-1",
+      "unitId": "speech-7-1",
+      "lane": "source",
+      "revision": 1,
+      "text": "Source with a completed translation.",
+      "state": "completed",
+      "language": "en",
+      "sourceRef": null,
+      "unitStartedAtMs": 1000,
+      "timestampMs": 1200
+    },
+    {
+      "generation": 7,
+      "streamId": "recognition-7-1",
+      "unitId": "speech-7-1",
+      "lane": "translation",
+      "revision": 1,
+      "text": "已完成翻译的原文。",
+      "state": "completed",
+      "language": "zh-Hans",
+      "sourceRef": {
+        "generation": 7,
+        "streamId": "recognition-7-1",
+        "unitId": "speech-7-1",
+        "revision": 1
+      },
+      "unitStartedAtMs": 1000,
+      "timestampMs": 1201
+    }
+  ],
+  "translationUnits": [
+    {
+      "state": "failed",
+      "sourceRef": {
+        "generation": 7,
+        "streamId": "recognition-7-1",
+        "unitId": "speech-7-3",
+        "revision": 1
+      },
+      "reasonCode": "translation.provider_unavailable"
+    },
+    {
+      "state": "pending",
+      "sourceRef": {
+        "generation": 7,
+        "streamId": "recognition-7-1",
+        "unitId": "speech-7-2",
+        "revision": 1
+      }
+    },
+    {
+      "state": "completed",
+      "sourceRef": {
+        "generation": 7,
+        "streamId": "recognition-7-1",
+        "unitId": "speech-7-1",
+        "revision": 1
+      }
+    }
+  ]
+}

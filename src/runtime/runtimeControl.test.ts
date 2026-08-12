@@ -94,7 +94,7 @@ test("classifies every current app config field into generation selection or run
 
 test("projects desired settings separately from the immutable active generation", () => {
   const snapshot: RuntimeControlSnapshot = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 4,
     runtimeStatus: {
       status: "running",
@@ -140,6 +140,7 @@ test("projects desired settings separately from the immutable active generation"
         host: "127.0.0.1",
         port: 9000,
       },
+      translationState: { state: "inactive" },
       uploadsMicrophoneAudio: true,
       uploadsSourceText: false,
     },
@@ -187,7 +188,7 @@ test("projects desired settings separately from the immutable active generation"
 
 test("ignores duplicate and older authoritative control snapshots", () => {
   const current = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 8,
     runtimeStatus: { status: "running", timestampMs: 80 },
     desired: {
@@ -211,7 +212,7 @@ test("ignores duplicate and older authoritative control snapshots", () => {
 
 test("accepts a newer snapshot even when its display timestamp is lower", () => {
   const current = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 3,
     runtimeStatus: { status: "idle", timestampMs: 30 },
     desired: {
@@ -249,7 +250,7 @@ test("accepts a newer snapshot even when its display timestamp is lower", () => 
 
 test("requests a control pull when a legacy status outpaces a missed control event", () => {
   const startingSnapshot = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 4,
     runtimeStatus: {
       status: "starting",
@@ -288,7 +289,7 @@ test("requests a control pull when a legacy status outpaces a missed control eve
 
 test("requests a control pull for an accepted same-timestamp status mismatch", () => {
   const snapshot = {
-    contractVersion: 2,
+    contractVersion: 3,
     revision: 4,
     runtimeStatus: { status: "starting", timestampMs: 40 },
     desired: {

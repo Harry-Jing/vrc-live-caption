@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v2.json?raw";
+import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v3.json?raw";
 import {
   decodeRuntimeControlSnapshot,
   RuntimeControlContractError,
@@ -15,7 +15,7 @@ function activeCustomTranslationPayload() {
     completePayload.desired.config.translation === null
   ) {
     throw new Error(
-      "V2 fixture must contain a generation and saved Translation.",
+      "V3 fixture must contain a generation and saved Translation.",
     );
   }
   const publication = { mode: "completed", content: "bilingual" } as const;
@@ -69,6 +69,7 @@ function activeCustomTranslationPayload() {
           revision: 1,
         },
       ],
+      translationState: { state: "active" } as const,
       uploadsSourceText: true,
     },
   };
@@ -165,9 +166,96 @@ describe("decodeRuntimeControlSnapshot", () => {
     expect(decoded.generation).toMatchObject({
       selection: { publication: { content: "bilingual" } },
       credentials: [{ id: "openai" }, { id: "customTranslation" }],
+      translationState: { state: "active" },
       uploadsMicrophoneAudio: true,
       uploadsSourceText: true,
     });
+  });
+
+  test("decodes degraded Translation with its first stable failure reason", () => {
+    const active = activeCustomTranslationPayload();
+    const payload = {
+      ...active,
+      generation: {
+        ...active.generation,
+        translationState: {
+          state: "degraded",
+          reasonCode: "translation.provider_unavailable",
+        },
+      },
+    };
+
+    expect(decodeRuntimeControlSnapshot(payload).generation).toMatchObject({
+      translationState: {
+        state: "degraded",
+        reasonCode: "translation.provider_unavailable",
+      },
+    });
+  });
+
+  test("decodes Official Translation with one deduplicated OpenAI credential", () => {
+    const active = activeCustomTranslationPayload();
+    const translation = {
+      ...active.generation.selection.translation,
+      endpoint: { kind: "official" },
+    };
+    const payload = {
+      ...active,
+      generation: {
+        ...active.generation,
+        selection: { ...active.generation.selection, translation },
+        credentials: active.generation.credentials.filter(
+          (credential) => credential.id === "openai",
+        ),
+      },
+    };
+
+    expect(decodeRuntimeControlSnapshot(payload).generation).toMatchObject({
+      selection: { translation: { endpoint: { kind: "official" } } },
+      credentials: [{ id: "openai" }],
+      translationState: { state: "active" },
+    });
+  });
+
+  test.each([
+    ["inactive", { state: "active" }],
+    ["active", { state: "inactive" }],
+  ])(
+    "rejects %s selection with a contradictory Translation state",
+    (kind, state) => {
+      const base =
+        kind === "inactive"
+          ? completePayload
+          : activeCustomTranslationPayload();
+      const payload = {
+        ...base,
+        generation: base.generation
+          ? { ...base.generation, translationState: state }
+          : null,
+      };
+
+      expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
+        "$.generation.translationState",
+      );
+    },
+  );
+
+  test("rejects an unknown degraded Translation reason", () => {
+    const active = activeCustomTranslationPayload();
+    const payload = {
+      ...active,
+      generation: {
+        ...active.generation,
+        translationState: {
+          state: "degraded",
+          reasonCode: "translation.arbitrary",
+        },
+      },
+    };
+
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
+      "$.generation.translationState.reasonCode",
+    );
   });
 
   test("rejects Source-text upload disclosure that contradicts active Translation", () => {
@@ -184,7 +272,7 @@ describe("decodeRuntimeControlSnapshot", () => {
     const translation = completePayload.desired.config.translation;
     if (generation === null || translation === null) {
       throw new Error(
-        "V2 fixture must contain a generation and saved Translation.",
+        "V3 fixture must contain a generation and saved Translation.",
       );
     }
     const payload = {
@@ -225,10 +313,10 @@ describe("decodeRuntimeControlSnapshot", () => {
     expect(() =>
       decodeRuntimeControlSnapshot({
         ...(fixtureJson as object),
-        contractVersion: 4,
+        contractVersion: 2,
       }),
     ).toThrow(
-      "Invalid runtime control payload at $.contractVersion: expected 2.",
+      "Invalid runtime control payload at $.contractVersion: expected 3.",
     );
   });
 
@@ -545,7 +633,7 @@ describe("decodeRuntimeControlSnapshot", () => {
   test.each([
     [
       "a pre-baseline contract version",
-      { ...completePayload, contractVersion: 3 },
+      { ...completePayload, contractVersion: 1 },
       "$.contractVersion",
     ],
     [

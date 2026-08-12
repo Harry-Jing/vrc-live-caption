@@ -18,6 +18,7 @@ mod output;
 mod supervisor;
 #[cfg(test)]
 mod test_support;
+mod translation;
 
 #[expect(
     unused_imports,
@@ -28,3 +29,4 @@ pub(crate) use manager::{
     PreparedRecognition, RuntimeManager, RuntimeStartOutcome, RuntimeStartRequest,
 };
 pub(crate) use output::RuntimeGeneration;
+pub(crate) use translation::PreparedTranslation;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v1.json?raw";
+import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v2.json?raw";
 import {
   CaptionAggregateContractError,
   decodeCaptionAggregateSnapshot,
@@ -17,18 +17,44 @@ describe("caption aggregate contract", () => {
     );
 
     expect(decoded).toEqual({
-      contractVersion: 1,
-      snapshotRevision: 4,
+      contractVersion: 2,
+      snapshotRevision: 9,
       activeStream: { generation: 7, streamId: "recognition-7-1" },
       openSourceUnits: [],
       captions: [
         {
           generation: 7,
           streamId: "recognition-7-1",
+          unitId: "speech-7-3",
+          lane: "source",
+          revision: 1,
+          text: "Source whose translation failed.",
+          state: "completed",
+          language: "en",
+          sourceRef: null,
+          unitStartedAtMs: 1400,
+          timestampMs: 1600,
+        },
+        {
+          generation: 7,
+          streamId: "recognition-7-1",
+          unitId: "speech-7-2",
+          lane: "source",
+          revision: 1,
+          text: "Source awaiting translation.",
+          state: "completed",
+          language: "en",
+          sourceRef: null,
+          unitStartedAtMs: 1200,
+          timestampMs: 1400,
+        },
+        {
+          generation: 7,
+          streamId: "recognition-7-1",
           unitId: "speech-7-1",
           lane: "source",
           revision: 1,
-          text: "Full bounded OpenAI transcript.",
+          text: "Source with a completed translation.",
           state: "completed",
           language: "en",
           sourceRef: null,
@@ -41,9 +67,9 @@ describe("caption aggregate contract", () => {
           unitId: "speech-7-1",
           lane: "translation",
           revision: 1,
-          text: "完整的有界转写。",
+          text: "已完成翻译的原文。",
           state: "completed",
-          language: "zh",
+          language: "zh-Hans",
           sourceRef: {
             generation: 7,
             streamId: "recognition-7-1",
@@ -54,6 +80,36 @@ describe("caption aggregate contract", () => {
           timestampMs: 1201,
         },
       ],
+      translationUnits: [
+        {
+          state: "failed",
+          sourceRef: {
+            generation: 7,
+            streamId: "recognition-7-1",
+            unitId: "speech-7-3",
+            revision: 1,
+          },
+          reasonCode: "translation.provider_unavailable",
+        },
+        {
+          state: "pending",
+          sourceRef: {
+            generation: 7,
+            streamId: "recognition-7-1",
+            unitId: "speech-7-2",
+            revision: 1,
+          },
+        },
+        {
+          state: "completed",
+          sourceRef: {
+            generation: 7,
+            streamId: "recognition-7-1",
+            unitId: "speech-7-1",
+            revision: 1,
+          },
+        },
+      ],
     });
   });
 
@@ -61,34 +117,32 @@ describe("caption aggregate contract", () => {
     expect(() =>
       decodeCaptionAggregateSnapshot({
         ...(JSON.parse(captionAggregateFixture) as object),
-        contractVersion: 2,
+        contractVersion: 1,
       }),
     ).toThrow(
-      "Invalid caption aggregate payload at $.contractVersion: expected 1.",
+      "Invalid caption aggregate payload at $.contractVersion: expected 2.",
     );
   });
 
-  test("admits an ongoing translation after its source lane completed", () => {
+  test("rejects an ongoing Translation caption for a completed outcome", () => {
     const fixture = decodeCaptionAggregateSnapshot(
       JSON.parse(captionAggregateFixture) as unknown,
     );
-    const source = fixture.captions[0];
+    const translation = fixture.captions.find(
+      (caption) => caption.lane === "translation",
+    );
 
-    expect(source?.lane).toBe("source");
+    expect(translation).toBeDefined();
     expect(() =>
       decodeCaptionAggregateSnapshot({
         ...fixture,
-        captions: [
-          source,
-          {
-            ...fixture.captions[1],
-            state: "ongoing",
-            revision: 2,
-            text: "仍在翻译",
-          },
-        ],
+        captions: fixture.captions.map((caption) =>
+          caption.lane === "translation"
+            ? { ...caption, state: "ongoing" }
+            : caption,
+        ),
       }),
-    ).not.toThrow();
+    ).toThrow(/only completed translation units/u);
   });
 
   test.each([
@@ -108,7 +162,12 @@ describe("caption aggregate contract", () => {
         ...fixture,
         captions: fixture.captions.map((caption, index) =>
           index === 0
-            ? { ...caption, sourceRef: fixture.captions[1]?.sourceRef }
+            ? {
+                ...caption,
+                sourceRef: fixture.captions.find(
+                  (candidate) => candidate.lane === "translation",
+                )?.sourceRef,
+              }
             : caption,
         ),
       }),
@@ -252,6 +311,178 @@ describe("caption aggregate contract", () => {
       ).toThrow(/sourceRef/u);
     },
   );
+
+  test("rejects duplicate translation outcomes for the same exact Source snapshot", () => {
+    const fixture = decodeCaptionAggregateSnapshot(
+      JSON.parse(captionAggregateFixture) as unknown,
+    );
+    const failed = fixture.translationUnits.find(
+      (translationUnit) => translationUnit.state === "failed",
+    );
+    const pending = fixture.translationUnits.find(
+      (translationUnit) => translationUnit.state === "pending",
+    );
+    expect(failed).toBeDefined();
+    expect(pending).toBeDefined();
+
+    expect(() =>
+      decodeCaptionAggregateSnapshot({
+        ...fixture,
+        translationUnits: fixture.translationUnits.map((translationUnit) =>
+          translationUnit === failed && pending !== undefined
+            ? { ...translationUnit, sourceRef: pending.sourceRef }
+            : translationUnit,
+        ),
+      }),
+    ).toThrow(/source references must be unique/u);
+  });
+
+  test.each([
+    [
+      "generation",
+      (sourceRef: DecodedSourceRef) => ({
+        ...sourceRef,
+        generation: sourceRef.generation + 1,
+      }),
+    ],
+    [
+      "stream",
+      (sourceRef: DecodedSourceRef) => ({
+        ...sourceRef,
+        streamId: `${sourceRef.streamId}-stale`,
+      }),
+    ],
+    [
+      "unit",
+      (sourceRef: DecodedSourceRef) => ({
+        ...sourceRef,
+        unitId: `${sourceRef.unitId}-stale`,
+      }),
+    ],
+    [
+      "revision",
+      (sourceRef: DecodedSourceRef) => ({
+        ...sourceRef,
+        revision: sourceRef.revision + 1,
+      }),
+    ],
+  ] as const)(
+    "rejects a translation outcome sourceRef with a mismatched %s",
+    (_dimension, mutateSourceRef) => {
+      const fixture = decodeCaptionAggregateSnapshot(
+        JSON.parse(captionAggregateFixture) as unknown,
+      );
+
+      expect(() =>
+        decodeCaptionAggregateSnapshot({
+          ...fixture,
+          translationUnits: fixture.translationUnits.map((translationUnit) =>
+            translationUnit.state === "failed"
+              ? {
+                  ...translationUnit,
+                  sourceRef: mutateSourceRef(translationUnit.sourceRef),
+                }
+              : translationUnit,
+          ),
+        }),
+      ).toThrow(/translationUnits.sourceRef/u);
+    },
+  );
+
+  test("rejects a pending translation outcome outside the active caption stream", () => {
+    const fixture = decodeCaptionAggregateSnapshot(
+      JSON.parse(captionAggregateFixture) as unknown,
+    );
+
+    expect(() =>
+      decodeCaptionAggregateSnapshot({
+        ...fixture,
+        activeStream: null,
+      }),
+    ).toThrow(
+      /pending translation units must belong to the active caption stream/u,
+    );
+  });
+
+  test.each([
+    [
+      "a completed outcome without its Translation caption",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        captions: fixture.captions.filter(
+          (caption) => caption.lane !== "translation",
+        ),
+      }),
+      /only completed translation units/u,
+    ],
+    [
+      "a failed outcome carrying a Translation caption",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        translationUnits: fixture.translationUnits.map((translationUnit) =>
+          translationUnit.state === "completed"
+            ? {
+                state: "failed",
+                sourceRef: translationUnit.sourceRef,
+                reasonCode: "translation.failed",
+              }
+            : translationUnit,
+        ),
+      }),
+      /only completed translation units/u,
+    ],
+    [
+      "a Translation caption without its completed outcome",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        translationUnits: fixture.translationUnits.filter(
+          (translationUnit) => translationUnit.state !== "completed",
+        ),
+      }),
+      /Translation captions require one exact completed translation unit/u,
+    ],
+  ] as const)("rejects %s", (_name, mutate, expectation) => {
+    const fixture = decodeCaptionAggregateSnapshot(
+      JSON.parse(captionAggregateFixture) as unknown,
+    );
+
+    expect(() => decodeCaptionAggregateSnapshot(mutate(fixture))).toThrow(
+      expectation,
+    );
+  });
+
+  test.each([
+    [
+      "an unknown translation failure reason",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        translationUnits: fixture.translationUnits.map((translationUnit) =>
+          translationUnit.state === "failed"
+            ? { ...translationUnit, reasonCode: "translation.provider_message" }
+            : translationUnit,
+        ),
+      }),
+      /reasonCode/u,
+    ],
+    [
+      "a reason on a pending outcome",
+      (fixture: DecodedAggregate) => ({
+        ...fixture,
+        translationUnits: fixture.translationUnits.map((translationUnit) =>
+          translationUnit.state === "pending"
+            ? { ...translationUnit, reasonCode: "translation.failed" }
+            : translationUnit,
+        ),
+      }),
+      /reasonCode/u,
+    ],
+  ] as const)("rejects %s", (_name, mutate, path) => {
+    const fixture = decodeCaptionAggregateSnapshot(
+      JSON.parse(captionAggregateFixture) as unknown,
+    );
+
+    expect(() => decodeCaptionAggregateSnapshot(mutate(fixture))).toThrow(path);
+  });
 
   test("preserves the aggregate contract error type", () => {
     expect(() => decodeCaptionAggregateSnapshot(null)).toThrow(

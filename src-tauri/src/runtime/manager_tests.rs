@@ -1,11 +1,16 @@
 use super::*;
 use crate::caption::CaptionAggregateStore;
-use crate::credentials::{CredentialId, CredentialStorage};
+use crate::config::{
+    ApiBaseUrl, ContentSelection, TranslationConfig, TranslationEndpoint, TranslationPath,
+    TranslationTarget,
+};
+use crate::credentials::{CredentialId, CredentialStorage, ResolvedCredential};
 use crate::host_resolver::{HostResolutionError, HostResolver};
 use crate::recognition::{
     RecognitionDriver, RecognitionDriverIo, openai_gpt_live_transcribe_module,
     openai_gpt_transcribe_module,
 };
+use crate::runtime::PreparedTranslation;
 use crate::runtime_control::RuntimeControlStore;
 use secrecy::SecretString;
 use std::io;
@@ -32,6 +37,34 @@ fn test_recognition_module(config: &AppConfig) -> AppResult<RecognitionModule> {
     }
 }
 
+fn official_translation() -> TranslationConfig {
+    TranslationConfig {
+        path: TranslationPath::OpenAiResponsesCompletedText,
+        target: TranslationTarget::SimplifiedChinese,
+        endpoint: TranslationEndpoint::Official,
+    }
+}
+
+fn prepared_translation(
+    selection: TranslationConfig,
+    credential: RuntimeGenerationCredentialSnapshot,
+) -> AppResult<PreparedTranslation> {
+    let revision = credential.revision;
+    let resolved = ResolvedCredential {
+        id: credential.id,
+        secret: SecretString::from("test-translation-key".to_string()),
+        storage: credential.storage,
+        display_suffix: credential.display_suffix,
+    };
+    let (binding, _) = crate::translation::translation_module_for_test(
+        selection,
+        resolved,
+        revision,
+        std::iter::empty(),
+    )?;
+    Ok(PreparedTranslation::cloud(binding))
+}
+
 struct WaitForRuntimeStopDriver {
     started: mpsc::SyncSender<()>,
     completed_runs: Arc<AtomicUsize>,
@@ -48,6 +81,61 @@ impl RecognitionDriver for WaitForRuntimeStopDriver {
     }
 }
 
+fn runtime_start_request(
+    manager: &RuntimeManager,
+    config: AppConfig,
+    recognition_credential: RuntimeGenerationCredentialSnapshot,
+    prepared_translation: Option<PreparedTranslation>,
+) -> AppResult<(RuntimeStartRequest, mpsc::Receiver<()>, Arc<AtomicUsize>)> {
+    let (driver_started, started) = mpsc::sync_channel(1);
+    let completed_runs = Arc::new(AtomicUsize::new(0));
+    let recognition_module = RecognitionModule::with_audio_budget(
+        Duration::from_millis(100),
+        1,
+        WaitForRuntimeStopDriver {
+            started: driver_started,
+            completed_runs: Arc::clone(&completed_runs),
+        },
+    )?;
+    Ok((
+        RuntimeStartRequest {
+            config,
+            chatbox_pacer: ChatboxPacer::default(),
+            caption_aggregate: CaptionAggregateStore::default(),
+            chatbox_host_resolver: HostResolver::default(),
+            prepared_recognition: PreparedRecognition::cloud(
+                recognition_module,
+                recognition_credential,
+            )?,
+            prepared_translation,
+            generation_id: 1,
+            config_revision: 2,
+            status_recorder: RuntimeControlStore::default().status_recorder(),
+            expected_stop_epoch: manager.stop_epoch(),
+        },
+        started,
+        completed_runs,
+    ))
+}
+
+#[test]
+fn cloud_recognition_rejects_non_openai_credential_metadata() -> AppResult<()> {
+    let error = PreparedRecognition::cloud(
+        test_recognition_module(&AppConfig::default())?,
+        RuntimeGenerationCredentialSnapshot {
+            id: CredentialId::CustomTranslation,
+            storage: CredentialStorage::SystemCredentialStore,
+            display_suffix: Some("wrong".to_string()),
+            revision: 4,
+        },
+    )
+    .err()
+    .ok_or_else(|| AppError::state("Cloud Recognition accepted non-OpenAI metadata."))?;
+
+    assert_eq!(error.code(), "runtime.state_failed");
+    Ok(())
+}
+
 #[test]
 fn prepared_cloud_recognition_binds_generation_disclosure_to_its_module() -> AppResult<()> {
     let credential = RuntimeGenerationCredentialSnapshot {
@@ -59,7 +147,7 @@ fn prepared_cloud_recognition_binds_generation_disclosure_to_its_module() -> App
     let prepared = PreparedRecognition::cloud(
         test_recognition_module(&AppConfig::default())?,
         credential.clone(),
-    );
+    )?;
     let PreparedRecognition {
         module,
         credentials,
@@ -78,6 +166,311 @@ fn prepared_cloud_recognition_binds_generation_disclosure_to_its_module() -> App
     );
     assert_eq!(prepared_credential.revision, credential.revision);
     assert!(uploads_microphone_audio);
+    Ok(())
+}
+
+#[test]
+fn runtime_rejects_a_prepared_translation_for_source_only_selection() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let manager = RuntimeManager::default();
+    let config = AppConfig::default();
+    let credential = RuntimeGenerationCredentialSnapshot {
+        id: CredentialId::OpenAi,
+        storage: CredentialStorage::Environment,
+        display_suffix: Some("same".to_string()),
+        revision: 3,
+    };
+    let request = RuntimeStartRequest {
+        prepared_translation: Some(prepared_translation(
+            official_translation(),
+            credential.clone(),
+        )?),
+        config: config.clone(),
+        chatbox_pacer: ChatboxPacer::default(),
+        caption_aggregate: CaptionAggregateStore::default(),
+        chatbox_host_resolver: HostResolver::default(),
+        prepared_recognition: PreparedRecognition::cloud(
+            test_recognition_module(&config)?,
+            credential,
+        )?,
+        generation_id: 1,
+        config_revision: 1,
+        status_recorder: RuntimeControlStore::default().status_recorder(),
+        expected_stop_epoch: manager.stop_epoch(),
+    };
+
+    let error = manager
+        .start(app.handle().clone(), request, |_| Ok(()))
+        .err()
+        .ok_or_else(|| AppError::state("Source-only Runtime accepted a Translation owner."))?;
+
+    assert_eq!(error.code(), "runtime.state_failed");
+    assert!(error.to_string().contains("Source-only"));
+    assert!(
+        manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn official_translation_reuses_the_exact_openai_generation_credential() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
+    let manager = RuntimeManager::default();
+    let mut config = AppConfig::default();
+    config.osc.enabled = false;
+    config.translation = Some(official_translation());
+    config.publication.content = ContentSelection::TranslationOnly;
+    let credential = RuntimeGenerationCredentialSnapshot {
+        id: CredentialId::OpenAi,
+        storage: CredentialStorage::Environment,
+        display_suffix: Some("shared".to_string()),
+        revision: 7,
+    };
+    let (mut request, started, _) = runtime_start_request(
+        &manager,
+        config,
+        credential.clone(),
+        Some(prepared_translation(
+            official_translation(),
+            credential.clone(),
+        )?),
+    )?;
+    request.status_recorder = status_recorder.clone();
+    let (snapshot_sender, snapshot_receiver) = mpsc::sync_channel(1);
+
+    assert_eq!(
+        manager.start(app.handle().clone(), request, |snapshot| {
+            snapshot_sender.send(snapshot).map_err(|_| {
+                AppError::state("Runtime test dropped its generation-snapshot receiver.")
+            })
+        })?,
+        RuntimeStartOutcome::Started
+    );
+    started
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::state("Prepared Recognition Driver did not start."))?;
+    let snapshot = snapshot_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::state("Prepared generation snapshot was not installed."))?;
+
+    assert!(matches!(
+        snapshot.translation_state,
+        RuntimeGenerationTranslationState::Active
+    ));
+    assert!(snapshot.uploads_source_text);
+    assert_eq!(snapshot.credentials.len(), 1);
+    let shared = snapshot
+        .credentials
+        .first()
+        .ok_or_else(|| AppError::state("Official Translation lost its shared credential."))?;
+    assert_eq!(shared.id, CredentialId::OpenAi);
+    assert_eq!(shared.storage, credential.storage);
+    assert_eq!(shared.display_suffix, credential.display_suffix);
+    assert_eq!(shared.revision, credential.revision);
+
+    manager.stop(app.handle(), &status_recorder)
+}
+
+#[test]
+fn custom_translation_adds_its_bound_credential_to_the_generation() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
+    let manager = RuntimeManager::default();
+    let selection = TranslationConfig {
+        path: TranslationPath::OpenAiResponsesCompletedText,
+        target: TranslationTarget::English,
+        endpoint: TranslationEndpoint::Custom {
+            api_base_url: ApiBaseUrl::parse("https://translate.example.test/v1")
+                .map_err(AppError::config)?,
+        },
+    };
+    let mut config = AppConfig::default();
+    config.osc.enabled = false;
+    config.translation = Some(selection.clone());
+    config.publication.content = ContentSelection::Bilingual;
+    let recognition_credential = RuntimeGenerationCredentialSnapshot {
+        id: CredentialId::OpenAi,
+        storage: CredentialStorage::Environment,
+        display_suffix: Some("openai".to_string()),
+        revision: 2,
+    };
+    let translation_credential = RuntimeGenerationCredentialSnapshot {
+        id: CredentialId::CustomTranslation,
+        storage: CredentialStorage::SystemCredentialStore,
+        display_suffix: Some("custom".to_string()),
+        revision: 9,
+    };
+    let (mut request, started, _) = runtime_start_request(
+        &manager,
+        config,
+        recognition_credential,
+        Some(prepared_translation(
+            selection.clone(),
+            translation_credential.clone(),
+        )?),
+    )?;
+    request.status_recorder = status_recorder.clone();
+    let (snapshot_sender, snapshot_receiver) = mpsc::sync_channel(1);
+
+    manager.start(app.handle().clone(), request, |snapshot| {
+        snapshot_sender
+            .send(snapshot)
+            .map_err(|_| AppError::state("Runtime test dropped its generation-snapshot receiver."))
+    })?;
+    started
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::state("Prepared Recognition Driver did not start."))?;
+    let snapshot = snapshot_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::state("Prepared generation snapshot was not installed."))?;
+
+    assert_eq!(snapshot.selection.translation, Some(selection));
+    assert_eq!(snapshot.credentials.len(), 2);
+    let custom = snapshot
+        .credentials
+        .iter()
+        .find(|credential| credential.id == CredentialId::CustomTranslation)
+        .ok_or_else(|| AppError::state("Custom Translation credential was not disclosed."))?;
+    assert_eq!(custom.storage, translation_credential.storage);
+    assert_eq!(custom.display_suffix, translation_credential.display_suffix);
+    assert_eq!(custom.revision, translation_credential.revision);
+    assert!(snapshot.uploads_source_text);
+
+    manager.stop(app.handle(), &status_recorder)
+}
+
+#[test]
+fn active_translation_without_a_prepared_owner_keeps_the_module_unavailable_gate() -> AppResult<()>
+{
+    let app = tauri::test::mock_app();
+    let manager = RuntimeManager::default();
+    let mut config = AppConfig {
+        translation: Some(official_translation()),
+        ..AppConfig::default()
+    };
+    config.publication.content = ContentSelection::TranslationOnly;
+    let (request, _, _) = runtime_start_request(
+        &manager,
+        config,
+        RuntimeGenerationCredentialSnapshot {
+            id: CredentialId::OpenAi,
+            storage: CredentialStorage::Environment,
+            display_suffix: None,
+            revision: 1,
+        },
+        None,
+    )?;
+
+    let error = manager
+        .start(app.handle().clone(), request, |_| Ok(()))
+        .err()
+        .ok_or_else(|| AppError::state("Active Translation started without a prepared owner."))?;
+
+    assert_eq!(error.code(), "config.invalid");
+    assert!(error.to_string().contains("translation.module_unavailable"));
+    assert!(
+        manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn runtime_rejects_translation_prepared_for_a_different_selection() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let manager = RuntimeManager::default();
+    let mut selected = official_translation();
+    selected.target = TranslationTarget::English;
+    let mut config = AppConfig {
+        translation: Some(selected),
+        ..AppConfig::default()
+    };
+    config.publication.content = ContentSelection::Bilingual;
+    let credential = RuntimeGenerationCredentialSnapshot {
+        id: CredentialId::OpenAi,
+        storage: CredentialStorage::Environment,
+        display_suffix: Some("same".to_string()),
+        revision: 4,
+    };
+    let (request, _, _) = runtime_start_request(
+        &manager,
+        config,
+        credential.clone(),
+        Some(prepared_translation(official_translation(), credential)?),
+    )?;
+
+    let error = manager
+        .start(app.handle().clone(), request, |_| Ok(()))
+        .err()
+        .ok_or_else(|| AppError::state("Runtime accepted a mismatched Translation selection."))?;
+
+    assert_eq!(error.code(), "runtime.state_failed");
+    assert!(error.to_string().contains("does not match"));
+    assert!(
+        manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn official_translation_rejects_conflicting_shared_credential_metadata() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let manager = RuntimeManager::default();
+    let mut config = AppConfig {
+        translation: Some(official_translation()),
+        ..AppConfig::default()
+    };
+    config.publication.content = ContentSelection::TranslationOnly;
+    let recognition_credential = RuntimeGenerationCredentialSnapshot {
+        id: CredentialId::OpenAi,
+        storage: CredentialStorage::Environment,
+        display_suffix: Some("old".to_string()),
+        revision: 4,
+    };
+    let translation_credential = RuntimeGenerationCredentialSnapshot {
+        id: CredentialId::OpenAi,
+        storage: CredentialStorage::SystemCredentialStore,
+        display_suffix: Some("new".to_string()),
+        revision: 5,
+    };
+    let (request, _, _) = runtime_start_request(
+        &manager,
+        config,
+        recognition_credential,
+        Some(prepared_translation(
+            official_translation(),
+            translation_credential,
+        )?),
+    )?;
+
+    let error = manager
+        .start(app.handle().clone(), request, |_| Ok(()))
+        .err()
+        .ok_or_else(|| AppError::state("Runtime accepted conflicting OpenAI metadata."))?;
+
+    assert_eq!(error.code(), "runtime.state_failed");
+    assert!(error.to_string().contains("disagree"));
+    assert!(
+        manager
+            .handle
+            .lock()
+            .map_err(|_| AppError::state("Runtime state lock was poisoned."))?
+            .is_none()
+    );
     Ok(())
 }
 
@@ -111,7 +504,8 @@ fn runtime_starts_the_prepared_module_with_its_bound_generation_metadata() -> Ap
         chatbox_pacer: ChatboxPacer::default(),
         caption_aggregate: CaptionAggregateStore::default(),
         chatbox_host_resolver: HostResolver::default(),
-        prepared_recognition: PreparedRecognition::cloud(recognition_module, credential),
+        prepared_recognition: PreparedRecognition::cloud(recognition_module, credential)?,
+        prepared_translation: None,
         generation_id: 1,
         config_revision: 2,
         status_recorder: status_recorder.clone(),
@@ -348,7 +742,8 @@ fn stop_supersedes_a_start_blocked_in_osc_hostname_resolution() -> AppResult<()>
                 display_suffix: None,
                 revision: 1,
             },
-        ),
+        )?,
+        prepared_translation: None,
         generation_id: 1,
         config_revision: 1,
         status_recorder: status_recorder.clone(),
@@ -493,7 +888,8 @@ fn runtime_start_fails_closed_when_its_derived_plan_is_incompatible() -> AppResu
                 display_suffix: None,
                 revision: 1,
             },
-        ),
+        )?,
+        prepared_translation: None,
         generation_id: 1,
         config_revision: 1,
         status_recorder: RuntimeControlStore::default().status_recorder(),

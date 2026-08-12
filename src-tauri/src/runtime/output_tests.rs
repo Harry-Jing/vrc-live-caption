@@ -2,7 +2,17 @@ use super::super::test_support::{
     RecordingChatboxTransport, inactive_caption_update, receive_json_event, runtime_test_publisher,
 };
 use super::*;
+use crate::caption::{TranslationFailureReason, TranslationUnitSnapshot};
+use crate::config::{TranslationConfig, TranslationEndpoint, TranslationPath, TranslationTarget};
+use crate::credentials::{CredentialId, CredentialStorage, ResolvedCredential};
 use crate::recognition::{ScriptedRecognitionContext, ScriptedRecognitionEvents, ScriptedText};
+use crate::runtime::PreparedTranslation;
+use crate::runtime_control::RuntimeGenerationCredentialSnapshot;
+use crate::translation::{
+    TestTranslationControl, TestTranslationResult, TranslationFailureClass,
+    translation_module_for_test,
+};
+use secrecy::SecretString;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,6 +24,362 @@ fn scripted_context(generation: &RuntimeGeneration) -> ScriptedRecognitionContex
         stream_id: generation.stream_id().to_string(),
         language: Some("en".to_string()),
     }
+}
+
+fn test_translation_selection() -> TranslationConfig {
+    TranslationConfig {
+        path: TranslationPath::OpenAiResponsesCompletedText,
+        target: TranslationTarget::SimplifiedChinese,
+        endpoint: TranslationEndpoint::Official,
+    }
+}
+
+fn test_translation_credential(id: CredentialId) -> RuntimeGenerationCredentialSnapshot {
+    RuntimeGenerationCredentialSnapshot {
+        id,
+        storage: CredentialStorage::Environment,
+        display_suffix: Some("test".to_string()),
+        revision: 3,
+    }
+}
+
+fn test_resolved_translation_credential(id: CredentialId) -> ResolvedCredential {
+    let metadata = test_translation_credential(id);
+    ResolvedCredential {
+        id: metadata.id,
+        secret: SecretString::from("test-translation-key".to_string()),
+        storage: metadata.storage,
+        display_suffix: metadata.display_suffix,
+    }
+}
+
+fn prepared_test_translation(
+    results: impl IntoIterator<Item = TestTranslationResult>,
+) -> AppResult<(PreparedTranslation, TestTranslationControl)> {
+    let selection = test_translation_selection();
+    let (binding, control) = translation_module_for_test(
+        selection,
+        test_resolved_translation_credential(CredentialId::OpenAi),
+        3,
+        results,
+    )?;
+    Ok((PreparedTranslation::cloud(binding), control))
+}
+
+fn completed_source_events(
+    generation: &RuntimeGeneration,
+    unit_id: &str,
+    text: &str,
+    started_at_ms: u64,
+) -> Vec<RecognitionEvent> {
+    ScriptedRecognitionEvents::new(scripted_context(generation)).script_unit(
+        unit_id,
+        started_at_ms,
+        &[],
+        ScriptedText::new(text, started_at_ms.saturating_add(1)),
+    )
+}
+
+fn drain_until_terminal<R: Runtime>(
+    generation: &RuntimeGeneration,
+    app: &AppHandle<R>,
+    publisher: Option<&ChatboxPublication>,
+) -> AppResult<TranslationDrainReport> {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let report = generation.drain_translation_outcomes(app, publisher)?;
+        if report.applied + report.ignored > 0 {
+            return Ok(report);
+        }
+        if Instant::now() >= deadline {
+            return Err(AppError::runtime(
+                "Translation outcome did not reach Runtime in time.",
+            ));
+        }
+        thread::yield_now();
+    }
+}
+
+#[test]
+fn bound_translation_rejects_a_credential_for_another_endpoint() -> AppResult<()> {
+    let selection = test_translation_selection();
+    let result = translation_module_for_test(
+        selection,
+        test_resolved_translation_credential(CredentialId::CustomTranslation),
+        3,
+        [],
+    );
+
+    assert!(result.is_err());
+    Ok(())
+}
+
+#[test]
+fn completed_source_is_published_while_translation_moves_from_pending_to_completed() -> AppResult<()>
+{
+    let app = tauri::test::mock_app();
+    let aggregate = CaptionAggregateStore::default();
+    let (prepared, control) = prepared_test_translation([TestTranslationResult::Blocked])?;
+    let generation =
+        RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
+    let (publisher, text_receiver) = runtime_test_publisher(generation.clone(), None)?;
+    let events = completed_source_events(&generation, "translated", "hello", 100);
+
+    assert_eq!(
+        generation.submit_recognition_event(app.handle(), Some(&publisher), events[0].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+    assert_eq!(
+        generation.submit_recognition_event(app.handle(), Some(&publisher), events[1].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+    control.wait_until_called(1, Duration::from_secs(1))?;
+
+    let pending = aggregate.snapshot()?;
+    assert!(matches!(
+        pending.translation_units.as_slice(),
+        [TranslationUnitSnapshot::Pending { .. }]
+    ));
+    assert_eq!(
+        text_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Source caption was not published immediately."))?,
+        "hello"
+    );
+
+    control.complete_blocked(Ok("你好".to_string()));
+    let report = drain_until_terminal(&generation, app.handle(), Some(&publisher))?;
+    assert_eq!(report.applied, 1);
+    assert_eq!(report.ignored, 0);
+    assert_eq!(report.degradation, None);
+    let completed = aggregate.snapshot()?;
+    assert!(matches!(
+        completed.translation_units.as_slice(),
+        [TranslationUnitSnapshot::Completed { .. }]
+    ));
+    assert!(
+        completed.captions.iter().any(|caption| {
+            caption.lane == CaptionLane::Translation && caption.text == "你好"
+        })
+    );
+    assert!(text_receiver.try_recv().is_err());
+
+    generation.request_stop(Some(&publisher))?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn ninth_translation_is_failed_as_backpressure_while_eight_are_outstanding() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let aggregate = CaptionAggregateStore::default();
+    let (prepared, control) = prepared_test_translation([TestTranslationResult::Blocked])?;
+    let generation =
+        RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
+
+    for index in 0_u64..8 {
+        let events = completed_source_events(
+            &generation,
+            &format!("queued-{index}"),
+            &format!("source {index}"),
+            index.saturating_mul(10),
+        );
+        assert_eq!(
+            generation.submit_recognition_event(app.handle(), None, events[0].clone())?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
+        assert_eq!(
+            generation.submit_recognition_event(app.handle(), None, events[1].clone())?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
+        if index == 0 {
+            control.wait_until_called(1, Duration::from_secs(1))?;
+        }
+    }
+    let rejected = completed_source_events(&generation, "rejected", "source 8", 80);
+    assert_eq!(
+        generation.submit_recognition_event(app.handle(), None, rejected[0].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+    assert_eq!(
+        generation.submit_recognition_event(app.handle(), None, rejected[1].clone())?,
+        RecognitionEventSubmitOutcome::AcceptedWithTranslationFailure(
+            TranslationFailureReason::Backpressure,
+        )
+    );
+
+    let snapshot = aggregate.snapshot()?;
+    assert!(snapshot.translation_units.iter().any(|unit| matches!(
+        unit,
+        TranslationUnitSnapshot::Failed {
+            reason_code: TranslationFailureReason::Backpressure,
+            ..
+        }
+    )));
+    assert_eq!(
+        generation
+            .drain_translation_outcomes(app.handle(), None)?
+            .degradation,
+        Some(TranslationFailureReason::Backpressure)
+    );
+
+    generation.request_stop(None)?;
+    assert!(
+        aggregate
+            .snapshot()?
+            .translation_units
+            .iter()
+            .all(|unit| { !matches!(unit, TranslationUnitSnapshot::Pending { .. }) })
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_failure_degrades_generation_without_blocking_a_later_translation() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let aggregate = CaptionAggregateStore::default();
+    let (prepared, control) = prepared_test_translation([
+        TestTranslationResult::Failed(TranslationFailureClass::ServiceUnavailable),
+        TestTranslationResult::Completed("后续成功".to_string()),
+    ])?;
+    let generation =
+        RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
+
+    for event in completed_source_events(&generation, "failed", "first", 100) {
+        assert_eq!(
+            generation.submit_recognition_event(app.handle(), None, event)?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
+    }
+    control.wait_until_called(1, Duration::from_secs(1))?;
+    let failed = drain_until_terminal(&generation, app.handle(), None)?;
+    assert_eq!(failed.applied, 1);
+    assert_eq!(
+        failed.degradation,
+        Some(TranslationFailureReason::ProviderUnavailable)
+    );
+
+    for event in completed_source_events(&generation, "succeeded", "second", 200) {
+        assert_eq!(
+            generation.submit_recognition_event(app.handle(), None, event)?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
+    }
+    control.wait_until_called(2, Duration::from_secs(1))?;
+    let succeeded = drain_until_terminal(&generation, app.handle(), None)?;
+    assert_eq!(succeeded.applied, 1);
+    assert_eq!(
+        succeeded.degradation,
+        Some(TranslationFailureReason::ProviderUnavailable)
+    );
+
+    let snapshot = aggregate.snapshot()?;
+    assert!(snapshot.translation_units.iter().any(|unit| matches!(
+        unit,
+        TranslationUnitSnapshot::Failed {
+            reason_code: TranslationFailureReason::ProviderUnavailable,
+            ..
+        }
+    )));
+    assert!(snapshot.captions.iter().any(|caption| {
+        caption.lane == CaptionLane::Translation && caption.text == "后续成功"
+    }));
+    generation.request_stop(None)?;
+    Ok(())
+}
+
+#[test]
+fn stop_records_pending_as_terminal_before_cancelling_translation_and_ignores_late_completion()
+-> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let aggregate = CaptionAggregateStore::default();
+    let (prepared, control) = prepared_test_translation([TestTranslationResult::Blocked])?;
+    let generation =
+        RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
+    for event in completed_source_events(&generation, "stopped", "private", 100) {
+        assert_eq!(
+            generation.submit_recognition_event(app.handle(), None, event)?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
+    }
+    control.wait_until_called(1, Duration::from_secs(1))?;
+    assert!(matches!(
+        aggregate.snapshot()?.translation_units.as_slice(),
+        [TranslationUnitSnapshot::Pending { .. }]
+    ));
+
+    generation.request_stop(None)?;
+    control.complete_blocked(Ok("late".to_string()));
+    let stopped = aggregate.snapshot()?;
+    assert!(stopped.active_stream.is_none());
+    assert!(matches!(
+        stopped.translation_units.as_slice(),
+        [TranslationUnitSnapshot::Failed {
+            reason_code: TranslationFailureReason::Stopped,
+            ..
+        }]
+    ));
+    assert!(stopped.captions.iter().any(|caption| {
+        caption.lane == CaptionLane::Source && caption.unit_id.as_deref() == Some("stopped")
+    }));
+    assert!(
+        stopped
+            .captions
+            .iter()
+            .all(|caption| caption.lane != CaptionLane::Translation)
+    );
+    assert_eq!(
+        generation.drain_translation_outcomes(app.handle(), None)?,
+        TranslationDrainReport::default()
+    );
+    Ok(())
+}
+
+#[test]
+fn outcome_from_replaced_generation_is_drained_without_mutating_the_replacement() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let aggregate = CaptionAggregateStore::default();
+    let (prepared, control) = prepared_test_translation([TestTranslationResult::Blocked])?;
+    let first =
+        RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
+    for event in completed_source_events(&first, "old", "private old", 100) {
+        assert_eq!(
+            first.submit_recognition_event(app.handle(), None, event)?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
+    }
+    control.wait_until_called(1, Duration::from_secs(1))?;
+
+    let second = RuntimeGeneration::activate(app.handle(), 2, aggregate.clone())?;
+    control.complete_blocked(Ok("late old".to_string()));
+    let report = drain_until_terminal(&first, app.handle(), None)?;
+    assert_eq!(report.applied, 0);
+    assert_eq!(report.ignored, 1);
+    let current = aggregate.snapshot()?;
+    assert_eq!(
+        current
+            .active_stream
+            .as_ref()
+            .map(|stream| stream.generation),
+        Some(2)
+    );
+    assert!(
+        current
+            .captions
+            .iter()
+            .all(|caption| caption.lane != CaptionLane::Translation)
+    );
+    assert!(current.translation_units.iter().any(|unit| matches!(
+        unit,
+        TranslationUnitSnapshot::Failed {
+            reason_code: TranslationFailureReason::Stopped,
+            source_ref,
+        } if source_ref.generation == 1 && source_ref.unit_id == "old"
+    )));
+
+    first.request_stop(None)?;
+    second.request_stop(None)?;
+    Ok(())
 }
 
 #[test]

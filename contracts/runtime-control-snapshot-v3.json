@@ -1,0 +1,121 @@
+{
+  "contractVersion": 3,
+  "revision": 9,
+  "runtimeStatus": {
+    "status": "running",
+    "message": "Runtime is running",
+    "timestampMs": 900
+  },
+  "desired": {
+    "revision": 4,
+    "config": {
+      "schemaVersion": 2,
+      "audio": { "inputDeviceId": null },
+      "recognition": {
+        "path": "openai/gpt-live-transcribe",
+        "expectedLanguages": ["zh", "en"]
+      },
+      "translation": {
+        "path": "openai/responses-completed-text",
+        "target": "zh-Hans",
+        "endpoint": {
+          "kind": "custom",
+          "apiBaseUrl": "https://example.com/v1"
+        }
+      },
+      "osc": { "host": "127.0.0.1", "port": 9000, "enabled": true },
+      "publication": { "mode": "live", "content": "sourceOnly" },
+      "ui": { "showOngoingPreview": true }
+    },
+    "captionPipelinePlan": {
+      "recognition": {
+        "path": "openai/gpt-live-transcribe",
+        "inputShape": "continuousAudioFrames",
+        "captionBoundaryOwner": "application",
+        "unitBehavior": "unitBased",
+        "lanes": [
+          {
+            "lane": "source",
+            "updates": "ongoingAndCompleted",
+            "revisions": "revisableFullSnapshot"
+          }
+        ]
+      },
+      "translation": null,
+      "publication": {
+        "state": "compatible",
+        "mode": "live",
+        "timing": { "timing": "liveUnit", "observationWindowMs": 1000 },
+        "selectedLanes": ["source"]
+      }
+    },
+    "credentials": [
+      {
+        "state": "configured",
+        "id": "openai",
+        "storage": "systemCredentialStore",
+        "displaySuffix": "abcd"
+      },
+      {
+        "state": "configured",
+        "id": "customTranslation",
+        "storage": "systemCredentialStore",
+        "displaySuffix": "wxyz"
+      }
+    ]
+  },
+  "generation": {
+    "id": 3,
+    "phase": "running",
+    "startedFromConfigRevision": 4,
+    "selection": {
+      "audio": { "inputDeviceId": null },
+      "recognition": {
+        "path": "openai/gpt-live-transcribe",
+        "expectedLanguages": ["zh", "en"]
+      },
+      "translation": null,
+      "osc": { "host": "127.0.0.1", "port": 9000, "enabled": true },
+      "publication": { "mode": "live", "content": "sourceOnly" }
+    },
+    "captionPipelinePlan": {
+      "recognition": {
+        "path": "openai/gpt-live-transcribe",
+        "inputShape": "continuousAudioFrames",
+        "captionBoundaryOwner": "application",
+        "unitBehavior": "unitBased",
+        "lanes": [
+          {
+            "lane": "source",
+            "updates": "ongoingAndCompleted",
+            "revisions": "revisableFullSnapshot"
+          }
+        ]
+      },
+      "translation": null,
+      "publication": {
+        "state": "compatible",
+        "mode": "live",
+        "timing": { "timing": "liveUnit", "observationWindowMs": 1000 },
+        "selectedLanes": ["source"]
+      }
+    },
+    "credentials": [
+      {
+        "id": "openai",
+        "storage": "systemCredentialStore",
+        "displaySuffix": "abcd",
+        "revision": 2
+      }
+    ],
+    "chatboxPublication": {
+      "state": "ready",
+      "host": "127.0.0.1",
+      "port": 9000
+    },
+    "translationState": { "state": "inactive" },
+    "uploadsMicrophoneAudio": true,
+    "uploadsSourceText": false
+  },
+  "pendingGenerationChanges": []
+}

@@ -63,7 +63,10 @@ impl Default for AppState {
 }
 
 impl AppState {
-    pub(super) fn start_runtime(&self, app: &AppHandle) -> AppResult<RuntimeControlSnapshot> {
+    pub(super) fn start_runtime<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> AppResult<RuntimeControlSnapshot> {
         let status_recorder = self.runtime_status_recorder();
         // Capture before waiting on desired-state I/O. Any later Stop changes
         // the epoch, so this invocation cannot install a runtime after Stop
@@ -148,7 +151,10 @@ impl AppState {
                 chatbox_pacer: self.chatbox_pacer.clone(),
                 caption_aggregate: self.caption_aggregate.clone(),
                 chatbox_host_resolver: self.chatbox_host_resolver.clone(),
-                prepared_recognition: PreparedRecognition::cloud(recognition_module, credential),
+                prepared_recognition: PreparedRecognition::cloud(recognition_module, credential)?,
+                // Production preflight above deliberately keeps Translation
+                // unavailable until GitHub issue #25 removes that gate.
+                prepared_translation: None,
                 generation_id: generation,
                 config_revision,
                 status_recorder,

@@ -2,8 +2,8 @@ use super::super::pacer::Clock;
 use super::super::transport::ChatboxSendReceipt;
 use super::*;
 use crate::caption::{
-    ActiveCaptionStream, CaptionAggregateStore, CaptionLane, CaptionSnapshot, CaptionState,
-    OpenSourceUnit,
+    ActiveCaptionStream, CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateStore, CaptionLane,
+    CaptionSnapshot, CaptionState, OpenSourceUnit,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::generation_fence::{GenerationCommitter, GenerationFence};
@@ -318,7 +318,7 @@ fn snapshot(
     captions: Vec<CaptionSnapshot>,
 ) -> CaptionAggregateSnapshot {
     CaptionAggregateSnapshot {
-        contract_version: 1,
+        contract_version: CAPTION_AGGREGATE_CONTRACT_VERSION,
         snapshot_revision: revision,
         active_stream: Some(active()),
         open_source_units: open_source_units
@@ -329,6 +329,7 @@ fn snapshot(
             })
             .collect(),
         captions,
+        translation_units: Vec::new(),
     }
 }
 
