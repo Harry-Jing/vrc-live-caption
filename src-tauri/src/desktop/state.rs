@@ -12,8 +12,8 @@ use crate::caption_pipeline::{plan_caption_pipeline, resolve_caption_pipeline_st
 use crate::chatbox::{ChatboxOscSender, ChatboxPacer, ChatboxSendReceipt, OSC_TEST_MESSAGE};
 use crate::config::AppConfig;
 use crate::credentials::{
-    CredentialId, credential_statuses, delete_credential, resolve_openai_credential,
-    save_credential,
+    CredentialId, ResolvedCredential, credential_statuses, delete_credential, resolve_credential,
+    resolve_openai_credential, save_credential,
 };
 use crate::error::{AppError, AppResult};
 use crate::events::{
@@ -22,13 +22,15 @@ use crate::events::{
 use crate::host_resolver::HostResolver;
 use crate::recognition::{openai_gpt_live_transcribe_module, openai_gpt_transcribe_module};
 use crate::runtime::{
-    PreparedRecognition, RuntimeManager, RuntimeStartOutcome, RuntimeStartRequest,
+    PreparedRecognition, PreparedTranslation, RuntimeManager, RuntimeStartOutcome,
+    RuntimeStartRequest,
 };
 use crate::runtime_control::{
     RuntimeControlSnapshot, RuntimeControlStore, RuntimeGenerationCredentialSnapshot,
     RuntimeStartSelection, RuntimeStatusRecorder,
 };
 use crate::saved_settings::{self, SavedSettingsLoad};
+use crate::translation::{openai_responses_completed_text_module, translation_credential_id};
 use std::sync::Mutex;
 use tauri::{AppHandle, Runtime};
 
@@ -40,11 +42,12 @@ pub(super) struct AppState {
     desired_state_gate: Mutex<()>,
     chatbox_pacer: ChatboxPacer,
     caption_aggregate: CaptionAggregateStore,
-    // OS hostname lookup is blocking. Keep the two current network subsystems
-    // on separate bounded workers so a stuck OSC lookup cannot queue OpenAI
-    // connection setup behind it, or vice versa.
+    // OS hostname lookup is blocking. Keep each current network subsystem on a
+    // separate bounded worker so one stuck lookup cannot queue another path's
+    // connection setup behind it.
     chatbox_host_resolver: HostResolver,
     recognition_host_resolver: HostResolver,
+    translation_host_resolver: HostResolver,
     runtime: RuntimeManager,
 }
 
@@ -57,6 +60,7 @@ impl Default for AppState {
             caption_aggregate: CaptionAggregateStore::default(),
             chatbox_host_resolver: HostResolver::default(),
             recognition_host_resolver: HostResolver::default(),
+            translation_host_resolver: HostResolver::default(),
             runtime: RuntimeManager::default(),
         }
     }
@@ -118,8 +122,57 @@ impl AppState {
         let credential = RuntimeGenerationCredentialSnapshot {
             id: CredentialId::OpenAi,
             storage: resolved.storage,
-            display_suffix: resolved.display_suffix,
+            display_suffix: resolved.display_suffix.clone(),
             revision: credential_revisions.revision(CredentialId::OpenAi),
+        };
+        let prepared_translation = match config.publication.content {
+            crate::config::ContentSelection::SourceOnly => None,
+            crate::config::ContentSelection::TranslationOnly
+            | crate::config::ContentSelection::Bilingual => {
+                let selection = config.translation.clone().ok_or_else(|| {
+                    AppError::state("Validated Translation publication was missing its selection.")
+                })?;
+                let credential_id = translation_credential_id(&selection);
+                let translation_credential = if credential_id == CredentialId::OpenAi {
+                    ResolvedCredential {
+                        id: resolved.id,
+                        secret: resolved.secret.clone(),
+                        storage: resolved.storage,
+                        display_suffix: resolved.display_suffix.clone(),
+                    }
+                } else {
+                    match resolve_credential(credential_id) {
+                        Ok(credential) => credential,
+                        Err(error) => {
+                            emit_diagnostic(
+                                app,
+                                DiagnosticUpdate::from_error(
+                                    &error,
+                                    "Translation credential could not be resolved",
+                                ),
+                            );
+                            return self.finish_start_failure(
+                                app,
+                                error,
+                                None,
+                                expected_stop_epoch,
+                            );
+                        }
+                    }
+                };
+                let binding = match openai_responses_completed_text_module(
+                    selection,
+                    translation_credential,
+                    credential_revisions.revision(credential_id),
+                    self.translation_host_resolver.clone(),
+                ) {
+                    Ok(binding) => binding,
+                    Err(error) => {
+                        return self.finish_start_failure(app, error, None, expected_stop_epoch);
+                    }
+                };
+                Some(PreparedTranslation::cloud(binding))
+            }
         };
         let recognition_module = match config.recognition.path {
             crate::config::RecognitionPath::OpenAiGptTranscribe => openai_gpt_transcribe_module(
@@ -152,9 +205,7 @@ impl AppState {
                 caption_aggregate: self.caption_aggregate.clone(),
                 chatbox_host_resolver: self.chatbox_host_resolver.clone(),
                 prepared_recognition: PreparedRecognition::cloud(recognition_module, credential)?,
-                // Production preflight above deliberately keeps Translation
-                // unavailable until GitHub issue #25 removes that gate.
-                prepared_translation: None,
+                prepared_translation,
                 generation_id: generation,
                 config_revision,
                 status_recorder,

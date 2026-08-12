@@ -27,9 +27,10 @@ speech and mixed English/Chinese speech.
 
 ## Phase 5: Completed translation
 
-Status: **in progress**. Contracts, bounded provider transport, and
-generation-scoped terminal outcomes are implemented; settings, selected-content
-publication, and release validation remain.
+Status: **implementation complete; validation in progress**. Contracts,
+settings, bounded provider transport, generation-scoped terminal outcomes, and
+selected-content publication are implemented. Authenticated native
+Windows/VRChat validation remains before the phase is complete.
 
 Goal: deliver the smallest reliable text-driven translation path, which is the
 original cross-language product need.

@@ -66,24 +66,18 @@ pub(crate) enum ChatboxLayoutError {
 /// and lets tests reconstruct both inputs without parsing a presentation
 /// separator back out of user-authored text.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "GitHub issue #25 will connect bilingual pages to publication"
-)]
 pub(crate) struct BilingualCompletedPage {
     source: String,
     translation: String,
 }
 
-#[allow(
-    dead_code,
-    reason = "GitHub issue #25 will connect bilingual pages to publication"
-)]
 impl BilingualCompletedPage {
+    #[cfg(test)]
     pub(crate) fn source_text(&self) -> &str {
         &self.source
     }
 
+    #[cfg(test)]
     pub(crate) fn translation_text(&self) -> &str {
         &self.translation
     }
@@ -130,10 +124,6 @@ pub(crate) fn paginate_completed(text: &str) -> Result<Vec<String>, ChatboxLayou
 /// UTF-16 budget follows the same 4:5 baseline and donates unused capacity to
 /// Translation first. Once one lane is exhausted, the other uses unchanged
 /// single-lane Completed pagination.
-#[allow(
-    dead_code,
-    reason = "GitHub issue #25 will connect bilingual pages to publication"
-)]
 pub(crate) fn paginate_bilingual_completed(
     source: &str,
     translation: &str,

@@ -19,6 +19,7 @@ import {
   RUNTIME_CONTROL_CONTRACT_VERSION,
   type CredentialId,
   type RuntimeControlSnapshot,
+  type RuntimeGenerationSnapshot,
   type RuntimePendingGenerationChange,
 } from "../runtime/runtimeControl";
 
@@ -180,14 +181,62 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
             ),
           );
         }
-        if (snapshot.desired.captionPipelinePlan.translation !== null) {
-          return Promise.reject(
-            new Error(
-              "The selected Translation path is not implemented yet (translation.module_unavailable).",
-            ),
-          );
-        }
         const selected = snapshot.desired.config;
+        const selectedTranslation =
+          selected.publication.content === "sourceOnly"
+            ? null
+            : selected.translation;
+        if (selectedTranslation !== null) {
+          const openAiStatus = snapshot.desired.credentials.find(
+            ({ id }) => id === "openai",
+          );
+          if (openAiStatus?.state !== "configured") {
+            return Promise.reject(
+              new Error("The active Recognition credential is not configured."),
+            );
+          }
+          const customStatus = snapshot.desired.credentials.find(
+            ({ id }) => id === "customTranslation",
+          );
+          if (
+            selectedTranslation.endpoint.kind === "custom" &&
+            customStatus?.state !== "configured"
+          ) {
+            return Promise.reject(
+              new Error("The active Translation credential is not configured."),
+            );
+          }
+        }
+        const openAiStatus = snapshot.desired.credentials.find(
+          ({ id }) => id === "openai",
+        );
+        const generationCredentials: Array<
+          RuntimeGenerationSnapshot["credentials"][number]
+        > = [
+          {
+            id: "openai" as const,
+            storage: "systemCredentialStore" as const,
+            displaySuffix:
+              openAiStatus?.state === "configured"
+                ? openAiStatus.displaySuffix
+                : null,
+            revision: credentialRevisions.openai,
+          },
+        ];
+        if (selectedTranslation?.endpoint.kind === "custom") {
+          const customStatus = snapshot.desired.credentials.find(
+            ({ id }) => id === "customTranslation",
+          );
+          generationCredentials.push({
+            id: "customTranslation",
+            storage: "systemCredentialStore",
+            displaySuffix:
+              customStatus?.state === "configured"
+                ? customStatus.displaySuffix
+                : null,
+            revision: credentialRevisions.customTranslation,
+          });
+        }
         snapshot = {
           ...snapshot,
           revision: snapshot.revision + 1,
@@ -199,27 +248,23 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
             selection: {
               audio: structuredClone(selected.audio),
               recognition: structuredClone(selected.recognition),
-              translation: null,
+              translation: structuredClone(selectedTranslation),
               osc: structuredClone(selected.osc),
               publication: structuredClone(selected.publication),
             },
             captionPipelinePlan: previewCaptionPipelinePlan(selected),
-            credentials: [
-              {
-                id: "openai",
-                storage: "systemCredentialStore",
-                displaySuffix: null,
-                revision: credentialRevisions.openai,
-              },
-            ],
+            credentials: generationCredentials,
             chatboxPublication: {
               state: selected.osc.enabled ? "ready" : "disabled",
               host: selected.osc.host,
               port: selected.osc.port,
             },
-            translationState: { state: "inactive" },
+            translationState:
+              selectedTranslation === null
+                ? { state: "inactive" }
+                : { state: "active" },
             uploadsMicrophoneAudio: true,
-            uploadsSourceText: false,
+            uploadsSourceText: selectedTranslation !== null,
           },
         };
         emitCaptionAggregateUpdate({
@@ -520,7 +565,7 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
     expect(saved.pendingGenerationChanges).toEqual([]);
   });
 
-  test("rejects active Translation before creating a generation", async () => {
+  test("starts Official Translation with the shared OpenAI credential", async () => {
     const gateway = create();
     const activeConfig: AppConfig = {
       ...initialConfig,
@@ -532,10 +577,93 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
       publication: { mode: "completed", content: "translationOnly" },
     };
     await gateway.saveAppConfig(activeConfig);
+    await gateway.saveCredential("openai", "sk-official-abcd");
 
-    await expect(gateway.startRuntime()).rejects.toThrow(
-      /translation\.module_unavailable/u,
+    const started = await gateway.startRuntime();
+
+    expect(started.generation?.selection.translation).toEqual(
+      activeConfig.translation,
     );
+    expect(started.generation?.credentials.map(({ id }) => id)).toEqual([
+      "openai",
+    ]);
+    expect(started.generation?.translationState).toEqual({ state: "active" });
+    expect(started.generation?.uploadsSourceText).toBe(true);
+  });
+
+  test("starts Custom Translation only after capturing its independent credential", async () => {
+    const gateway = create();
+    const activeConfig: AppConfig = {
+      ...initialConfig,
+      translation: {
+        path: "openai/responses-completed-text",
+        target: "en",
+        endpoint: {
+          kind: "custom",
+          apiBaseUrl: "https://translation.example.test/v1",
+        },
+      },
+      publication: { mode: "completed", content: "bilingual" },
+    };
+    await gateway.saveAppConfig(activeConfig);
+    await gateway.saveCredential("openai", "sk-recognition-abcd");
+    await gateway.saveCredential("customTranslation", "sk-custom-efgh");
+
+    const started = await gateway.startRuntime();
+
+    expect(started.generation?.selection.translation).toEqual(
+      activeConfig.translation,
+    );
+    expect(started.generation?.credentials.map(({ id }) => id)).toEqual([
+      "openai",
+      "customTranslation",
+    ]);
+    expect(started.generation?.translationState).toEqual({ state: "active" });
+    expect(started.generation?.uploadsSourceText).toBe(true);
+  });
+
+  test("rejects a missing selected Translation credential before creating a generation", async () => {
+    const gateway = create();
+    const activeConfig: AppConfig = {
+      ...initialConfig,
+      translation: {
+        path: "openai/responses-completed-text",
+        target: "zh-Hans",
+        endpoint: {
+          kind: "custom",
+          apiBaseUrl: "https://translation.example.test/v1",
+        },
+      },
+      publication: { mode: "completed", content: "translationOnly" },
+    };
+    await gateway.saveAppConfig(activeConfig);
+    await gateway.saveCredential("openai", "sk-recognition-abcd");
+
+    await expect(gateway.startRuntime()).rejects.toThrow(/credential/u);
+
+    const retained = await gateway.getRuntimeControlSnapshot();
+    expect(retained.desired.config).toEqual(activeConfig);
+    expect(retained.generation).toBeNull();
+  });
+
+  test("rejects a missing Recognition credential for active Custom Translation", async () => {
+    const gateway = create();
+    const activeConfig: AppConfig = {
+      ...initialConfig,
+      translation: {
+        path: "openai/responses-completed-text",
+        target: "en",
+        endpoint: {
+          kind: "custom",
+          apiBaseUrl: "https://translation.example.test/v1",
+        },
+      },
+      publication: { mode: "completed", content: "bilingual" },
+    };
+    await gateway.saveAppConfig(activeConfig);
+    await gateway.saveCredential("customTranslation", "sk-custom-efgh");
+
+    await expect(gateway.startRuntime()).rejects.toThrow(/credential/u);
 
     const retained = await gateway.getRuntimeControlSnapshot();
     expect(retained.desired.config).toEqual(activeConfig);

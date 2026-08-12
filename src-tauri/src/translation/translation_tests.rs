@@ -628,6 +628,7 @@ fn production_factory_binds_each_endpoint_to_its_own_credential() -> AppResult<(
             target: TranslationTarget::English,
             endpoint,
         };
+        assert_eq!(translation_credential_id(&selection), expected);
         let binding = openai_responses_completed_text_module(
             selection.clone(),
             translation_credential(expected),

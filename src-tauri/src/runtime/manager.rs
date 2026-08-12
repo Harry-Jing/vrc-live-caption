@@ -5,7 +5,7 @@ use super::supervisor::run_runtime_thread;
 
 use crate::caption::CaptionAggregateStore;
 use crate::caption_pipeline::{plan_caption_pipeline, resolve_caption_pipeline_timing};
-use crate::chatbox::{ChatboxPacer, ChatboxPublication};
+use crate::chatbox::{ChatboxPacer, ChatboxPublication, ChatboxPublicationPolicy};
 use crate::config::AppConfig;
 use crate::credentials::CredentialId;
 use crate::error::{AppError, AppResult};
@@ -231,7 +231,7 @@ impl RuntimeManager {
         let publisher_init = initialize_chatbox_publication(
             &app,
             &config.osc,
-            publication_timing,
+            ChatboxPublicationPolicy::new(publication_timing, config.publication.content),
             chatbox_pacer,
             &generation,
             &chatbox_host_resolver,
@@ -435,9 +435,8 @@ fn validate_prepared_translation(
             return Ok((None, RuntimeGenerationTranslationState::Inactive, false));
         }
         (Some(_), None) => {
-            return Err(AppError::config(
-                "The selected Translation path is not implemented yet \
-                 (translation.module_unavailable).",
+            return Err(AppError::state(
+                "Active Translation selection requires a prepared Translation owner.",
             ));
         }
         (None, Some(_)) => {

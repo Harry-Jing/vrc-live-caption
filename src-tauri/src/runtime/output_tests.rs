@@ -1,9 +1,13 @@
 use super::super::test_support::{
     RecordingChatboxTransport, inactive_caption_update, receive_json_event, runtime_test_publisher,
+    runtime_test_publisher_with_content,
 };
 use super::*;
 use crate::caption::{TranslationFailureReason, TranslationUnitSnapshot};
-use crate::config::{TranslationConfig, TranslationEndpoint, TranslationPath, TranslationTarget};
+use crate::caption_pipeline::ResolvedPublicationTiming;
+use crate::config::{
+    ContentSelection, TranslationConfig, TranslationEndpoint, TranslationPath, TranslationTarget,
+};
 use crate::credentials::{CredentialId, CredentialStorage, ResolvedCredential};
 use crate::recognition::{ScriptedRecognitionContext, ScriptedRecognitionEvents, ScriptedText};
 use crate::runtime::PreparedTranslation;
@@ -115,14 +119,18 @@ fn bound_translation_rejects_a_credential_for_another_endpoint() -> AppResult<()
 }
 
 #[test]
-fn completed_source_is_published_while_translation_moves_from_pending_to_completed() -> AppResult<()>
-{
+fn translation_only_waits_for_the_exact_terminal_translation_without_publishing_source()
+-> AppResult<()> {
     let app = tauri::test::mock_app();
     let aggregate = CaptionAggregateStore::default();
     let (prepared, control) = prepared_test_translation([TestTranslationResult::Blocked])?;
     let generation =
         RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
-    let (publisher, text_receiver) = runtime_test_publisher(generation.clone(), None)?;
+    let (publisher, text_receiver) = runtime_test_publisher_with_content(
+        generation.clone(),
+        ContentSelection::TranslationOnly,
+        None,
+    )?;
     let events = completed_source_events(&generation, "translated", "hello", 100);
 
     assert_eq!(
@@ -140,12 +148,10 @@ fn completed_source_is_published_while_translation_moves_from_pending_to_complet
         pending.translation_units.as_slice(),
         [TranslationUnitSnapshot::Pending { .. }]
     ));
-    assert_eq!(
-        text_receiver
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| AppError::runtime("Source caption was not published immediately."))?,
-        "hello"
-    );
+    assert!(matches!(
+        text_receiver.recv_timeout(Duration::from_millis(50)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
 
     control.complete_blocked(Ok("你好".to_string()));
     let report = drain_until_terminal(&generation, app.handle(), Some(&publisher))?;
@@ -162,11 +168,54 @@ fn completed_source_is_published_while_translation_moves_from_pending_to_complet
             caption.lane == CaptionLane::Translation && caption.text == "你好"
         })
     );
-    assert!(text_receiver.try_recv().is_err());
+    assert_eq!(
+        text_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Terminal Translation was not published."))?,
+        "你好"
+    );
 
     generation.request_stop(Some(&publisher))?;
     publisher.join()?;
     Ok(())
+}
+
+#[test]
+fn bilingual_publishes_source_as_partial_success_after_terminal_translation_failure()
+-> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let aggregate = CaptionAggregateStore::default();
+    let (prepared, control) = prepared_test_translation([TestTranslationResult::Failed(
+        TranslationFailureClass::InvalidOutput,
+    )])?;
+    let generation =
+        RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
+    let (publisher, text_receiver) =
+        runtime_test_publisher_with_content(generation.clone(), ContentSelection::Bilingual, None)?;
+
+    for event in completed_source_events(&generation, "failed", "source remains", 100) {
+        assert_eq!(
+            generation.submit_recognition_event(app.handle(), Some(&publisher), event)?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
+    }
+    control.wait_until_called(1, Duration::from_secs(1))?;
+    let report = drain_until_terminal(&generation, app.handle(), Some(&publisher))?;
+
+    assert_eq!(
+        report.degradation,
+        Some(TranslationFailureReason::InvalidOutput)
+    );
+    assert_eq!(
+        text_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Bilingual partial success was not published."))?,
+        "source remains"
+    );
+    assert!(text_receiver.try_recv().is_err());
+
+    generation.request_stop(Some(&publisher))?;
+    publisher.join()
 }
 
 #[test]
@@ -296,9 +345,14 @@ fn stop_records_pending_as_terminal_before_cancelling_translation_and_ignores_la
     let (prepared, control) = prepared_test_translation([TestTranslationResult::Blocked])?;
     let generation =
         RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
+    let (publisher, text_receiver) = runtime_test_publisher_with_content(
+        generation.clone(),
+        ContentSelection::TranslationOnly,
+        None,
+    )?;
     for event in completed_source_events(&generation, "stopped", "private", 100) {
         assert_eq!(
-            generation.submit_recognition_event(app.handle(), None, event)?,
+            generation.submit_recognition_event(app.handle(), Some(&publisher), event)?,
             RecognitionEventSubmitOutcome::Accepted
         );
     }
@@ -308,7 +362,7 @@ fn stop_records_pending_as_terminal_before_cancelling_translation_and_ignores_la
         [TranslationUnitSnapshot::Pending { .. }]
     ));
 
-    generation.request_stop(None)?;
+    generation.request_stop(Some(&publisher))?;
     control.complete_blocked(Ok("late".to_string()));
     let stopped = aggregate.snapshot()?;
     assert!(stopped.active_stream.is_none());
@@ -329,9 +383,14 @@ fn stop_records_pending_as_terminal_before_cancelling_translation_and_ignores_la
             .all(|caption| caption.lane != CaptionLane::Translation)
     );
     assert_eq!(
-        generation.drain_translation_outcomes(app.handle(), None)?,
+        generation.drain_translation_outcomes(app.handle(), Some(&publisher))?,
         TranslationDrainReport::default()
     );
+    publisher.join()?;
+    assert!(matches!(
+        text_receiver.recv_timeout(Duration::from_millis(50)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
     Ok(())
 }
 
@@ -342,17 +401,29 @@ fn outcome_from_replaced_generation_is_drained_without_mutating_the_replacement(
     let (prepared, control) = prepared_test_translation([TestTranslationResult::Blocked])?;
     let first =
         RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
+    let (first_publisher, first_text_receiver) = runtime_test_publisher_with_content(
+        first.clone(),
+        ContentSelection::TranslationOnly,
+        None,
+    )?;
     for event in completed_source_events(&first, "old", "private old", 100) {
         assert_eq!(
-            first.submit_recognition_event(app.handle(), None, event)?,
+            first.submit_recognition_event(app.handle(), Some(&first_publisher), event)?,
             RecognitionEventSubmitOutcome::Accepted
         );
     }
     control.wait_until_called(1, Duration::from_secs(1))?;
 
     let second = RuntimeGeneration::activate(app.handle(), 2, aggregate.clone())?;
+    let (second_publisher, second_text_receiver) = runtime_test_publisher(second.clone(), None)?;
+    for event in completed_source_events(&second, "current", "current source", 200) {
+        assert_eq!(
+            second.submit_recognition_event(app.handle(), Some(&second_publisher), event)?,
+            RecognitionEventSubmitOutcome::Accepted
+        );
+    }
     control.complete_blocked(Ok("late old".to_string()));
-    let report = drain_until_terminal(&first, app.handle(), None)?;
+    let report = drain_until_terminal(&first, app.handle(), Some(&first_publisher))?;
     assert_eq!(report.applied, 0);
     assert_eq!(report.ignored, 1);
     let current = aggregate.snapshot()?;
@@ -376,10 +447,21 @@ fn outcome_from_replaced_generation_is_drained_without_mutating_the_replacement(
             source_ref,
         } if source_ref.generation == 1 && source_ref.unit_id == "old"
     )));
+    assert!(matches!(
+        first_text_receiver.recv_timeout(Duration::from_millis(50)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+    assert_eq!(
+        second_text_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Replacement generation did not publish."))?,
+        "current source"
+    );
 
-    first.request_stop(None)?;
-    second.request_stop(None)?;
-    Ok(())
+    first.request_stop(Some(&first_publisher))?;
+    second.request_stop(Some(&second_publisher))?;
+    first_publisher.join()?;
+    second_publisher.join()
 }
 
 #[test]

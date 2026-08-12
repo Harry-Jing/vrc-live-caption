@@ -4,7 +4,11 @@ use crate::caption::{
     CaptionAggregateUpdate,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
-use crate::chatbox::{ChatboxPacer, ChatboxPublication, ChatboxSendReceipt, ChatboxTransport};
+use crate::chatbox::{
+    ChatboxPacer, ChatboxPublication, ChatboxPublicationPolicy, ChatboxSendReceipt,
+    ChatboxTransport,
+};
+use crate::config::ContentSelection;
 use crate::error::{AppError, AppResult};
 use crate::events::DiagnosticUpdate;
 use std::sync::Arc;
@@ -58,6 +62,29 @@ pub(super) fn runtime_test_publisher(
         generation.generation_id(),
         generation.committer(),
         ResolvedPublicationTiming::Completed,
+        reporter,
+    )?;
+
+    Ok((publication, text_receiver))
+}
+
+pub(super) fn runtime_test_publisher_with_content(
+    generation: RuntimeGeneration,
+    content: ContentSelection,
+    typing_sender: Option<std::sync::mpsc::Sender<bool>>,
+) -> AppResult<(ChatboxPublication, std::sync::mpsc::Receiver<String>)> {
+    let (text_sender, text_receiver) = std::sync::mpsc::channel();
+    let reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync> = Arc::new(|_| {});
+    let publication = ChatboxPublication::start_with_transport_for_content(
+        Arc::new(RecordingChatboxTransport {
+            text_sender,
+            typing_sender,
+        }),
+        ChatboxPacer::default(),
+        generation.generation_id(),
+        generation.stream_id().to_string(),
+        generation.committer(),
+        ChatboxPublicationPolicy::new(ResolvedPublicationTiming::Completed, content),
         reporter,
     )?;
 

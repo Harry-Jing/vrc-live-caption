@@ -8,6 +8,7 @@
 
 mod common;
 mod completed;
+mod completed_content;
 mod diagnostics;
 mod layout;
 mod live;
@@ -22,12 +23,13 @@ pub(crate) use transport::{ChatboxSendReceipt, ChatboxTransport};
 
 use crate::caption::CaptionAggregateUpdate;
 use crate::caption_pipeline::ResolvedPublicationTiming;
-use crate::config::OscConfig;
+use crate::config::{ContentSelection, OscConfig};
 use crate::error::{AppError, AppResult};
 use crate::events::DiagnosticUpdate;
 use crate::generation_fence::GenerationCommitter;
 use crate::host_resolver::HostResolver;
 use completed::{CompletedChatboxPublisher, CompletedPublisherReporter};
+use completed_content::CompletedContentCoordinator;
 use diagnostics::{
     completed_publisher_diagnostic, completed_update_discarded_after_close,
     live_publisher_diagnostic, live_update_discarded_after_close,
@@ -43,6 +45,7 @@ const CLOSE_REASON_STOP: u8 = 2;
 #[derive(Clone)]
 pub(crate) struct ChatboxPublication {
     generation_id: u64,
+    stream_id: String,
     highest_update_revision: Arc<AtomicU64>,
     close_reason: Arc<AtomicU8>,
     committer: GenerationCommitter,
@@ -52,8 +55,37 @@ pub(crate) struct ChatboxPublication {
 
 #[derive(Clone)]
 enum ChatboxPublisher {
-    Completed(CompletedChatboxPublisher),
+    Completed(CompletedPublication),
     Live(LiveChatboxPublisher),
+}
+
+#[derive(Clone)]
+enum CompletedPublication {
+    Source(CompletedChatboxPublisher),
+    Translation(CompletedContentCoordinator),
+}
+
+impl CompletedPublication {
+    fn try_observe(&self, update: &CaptionAggregateUpdate) -> AppResult<PublisherSubmitOutcome> {
+        match self {
+            Self::Source(publisher) => publisher.try_observe(update),
+            Self::Translation(publisher) => publisher.try_observe(update),
+        }
+    }
+
+    fn request_close(&self, reason: PublisherCloseReason) -> AppResult<()> {
+        match self {
+            Self::Source(publisher) => publisher.request_close(reason),
+            Self::Translation(publisher) => publisher.request_close(reason),
+        }
+    }
+
+    fn join(&self) -> AppResult<()> {
+        match self {
+            Self::Source(publisher) => publisher.join(),
+            Self::Translation(publisher) => publisher.join(),
+        }
+    }
 }
 
 pub(crate) enum ChatboxPublicationInit {
@@ -62,11 +94,24 @@ pub(crate) enum ChatboxPublicationInit {
     Unavailable(AppError),
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct ChatboxPublicationPolicy {
+    timing: ResolvedPublicationTiming,
+    content: ContentSelection,
+}
+
+impl ChatboxPublicationPolicy {
+    pub(crate) const fn new(timing: ResolvedPublicationTiming, content: ContentSelection) -> Self {
+        Self { timing, content }
+    }
+}
+
 pub(crate) struct ChatboxPublicationStart<'a> {
     pub(crate) config: &'a OscConfig,
-    pub(crate) timing: ResolvedPublicationTiming,
+    pub(crate) policy: ChatboxPublicationPolicy,
     pub(crate) pacer: ChatboxPacer,
     pub(crate) generation_id: u64,
+    pub(crate) stream_id: &'a str,
     pub(crate) committer: GenerationCommitter,
     pub(crate) host_resolver: &'a HostResolver,
     pub(crate) is_cancelled: &'a dyn Fn() -> bool,
@@ -77,9 +122,10 @@ impl ChatboxPublication {
     pub(crate) fn initialize(start: ChatboxPublicationStart<'_>) -> ChatboxPublicationInit {
         let ChatboxPublicationStart {
             config,
-            timing,
+            policy,
             pacer,
             generation_id,
+            stream_id,
             committer,
             host_resolver,
             is_cancelled,
@@ -93,12 +139,13 @@ impl ChatboxPublication {
             Ok(sender) => sender,
             Err(error) => return ChatboxPublicationInit::Unavailable(error),
         };
-        match Self::start_with_transport(
+        match Self::start_with_transport_for_content(
             Arc::new(sender),
             pacer,
             generation_id,
+            stream_id.to_string(),
             committer,
-            timing,
+            policy,
             reporter,
         ) {
             Ok(publication) => ChatboxPublicationInit::Ready(publication),
@@ -106,6 +153,7 @@ impl ChatboxPublication {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn start_with_transport(
         transport: Arc<dyn ChatboxTransport>,
         pacer: ChatboxPacer,
@@ -114,6 +162,27 @@ impl ChatboxPublication {
         timing: ResolvedPublicationTiming,
         reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync>,
     ) -> AppResult<Self> {
+        Self::start_with_transport_for_content(
+            transport,
+            pacer,
+            generation_id,
+            format!("recognition-{generation_id}-1"),
+            committer,
+            ChatboxPublicationPolicy::new(timing, ContentSelection::SourceOnly),
+            reporter,
+        )
+    }
+
+    pub(crate) fn start_with_transport_for_content(
+        transport: Arc<dyn ChatboxTransport>,
+        pacer: ChatboxPacer,
+        generation_id: u64,
+        stream_id: String,
+        committer: GenerationCommitter,
+        policy: ChatboxPublicationPolicy,
+        reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync>,
+    ) -> AppResult<Self> {
+        let ChatboxPublicationPolicy { timing, content } = policy;
         let publication_committer = committer.clone();
         let publisher = match timing {
             ResolvedPublicationTiming::Completed => {
@@ -121,14 +190,31 @@ impl ChatboxPublication {
                 let completed_reporter: CompletedPublisherReporter = Arc::new(move |diagnostic| {
                     diagnostic_reporter(completed_publisher_diagnostic(diagnostic));
                 });
-                ChatboxPublisher::Completed(CompletedChatboxPublisher::start(
+                let completed = CompletedChatboxPublisher::start(
                     transport,
                     pacer,
                     committer,
                     completed_reporter,
-                )?)
+                )?;
+                let completed = match content {
+                    ContentSelection::SourceOnly => CompletedPublication::Source(completed),
+                    ContentSelection::TranslationOnly | ContentSelection::Bilingual => {
+                        CompletedPublication::Translation(CompletedContentCoordinator::new(
+                            content,
+                            generation_id,
+                            stream_id.clone(),
+                            completed,
+                        )?)
+                    }
+                };
+                ChatboxPublisher::Completed(completed)
             }
             ResolvedPublicationTiming::LiveUnit { .. } => {
+                if content != ContentSelection::SourceOnly {
+                    return Err(AppError::config(
+                        "Live publication supports Source content only.",
+                    ));
+                }
                 let diagnostic_reporter = Arc::clone(&reporter);
                 let live_reporter: LivePublisherReporter = Arc::new(move |diagnostic| {
                     diagnostic_reporter(live_publisher_diagnostic(diagnostic));
@@ -145,6 +231,7 @@ impl ChatboxPublication {
         };
         Ok(Self {
             generation_id,
+            stream_id,
             highest_update_revision: Arc::new(AtomicU64::new(0)),
             close_reason: Arc::new(AtomicU8::new(CLOSE_REASON_NONE)),
             committer: publication_committer,
@@ -162,6 +249,14 @@ impl ChatboxPublication {
             .active_stream
             .as_ref()
             .is_some_and(|active| active.generation != self.generation_id)
+        {
+            return Ok(PublisherSubmitOutcome::Handled);
+        }
+        if update
+            .snapshot
+            .active_stream
+            .as_ref()
+            .is_some_and(|active| active.stream_id != self.stream_id)
         {
             return Ok(PublisherSubmitOutcome::Handled);
         }
