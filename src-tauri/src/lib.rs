@@ -13,6 +13,7 @@ mod recognition;
 mod runtime;
 mod runtime_control;
 mod saved_settings;
+mod translation;
 mod wall_clock;
 
 #[expect(

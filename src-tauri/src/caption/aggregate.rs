@@ -2,6 +2,7 @@
 
 use std::cmp::Reverse;
 use std::collections::VecDeque;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use super::contract::{
@@ -29,6 +30,12 @@ struct CaptionLaneKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct CompletedSourceKey {
+    unit: CaptionUnitKey,
+    revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CaptionAggregateUpdate {
     pub(crate) snapshot: CaptionAggregateSnapshot,
     pub(crate) change: CaptionAggregateChange,
@@ -53,12 +60,105 @@ struct CaptionAggregateState {
     captions: Vec<CaptionSnapshot>,
     unit_ordinals: Vec<(CaptionUnitKey, u64)>,
     completed_units: VecDeque<CaptionUnitKey>,
+    pinned_sources: Vec<CompletedSourceKey>,
     recent_terminal_lanes: VecDeque<CaptionLaneKey>,
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct CaptionAggregateStore {
     state: Arc<Mutex<CaptionAggregateState>>,
+}
+
+pub(crate) struct ReservedCompletedSource {
+    store: CaptionAggregateStore,
+    source: CaptionSnapshot,
+    key: Option<CompletedSourceKey>,
+}
+
+impl fmt::Debug for ReservedCompletedSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReservedCompletedSource")
+            .field("generation", &self.source.generation)
+            .field("stream_id", &self.source.stream_id)
+            .field("unit_id", &self.source.unit_id)
+            .field("revision", &self.source.revision)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ReservedCompletedSource {
+    fn drop(&mut self) {
+        let Some(key) = self.key.take() else {
+            return;
+        };
+        let Ok(mut state) = self.store.state.lock() else {
+            return;
+        };
+        CaptionAggregateStore::release_reserved_source(&mut state, &key);
+    }
+}
+
+impl ReservedCompletedSource {
+    pub(crate) fn source(&self) -> &CaptionSnapshot {
+        &self.source
+    }
+
+    pub(crate) fn complete_translation(
+        mut self,
+        text: String,
+        language: String,
+        timestamp_ms: u64,
+    ) -> AppResult<Option<CaptionAggregateUpdate>> {
+        let mut state = self.store.lock()?;
+        let Some(key) = self.key.as_ref() else {
+            return Ok(None);
+        };
+        let source_is_current =
+            CaptionAggregateStore::matches_active(&state, key.unit.generation, &key.unit.stream_id)
+                && state.pinned_sources.contains(key)
+                && state.captions.iter().any(|caption| caption == &self.source);
+        let translation_lane = CaptionLaneKey {
+            unit: key.unit.clone(),
+            lane: CaptionLane::Translation,
+        };
+        if !source_is_current || state.recent_terminal_lanes.contains(&translation_lane) {
+            CaptionAggregateStore::release_reserved_source(&mut state, key);
+            self.key = None;
+            return Ok(None);
+        }
+
+        let translation = CaptionSnapshot {
+            generation: key.unit.generation,
+            stream_id: key.unit.stream_id.clone(),
+            unit_id: Some(key.unit.unit_id.clone()),
+            lane: CaptionLane::Translation,
+            revision: 1,
+            text,
+            state: CaptionState::Completed,
+            language: Some(language),
+            source_ref: Some(super::contract::SourceSnapshotRef {
+                generation: key.unit.generation,
+                stream_id: key.unit.stream_id.clone(),
+                unit_id: key.unit.unit_id.clone(),
+                revision: key.revision,
+            }),
+            unit_started_at_ms: self.source.unit_started_at_ms,
+            timestamp_ms,
+        };
+        state.captions.insert(0, translation.clone());
+        CaptionAggregateStore::record_terminal_lane(&mut state, translation_lane);
+        state.pinned_sources.retain(|pinned| pinned != key);
+        self.key = None;
+        CaptionAggregateStore::trim_completed_units(&mut state);
+        CaptionAggregateStore::sort_captions_by_unit_order(&mut state);
+        CaptionAggregateStore::advance_revision(&mut state);
+
+        Ok(Some(CaptionAggregateUpdate {
+            snapshot: CaptionAggregateStore::snapshot_from(&state),
+            change: CaptionAggregateChange::CaptionAccepted(translation),
+        }))
+    }
 }
 
 impl CaptionAggregateStore {
@@ -69,6 +169,7 @@ impl CaptionAggregateStore {
         }
 
         state.generation_high_watermark = generation;
+        state.pinned_sources.clear();
         state.active_stream = Some(ActiveCaptionStream {
             generation,
             stream_id: format!("recognition-{generation}-1"),
@@ -79,6 +180,7 @@ impl CaptionAggregateStore {
             .captions
             .retain(|caption| caption.state == CaptionState::Completed);
         state.next_unit_ordinal = 0;
+        Self::trim_completed_units(&mut state);
         Self::retain_caption_unit_ordinals(&mut state);
         Self::advance_revision(&mut state);
 
@@ -134,13 +236,58 @@ impl CaptionAggregateStore {
         &self,
         caption: CaptionSnapshot,
     ) -> AppResult<Option<CaptionAggregateUpdate>> {
+        if caption.lane == CaptionLane::Translation {
+            return Ok(None);
+        }
+
         let mut state = self.lock()?;
-        if !Self::matches_active(&state, caption.generation, &caption.stream_id)
+        Ok(Self::accept_caption_locked(&mut state, caption, false).map(|(update, _)| update))
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "GitHub issue #11 integrates the Phase 5 Translation core with Runtime in its next child slice."
+        )
+    )]
+    pub(crate) fn accept_completed_source_for_translation(
+        &self,
+        caption: CaptionSnapshot,
+    ) -> AppResult<Option<(CaptionAggregateUpdate, ReservedCompletedSource)>> {
+        if caption.lane != CaptionLane::Source || caption.state != CaptionState::Completed {
+            return Ok(None);
+        }
+
+        let source = caption.clone();
+        let mut state = self.lock()?;
+        let Some((update, Some(key))) = Self::accept_caption_locked(&mut state, caption, true)
+        else {
+            return Ok(None);
+        };
+        drop(state);
+
+        Ok(Some((
+            update,
+            ReservedCompletedSource {
+                store: self.clone(),
+                source,
+                key: Some(key),
+            },
+        )))
+    }
+
+    fn accept_caption_locked(
+        state: &mut CaptionAggregateState,
+        caption: CaptionSnapshot,
+        reserve_completed_source: bool,
+    ) -> Option<(CaptionAggregateUpdate, Option<CompletedSourceKey>)> {
+        if !Self::matches_active(state, caption.generation, &caption.stream_id)
             || caption.revision == 0
             || (caption.state == CaptionState::Completed && caption.unit_id.is_none())
-            || !Self::source_reference_is_valid(&state, &caption)
+            || !Self::source_reference_is_valid(state, &caption)
         {
-            return Ok(None);
+            return None;
         }
 
         let unit_key = caption.unit_id.as_ref().map(|unit_id| CaptionUnitKey {
@@ -156,7 +303,7 @@ impl CaptionAggregateStore {
             .as_ref()
             .is_some_and(|lane_key| state.recent_terminal_lanes.contains(lane_key))
         {
-            return Ok(None);
+            return None;
         }
 
         let existing = state.captions.iter().position(|current| {
@@ -169,7 +316,7 @@ impl CaptionAggregateStore {
             let current = &state.captions[index];
             current.state == CaptionState::Completed || current.revision >= caption.revision
         }) {
-            return Ok(None);
+            return None;
         }
 
         if let Some(unit_key) = unit_key.as_ref()
@@ -180,7 +327,7 @@ impl CaptionAggregateStore {
             && !(caption.lane == CaptionLane::Translation
                 && state.completed_units.contains(unit_key))
         {
-            return Ok(None);
+            return None;
         }
 
         if let Some(index) = existing {
@@ -188,10 +335,9 @@ impl CaptionAggregateStore {
         }
 
         let accepted_caption = caption.clone();
+        let mut reservation_key = None;
         if caption.state == CaptionState::Completed {
-            let Some(unit_id) = caption.unit_id.clone() else {
-                return Ok(None);
-            };
+            let unit_id = caption.unit_id.clone()?;
             if caption.lane == CaptionLane::Source {
                 state
                     .open_source_units
@@ -204,7 +350,7 @@ impl CaptionAggregateStore {
                 unit_id,
             };
             Self::record_terminal_lane(
-                &mut state,
+                state,
                 CaptionLaneKey {
                     unit: completed_unit.clone(),
                     lane: caption.lane,
@@ -214,19 +360,30 @@ impl CaptionAggregateStore {
                 state
                     .completed_units
                     .retain(|current| current != &completed_unit);
-                state.completed_units.push_front(completed_unit);
-                Self::trim_completed_units(&mut state);
+                state.completed_units.push_front(completed_unit.clone());
+                if reserve_completed_source {
+                    let key = CompletedSourceKey {
+                        unit: completed_unit,
+                        revision: caption.revision,
+                    };
+                    state.pinned_sources.push(key.clone());
+                    reservation_key = Some(key);
+                }
+                Self::trim_completed_units(state);
             }
         } else {
             state.captions.insert(0, caption);
         }
-        Self::sort_captions_by_unit_order(&mut state);
-        Self::advance_revision(&mut state);
+        Self::sort_captions_by_unit_order(state);
+        Self::advance_revision(state);
 
-        Ok(Some(CaptionAggregateUpdate {
-            snapshot: Self::snapshot_from(&state),
-            change: CaptionAggregateChange::CaptionAccepted(accepted_caption),
-        }))
+        Some((
+            CaptionAggregateUpdate {
+                snapshot: Self::snapshot_from(state),
+                change: CaptionAggregateChange::CaptionAccepted(accepted_caption),
+            },
+            reservation_key,
+        ))
     }
 
     pub(crate) fn abort_source_unit(
@@ -286,10 +443,14 @@ impl CaptionAggregateStore {
         }
 
         state.active_stream = None;
+        state
+            .pinned_sources
+            .retain(|source| source.unit.generation != generation);
         state.open_source_units.clear();
         state
             .captions
             .retain(|caption| caption.state == CaptionState::Completed);
+        Self::trim_completed_units(&mut state);
         Self::retain_caption_unit_ordinals(&mut state);
         Self::advance_revision(&mut state);
 
@@ -349,11 +510,18 @@ impl CaptionAggregateStore {
     }
 
     fn trim_completed_units(state: &mut CaptionAggregateState) {
-        while state.completed_units.len() > COMPLETED_UNIT_LIMIT {
+        while state
+            .completed_units
+            .iter()
+            .filter(|unit| !Self::unit_is_pinned(state, unit))
+            .count()
+            > COMPLETED_UNIT_LIMIT
+        {
             let expired_index = state
                 .completed_units
                 .iter()
                 .enumerate()
+                .filter(|(_, unit)| !Self::unit_is_pinned(state, unit))
                 .min_by_key(|(_, unit)| Self::unit_order(state, unit))
                 .map(|(index, _)| index);
             if let Some(expired) =
@@ -367,6 +535,22 @@ impl CaptionAggregateStore {
             }
         }
         Self::retain_caption_unit_ordinals(state);
+    }
+
+    fn unit_is_pinned(state: &CaptionAggregateState, unit: &CaptionUnitKey) -> bool {
+        state
+            .pinned_sources
+            .iter()
+            .any(|source| &source.unit == unit)
+    }
+
+    fn release_reserved_source(state: &mut CaptionAggregateState, key: &CompletedSourceKey) {
+        let caption_count = state.captions.len();
+        state.pinned_sources.retain(|pinned| pinned != key);
+        Self::trim_completed_units(state);
+        if state.captions.len() != caption_count {
+            Self::advance_revision(state);
+        }
     }
 
     fn unit_order(state: &CaptionAggregateState, unit: &CaptionUnitKey) -> (u64, u64) {
