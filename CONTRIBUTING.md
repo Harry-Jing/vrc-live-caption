@@ -115,8 +115,10 @@ the maintainer to arrange a private channel.
 
 Before requesting review:
 
-- use a Conventional Commit pull-request title; it becomes the commit subject
-  when the project squash-merges the pull request;
+- use a Conventional Commit pull-request title without issue or pull-request
+  numbers; when squash-merging, make the final commit subject match the
+  pull-request title exactly and remove GitHub's automatically appended
+  `(#N)`;
 - link the accepted issue and explain what changed and why;
 - describe automated and manual validation, including anything not run;
 - include screenshots for user-interface changes;

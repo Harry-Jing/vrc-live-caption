@@ -1,0 +1,43 @@
+name: Feedback or question
+description: Report a problem, suggest an improvement, or ask a question
+labels:
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues before submitting. Do not include API keys,
+        private captions, microphone audio, or other sensitive data. Do not
+        disclose a suspected vulnerability publicly; ask the maintainer to
+        arrange a private channel. See the
+        [security guidance](https://github.com/Harry-Jing/vrc-live-caption/blob/main/CONTRIBUTING.md#security-and-user-data).
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What do you need?
+      options:
+        - Something is not working
+        - I have an improvement idea
+        - I have a question
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: >-
+        Explain what happened or what you want to accomplish. For a problem,
+        include steps to reproduce it and the expected and actual behavior. For
+        a question, include what you already tried.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: >-
+        If relevant, include the app version or commit, operating system,
+        recognition mode, publication mode, and VRChat context.
