@@ -152,3 +152,80 @@ test("preserves a finite edited port in the save payload", () => {
 
   expect(settings.createSaveConfig()?.osc.port).toBe(9_001);
 });
+
+test("keeps an invalid Translation draft out of the saved AppConfig", () => {
+  const savedConfig = appConfig();
+  const saved = ref<AppConfig | null>(savedConfig);
+  const settings = useSettingsDraft(() => saved.value);
+
+  if (settings.translationDraft.value === null) {
+    throw new Error(
+      "The initial saved config must create a Translation draft.",
+    );
+  }
+
+  settings.translationDraft.value.content = "bilingual";
+  expect(settings.hasValidTranslationSettings.value).toBe(false);
+  expect(settings.isDirty.value).toBe(true);
+  expect(settings.createSaveConfig()).toBeNull();
+  expect(savedConfig.publication.content).toBe("sourceOnly");
+  expect(savedConfig.translation).toBeNull();
+
+  settings.translationDraft.value.target = "zh-Hans";
+  expect(settings.hasValidTranslationSettings.value).toBe(true);
+  expect(settings.createSaveConfig()).toMatchObject({
+    publication: { content: "bilingual" },
+    translation: {
+      path: "openai/responses-completed-text",
+      target: "zh-Hans",
+      endpoint: { kind: "official" },
+    },
+  });
+});
+
+test("does not replace saved settings with an invalid Custom URL", () => {
+  const savedConfig = appConfig();
+  const saved = ref<AppConfig | null>(savedConfig);
+  const settings = useSettingsDraft(() => saved.value);
+
+  if (settings.translationDraft.value === null) {
+    throw new Error(
+      "The initial saved config must create a Translation draft.",
+    );
+  }
+
+  settings.translationDraft.value.content = "translationOnly";
+  settings.translationDraft.value.target = "en";
+  settings.translationDraft.value.endpointKind = "custom";
+  settings.translationDraft.value.customApiBaseUrl =
+    "http://translation.example.test/v1";
+
+  expect(settings.hasValidTranslationSettings.value).toBe(false);
+  expect(settings.createSaveConfig()).toBeNull();
+  expect(savedConfig.publication.content).toBe("sourceOnly");
+  expect(savedConfig.translation).toBeNull();
+});
+
+test("round-trips complete dormant Translation settings in Source-only", () => {
+  const configured = appConfig();
+  configured.translation = {
+    path: "openai/responses-completed-text",
+    target: "en",
+    endpoint: {
+      kind: "custom",
+      apiBaseUrl: "https://translation.example.test/v1",
+    },
+  };
+  const saved = ref<AppConfig | null>(configured);
+  const settings = useSettingsDraft(() => saved.value);
+
+  expect(settings.translationDraft.value).toMatchObject({
+    content: "sourceOnly",
+    target: "en",
+    endpointKind: "custom",
+    customApiBaseUrl: "https://translation.example.test/v1",
+  });
+  expect(settings.createSaveConfig()?.translation).toEqual(
+    configured.translation,
+  );
+});

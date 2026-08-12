@@ -3,6 +3,7 @@ import { useToast } from "@nuxt/ui/composables";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { onBeforeRouteLeave } from "vue-router";
 import MicrophoneProbeControl from "./MicrophoneProbeControl.vue";
+import TranslationSettings from "./TranslationSettings.vue";
 import { uiText } from "../../i18n/uiText";
 import { requestConfirmation } from "../../platform/confirmation";
 import { useRuntimeContext } from "../../runtime/context";
@@ -20,6 +21,7 @@ import {
   RECOGNITION_PATHS,
   type PublicationMode,
 } from "../../runtime/captionPipeline";
+import type { CredentialId } from "../../runtime/runtimeControl";
 import { openAiCredentialStatusPresentation } from "./openAiCredentialStatusPresentation";
 import { useSettingsDraft } from "./settingsDraft";
 
@@ -30,6 +32,7 @@ const {
   credentialFailure,
   credentialStatuses,
   currentGeneration,
+  currentGenerationSelection,
   currentGenerationUploadsMicrophoneAudio,
   deleteCredential,
   desiredCaptionPipelinePlan,
@@ -59,9 +62,12 @@ const {
   createSaveConfig,
   draft: form,
   hasValidExpectedLanguages,
+  hasValidTranslationSettings,
   isDirty: isFormDirty,
+  translationDraft,
 } = useSettingsDraft(() => desiredConfig.value);
 const apiKeyInput = ref("");
+const credentialActionOwner = ref<CredentialId | null>(null);
 const isConfigSaveSubmitting = ref(false);
 const isRemoveKeyModalOpen = ref(false);
 const recognitionFields = ref<HTMLElement | null>(null);
@@ -79,6 +85,46 @@ const areConfigControlsDisabled = computed(
 const isRuntimeActive = computed(() =>
   isActiveRuntimeGenerationPhase(currentGeneration.value?.phase),
 );
+const currentGenerationCapturedCustomTranslationCredential = computed(() =>
+  Boolean(
+    isRuntimeActive.value &&
+    currentGeneration.value?.credentials.some(
+      (credential) => credential.id === "customTranslation",
+    ),
+  ),
+);
+const translationSelectionDiffersFromCurrentGeneration = computed(() => {
+  if (!isRuntimeActive.value || !translationDraft.value) {
+    return false;
+  }
+
+  const selected = currentGenerationSelection.value;
+  if (selected === null) {
+    return false;
+  }
+
+  const desiredTranslation =
+    translationDraft.value.content === "sourceOnly"
+      ? null
+      : translationDraft.value.target === null
+        ? undefined
+        : {
+            path: "openai/responses-completed-text" as const,
+            target: translationDraft.value.target,
+            endpoint:
+              translationDraft.value.endpointKind === "official"
+                ? ({ kind: "official" } as const)
+                : ({
+                    kind: "custom",
+                    apiBaseUrl: translationDraft.value.customApiBaseUrl.trim(),
+                  } as const),
+          };
+
+  return (
+    selected.publication.content !== translationDraft.value.content ||
+    JSON.stringify(selected.translation) !== JSON.stringify(desiredTranslation)
+  );
+});
 
 const probeMatchesSelectedInput = computed(
   () =>
@@ -101,6 +147,19 @@ const settingsFailureMessage = computed(
 );
 const credentialFailureMessage = computed(
   () => credentialFailure.value?.message ?? "",
+);
+const openAiCredentialFailureMessage = computed(() =>
+  credentialActionOwner.value === "customTranslation"
+    ? ""
+    : credentialFailureMessage.value,
+);
+const customCredentialFailureMessage = computed(() =>
+  credentialActionOwner.value === "customTranslation"
+    ? credentialFailureMessage.value
+    : "",
+);
+const customTranslationCredentialStatus = computed(
+  () => credentialStatuses.value.customTranslation ?? null,
 );
 
 const canSaveOpenAiApiKey = computed(() => apiKeyInput.value.trim().length > 0);
@@ -262,6 +321,7 @@ async function save() {
 }
 
 function saveOpenAiApiKey() {
+  credentialActionOwner.value = "openai";
   void saveCredential("openai", apiKeyInput.value);
   // Do not retain plaintext in the form while waiting for secure-store I/O.
   // Full control snapshots are unrelated acknowledgements and must never be
@@ -292,7 +352,18 @@ function closeRemoveKeyModal() {
 
 function confirmDeleteOpenAiApiKey() {
   isRemoveKeyModalOpen.value = false;
+  credentialActionOwner.value = "openai";
   void deleteCredential("openai");
+}
+
+function saveTranslationCredential(id: CredentialId, secret: string) {
+  credentialActionOwner.value = id;
+  void saveCredential(id, secret);
+}
+
+function deleteTranslationCredential(id: CredentialId) {
+  credentialActionOwner.value = id;
+  void deleteCredential(id);
 }
 
 function selectPublicationMode(mode: PublicationMode) {
@@ -485,12 +556,12 @@ async function focusRecognitionPath() {
             </div>
 
             <UAlert
-              v-if="credentialFailureMessage"
+              v-if="openAiCredentialFailureMessage"
               color="error"
               icon="i-lucide-circle-alert"
               role="alert"
               :title="uiText('settings.credentials.openai.errors.actionFailed')"
-              :description="credentialFailureMessage"
+              :description="openAiCredentialFailureMessage"
               variant="subtle"
             />
 
@@ -503,6 +574,25 @@ async function focusRecognitionPath() {
             </p>
           </div>
         </section>
+
+        <USeparator />
+
+        <TranslationSettings
+          v-if="translationDraft"
+          v-model="translationDraft"
+          :credential-failure="customCredentialFailureMessage"
+          :custom-credential-captured="
+            currentGenerationCapturedCustomTranslationCredential
+          "
+          :custom-credential-status="customTranslationCredentialStatus"
+          :disabled="areConfigControlsDisabled || isCredentialBusy"
+          :official-credential-status="openAiCredentialStatus"
+          :show-next-start-disclosure="
+            translationSelectionDiffersFromCurrentGeneration
+          "
+          @delete-credential="deleteTranslationCredential"
+          @save-credential="saveTranslationCredential"
+        />
 
         <USeparator />
 
@@ -634,7 +724,11 @@ async function focusRecognitionPath() {
         </section>
 
         <UButton
-          :disabled="areConfigControlsDisabled || !hasValidExpectedLanguages"
+          :disabled="
+            areConfigControlsDisabled ||
+            !hasValidExpectedLanguages ||
+            !hasValidTranslationSettings
+          "
           icon="i-lucide-save"
           :label="uiText('settings.actions.save')"
           type="submit"

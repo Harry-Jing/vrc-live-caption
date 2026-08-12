@@ -1,9 +1,17 @@
 import { computed, ref, toRaw, watch } from "vue";
 import type { AppConfig } from "../../runtime/appConfig";
+import {
+  createAppConfigFromTranslationSettings,
+  createTranslationSettingsDraft,
+  translationSettingsValidation,
+  type TranslationSettingsDraft,
+} from "./translationSettingsModel";
 
 export function useSettingsDraft(savedConfig: () => AppConfig | null) {
   const draft = ref<AppConfig | null>(null);
+  const translationDraft = ref<TranslationSettingsDraft | null>(null);
   let lastSyncedConfigJson: string | null = null;
+  let lastSyncedDraftJson: string | null = null;
 
   watch(
     savedConfig,
@@ -18,6 +26,12 @@ export function useSettingsDraft(savedConfig: () => AppConfig | null) {
 
       lastSyncedConfigJson = configJson;
       draft.value = config ? structuredClone(toRaw(config)) : null;
+      translationDraft.value = config
+        ? createTranslationSettingsDraft(config)
+        : null;
+      lastSyncedDraftJson = config
+        ? settingsDraftJson(config, createTranslationSettingsDraft(config))
+        : null;
     },
     { immediate: true },
   );
@@ -42,18 +56,37 @@ export function useSettingsDraft(savedConfig: () => AppConfig | null) {
   });
 
   const isDirty = computed(() => {
-    if (!draft.value || lastSyncedConfigJson === null) {
+    if (
+      !draft.value ||
+      !translationDraft.value ||
+      lastSyncedDraftJson === null
+    ) {
       return false;
     }
 
     // Serialize through the reactive proxy so Vue tracks nested field edits.
-    return JSON.stringify(draft.value) !== lastSyncedConfigJson;
+    return (
+      settingsDraftJson(draft.value, translationDraft.value) !==
+      lastSyncedDraftJson
+    );
   });
+
+  const hasValidTranslationSettings = computed(
+    () =>
+      translationDraft.value !== null &&
+      translationSettingsValidation(translationDraft.value).isValid,
+  );
 
   function createSaveConfig() {
     const saved = savedConfig();
 
-    if (!draft.value || !saved || !hasValidExpectedLanguages.value) {
+    if (
+      !draft.value ||
+      !translationDraft.value ||
+      !saved ||
+      !hasValidExpectedLanguages.value ||
+      !hasValidTranslationSettings.value
+    ) {
       return null;
     }
 
@@ -64,13 +97,22 @@ export function useSettingsDraft(savedConfig: () => AppConfig | null) {
       ? next.osc.port
       : saved.osc.port;
 
-    return next;
+    return createAppConfigFromTranslationSettings(next, translationDraft.value);
   }
 
   return {
     createSaveConfig,
     draft,
     hasValidExpectedLanguages,
+    hasValidTranslationSettings,
     isDirty,
+    translationDraft,
   };
+}
+
+function settingsDraftJson(
+  config: AppConfig,
+  translation: TranslationSettingsDraft,
+): string {
+  return JSON.stringify({ config, translation });
 }

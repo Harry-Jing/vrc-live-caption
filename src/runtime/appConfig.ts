@@ -42,9 +42,18 @@ export type AppConfig = {
   };
 };
 
-export function translationApiBaseUrlValidationError(
+export type TranslationApiBaseUrlValidationReason =
+  | "invalidUrl"
+  | "httpsRequired"
+  | "hostRequired"
+  | "userinfoForbidden"
+  | "queryOrFragmentForbidden"
+  | "invalidPercentEncoding"
+  | "responsesPathForbidden";
+
+export function translationApiBaseUrlValidationReason(
   raw: string,
-): string | null {
+): TranslationApiBaseUrlValidationReason | null {
   // URL parsers normalize an empty userinfo marker away, so inspect the raw
   // authority before parsing to reject every syntactic userinfo form.
   const schemeSeparator = raw.indexOf("://");
@@ -56,26 +65,26 @@ export function translationApiBaseUrlValidationError(
           .split(/[/?#]/u, 1)
           .at(0) ?? "");
   if (authority.includes("@")) {
-    return "API base URL cannot contain user information.";
+    return "userinfoForbidden";
   }
 
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
-    return "API base URL must be a valid URL.";
+    return "invalidUrl";
   }
   if (parsed.protocol !== "https:") {
-    return "API base URL must use HTTPS.";
+    return "httpsRequired";
   }
   if (parsed.hostname.length === 0) {
-    return "API base URL must include a host.";
+    return "hostRequired";
   }
   if (parsed.username.length > 0 || parsed.password.length > 0) {
-    return "API base URL cannot contain user information.";
+    return "userinfoForbidden";
   }
   if (raw.includes("?") || raw.includes("#")) {
-    return "API base URL cannot contain a query or fragment.";
+    return "queryOrFragmentForbidden";
   }
 
   const finalSegment = parsed.pathname
@@ -87,14 +96,37 @@ export function translationApiBaseUrlValidationError(
     try {
       decodedFinalSegment = decodeURIComponent(finalSegment);
     } catch {
-      return "API base URL must contain valid percent encoding.";
+      return "invalidPercentEncoding";
     }
     if (decodedFinalSegment.toLocaleLowerCase("en") === "responses") {
-      return "API base URL cannot include the Responses endpoint.";
+      return "responsesPathForbidden";
     }
   }
 
   return null;
+}
+
+export function translationApiBaseUrlValidationError(
+  raw: string,
+): string | null {
+  switch (translationApiBaseUrlValidationReason(raw)) {
+    case null:
+      return null;
+    case "invalidUrl":
+      return "API base URL must be a valid URL.";
+    case "httpsRequired":
+      return "API base URL must use HTTPS.";
+    case "hostRequired":
+      return "API base URL must include a host.";
+    case "userinfoForbidden":
+      return "API base URL cannot contain user information.";
+    case "queryOrFragmentForbidden":
+      return "API base URL cannot contain a query or fragment.";
+    case "invalidPercentEncoding":
+      return "API base URL must contain valid percent encoding.";
+    case "responsesPathForbidden":
+      return "API base URL cannot include the Responses endpoint.";
+  }
 }
 
 export function appConfigValidationError(config: AppConfig): string | null {
