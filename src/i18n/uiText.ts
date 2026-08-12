@@ -186,6 +186,7 @@ const englishMessages = {
     `The failed runtime generation is retained for diagnostics. Saved changes to ${changes} will be used on the next Start.`,
   "settings.feedback.nextStart.change.microphone": "microphone",
   "settings.feedback.nextStart.change.recognition": "speech recognition",
+  "settings.feedback.nextStart.change.translation": "translation",
   "settings.feedback.nextStart.change.credential": "service credential",
   "settings.feedback.nextStart.change.chatboxOutput": "Chatbox output",
   "settings.feedback.nextStart.change.publication": "publication timing",

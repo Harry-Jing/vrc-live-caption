@@ -8,7 +8,7 @@
 
 use crate::audio::{AudioProbeRequest, AudioProbeResult, probe_audio_input as run_audio_probe};
 use crate::caption::{CaptionAggregateSnapshot, CaptionAggregateStore};
-use crate::caption_pipeline::{plan_caption_pipeline, publication_timing_for_start};
+use crate::caption_pipeline::{plan_caption_pipeline, resolve_caption_pipeline_start_timing};
 use crate::chatbox::{ChatboxOscSender, ChatboxPacer, ChatboxSendReceipt, OSC_TEST_MESSAGE};
 use crate::config::AppConfig;
 use crate::credentials::{
@@ -87,7 +87,7 @@ impl AppState {
             config,
             config_requires_review,
             config_revision,
-            credential_revision,
+            credential_revisions,
         } = self.control.start_selection()?;
         if let Err(error) = ensure_config_was_reviewed(config_requires_review) {
             return self.finish_start_failure(app, error, None, expected_stop_epoch);
@@ -96,7 +96,7 @@ impl AppState {
             return self.finish_start_failure(app, error, None, expected_stop_epoch);
         }
         let caption_pipeline_plan = plan_caption_pipeline(&config);
-        if let Err(error) = publication_timing_for_start(&caption_pipeline_plan) {
+        if let Err(error) = resolve_caption_pipeline_start_timing(&caption_pipeline_plan) {
             return self.finish_start_failure(app, error, None, expected_stop_epoch);
         }
         let resolved = match resolve_openai_credential() {
@@ -116,7 +116,7 @@ impl AppState {
             id: CredentialId::OpenAi,
             storage: resolved.storage,
             display_suffix: resolved.display_suffix,
-            revision: credential_revision,
+            revision: credential_revisions.revision(CredentialId::OpenAi),
         };
         let recognition_module = match config.recognition.path {
             crate::config::RecognitionPath::OpenAiGptTranscribe => openai_gpt_transcribe_module(
@@ -346,7 +346,7 @@ impl AppState {
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
         save_credential(id, secret)?;
         self.control
-            .replace_credential_statuses(credential_statuses())
+            .replace_credential_statuses(id, credential_statuses())
     }
 
     pub(super) fn delete_credential(&self, id: CredentialId) -> AppResult<RuntimeControlSnapshot> {
@@ -356,7 +356,7 @@ impl AppState {
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
         delete_credential(id)?;
         self.control
-            .replace_credential_statuses(credential_statuses())
+            .replace_credential_statuses(id, credential_statuses())
     }
 }
 

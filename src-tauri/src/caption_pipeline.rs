@@ -1,7 +1,10 @@
 //! Caption-pipeline capabilities and publication compatibility planning.
 
 use crate::caption::CaptionLane;
-use crate::config::{AppConfig, PublicationMode, RecognitionConfig, RecognitionPath};
+use crate::config::{
+    AppConfig, ContentSelection, PublicationMode, RecognitionConfig, RecognitionPath,
+    TranslationConfig, TranslationPath,
+};
 use crate::error::{AppError, AppResult};
 use serde::Serialize;
 
@@ -11,6 +14,12 @@ pub(crate) const LIVE_OBSERVATION_MILLIS: u64 = 1_000;
 #[serde(rename_all = "camelCase")]
 pub(crate) enum RecognitionInputShape {
     ContinuousAudioFrames,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum TranslationInputShape {
+    CompletedSourceSnapshots,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -65,6 +74,14 @@ pub(crate) struct RecognitionCapabilityProfile {
     pub(crate) input_shape: RecognitionInputShape,
     pub(crate) caption_boundary_owner: CaptionBoundaryOwner,
     pub(crate) unit_behavior: CaptionUnitBehavior,
+    pub(crate) lanes: Vec<LaneCapabilities>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TranslationCapabilityProfile {
+    pub(crate) path: TranslationPath,
+    pub(crate) input_shape: TranslationInputShape,
     pub(crate) lanes: Vec<LaneCapabilities>,
 }
 
@@ -135,33 +152,78 @@ impl PublicationPlan {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CaptionPipelinePlan {
     pub(crate) recognition: RecognitionCapabilityProfile,
+    pub(crate) translation: Option<TranslationCapabilityProfile>,
     pub(crate) publication: PublicationPlan,
 }
 
 pub(crate) fn plan_caption_pipeline(config: &AppConfig) -> CaptionPipelinePlan {
     let recognition = recognition_capabilities(&config.recognition);
+    let translation = active_translation(config);
+    let mut available_lanes = recognition.lanes.clone();
+    if let Some(profile) = &translation {
+        available_lanes.extend(profile.lanes.iter().cloned());
+    }
     let publication = plan_publication(
-        &recognition.lanes,
+        &available_lanes,
         config.publication.mode,
-        &[CaptionLane::Source],
+        selected_lanes(config.publication.content),
     );
     CaptionPipelinePlan {
         recognition,
+        translation,
         publication,
     }
 }
 
-pub(crate) fn publication_timing_for_start(
+fn active_translation(config: &AppConfig) -> Option<TranslationCapabilityProfile> {
+    match config.publication.content {
+        ContentSelection::SourceOnly => None,
+        ContentSelection::TranslationOnly | ContentSelection::Bilingual => {
+            config.translation.as_ref().map(translation_capabilities)
+        }
+    }
+}
+
+fn selected_lanes(content: ContentSelection) -> &'static [CaptionLane] {
+    match content {
+        ContentSelection::SourceOnly => &[CaptionLane::Source],
+        ContentSelection::TranslationOnly => &[CaptionLane::Translation],
+        ContentSelection::Bilingual => &[CaptionLane::Source, CaptionLane::Translation],
+    }
+}
+
+fn translation_capabilities(translation: &TranslationConfig) -> TranslationCapabilityProfile {
+    match translation.path {
+        TranslationPath::OpenAiResponsesCompletedText => TranslationCapabilityProfile {
+            path: translation.path,
+            input_shape: TranslationInputShape::CompletedSourceSnapshots,
+            lanes: vec![LaneCapabilities {
+                lane: CaptionLane::Translation,
+                updates: LaneUpdateBehavior::CompletedOnly,
+                revisions: RevisionBehavior::AppendOnly,
+            }],
+        },
+    }
+}
+
+pub(crate) fn resolve_caption_pipeline_start_timing(
     plan: &CaptionPipelinePlan,
 ) -> AppResult<ResolvedPublicationTiming> {
-    plan.publication.resolved_timing().ok_or_else(|| {
+    let timing = plan.publication.resolved_timing().ok_or_else(|| {
         AppError::config(format!(
             "The selected recognition path and publication mode are incompatible ({}).",
             plan.publication
                 .incompatibility_code()
                 .unwrap_or("publication.incompatible")
         ))
-    })
+    })?;
+    if plan.translation.is_some() {
+        return Err(AppError::config(
+            "The selected Translation path is not implemented yet (translation.module_unavailable).",
+        ));
+    }
+
+    Ok(timing)
 }
 
 pub(crate) fn recognition_capabilities(

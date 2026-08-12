@@ -6,6 +6,7 @@
 import type { AppGateway, RuntimeEventListener } from "../../runtime/gateway";
 import { isActiveRuntimeStatus } from "../../runtime/lifecycle";
 import {
+  appConfigValidationError,
   type AppConfig,
   APP_CONFIG_SCHEMA_VERSION,
 } from "../../runtime/appConfig";
@@ -37,6 +38,7 @@ const PREVIEW_DEFAULT_CONFIG: AppConfig = {
     path: "openai/gpt-transcribe",
     expectedLanguages: ["en"],
   },
+  translation: null,
   osc: {
     host: "127.0.0.1",
     port: 9000,
@@ -44,6 +46,7 @@ const PREVIEW_DEFAULT_CONFIG: AppConfig = {
   },
   publication: {
     mode: "completed",
+    content: "sourceOnly",
   },
   ui: {
     showOngoingPreview: true,
@@ -85,29 +88,78 @@ export function previewCaptionPipelinePlan(
   if (!sourceUpdates) {
     throw new Error("Preview recognition profile must produce a source lane.");
   }
-  const compatible =
-    config.publication.mode === "completed" ||
-    sourceUpdates === "ongoingAndCompleted";
+  const translation =
+    config.publication.content === "sourceOnly" || config.translation === null
+      ? null
+      : {
+          path: config.translation.path,
+          inputShape: "completedSourceSnapshots" as const,
+          lanes: [
+            {
+              lane: "translation" as const,
+              updates: "completedOnly" as const,
+              revisions: "appendOnly" as const,
+            },
+          ],
+        };
+  const selectedLanes =
+    config.publication.content === "sourceOnly"
+      ? (["source"] as const)
+      : config.publication.content === "translationOnly"
+        ? (["translation"] as const)
+        : (["source", "translation"] as const);
+  const availableUpdates = new Map([
+    ["source", sourceUpdates],
+    ...(translation === null
+      ? []
+      : ([["translation", translation.lanes[0]?.updates]] as const)),
+  ]);
+  const unavailableLanes = selectedLanes.filter(
+    (lane) => !availableUpdates.has(lane),
+  );
+  const unsupportedLanes = selectedLanes.filter(
+    (lane) =>
+      config.publication.mode === "live" &&
+      availableUpdates.get(lane) !== "ongoingAndCompleted",
+  );
+  const supportedModes = (["completed", "live"] as const).filter((mode) =>
+    selectedLanes.every(
+      (lane) =>
+        availableUpdates.has(lane) &&
+        (mode === "completed" ||
+          availableUpdates.get(lane) === "ongoingAndCompleted"),
+    ),
+  );
 
   return {
     recognition,
-    publication: compatible
-      ? {
-          state: "compatible",
-          mode: config.publication.mode,
-          timing:
-            config.publication.mode === "completed"
-              ? { timing: "completed" }
-              : { timing: "liveUnit", observationWindowMs: 1000 },
-          selectedLanes: ["source"],
-        }
-      : {
-          state: "incompatible",
-          requestedMode: config.publication.mode,
-          selectedLanes: ["source"],
-          reason: { reason: "modeUnsupported", lanes: ["source"] },
-          supportedModes: ["completed"],
-        },
+    translation,
+    publication:
+      unavailableLanes.length > 0
+        ? {
+            state: "incompatible",
+            requestedMode: config.publication.mode,
+            selectedLanes,
+            reason: { reason: "laneUnavailable", lanes: unavailableLanes },
+            supportedModes: [],
+          }
+        : unsupportedLanes.length > 0
+          ? {
+              state: "incompatible",
+              requestedMode: config.publication.mode,
+              selectedLanes,
+              reason: { reason: "modeUnsupported", lanes: unsupportedLanes },
+              supportedModes,
+            }
+          : {
+              state: "compatible",
+              mode: config.publication.mode,
+              timing:
+                config.publication.mode === "completed"
+                  ? { timing: "completed" }
+                  : { timing: "liveUnit", observationWindowMs: 1000 },
+              selectedLanes,
+            },
   };
 }
 
@@ -117,13 +169,18 @@ export function createPreviewAppGateway(): AppGateway {
     Readonly<{ listener: (snapshot: RuntimeControlSnapshot) => void }>
   >();
   let config = structuredClone(PREVIEW_DEFAULT_CONFIG);
-  let openAiCredentialSuffix: string | null = null;
-  let credentialRevision = 0;
+  const credentialSuffixes: Record<CredentialId, string | null> = {
+    openai: null,
+    customTranslation: null,
+  };
+  const credentialRevisions: Record<CredentialId, number> = {
+    openai: 0,
+    customTranslation: 0,
+  };
   let configRevision = 1;
   let controlRevision = 1;
   let nextGeneration = 0;
   let generation: RuntimeGenerationSnapshot | null = null;
-  let generationCredentialRevision: number | null = null;
   let nextEventNumber = 1;
   let captionAggregate: CaptionAggregateSnapshot = {
     contractVersion: CAPTION_AGGREGATE_CONTRACT_VERSION,
@@ -192,14 +249,16 @@ export function createPreviewAppGateway(): AppGateway {
     });
   }
 
-  function openAiCredentialStatus(): CredentialStatus {
-    return openAiCredentialSuffix === null
-      ? { state: "unconfigured", id: "openai" }
+  function credentialStatus(id: CredentialId): CredentialStatus {
+    const suffix = credentialSuffixes[id];
+
+    return suffix === null
+      ? { state: "unconfigured", id }
       : {
           state: "configured",
-          id: "openai",
+          id,
           storage: "systemCredentialStore",
-          displaySuffix: openAiCredentialSuffix,
+          displaySuffix: suffix,
         };
   }
 
@@ -212,7 +271,10 @@ export function createPreviewAppGateway(): AppGateway {
         revision: configRevision,
         config: structuredClone(config),
         captionPipelinePlan: previewCaptionPipelinePlan(config),
-        credentials: [openAiCredentialStatus()],
+        credentials: [
+          credentialStatus("openai"),
+          credentialStatus("customTranslation"),
+        ],
       },
       generation: generation ? structuredClone(generation) : null,
       pendingGenerationChanges: pendingGenerationChanges(),
@@ -242,7 +304,21 @@ export function createPreviewAppGateway(): AppGateway {
     ) {
       pending.push("recognition");
     }
-    if (generationCredentialRevision !== credentialRevision) {
+    const desiredTranslation =
+      config.publication.content === "sourceOnly" ? null : config.translation;
+    if (
+      generation.selection.publication.content === config.publication.content &&
+      JSON.stringify(generation.selection.translation) !==
+        JSON.stringify(desiredTranslation)
+    ) {
+      pending.push("translation");
+    }
+    if (
+      generation.credentials.some(
+        (credential) =>
+          credential.revision !== credentialRevisions[credential.id],
+      )
+    ) {
       pending.push("credential");
     }
     if (
@@ -252,7 +328,10 @@ export function createPreviewAppGateway(): AppGateway {
     ) {
       pending.push("chatboxOutput");
     }
-    if (generation.selection.publication.mode !== config.publication.mode) {
+    if (
+      generation.selection.publication.mode !== config.publication.mode ||
+      generation.selection.publication.content !== config.publication.content
+    ) {
       pending.push("publication");
     }
 
@@ -278,6 +357,10 @@ export function createPreviewAppGateway(): AppGateway {
     const selection = {
       audio: structuredClone(config.audio),
       recognition: structuredClone(config.recognition),
+      translation:
+        config.publication.content === "sourceOnly"
+          ? null
+          : structuredClone(config.translation),
       osc: structuredClone(config.osc),
       publication: structuredClone(config.publication),
     };
@@ -288,21 +371,21 @@ export function createPreviewAppGateway(): AppGateway {
       startedFromConfigRevision: configRevision,
       selection,
       captionPipelinePlan: previewCaptionPipelinePlan(config),
-      credential:
-        openAiCredentialSuffix !== null
-          ? {
-              id: "openai",
-              storage: "systemCredentialStore",
-              displaySuffix: openAiCredentialSuffix,
-              revision: credentialRevision,
-            }
-          : null,
+      credentials: [
+        {
+          id: "openai",
+          storage: "systemCredentialStore",
+          displaySuffix: credentialSuffixes.openai,
+          revision: credentialRevisions.openai,
+        },
+      ],
       chatboxPublication: {
         state: selection.osc.enabled ? "ready" : "disabled",
         host: selection.osc.host,
         port: selection.osc.port,
       },
       uploadsMicrophoneAudio: true,
+      uploadsSourceText: false,
     };
   }
 
@@ -321,8 +404,14 @@ export function createPreviewAppGateway(): AppGateway {
         ),
       );
     }
+    if (captionPipelinePlan.translation !== null) {
+      return Promise.reject(
+        new Error(
+          "The selected Translation path is not implemented yet (translation.module_unavailable).",
+        ),
+      );
+    }
     nextGeneration += 1;
-    generationCredentialRevision = credentialRevision;
     generation = createGeneration("starting");
     emitCaptionAggregateUpdate({
       activeStream: {
@@ -356,7 +445,6 @@ export function createPreviewAppGateway(): AppGateway {
   function stopPreviewRuntime(): Promise<RuntimeControlSnapshot> {
     if (latestStatus.status === "idle" || latestStatus.status === "stopped") {
       generation = null;
-      generationCredentialRevision = null;
       emitStatus("stopped", "Browser preview runtime is already stopped");
       return Promise.resolve(controlSnapshot());
     }
@@ -373,7 +461,6 @@ export function createPreviewAppGateway(): AppGateway {
       ),
     });
     generation = null;
-    generationCredentialRevision = null;
     emitStatus("stopped", "Browser preview runtime stopped");
     emitDiagnostic(
       "runtime",
@@ -430,6 +517,10 @@ export function createPreviewAppGateway(): AppGateway {
     },
 
     saveAppConfig(nextConfig: AppConfig) {
+      const validationError = appConfigValidationError(nextConfig);
+      if (validationError !== null) {
+        return Promise.reject(new Error(validationError));
+      }
       config = structuredClone(nextConfig);
       configRevision += 1;
       emitControlSnapshot();
@@ -458,7 +549,6 @@ export function createPreviewAppGateway(): AppGateway {
     },
 
     saveCredential(id: CredentialId, secret: string) {
-      void id;
       const trimmed = secret.trim();
 
       if (!trimmed) {
@@ -472,16 +562,15 @@ export function createPreviewAppGateway(): AppGateway {
         );
       }
 
-      openAiCredentialSuffix = trimmed.slice(-4);
-      credentialRevision += 1;
+      credentialSuffixes[id] = trimmed.slice(-4);
+      credentialRevisions[id] += 1;
       emitControlSnapshot();
       return Promise.resolve(controlSnapshot());
     },
 
     deleteCredential(id: CredentialId) {
-      void id;
-      openAiCredentialSuffix = null;
-      credentialRevision += 1;
+      credentialSuffixes[id] = null;
+      credentialRevisions[id] += 1;
       emitControlSnapshot();
 
       return Promise.resolve(controlSnapshot());

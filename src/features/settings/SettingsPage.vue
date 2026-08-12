@@ -113,6 +113,8 @@ const pendingGenerationChangesDescription = computed(() => {
           return uiText("settings.feedback.nextStart.change.microphone");
         case "recognition":
           return uiText("settings.feedback.nextStart.change.recognition");
+        case "translation":
+          return uiText("settings.feedback.nextStart.change.translation");
         case "credential":
           return uiText("settings.feedback.nextStart.change.credential");
         case "chatboxOutput":

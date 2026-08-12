@@ -1,5 +1,23 @@
 use super::*;
+use crate::config::{
+    ContentSelection, TranslationConfig, TranslationEndpoint, TranslationPath, TranslationTarget,
+};
 use crate::error::{AppError, AppResult};
+
+fn translation(target: TranslationTarget) -> TranslationConfig {
+    TranslationConfig {
+        path: TranslationPath::OpenAiResponsesCompletedText,
+        target,
+        endpoint: TranslationEndpoint::Official,
+    }
+}
+
+fn config_with_translation(target: TranslationTarget) -> AppConfig {
+    AppConfig {
+        translation: Some(translation(target)),
+        ..Default::default()
+    }
+}
 
 fn generation_snapshot(config: &AppConfig, generation: u64) -> RuntimeGenerationSnapshot {
     RuntimeGenerationSnapshot {
@@ -8,12 +26,13 @@ fn generation_snapshot(config: &AppConfig, generation: u64) -> RuntimeGeneration
         started_from_config_revision: 0,
         selection: RuntimeGenerationSelection::from(config),
         caption_pipeline_plan: plan_caption_pipeline(config),
-        credential: None,
+        credentials: Vec::new(),
         chatbox_publication: ChatboxPublicationSnapshot::Disabled {
             host: config.osc.host.clone(),
             port: config.osc.port,
         },
         uploads_microphone_audio: false,
+        uploads_source_text: false,
     }
 }
 
@@ -23,7 +42,10 @@ fn ui_only_desired_change_does_not_require_generation_restart() {
     let mut desired = AppConfig::default();
     desired.ui.show_ongoing_preview = false;
 
-    assert!(pending_generation_changes(&desired, &selection, 0, None).is_empty());
+    assert!(
+        pending_generation_changes(&desired, &selection, &CredentialRevisions::default(), &[],)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -33,7 +55,48 @@ fn publication_change_requires_a_new_generation_without_becoming_an_osc_change()
     desired.publication.mode = crate::config::PublicationMode::Live;
 
     assert_eq!(
-        pending_generation_changes(&desired, &selection, 0, None),
+        pending_generation_changes(&desired, &selection, &CredentialRevisions::default(), &[],),
+        vec![PendingGenerationChange::Publication]
+    );
+}
+
+#[test]
+fn active_translation_change_requires_a_new_generation() {
+    let mut active = config_with_translation(TranslationTarget::English);
+    active.publication.content = ContentSelection::TranslationOnly;
+    let selection = RuntimeGenerationSelection::from(&active);
+    let mut desired = active;
+    desired.translation = Some(translation(TranslationTarget::SimplifiedChinese));
+
+    assert_eq!(
+        pending_generation_changes(&desired, &selection, &CredentialRevisions::default(), &[],),
+        vec![PendingGenerationChange::Translation]
+    );
+}
+
+#[test]
+fn dormant_translation_change_does_not_require_a_new_generation() {
+    let active = config_with_translation(TranslationTarget::English);
+    let selection = RuntimeGenerationSelection::from(&active);
+    let mut desired = active;
+    desired.translation = Some(translation(TranslationTarget::SimplifiedChinese));
+
+    assert!(
+        pending_generation_changes(&desired, &selection, &CredentialRevisions::default(), &[],)
+            .is_empty()
+    );
+}
+
+#[test]
+fn activating_translation_content_is_only_a_publication_change() {
+    let active = config_with_translation(TranslationTarget::English);
+    let selection = RuntimeGenerationSelection::from(&active);
+    let mut desired = active;
+    desired.translation = Some(translation(TranslationTarget::SimplifiedChinese));
+    desired.publication.content = ContentSelection::Bilingual;
+
+    assert_eq!(
+        pending_generation_changes(&desired, &selection, &CredentialRevisions::default(), &[],),
         vec![PendingGenerationChange::Publication]
     );
 }
@@ -42,9 +105,22 @@ fn publication_change_requires_a_new_generation_without_becoming_an_osc_change()
 fn openai_credential_change_requires_a_new_generation() {
     let active = AppConfig::default();
     let selection = RuntimeGenerationSelection::from(&active);
+    let mut revisions = CredentialRevisions::default();
+    revisions.advance(CredentialId::OpenAi);
+    revisions.advance(CredentialId::OpenAi);
 
     assert_eq!(
-        pending_generation_changes(&active, &selection, 2, Some(1)),
+        pending_generation_changes(
+            &active,
+            &selection,
+            &revisions,
+            &[RuntimeGenerationCredentialSnapshot {
+                id: CredentialId::OpenAi,
+                storage: CredentialStorage::Environment,
+                display_suffix: None,
+                revision: 1,
+            }],
+        ),
         vec![PendingGenerationChange::Credential]
     );
 }
@@ -54,17 +130,93 @@ fn credential_changes_do_not_restart_a_generation_without_a_credential() -> AppR
     let store = RuntimeControlStore::default();
     let selected = AppConfig::default();
     store.install_starting_generation(generation_snapshot(&selected, 1))?;
-    store.replace_credential_statuses(vec![CredentialStatus::Configured {
-        id: CredentialId::OpenAi,
-        storage: CredentialStorage::Environment,
-        display_suffix: Some("updated".to_string()),
-    }])?;
+    store.replace_credential_statuses(
+        CredentialId::OpenAi,
+        vec![CredentialStatus::Configured {
+            id: CredentialId::OpenAi,
+            storage: CredentialStorage::Environment,
+            display_suffix: Some("updated".to_string()),
+        }],
+    )?;
 
     assert!(
         !store
             .snapshot()?
             .pending_generation_changes
             .contains(&PendingGenerationChange::Credential)
+    );
+    Ok(())
+}
+
+#[test]
+fn changing_unused_custom_translation_credential_does_not_restart_source_only() -> AppResult<()> {
+    let store = RuntimeControlStore::default();
+    let selected = config_with_translation(TranslationTarget::SimplifiedChinese);
+    let mut generation = generation_snapshot(&selected, 1);
+    generation.credentials = vec![RuntimeGenerationCredentialSnapshot {
+        id: CredentialId::OpenAi,
+        storage: CredentialStorage::Environment,
+        display_suffix: Some("used".to_string()),
+        revision: 0,
+    }];
+    store.install_starting_generation(generation)?;
+    store.replace_credential_statuses(
+        CredentialId::CustomTranslation,
+        vec![CredentialStatus::Configured {
+            id: CredentialId::CustomTranslation,
+            storage: CredentialStorage::SystemCredentialStore,
+            display_suffix: Some("new".to_string()),
+        }],
+    )?;
+
+    assert!(
+        !store
+            .snapshot()?
+            .pending_generation_changes
+            .contains(&PendingGenerationChange::Credential)
+    );
+    Ok(())
+}
+
+#[test]
+fn changing_used_custom_translation_credential_requires_a_new_generation() -> AppResult<()> {
+    let store = RuntimeControlStore::default();
+    let mut selected = AppConfig {
+        translation: Some(TranslationConfig {
+            path: TranslationPath::OpenAiResponsesCompletedText,
+            target: TranslationTarget::SimplifiedChinese,
+            endpoint: TranslationEndpoint::Custom {
+                api_base_url: crate::config::ApiBaseUrl::parse("https://example.com/v1")
+                    .map_err(AppError::config)?,
+            },
+        }),
+        ..Default::default()
+    };
+    selected.publication.content = ContentSelection::TranslationOnly;
+    store.replace_loaded_config(selected.clone(), false, Vec::new())?;
+    let mut generation = generation_snapshot(&selected, 1);
+    generation.credentials = vec![
+        RuntimeGenerationCredentialSnapshot {
+            id: CredentialId::OpenAi,
+            storage: CredentialStorage::Environment,
+            display_suffix: Some("openai".to_string()),
+            revision: 0,
+        },
+        RuntimeGenerationCredentialSnapshot {
+            id: CredentialId::CustomTranslation,
+            storage: CredentialStorage::SystemCredentialStore,
+            display_suffix: Some("custom".to_string()),
+            revision: 0,
+        },
+    ];
+    store.install_starting_generation(generation)?;
+
+    let snapshot =
+        store.replace_credential_statuses(CredentialId::CustomTranslation, Vec::new())?;
+
+    assert_eq!(
+        snapshot.pending_generation_changes,
+        vec![PendingGenerationChange::Credential]
     );
     Ok(())
 }
@@ -92,12 +244,12 @@ fn snapshot_has_a_versioned_authoritative_shape() -> AppResult<()> {
     let value = serde_json::to_value(snapshot)
         .map_err(|error| AppError::state(format!("Failed to serialize snapshot: {error}")))?;
 
-    assert_eq!(value["contractVersion"], serde_json::json!(1));
+    assert_eq!(value["contractVersion"], serde_json::json!(2));
     assert_eq!(value["revision"], serde_json::json!(0));
     assert_eq!(value["desired"]["revision"], serde_json::json!(0));
     assert_eq!(
         value["desired"]["config"]["schemaVersion"],
-        serde_json::json!(1)
+        serde_json::json!(2)
     );
     assert_eq!(
         value["desired"]["captionPipelinePlan"]["publication"]["state"],
@@ -277,22 +429,37 @@ fn desired_and_credential_mutations_advance_only_their_owned_revisions() -> AppR
         let control = store.lock()?;
         assert_eq!(control.revision, 1);
         assert_eq!(control.config_revision, 1);
-        assert_eq!(control.credential_revision, 0);
+        assert_eq!(
+            control.credential_revisions.revision(CredentialId::OpenAi),
+            0
+        );
     }
 
-    store.replace_credential_statuses(Vec::new())?;
+    store.replace_credential_statuses(CredentialId::OpenAi, Vec::new())?;
     {
         let control = store.lock()?;
         assert_eq!(control.revision, 2);
         assert_eq!(control.config_revision, 1);
-        assert_eq!(control.credential_revision, 1);
+        assert_eq!(
+            control.credential_revisions.revision(CredentialId::OpenAi),
+            1
+        );
+        assert_eq!(
+            control
+                .credential_revisions
+                .revision(CredentialId::CustomTranslation),
+            0
+        );
     }
 
     store.replace_saved_config(AppConfig::default())?;
     let control = store.lock()?;
     assert_eq!(control.revision, 3);
     assert_eq!(control.config_revision, 2);
-    assert_eq!(control.credential_revision, 1);
+    assert_eq!(
+        control.credential_revisions.revision(CredentialId::OpenAi),
+        1
+    );
     Ok(())
 }
 

@@ -15,12 +15,13 @@ fn generation_snapshot(config: &AppConfig, generation: u64) -> RuntimeGeneration
         started_from_config_revision: 0,
         selection: RuntimeGenerationSelection::from(config),
         caption_pipeline_plan: plan_caption_pipeline(config),
-        credential: None,
+        credentials: Vec::new(),
         chatbox_publication: ChatboxPublicationSnapshot::Disabled {
             host: config.osc.host.clone(),
             port: config.osc.port,
         },
         uploads_microphone_audio: false,
+        uploads_source_text: false,
     }
 }
 
@@ -193,7 +194,7 @@ fn incompatible_publication_fails_before_openai_credentials_are_resolved() -> Ap
     let mut config = AppConfig::default();
     config.publication.mode = crate::config::PublicationMode::Live;
     let plan = plan_caption_pipeline(&config);
-    let Err(error) = publication_timing_for_start(&plan) else {
+    let Err(error) = resolve_caption_pipeline_start_timing(&plan) else {
         return Err(AppError::state(
             "Bounded OpenAI Live unexpectedly passed runtime preflight.",
         ));
@@ -219,7 +220,7 @@ fn gpt_live_transcribe_live_publication_passes_runtime_preflight() -> AppResult<
     config.recognition.path = crate::config::RecognitionPath::OpenAiGptLiveTranscribe;
     config.publication.mode = crate::config::PublicationMode::Live;
 
-    publication_timing_for_start(&plan_caption_pipeline(&config)).map(|_| ())
+    resolve_caption_pipeline_start_timing(&plan_caption_pipeline(&config)).map(|_| ())
 }
 
 #[test]

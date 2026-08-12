@@ -8,7 +8,7 @@
     "stopped",
     "error"
   ],
-  "credentialIds": ["openai"],
+  "credentialIds": ["openai", "customTranslation"],
   "credentialStorages": ["systemCredentialStore", "environment"],
   "credentialStatusStates": ["unconfigured", "configured", "unavailable"],
   "diagnosticCategories": ["config", "runtime", "audio", "stt", "osc"],
@@ -16,8 +16,13 @@
   "captionLanes": ["source", "translation"],
   "captionStates": ["ongoing", "completed"],
   "publicationModes": ["completed", "live"],
+  "contentSelections": ["sourceOnly", "translationOnly", "bilingual"],
   "recognitionPaths": ["openai/gpt-transcribe", "openai/gpt-live-transcribe"],
   "recognitionInputShapes": ["continuousAudioFrames"],
+  "translationPaths": ["openai/responses-completed-text"],
+  "translationTargets": ["en", "zh-Hans"],
+  "translationEndpointKinds": ["official", "custom"],
+  "translationInputShapes": ["completedSourceSnapshots"],
   "captionBoundaryOwners": ["application"],
   "captionUnitBehaviors": ["unitBased"],
   "laneUpdateBehaviors": ["completedOnly", "ongoingAndCompleted"],
@@ -32,6 +37,7 @@
   "runtimePendingGenerationChanges": [
     "microphone",
     "recognition",
+    "translation",
     "credential",
     "chatboxOutput",
     "publication"

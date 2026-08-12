@@ -1,14 +1,17 @@
 //! Authoritative desired settings and effective runtime-generation state.
 
 use crate::caption_pipeline::{CaptionPipelinePlan, plan_caption_pipeline};
-use crate::config::{AppConfig, AudioConfig, OscConfig, PublicationConfig, RecognitionConfig};
+use crate::config::{
+    AppConfig, AudioConfig, ContentSelection, OscConfig, PublicationConfig, RecognitionConfig,
+    TranslationConfig,
+};
 use crate::credentials::{CredentialId, CredentialStatus, CredentialStorage};
 use crate::error::{AppError, AppResult};
 use crate::wall_clock::unix_timestamp_ms;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 
-pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 1;
+pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,9 +76,10 @@ pub(crate) struct RuntimeGenerationSnapshot {
     pub(crate) started_from_config_revision: u64,
     pub(crate) selection: RuntimeGenerationSelection,
     pub(crate) caption_pipeline_plan: CaptionPipelinePlan,
-    pub(crate) credential: Option<RuntimeGenerationCredentialSnapshot>,
+    pub(crate) credentials: Vec<RuntimeGenerationCredentialSnapshot>,
     pub(crate) chatbox_publication: ChatboxPublicationSnapshot,
     pub(crate) uploads_microphone_audio: bool,
+    pub(crate) uploads_source_text: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -121,6 +125,7 @@ pub(crate) enum ChatboxPublicationSnapshot {
 pub(crate) struct RuntimeGenerationSelection {
     pub(crate) audio: AudioConfig,
     pub(crate) recognition: RecognitionConfig,
+    pub(crate) translation: Option<TranslationConfig>,
     pub(crate) osc: OscConfig,
     pub(crate) publication: PublicationConfig,
 }
@@ -134,6 +139,7 @@ impl From<&AppConfig> for RuntimeGenerationSelection {
             schema_version: _,
             audio,
             recognition,
+            translation,
             osc,
             publication,
             ui: _,
@@ -142,6 +148,12 @@ impl From<&AppConfig> for RuntimeGenerationSelection {
         Self {
             audio: audio.clone(),
             recognition: recognition.clone(),
+            translation: match publication.content {
+                ContentSelection::SourceOnly => None,
+                ContentSelection::TranslationOnly | ContentSelection::Bilingual => {
+                    translation.clone()
+                }
+            },
             osc: osc.clone(),
             publication: publication.clone(),
         }
@@ -153,18 +165,43 @@ impl From<&AppConfig> for RuntimeGenerationSelection {
 pub(crate) enum PendingGenerationChange {
     Microphone,
     Recognition,
+    Translation,
     Credential,
     ChatboxOutput,
     Publication,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CredentialRevisions {
+    open_ai: u64,
+    custom_translation: u64,
+}
+
+impl CredentialRevisions {
+    pub(crate) fn revision(&self, id: CredentialId) -> u64 {
+        match id {
+            CredentialId::OpenAi => self.open_ai,
+            CredentialId::CustomTranslation => self.custom_translation,
+        }
+    }
+
+    fn advance(&mut self, id: CredentialId) {
+        let revision = match id {
+            CredentialId::OpenAi => &mut self.open_ai,
+            CredentialId::CustomTranslation => &mut self.custom_translation,
+        };
+        *revision = revision.saturating_add(1);
+    }
+}
+
 fn pending_generation_changes(
     desired: &AppConfig,
     selection: &RuntimeGenerationSelection,
-    desired_credential_revision: u64,
-    generation_credential_revision: Option<u64>,
+    desired_credential_revisions: &CredentialRevisions,
+    generation_credentials: &[RuntimeGenerationCredentialSnapshot],
 ) -> Vec<PendingGenerationChange> {
     let mut changes = Vec::new();
+    let desired_selection = RuntimeGenerationSelection::from(desired);
 
     if desired.audio != selection.audio {
         changes.push(PendingGenerationChange::Microphone);
@@ -172,9 +209,14 @@ fn pending_generation_changes(
     if desired.recognition != selection.recognition {
         changes.push(PendingGenerationChange::Recognition);
     }
-    if generation_credential_revision
-        .is_some_and(|revision| desired_credential_revision != revision)
+    if desired.publication.content == selection.publication.content
+        && desired_selection.translation != selection.translation
     {
+        changes.push(PendingGenerationChange::Translation);
+    }
+    if generation_credentials.iter().any(|credential| {
+        desired_credential_revisions.revision(credential.id) != credential.revision
+    }) {
         changes.push(PendingGenerationChange::Credential);
     }
     if desired.osc != selection.osc {
@@ -200,7 +242,7 @@ pub(crate) struct RuntimeControlStore {
 struct RuntimeControlState {
     revision: u64,
     config_revision: u64,
-    credential_revision: u64,
+    credential_revisions: CredentialRevisions,
     next_generation: u64,
     config: AppConfig,
     config_requires_review: bool,
@@ -214,7 +256,7 @@ impl Default for RuntimeControlState {
         Self {
             revision: 0,
             config_revision: 0,
-            credential_revision: 0,
+            credential_revisions: CredentialRevisions::default(),
             next_generation: 0,
             config: AppConfig::default(),
             config_requires_review: false,
@@ -247,7 +289,7 @@ pub(crate) struct RuntimeStartSelection {
     pub(crate) config: AppConfig,
     pub(crate) config_requires_review: bool,
     pub(crate) config_revision: u64,
-    pub(crate) credential_revision: u64,
+    pub(crate) credential_revisions: CredentialRevisions,
 }
 
 impl RuntimeControlStore {
@@ -262,7 +304,7 @@ impl RuntimeControlStore {
             config: control.config.clone(),
             config_requires_review: control.config_requires_review,
             config_revision: control.config_revision,
-            credential_revision: control.credential_revision,
+            credential_revisions: control.credential_revisions.clone(),
         })
     }
 
@@ -360,10 +402,11 @@ impl RuntimeControlStore {
 
     pub(crate) fn replace_credential_statuses(
         &self,
+        changed_id: CredentialId,
         credentials: Vec<CredentialStatus>,
     ) -> AppResult<RuntimeControlSnapshot> {
         let mut control = self.lock()?;
-        control.credential_revision = control.credential_revision.saturating_add(1);
+        control.credential_revisions.advance(changed_id);
         control.credentials = credentials;
         Self::advance_revision(&mut control);
         Ok(Self::snapshot_from(&control))
@@ -389,11 +432,8 @@ impl RuntimeControlStore {
                 pending_generation_changes(
                     &control.config,
                     &generation.selection,
-                    control.credential_revision,
-                    generation
-                        .credential
-                        .as_ref()
-                        .map(|credential| credential.revision),
+                    &control.credential_revisions,
+                    &generation.credentials,
                 )
             })
             .unwrap_or_default();

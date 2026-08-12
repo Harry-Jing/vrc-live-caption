@@ -3,9 +3,12 @@ use crate::caption::{CaptionLane, CaptionState};
 use crate::caption_pipeline::{
     CaptionBoundaryOwner, CaptionUnitBehavior, LaneUpdateBehavior, PublicationIncompatibility,
     PublicationPlan, RecognitionInputShape, ResolvedPublicationTiming, RevisionBehavior,
-    plan_caption_pipeline,
+    TranslationInputShape, plan_caption_pipeline,
 };
-use crate::config::{AppConfig, PublicationMode, RecognitionPath};
+use crate::config::{
+    ApiBaseUrl, AppConfig, ContentSelection, PublicationMode, RecognitionPath, TranslationEndpoint,
+    TranslationPath, TranslationTarget,
+};
 use crate::credentials::{CredentialFailure, CredentialId, CredentialStatus, CredentialStorage};
 use crate::error::{AppError, AppResult};
 use crate::events::{DiagnosticCategory, DiagnosticSeverity};
@@ -75,6 +78,7 @@ fn closed_rust_wire_values_match_the_shared_vocabulary() -> AppResult<()> {
         ))?,
         "credentialIds": serialized_wire_values(exhaustive_values!(CredentialId;
             CredentialId::OpenAi => CredentialId::OpenAi,
+            CredentialId::CustomTranslation => CredentialId::CustomTranslation,
         ))?,
         "credentialStorages": serialized_wire_values(exhaustive_values!(CredentialStorage;
             CredentialStorage::SystemCredentialStore => CredentialStorage::SystemCredentialStore,
@@ -121,12 +125,34 @@ fn closed_rust_wire_values_match_the_shared_vocabulary() -> AppResult<()> {
             PublicationMode::Completed => PublicationMode::Completed,
             PublicationMode::Live => PublicationMode::Live,
         ))?,
+        "contentSelections": serialized_wire_values(exhaustive_values!(ContentSelection;
+            ContentSelection::SourceOnly => ContentSelection::SourceOnly,
+            ContentSelection::TranslationOnly => ContentSelection::TranslationOnly,
+            ContentSelection::Bilingual => ContentSelection::Bilingual,
+        ))?,
         "recognitionPaths": serialized_wire_values(exhaustive_values!(RecognitionPath;
             RecognitionPath::OpenAiGptTranscribe => RecognitionPath::OpenAiGptTranscribe,
             RecognitionPath::OpenAiGptLiveTranscribe => RecognitionPath::OpenAiGptLiveTranscribe,
         ))?,
         "recognitionInputShapes": serialized_wire_values(exhaustive_values!(RecognitionInputShape;
             RecognitionInputShape::ContinuousAudioFrames => RecognitionInputShape::ContinuousAudioFrames,
+        ))?,
+        "translationPaths": serialized_wire_values(exhaustive_values!(TranslationPath;
+            TranslationPath::OpenAiResponsesCompletedText => TranslationPath::OpenAiResponsesCompletedText,
+        ))?,
+        "translationTargets": serialized_wire_values(exhaustive_values!(TranslationTarget;
+            TranslationTarget::English => TranslationTarget::English,
+            TranslationTarget::SimplifiedChinese => TranslationTarget::SimplifiedChinese,
+        ))?,
+        "translationEndpointKinds": serialized_tag_values(exhaustive_values!(TranslationEndpoint;
+            TranslationEndpoint::Official => TranslationEndpoint::Official,
+            TranslationEndpoint::Custom { .. } => TranslationEndpoint::Custom {
+                api_base_url: ApiBaseUrl::parse("https://example.com/v1")
+                    .map_err(AppError::config)?,
+            },
+        ), "kind")?,
+        "translationInputShapes": serialized_wire_values(exhaustive_values!(TranslationInputShape;
+            TranslationInputShape::CompletedSourceSnapshots => TranslationInputShape::CompletedSourceSnapshots,
         ))?,
         "captionBoundaryOwners": serialized_wire_values(exhaustive_values!(CaptionBoundaryOwner;
             CaptionBoundaryOwner::Application => CaptionBoundaryOwner::Application,
@@ -167,6 +193,7 @@ fn closed_rust_wire_values_match_the_shared_vocabulary() -> AppResult<()> {
         "runtimePendingGenerationChanges": serialized_wire_values(exhaustive_values!(PendingGenerationChange;
             PendingGenerationChange::Microphone => PendingGenerationChange::Microphone,
             PendingGenerationChange::Recognition => PendingGenerationChange::Recognition,
+            PendingGenerationChange::Translation => PendingGenerationChange::Translation,
             PendingGenerationChange::Credential => PendingGenerationChange::Credential,
             PendingGenerationChange::ChatboxOutput => PendingGenerationChange::ChatboxOutput,
             PendingGenerationChange::Publication => PendingGenerationChange::Publication,
@@ -194,11 +221,26 @@ fn closed_rust_wire_values_match_the_shared_vocabulary() -> AppResult<()> {
 }
 
 #[test]
-fn shared_v1_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Error> {
-    let mut config = AppConfig::default();
-    config.recognition.expected_languages = vec!["zh".to_string(), "en".to_string()];
-    config.recognition.path = RecognitionPath::OpenAiGptLiveTranscribe;
-    config.publication.mode = PublicationMode::Live;
+fn shared_v2_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Error> {
+    let config = serde_json::from_value::<AppConfig>(serde_json::json!({
+        "schemaVersion": 2,
+        "audio": { "inputDeviceId": null },
+        "recognition": {
+            "path": "openai/gpt-live-transcribe",
+            "expectedLanguages": ["zh", "en"]
+        },
+        "translation": {
+            "path": "openai/responses-completed-text",
+            "target": "zh-Hans",
+            "endpoint": {
+                "kind": "custom",
+                "apiBaseUrl": "https://example.com/v1"
+            }
+        },
+        "osc": { "host": "127.0.0.1", "port": 9000, "enabled": true },
+        "publication": { "mode": "live", "content": "sourceOnly" },
+        "ui": { "showOngoingPreview": true }
+    }))?;
     let caption_pipeline_plan = plan_caption_pipeline(&config);
     let snapshot = RuntimeControlSnapshot {
         contract_version: RUNTIME_CONTROL_CONTRACT_VERSION,
@@ -212,11 +254,18 @@ fn shared_v1_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Err
             revision: 4,
             config: config.clone(),
             caption_pipeline_plan: caption_pipeline_plan.clone(),
-            credentials: vec![CredentialStatus::Configured {
-                id: CredentialId::OpenAi,
-                storage: CredentialStorage::SystemCredentialStore,
-                display_suffix: Some("abcd".to_string()),
-            }],
+            credentials: vec![
+                CredentialStatus::Configured {
+                    id: CredentialId::OpenAi,
+                    storage: CredentialStorage::SystemCredentialStore,
+                    display_suffix: Some("abcd".to_string()),
+                },
+                CredentialStatus::Configured {
+                    id: CredentialId::CustomTranslation,
+                    storage: CredentialStorage::SystemCredentialStore,
+                    display_suffix: Some("wxyz".to_string()),
+                },
+            ],
         },
         generation: Some(RuntimeGenerationSnapshot {
             id: 3,
@@ -224,22 +273,23 @@ fn shared_v1_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Err
             started_from_config_revision: 4,
             selection: RuntimeGenerationSelection::from(&config),
             caption_pipeline_plan,
-            credential: Some(RuntimeGenerationCredentialSnapshot {
+            credentials: vec![RuntimeGenerationCredentialSnapshot {
                 id: CredentialId::OpenAi,
                 storage: CredentialStorage::SystemCredentialStore,
                 display_suffix: Some("abcd".to_string()),
                 revision: 2,
-            }),
+            }],
             chatbox_publication: ChatboxPublicationSnapshot::Ready {
                 host: "127.0.0.1".to_string(),
                 port: 9000,
             },
             uploads_microphone_audio: true,
+            uploads_source_text: false,
         }),
         pending_generation_changes: Vec::new(),
     };
     let expected = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../contracts/runtime-control-snapshot-v1.json"
+        "../../contracts/runtime-control-snapshot-v2.json"
     ))?;
 
     assert_eq!(serde_json::to_value(snapshot)?, expected);

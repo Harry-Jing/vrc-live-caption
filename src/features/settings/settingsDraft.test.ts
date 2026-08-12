@@ -1,18 +1,22 @@
 import { nextTick, ref } from "vue";
 import { expect, test } from "vitest";
-import type { AppConfig } from "../../runtime/appConfig";
+import {
+  APP_CONFIG_SCHEMA_VERSION,
+  type AppConfig,
+} from "../../runtime/appConfig";
 import { useSettingsDraft } from "./settingsDraft";
 
 function appConfig(): AppConfig {
   return {
-    schemaVersion: 1,
+    schemaVersion: APP_CONFIG_SCHEMA_VERSION,
     audio: { inputDeviceId: null },
     recognition: {
       path: "openai/gpt-live-transcribe",
       expectedLanguages: ["zh", "en"],
     },
+    translation: null,
     osc: { host: "127.0.0.1", port: 9_000, enabled: true },
-    publication: { mode: "live" },
+    publication: { mode: "live", content: "sourceOnly" },
     ui: { showOngoingPreview: true },
   };
 }
@@ -117,7 +121,9 @@ test("normalizes a detached save payload and retains the saved port fallback", (
 
   expect(next).toMatchObject({
     recognition: { expectedLanguages: ["zh-CN", "EN"] },
+    translation: null,
     osc: { host: "vrchat.local", port: 9_000 },
+    publication: { mode: "live", content: "sourceOnly" },
   });
   expect(next).not.toBe(settings.draft.value);
   expect(settings.draft.value.recognition.expectedLanguages).toEqual([

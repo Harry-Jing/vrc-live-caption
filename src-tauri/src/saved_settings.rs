@@ -5,14 +5,54 @@
 //! editable defaults while carrying an explicit review requirement back to
 //! the desktop state; secrets never enter this module.
 
-use crate::config::{APP_CONFIG_SCHEMA_VERSION, AppConfig};
+use crate::config::{
+    APP_CONFIG_SCHEMA_VERSION, AppConfig, AudioConfig, ContentSelection, OscConfig,
+    PublicationConfig, PublicationMode, RecognitionConfig, UiConfig,
+};
 use crate::error::{AppError, AppResult};
+use serde::Deserialize;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Runtime};
 
 const CONFIG_FILE_NAME: &str = "config.json";
+const APP_CONFIG_V1_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AppConfigV1 {
+    schema_version: u32,
+    audio: AudioConfig,
+    recognition: RecognitionConfig,
+    osc: OscConfig,
+    publication: PublicationConfigV1,
+    ui: UiConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PublicationConfigV1 {
+    mode: PublicationMode,
+}
+
+impl From<AppConfigV1> for AppConfig {
+    fn from(config: AppConfigV1) -> Self {
+        debug_assert_eq!(config.schema_version, APP_CONFIG_V1_SCHEMA_VERSION);
+        Self {
+            schema_version: APP_CONFIG_SCHEMA_VERSION,
+            audio: config.audio,
+            recognition: config.recognition,
+            translation: None,
+            osc: config.osc,
+            publication: PublicationConfig {
+                mode: config.publication.mode,
+                content: ContentSelection::SourceOnly,
+            },
+            ui: config.ui,
+        }
+    }
+}
 
 pub(crate) enum SavedSettingsLoad {
     Ready(AppConfig),
@@ -108,13 +148,22 @@ fn parse_valid_config(contents: &str) -> AppResult<AppConfig> {
         .ok_or_else(|| {
             AppError::config_io("Failed to parse app config: schemaVersion must be an integer.")
         })?;
-    if schema_version != u64::from(APP_CONFIG_SCHEMA_VERSION) {
-        return Err(AppError::config_io(format!(
-            "Failed to parse app config: unsupported schema version {schema_version}."
-        )));
-    }
-    let config = serde_json::from_value::<AppConfig>(value)
-        .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?;
+    let config = match schema_version {
+        version if version == u64::from(APP_CONFIG_V1_SCHEMA_VERSION) => serde_json::from_value::<
+            AppConfigV1,
+        >(value)
+        .map(AppConfig::from)
+        .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?,
+        version if version == u64::from(APP_CONFIG_SCHEMA_VERSION) => serde_json::from_value::<
+            AppConfig,
+        >(value)
+        .map_err(|error| AppError::config_io(format!("Failed to parse app config: {error}.")))?,
+        _ => {
+            return Err(AppError::config_io(format!(
+                "Failed to parse app config: unsupported schema version {schema_version}."
+            )));
+        }
+    };
 
     config.validate()?;
 

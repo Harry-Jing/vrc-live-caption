@@ -49,6 +49,65 @@ fn missing_saved_settings_load_editable_defaults_without_review() -> AppResult<(
 }
 
 #[test]
+fn supported_v1_settings_migrate_to_v2_in_memory_without_rewriting_the_file() -> AppResult<()> {
+    let directory = TestSettingsDirectory::new("v1-migration")?;
+    let path = directory.config_path();
+    let contents = serde_json::json!({
+        "schemaVersion": 1,
+        "audio": { "inputDeviceId": "saved-device" },
+        "recognition": {
+            "path": "openai/gpt-live-transcribe",
+            "expectedLanguages": ["zh", "en"]
+        },
+        "osc": { "host": "192.0.2.25", "port": 9001, "enabled": false },
+        "publication": { "mode": "live" },
+        "ui": { "showOngoingPreview": false }
+    })
+    .to_string();
+    fs::write(&path, &contents).map_err(|error| {
+        AppError::config_io(format!(
+            "Failed to write V1 migration fixture at {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    let migrated = match load_from_path(path.clone())? {
+        SavedSettingsLoad::Ready(config) => config,
+        SavedSettingsLoad::DefaultsRequireReview { .. } => {
+            return Err(AppError::state(
+                "Supported V1 settings unexpectedly required review.",
+            ));
+        }
+    };
+    let value = serde_json::to_value(migrated).map_err(|error| {
+        AppError::state(format!("Failed to serialize migrated config: {error}"))
+    })?;
+
+    assert_eq!(value["schemaVersion"], serde_json::json!(2));
+    assert_eq!(value["audio"]["inputDeviceId"], "saved-device");
+    assert_eq!(value["recognition"]["path"], "openai/gpt-live-transcribe");
+    assert_eq!(
+        value["recognition"]["expectedLanguages"],
+        serde_json::json!(["zh", "en"])
+    );
+    assert_eq!(value["osc"]["host"], "192.0.2.25");
+    assert_eq!(value["osc"]["port"], 9001);
+    assert_eq!(value["osc"]["enabled"], false);
+    assert_eq!(value["publication"]["mode"], "live");
+    assert_eq!(value["publication"]["content"], "sourceOnly");
+    assert_eq!(value["translation"], serde_json::Value::Null);
+    assert_eq!(value["ui"]["showOngoingPreview"], false);
+    assert_eq!(
+        fs::read_to_string(path).map_err(|error| {
+            AppError::config_io(format!("Failed to reread V1 migration fixture: {error}"))
+        })?,
+        contents
+    );
+
+    Ok(())
+}
+
+#[test]
 fn invalid_saved_settings_load_defaults_with_review_context() -> AppResult<()> {
     let directory = TestSettingsDirectory::new("invalid")?;
     let path = directory.config_path();
@@ -80,11 +139,11 @@ fn invalid_saved_settings_load_defaults_with_review_context() -> AppResult<()> {
 }
 
 #[test]
-fn current_v1_settings_save_and_load_through_the_temporary_path() -> AppResult<()> {
+fn current_v2_settings_save_and_load_through_the_temporary_path() -> AppResult<()> {
     let directory = TestSettingsDirectory::new("save")?;
     let path = directory.config_path();
     let mut config = AppConfig::default();
-    assert_eq!(config.schema_version, 1);
+    assert_eq!(config.schema_version, 2);
     config.audio.input_device_id = Some("saved-device".to_string());
 
     save_to_path(&path, &config)?;
@@ -95,6 +154,77 @@ fn current_v1_settings_save_and_load_through_the_temporary_path() -> AppResult<(
         SavedSettingsLoad::DefaultsRequireReview { .. } => {
             return Err(AppError::state(
                 "Freshly saved settings unexpectedly required review.",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn custom_translation_v2_round_trips_with_the_exact_persisted_shape() -> AppResult<()> {
+    let directory = TestSettingsDirectory::new("custom-translation-round-trip")?;
+    let path = directory.config_path();
+    let mut config = AppConfig::default();
+    config.audio.input_device_id = Some("translation-device".to_string());
+    config.recognition.path = crate::config::RecognitionPath::OpenAiGptLiveTranscribe;
+    config.recognition.expected_languages = vec!["zh".to_string(), "en".to_string()];
+    config.translation = Some(crate::config::TranslationConfig {
+        path: crate::config::TranslationPath::OpenAiResponsesCompletedText,
+        target: crate::config::TranslationTarget::SimplifiedChinese,
+        endpoint: crate::config::TranslationEndpoint::Custom {
+            api_base_url: crate::config::ApiBaseUrl::parse(
+                "https://translation.example.test/api/v1",
+            )
+            .map_err(AppError::config)?,
+        },
+    });
+    config.osc.host = "192.0.2.25".to_string();
+    config.osc.port = 9001;
+    config.osc.enabled = false;
+    config.publication.content = ContentSelection::Bilingual;
+    config.ui.show_ongoing_preview = false;
+
+    save_to_path(&path, &config)?;
+
+    let persisted_contents = fs::read_to_string(&path).map_err(|error| {
+        AppError::config_io(format!(
+            "Failed to read Custom Translation settings at {}: {error}",
+            path.display()
+        ))
+    })?;
+    let persisted =
+        serde_json::from_str::<serde_json::Value>(&persisted_contents).map_err(|error| {
+            AppError::state(format!("Failed to parse persisted test config: {error}"))
+        })?;
+    assert_eq!(
+        persisted,
+        serde_json::json!({
+            "schemaVersion": 2,
+            "audio": { "inputDeviceId": "translation-device" },
+            "recognition": {
+                "path": "openai/gpt-live-transcribe",
+                "expectedLanguages": ["zh", "en"]
+            },
+            "translation": {
+                "path": "openai/responses-completed-text",
+                "target": "zh-Hans",
+                "endpoint": {
+                    "kind": "custom",
+                    "apiBaseUrl": "https://translation.example.test/api/v1"
+                }
+            },
+            "osc": { "host": "192.0.2.25", "port": 9001, "enabled": false },
+            "publication": { "mode": "completed", "content": "bilingual" },
+            "ui": { "showOngoingPreview": false }
+        })
+    );
+
+    match load_from_path(path)? {
+        SavedSettingsLoad::Ready(saved) => assert_eq!(saved, config),
+        SavedSettingsLoad::DefaultsRequireReview { .. } => {
+            return Err(AppError::state(
+                "Freshly saved Custom Translation settings unexpectedly required review.",
             ));
         }
     }
@@ -166,7 +296,7 @@ fn failed_temporary_write_preserves_existing_settings() -> AppResult<()> {
 fn default_config_serializes_schema_version() -> Result<(), serde_json::Error> {
     let value = serde_json::to_value(AppConfig::default())?;
 
-    assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(1)));
+    assert_eq!(value.get("schemaVersion"), Some(&serde_json::json!(2)));
     assert_eq!(
         value.pointer("/recognition/path"),
         Some(&serde_json::json!("openai/gpt-transcribe"))
@@ -177,6 +307,11 @@ fn default_config_serializes_schema_version() -> Result<(), serde_json::Error> {
         value.pointer("/publication/mode"),
         Some(&serde_json::json!("completed"))
     );
+    assert_eq!(
+        value.pointer("/publication/content"),
+        Some(&serde_json::json!("sourceOnly"))
+    );
+    assert_eq!(value.get("translation"), Some(&serde_json::Value::Null));
     assert!(value.pointer("/osc/minIntervalMs").is_none());
 
     Ok(())
@@ -196,6 +331,19 @@ fn current_config_round_trips_without_compatibility_defaults() -> AppResult<()> 
     let reparsed = parse_valid_config(&serialized)?;
 
     assert_eq!(reparsed, config);
+    Ok(())
+}
+
+#[test]
+fn current_v2_requires_an_explicit_translation_field() -> AppResult<()> {
+    let mut value = serde_json::to_value(AppConfig::default())
+        .map_err(|error| AppError::state(format!("Failed to build V2 test config: {error}")))?;
+    value
+        .as_object_mut()
+        .ok_or_else(|| AppError::state("V2 test config was not an object."))?
+        .remove("translation");
+
+    assert!(parse_valid_config(&value.to_string()).is_err());
     Ok(())
 }
 
@@ -273,7 +421,7 @@ fn parse_valid_config_still_rejects_other_unknown_fields() -> AppResult<()> {
 fn parse_valid_config_rejects_unsupported_schema_version() -> AppResult<()> {
     let mut value = serde_json::to_value(AppConfig::default())
         .map_err(|error| AppError::config(format!("Failed to build test JSON: {error}")))?;
-    value["schemaVersion"] = serde_json::json!(2);
+    value["schemaVersion"] = serde_json::json!(3);
 
     assert!(parse_valid_config(&value.to_string()).is_err());
     Ok(())

@@ -4,6 +4,7 @@ import { CAPTION_LANES, CAPTION_STATES } from "../captionAggregate";
 import {
   CAPTION_BOUNDARY_OWNERS,
   CAPTION_UNIT_BEHAVIORS,
+  CONTENT_SELECTIONS,
   LANE_UPDATE_BEHAVIORS,
   PUBLICATION_INCOMPATIBILITY_REASONS,
   PUBLICATION_MODES,
@@ -12,6 +13,10 @@ import {
   RECOGNITION_PATHS,
   RESOLVED_PUBLICATION_TIMINGS,
   REVISION_BEHAVIORS,
+  TRANSLATION_ENDPOINT_KINDS,
+  TRANSLATION_INPUT_SHAPES,
+  TRANSLATION_PATHS,
+  TRANSLATION_TARGETS,
 } from "../captionPipeline";
 import {
   CHATBOX_PUBLICATION_STATES,
@@ -38,8 +43,13 @@ test("closed frontend wire values match the shared vocabulary", () => {
     captionLanes: CAPTION_LANES,
     captionStates: CAPTION_STATES,
     publicationModes: PUBLICATION_MODES,
+    contentSelections: CONTENT_SELECTIONS,
     recognitionPaths: RECOGNITION_PATHS,
     recognitionInputShapes: RECOGNITION_INPUT_SHAPES,
+    translationPaths: TRANSLATION_PATHS,
+    translationTargets: TRANSLATION_TARGETS,
+    translationEndpointKinds: TRANSLATION_ENDPOINT_KINDS,
+    translationInputShapes: TRANSLATION_INPUT_SHAPES,
     captionBoundaryOwners: CAPTION_BOUNDARY_OWNERS,
     captionUnitBehaviors: CAPTION_UNIT_BEHAVIORS,
     laneUpdateBehaviors: LANE_UPDATE_BEHAVIORS,

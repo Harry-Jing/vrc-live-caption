@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import captionAggregateFixture from "../../../contracts/caption-aggregate-snapshot-v1.json?raw";
-import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v1.json?raw";
+import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v2.json?raw";
 import type { CaptionAggregateSnapshot } from "../captionAggregate";
 import type {
   AppGateway,

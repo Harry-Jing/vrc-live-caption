@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v1.json?raw";
+import runtimeControlFixture from "../../../contracts/runtime-control-snapshot-v2.json?raw";
 import {
   decodeRuntimeControlSnapshot,
   RuntimeControlContractError,
@@ -8,9 +8,217 @@ import {
 const fixtureJson = JSON.parse(runtimeControlFixture) as unknown;
 const completePayload = decodeRuntimeControlSnapshot(fixtureJson);
 
+function activeCustomTranslationPayload() {
+  const generation = completePayload.generation;
+  if (
+    generation === null ||
+    completePayload.desired.config.translation === null
+  ) {
+    throw new Error(
+      "V2 fixture must contain a generation and saved Translation.",
+    );
+  }
+  const publication = { mode: "completed", content: "bilingual" } as const;
+  const translationProfile = {
+    path: "openai/responses-completed-text",
+    inputShape: "completedSourceSnapshots",
+    lanes: [
+      {
+        lane: "translation",
+        updates: "completedOnly",
+        revisions: "appendOnly",
+      },
+    ],
+  } as const;
+  const publicationPlan = {
+    state: "compatible",
+    mode: "completed",
+    timing: { timing: "completed" },
+    selectedLanes: ["source", "translation"],
+  } as const;
+  const captionPipelinePlan = {
+    ...completePayload.desired.captionPipelinePlan,
+    translation: translationProfile,
+    publication: publicationPlan,
+  };
+
+  return {
+    ...completePayload,
+    desired: {
+      ...completePayload.desired,
+      config: {
+        ...completePayload.desired.config,
+        publication,
+      },
+      captionPipelinePlan,
+    },
+    generation: {
+      ...generation,
+      selection: {
+        ...generation.selection,
+        translation: completePayload.desired.config.translation,
+        publication,
+      },
+      captionPipelinePlan,
+      credentials: [
+        ...generation.credentials,
+        {
+          id: "customTranslation",
+          storage: "systemCredentialStore",
+          displaySuffix: "wxyz",
+          revision: 1,
+        },
+      ],
+      uploadsSourceText: true,
+    },
+  };
+}
+
 describe("decodeRuntimeControlSnapshot", () => {
   test("decodes the shared Rust-serialized fixture", () => {
     expect(decodeRuntimeControlSnapshot(fixtureJson)).toEqual(fixtureJson);
+  });
+
+  test("rejects an active Translation profile while content is Source-only", () => {
+    const payload = {
+      ...completePayload,
+      desired: {
+        ...completePayload.desired,
+        captionPipelinePlan: {
+          ...completePayload.desired.captionPipelinePlan,
+          translation: {
+            path: "openai/responses-completed-text",
+            inputShape: "completedSourceSnapshots",
+            lanes: [
+              {
+                lane: "translation",
+                updates: "completedOnly",
+                revisions: "appendOnly",
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
+      "$.desired.captionPipelinePlan.translation",
+    );
+  });
+
+  test.each([
+    "http://example.com/v1",
+    "https://@example.com/v1",
+    "https://example.com/v1?",
+    "https://example.com/v1#",
+    "https://example.com/v1/responses/",
+    "https://example.com/v1/%72esponses",
+    "https://example.com/v1/respon%73es",
+    "https://example.com/v1/%",
+    "not a URL",
+  ])("rejects invalid Custom Translation API base URL %s", (apiBaseUrl) => {
+    const payload = {
+      ...completePayload,
+      desired: {
+        ...completePayload.desired,
+        config: {
+          ...completePayload.desired.config,
+          translation: {
+            ...completePayload.desired.config.translation,
+            endpoint: { kind: "custom", apiBaseUrl },
+          },
+        },
+      },
+    };
+
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
+      "$.desired.config.translation.endpoint.apiBaseUrl",
+    );
+  });
+
+  test("rejects Translation content without an explicit selection", () => {
+    const payload = {
+      ...completePayload,
+      desired: {
+        ...completePayload.desired,
+        config: {
+          ...completePayload.desired.config,
+          translation: null,
+          publication: {
+            ...completePayload.desired.config.publication,
+            content: "translationOnly",
+          },
+        },
+      },
+    };
+
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
+      "$.desired.config.translation",
+    );
+  });
+
+  test("decodes active Custom Translation with both used credential identities", () => {
+    const decoded = decodeRuntimeControlSnapshot(
+      activeCustomTranslationPayload(),
+    );
+
+    expect(decoded.generation).toMatchObject({
+      selection: { publication: { content: "bilingual" } },
+      credentials: [{ id: "openai" }, { id: "customTranslation" }],
+      uploadsMicrophoneAudio: true,
+      uploadsSourceText: true,
+    });
+  });
+
+  test("rejects Source-text upload disclosure that contradicts active Translation", () => {
+    const payload = activeCustomTranslationPayload();
+    payload.generation.uploadsSourceText = false;
+
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
+      "$.generation.uploadsSourceText",
+    );
+  });
+
+  test("rejects a non-null generation Translation selection for Source-only content", () => {
+    const generation = completePayload.generation;
+    const translation = completePayload.desired.config.translation;
+    if (generation === null || translation === null) {
+      throw new Error(
+        "V2 fixture must contain a generation and saved Translation.",
+      );
+    }
+    const payload = {
+      ...completePayload,
+      generation: {
+        ...generation,
+        selection: { ...generation.selection, translation },
+        credentials: [
+          ...generation.credentials,
+          {
+            id: "customTranslation",
+            storage: "systemCredentialStore",
+            displaySuffix: "wxyz",
+            revision: 1,
+          },
+        ],
+        uploadsSourceText: true,
+      },
+    };
+
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
+      "$.generation.selection.translation",
+    );
+  });
+
+  test("rejects active Custom Translation without its credential identity", () => {
+    const payload = activeCustomTranslationPayload();
+    payload.generation.credentials = payload.generation.credentials.filter(
+      (credential) => credential.id !== "customTranslation",
+    );
+
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
+      "$.generation.credentials",
+    );
   });
 
   test("rejects the old runtime control contract version", () => {
@@ -20,7 +228,7 @@ describe("decodeRuntimeControlSnapshot", () => {
         contractVersion: 4,
       }),
     ).toThrow(
-      "Invalid runtime control payload at $.contractVersion: expected 1.",
+      "Invalid runtime control payload at $.contractVersion: expected 2.",
     );
   });
 
@@ -34,7 +242,7 @@ describe("decodeRuntimeControlSnapshot", () => {
         },
       }),
     ).toThrow(
-      "Invalid runtime control payload at $.desired.config.schemaVersion: expected 1.",
+      "Invalid runtime control payload at $.desired.config.schemaVersion: expected 2.",
     );
   });
 
@@ -92,12 +300,16 @@ describe("decodeRuntimeControlSnapshot", () => {
       ...completePayload,
       desired: {
         ...completePayload.desired,
-        credentials: [{ state: "unconfigured", id: "openai" }],
+        credentials: [
+          { state: "unconfigured", id: "openai" },
+          { state: "unconfigured", id: "customTranslation" },
+        ],
       },
     };
 
     expect(decodeRuntimeControlSnapshot(payload).desired.credentials).toEqual([
       { state: "unconfigured", id: "openai" },
+      { state: "unconfigured", id: "customTranslation" },
     ]);
   });
 
@@ -110,13 +322,40 @@ describe("decodeRuntimeControlSnapshot", () => {
       ...completePayload,
       desired: {
         ...completePayload.desired,
-        credentials: [{ state: "unavailable", id: "openai", failure }],
+        credentials: [
+          { state: "unavailable", id: "openai", failure },
+          { state: "unconfigured", id: "customTranslation" },
+        ],
       },
     };
 
     expect(decodeRuntimeControlSnapshot(payload).desired.credentials).toEqual([
       { state: "unavailable", id: "openai", failure },
+      { state: "unconfigured", id: "customTranslation" },
     ]);
+  });
+
+  test.each([
+    {
+      name: "a missing Custom Translation status",
+      credentials: [{ state: "unconfigured", id: "openai" }],
+    },
+    {
+      name: "a duplicate OpenAI status",
+      credentials: [
+        { state: "unconfigured", id: "openai" },
+        { state: "unconfigured", id: "openai" },
+      ],
+    },
+  ])("rejects desired credentials with $name", ({ credentials }) => {
+    const payload = {
+      ...completePayload,
+      desired: { ...completePayload.desired, credentials },
+    };
+
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
+      "$.desired.credentials",
+    );
   });
 
   test("rejects credential fields that do not belong to the tagged state", () => {
@@ -140,6 +379,24 @@ describe("decodeRuntimeControlSnapshot", () => {
 
     expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
       "$.desired.credentials[0].configured",
+    );
+  });
+
+  test("rejects an environment-backed Custom Translation credential status", () => {
+    const payload = {
+      ...completePayload,
+      desired: {
+        ...completePayload.desired,
+        credentials: completePayload.desired.credentials.map((credential) =>
+          credential.id === "customTranslation"
+            ? { ...credential, storage: "environment" }
+            : credential,
+        ),
+      },
+    };
+
+    expect(() => decodeRuntimeControlSnapshot(payload)).toThrow(
+      "$.desired.credentials[1].storage",
     );
   });
 
@@ -188,7 +445,10 @@ describe("decodeRuntimeControlSnapshot", () => {
           ...completePayload.desired,
           config: {
             ...completePayload.desired.config,
-            publication: { mode },
+            publication: {
+              ...completePayload.desired.config.publication,
+              mode,
+            },
           },
           captionPipelinePlan: {
             ...completePayload.desired.captionPipelinePlan,
@@ -371,7 +631,10 @@ describe("decodeRuntimeControlSnapshot", () => {
           ...completePayload.desired,
           config: {
             ...completePayload.desired.config,
-            publication: { mode: "completed" },
+            publication: {
+              ...completePayload.desired.config.publication,
+              mode: "completed",
+            },
           },
         },
       },

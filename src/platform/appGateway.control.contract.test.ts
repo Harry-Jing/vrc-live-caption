@@ -15,9 +15,11 @@ import {
   type AppConfig,
 } from "../runtime/appConfig";
 import type { CaptionAggregateSnapshot } from "../runtime/captionAggregate";
-import type {
-  RuntimeControlSnapshot,
-  RuntimePendingGenerationChange,
+import {
+  RUNTIME_CONTROL_CONTRACT_VERSION,
+  type CredentialId,
+  type RuntimeControlSnapshot,
+  type RuntimePendingGenerationChange,
 } from "../runtime/runtimeControl";
 
 const initialConfig: AppConfig = {
@@ -27,8 +29,9 @@ const initialConfig: AppConfig = {
     path: "openai/gpt-transcribe",
     expectedLanguages: ["en"],
   },
+  translation: null,
   osc: { enabled: true, host: "127.0.0.1", port: 9000 },
-  publication: { mode: "completed" },
+  publication: { mode: "completed", content: "sourceOnly" },
   ui: { showOngoingPreview: true },
 };
 
@@ -38,20 +41,25 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
     Set<(event: Readonly<{ payload: unknown }>) => void>
   >();
   let snapshot: RuntimeControlSnapshot = {
-    contractVersion: 1,
+    contractVersion: RUNTIME_CONTROL_CONTRACT_VERSION,
     revision: 1,
     runtimeStatus: { status: "idle", timestampMs: 1 },
     desired: {
       revision: 1,
       config: initialConfig,
       captionPipelinePlan: previewCaptionPipelinePlan(initialConfig),
-      credentials: [],
+      credentials: [
+        { state: "unconfigured", id: "openai" },
+        { state: "unconfigured", id: "customTranslation" },
+      ],
     },
     generation: null,
     pendingGenerationChanges: [],
   };
-  let credentialRevision = 0;
-  let generationCredentialRevision: number | null = null;
+  const credentialRevisions: Record<CredentialId, number> = {
+    openai: 0,
+    customTranslation: 0,
+  };
   let captionAggregate: CaptionAggregateSnapshot = {
     contractVersion: 1,
     snapshotRevision: 0,
@@ -111,7 +119,21 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
     ) {
       pending.push("recognition");
     }
-    if (generationCredentialRevision !== credentialRevision) {
+    const desiredTranslation =
+      config.publication.content === "sourceOnly" ? null : config.translation;
+    if (
+      selection.publication.content === config.publication.content &&
+      JSON.stringify(selection.translation) !==
+        JSON.stringify(desiredTranslation)
+    ) {
+      pending.push("translation");
+    }
+    if (
+      snapshot.generation?.credentials.some(
+        (credential) =>
+          credential.revision !== credentialRevisions[credential.id],
+      )
+    ) {
       pending.push("credential");
     }
     if (
@@ -121,7 +143,10 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
     ) {
       pending.push("chatboxOutput");
     }
-    if (selection.publication.mode !== config.publication.mode) {
+    if (
+      selection.publication.mode !== config.publication.mode ||
+      selection.publication.content !== config.publication.content
+    ) {
       pending.push("publication");
     }
 
@@ -154,7 +179,13 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
             ),
           );
         }
-        generationCredentialRevision = credentialRevision;
+        if (snapshot.desired.captionPipelinePlan.translation !== null) {
+          return Promise.reject(
+            new Error(
+              "The selected Translation path is not implemented yet (translation.module_unavailable).",
+            ),
+          );
+        }
         const selected = snapshot.desired.config;
         snapshot = {
           ...snapshot,
@@ -167,17 +198,26 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
             selection: {
               audio: structuredClone(selected.audio),
               recognition: structuredClone(selected.recognition),
+              translation: null,
               osc: structuredClone(selected.osc),
               publication: structuredClone(selected.publication),
             },
             captionPipelinePlan: previewCaptionPipelinePlan(selected),
-            credential: null,
+            credentials: [
+              {
+                id: "openai",
+                storage: "systemCredentialStore",
+                displaySuffix: null,
+                revision: credentialRevisions.openai,
+              },
+            ],
             chatboxPublication: {
               state: selected.osc.enabled ? "ready" : "disabled",
               host: selected.osc.host,
               port: selected.osc.port,
             },
             uploadsMicrophoneAudio: true,
+            uploadsSourceText: false,
           },
         };
         emitCaptionAggregateUpdate({
@@ -187,7 +227,6 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
         });
         emitControl();
       } else if (command === TAURI_COMMANDS.stopRuntime) {
-        generationCredentialRevision = null;
         snapshot = {
           ...snapshot,
           revision: snapshot.revision + 1,
@@ -222,23 +261,26 @@ function createControlTauriIpcBridge(): TauriIpcBridge {
         };
         emitControl();
       } else if (command === TAURI_COMMANDS.saveCredential) {
+        const id = args?.["id"] as CredentialId;
         const secretArgument = args?.["secret"];
         const secret =
           typeof secretArgument === "string" ? secretArgument.trim() : "";
-        credentialRevision += 1;
+        credentialRevisions[id] += 1;
         snapshot = {
           ...snapshot,
           revision: snapshot.revision + 1,
           desired: {
             ...snapshot.desired,
-            credentials: [
-              {
-                state: "configured",
-                id: "openai",
-                storage: "systemCredentialStore",
-                displaySuffix: secret.slice(-4),
-              },
-            ],
+            credentials: snapshot.desired.credentials.map((credential) =>
+              credential.id === id
+                ? {
+                    state: "configured" as const,
+                    id,
+                    storage: "systemCredentialStore" as const,
+                    displaySuffix: secret.slice(-4),
+                  }
+                : credential,
+            ),
           },
           pendingGenerationChanges: pendingGenerationChanges(
             snapshot.desired.config,
@@ -306,7 +348,7 @@ test("TauriAppGateway rejects an invalid runtime-control pull", async () => {
   });
 
   await expect(gateway.getRuntimeControlSnapshot()).rejects.toThrow(
-    "Invalid runtime control payload at $.contractVersion: expected 1.",
+    "Invalid runtime control payload at $.contractVersion: expected 2.",
   );
 });
 
@@ -336,7 +378,7 @@ test.each([
   });
 
   await expect(invoke(gateway)).rejects.toThrow(
-    "Invalid runtime control payload at $.contractVersion: expected 1.",
+    "Invalid runtime control payload at $.contractVersion: expected 2.",
   );
 });
 
@@ -362,7 +404,7 @@ test("TauriAppGateway decodes runtime-control pushes before delivery", async () 
   );
 
   expect(() => deliver?.({ payload: { contractVersion: 4 } })).toThrow(
-    "Invalid runtime control payload at $.contractVersion: expected 1.",
+    "Invalid runtime control payload at $.contractVersion: expected 2.",
   );
   expect(received).toEqual([]);
   unsubscribe();
@@ -382,7 +424,7 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
     const started = await gateway.startRuntime();
     unsubscribe();
 
-    expect(initial.contractVersion).toBe(1);
+    expect(initial.contractVersion).toBe(2);
     expect(initial.generation).toBeNull();
     expect(started.generation?.selection.recognition.path).toBe(
       "openai/gpt-transcribe",
@@ -401,7 +443,7 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
         expectedLanguages: ["zh", "en"],
       },
       osc: { enabled: false, host: "192.0.2.30", port: 9012 },
-      publication: { mode: "live" },
+      publication: { mode: "live", content: "sourceOnly" },
       ui: { showOngoingPreview: false },
     };
 
@@ -445,11 +487,62 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
     expect(saved.pendingGenerationChanges).toContain("credential");
   });
 
+  test("keeps dormant Translation settings and credentials outside the active generation", async () => {
+    const gateway = create();
+    const dormantConfig: AppConfig = {
+      ...initialConfig,
+      translation: {
+        path: "openai/responses-completed-text",
+        target: "zh-Hans",
+        endpoint: {
+          kind: "custom",
+          apiBaseUrl: "https://example.com/v1",
+        },
+      },
+    };
+    await gateway.saveAppConfig(dormantConfig);
+    const started = await gateway.startRuntime();
+
+    const saved = await gateway.saveCredential(
+      "customTranslation",
+      "custom-test-abcd",
+    );
+
+    expect(started.generation?.selection.translation).toBeNull();
+    expect(started.generation?.credentials.map(({ id }) => id)).toEqual([
+      "openai",
+    ]);
+    expect(saved.desired.config.translation).toEqual(dormantConfig.translation);
+    expect(saved.pendingGenerationChanges).toEqual([]);
+  });
+
+  test("rejects active Translation before creating a generation", async () => {
+    const gateway = create();
+    const activeConfig: AppConfig = {
+      ...initialConfig,
+      translation: {
+        path: "openai/responses-completed-text",
+        target: "zh-Hans",
+        endpoint: { kind: "official" },
+      },
+      publication: { mode: "completed", content: "translationOnly" },
+    };
+    await gateway.saveAppConfig(activeConfig);
+
+    await expect(gateway.startRuntime()).rejects.toThrow(
+      /translation\.module_unavailable/u,
+    );
+
+    const retained = await gateway.getRuntimeControlSnapshot();
+    expect(retained.desired.config).toEqual(activeConfig);
+    expect(retained.generation).toBeNull();
+  });
+
   test("preserves an incompatible saved mode and returns the gateway plan", async () => {
     const gateway = create();
     const saved = await gateway.saveAppConfig({
       ...initialConfig,
-      publication: { mode: "live" },
+      publication: { mode: "live", content: "sourceOnly" },
     });
 
     expect(saved.desired.config.publication.mode).toBe("live");
@@ -464,7 +557,7 @@ describe.each(cases)("$name runtime control contract", ({ create }) => {
     const gateway = create();
     await gateway.saveAppConfig({
       ...initialConfig,
-      publication: { mode: "live" },
+      publication: { mode: "live", content: "sourceOnly" },
     });
 
     await expect(gateway.startRuntime()).rejects.toThrow(/incompatible/u);

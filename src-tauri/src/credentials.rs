@@ -18,6 +18,7 @@ const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 // This persisted account identifier predates the service-credential vocabulary.
 // Keep it stable so upgrades continue to find users' existing API keys.
 const OPENAI_ACCOUNT: &str = "provider/openai/default/api-key";
+const CUSTOM_TRANSLATION_ACCOUNT: &str = "translation/custom/default/api-key";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +32,7 @@ pub(crate) enum CredentialStorage {
 pub(crate) enum CredentialId {
     #[serde(rename = "openai")]
     OpenAi,
+    CustomTranslation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -96,12 +98,16 @@ impl CredentialStatus {
 fn credential_status(id: CredentialId) -> CredentialStatus {
     match id {
         CredentialId::OpenAi => openai_credential_status(),
+        CredentialId::CustomTranslation => custom_translation_credential_status(),
     }
 }
 
 #[cfg(not(test))]
 pub(crate) fn credential_statuses() -> Vec<CredentialStatus> {
-    vec![credential_status(CredentialId::OpenAi)]
+    vec![
+        credential_status(CredentialId::OpenAi),
+        credential_status(CredentialId::CustomTranslation),
+    ]
 }
 
 #[cfg(test)]
@@ -109,7 +115,10 @@ pub(crate) fn credential_statuses() -> Vec<CredentialStatus> {
     // Unit tests must not open an operator's real credential store or trigger
     // an OS authorization prompt. Production builds use the implementation
     // above; credential-store behavior is isolated behind the credentials module.
-    vec![CredentialStatus::unconfigured(CredentialId::OpenAi)]
+    vec![
+        CredentialStatus::unconfigured(CredentialId::OpenAi),
+        CredentialStatus::unconfigured(CredentialId::CustomTranslation),
+    ]
 }
 
 pub(crate) fn save_credential(id: CredentialId, secret: String) -> AppResult<()> {
@@ -118,12 +127,14 @@ pub(crate) fn save_credential(id: CredentialId, secret: String) -> AppResult<()>
 
     match id {
         CredentialId::OpenAi => save_system_secret(OPENAI_ACCOUNT, &secret),
+        CredentialId::CustomTranslation => save_system_secret(CUSTOM_TRANSLATION_ACCOUNT, &secret),
     }
 }
 
 pub(crate) fn delete_credential(id: CredentialId) -> AppResult<()> {
     match id {
         CredentialId::OpenAi => delete_system_secret(OPENAI_ACCOUNT),
+        CredentialId::CustomTranslation => delete_system_secret(CUSTOM_TRANSLATION_ACCOUNT),
     }
 }
 
@@ -178,6 +189,19 @@ fn openai_credential_status() -> CredentialStatus {
                 )
             })
             .unwrap_or_else(|| CredentialStatus::unavailable(CredentialId::OpenAi, &error)),
+    }
+}
+
+#[cfg(not(test))]
+fn custom_translation_credential_status() -> CredentialStatus {
+    match read_system_secret(CUSTOM_TRANSLATION_ACCOUNT) {
+        Ok(Some(secret)) => CredentialStatus::configured(
+            CredentialId::CustomTranslation,
+            CredentialStorage::SystemCredentialStore,
+            &secret,
+        ),
+        Ok(None) => CredentialStatus::unconfigured(CredentialId::CustomTranslation),
+        Err(error) => CredentialStatus::unavailable(CredentialId::CustomTranslation, &error),
     }
 }
 
@@ -331,13 +355,39 @@ mod tests {
     }
 
     #[test]
-    fn test_credential_statuses_expose_only_openai_without_opening_the_real_store() {
+    fn test_credential_statuses_expose_both_ids_without_opening_the_real_store() {
         let statuses = credential_statuses();
-        assert_eq!(statuses.len(), 1);
-        let status = &statuses[0];
         assert_eq!(
-            status,
-            &CredentialStatus::Unconfigured {
+            statuses,
+            vec![
+                CredentialStatus::Unconfigured {
+                    id: CredentialId::OpenAi,
+                },
+                CredentialStatus::Unconfigured {
+                    id: CredentialId::CustomTranslation,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn custom_translation_credential_id_has_its_own_wire_value() {
+        let value = serde_json::to_value(CredentialStatus::unconfigured(
+            CredentialId::CustomTranslation,
+        ))
+        .unwrap_or_else(|error| serde_json::json!({ "serializationError": error.to_string() }));
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "state": "unconfigured",
+                "id": "customTranslation",
+            })
+        );
+        assert_ne!(CredentialId::CustomTranslation, CredentialId::OpenAi);
+        assert_eq!(
+            CredentialStatus::unconfigured(CredentialId::OpenAi),
+            CredentialStatus::Unconfigured {
                 id: CredentialId::OpenAi,
             }
         );
