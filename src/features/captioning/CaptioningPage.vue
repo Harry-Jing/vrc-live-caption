@@ -3,6 +3,7 @@ import { computed } from "vue";
 import CaptionPreview from "./CaptionPreview.vue";
 import MicrophoneLevelMeter from "./MicrophoneLevelMeter.vue";
 import RuntimeControls from "./RuntimeControls.vue";
+import TranslationActivity from "./TranslationActivity.vue";
 import { uiText } from "../../i18n/uiText";
 import { formatTime } from "../../i18n/format";
 import { isActiveRuntimeGenerationPhase } from "../../runtime/lifecycle";
@@ -33,6 +34,7 @@ const {
   runAction,
   runtimeFailure,
   runtimeStatus,
+  translationPresentation,
   visibleCaptionText,
 } = useRuntimeContext();
 
@@ -157,6 +159,13 @@ const currentRecognitionPath = computed(() =>
     ? currentGenerationSelection.value.recognition.path
     : (desiredConfig.value?.recognition.path ?? null),
 );
+
+const showTranslationActivity = computed(() =>
+  currentGeneration.value
+    ? translationPresentation.value.state !== "inactive"
+    : desiredConfig.value?.publication.content !== "sourceOnly" &&
+      desiredConfig.value !== null,
+);
 </script>
 
 <template>
@@ -223,7 +232,12 @@ const currentRecognitionPath = computed(() =>
       </template>
     </UAlert>
 
+    <TranslationActivity
+      v-if="showTranslationActivity"
+      :presentation="translationPresentation"
+    />
     <CaptionPreview
+      v-else
       :latest-completed-caption="latestCompletedCaption"
       :status="captionPreviewStatus"
       :text="visibleCaptionText"
@@ -331,7 +345,7 @@ const currentRecognitionPath = computed(() =>
           </template>
 
           <div class="grid gap-4 text-sm">
-            <div>
+            <div v-if="!showTranslationActivity">
               <p class="text-muted">
                 {{ uiText("captioning.recentActivity.latestCompletedCaption") }}
               </p>
@@ -343,7 +357,7 @@ const currentRecognitionPath = computed(() =>
               </p>
             </div>
 
-            <USeparator />
+            <USeparator v-if="!showTranslationActivity" />
 
             <div>
               <p class="text-muted">
