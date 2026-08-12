@@ -3,7 +3,9 @@
 mod aggregate;
 mod contract;
 
-pub(crate) use aggregate::{CaptionAggregateChange, CaptionAggregateStore, CaptionAggregateUpdate};
+pub(crate) use aggregate::{
+    CaptionAggregateChange, CaptionAggregateStore, CaptionAggregateUpdate, ReservedCompletedSource,
+};
 pub(crate) use contract::{CaptionAggregateSnapshot, CaptionLane, CaptionSnapshot, CaptionState};
 
 #[cfg(test)]

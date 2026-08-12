@@ -1,11 +1,6 @@
 use super::super::contract::SourceSnapshotRef;
 use super::*;
 
-struct SourceRefMismatch {
-    dimension: &'static str,
-    mutate: fn(&mut SourceSnapshotRef),
-}
-
 fn source_caption(
     generation: u64,
     stream_id: &str,
@@ -73,14 +68,17 @@ fn completed_source_lane_does_not_close_the_correlated_translation_lane()
         CaptionState::Completed,
         10,
     );
-    let source_update = store
-        .accept_caption(source.clone())?
+    let (source_update, reservation) = store
+        .accept_completed_source_for_translation(source.clone())?
         .ok_or_else(|| crate::error::AppError::state("Source lane was rejected."))?;
     assert!(source_update.snapshot.open_source_units.is_empty());
 
-    let translated = translation_caption(&source, "translation", CaptionState::Completed)?;
-    let update = store
-        .accept_caption(translated)?
+    let update = reservation
+        .complete_translation(
+            "translation".to_string(),
+            "zh".to_string(),
+            source.timestamp_ms.saturating_add(1),
+        )?
         .ok_or_else(|| crate::error::AppError::state("Translation lane was rejected."))?;
     let snapshot = update.snapshot;
 
@@ -99,64 +97,44 @@ fn completed_source_lane_does_not_close_the_correlated_translation_lane()
 }
 
 #[test]
-fn translation_must_reference_the_exact_completed_source_snapshot() -> crate::error::AppResult<()> {
+fn completed_source_reservation_rejects_non_terminal_or_non_source_captions()
+-> crate::error::AppResult<()> {
     let store = CaptionAggregateStore::default();
     let active = store
         .begin_generation(1)?
         .active_stream
         .ok_or_else(|| crate::error::AppError::state("Generation 1 was not active."))?;
-    store.start_unit(1, &active.stream_id, "speech-1".to_string(), 10)?;
+    store.start_unit(1, &active.stream_id, "ongoing".to_string(), 10)?;
 
-    let source = source_caption(
+    let ongoing = source_caption(
         1,
         &active.stream_id,
-        "speech-1",
+        "ongoing",
         "source",
-        CaptionState::Completed,
+        CaptionState::Ongoing,
         10,
     );
-    assert!(store.accept_caption(source.clone())?.is_some());
+    assert!(
+        store
+            .accept_completed_source_for_translation(ongoing.clone())?
+            .is_none()
+    );
+    assert!(store.accept_caption(ongoing.clone())?.is_some());
 
-    let mismatches = [
-        SourceRefMismatch {
-            dimension: "generation",
-            mutate: |source_ref| {
-                source_ref.generation = source_ref.generation.saturating_add(1);
-            },
-        },
-        SourceRefMismatch {
-            dimension: "stream",
-            mutate: |source_ref| {
-                source_ref.stream_id.push_str("-stale");
-            },
-        },
-        SourceRefMismatch {
-            dimension: "unit",
-            mutate: |source_ref| {
-                source_ref.unit_id.push_str("-stale");
-            },
-        },
-        SourceRefMismatch {
-            dimension: "revision",
-            mutate: |source_ref| {
-                source_ref.revision = source_ref.revision.saturating_add(1);
-            },
-        },
-    ];
-
-    for mismatch in mismatches {
-        let mut translated = translation_caption(&source, "translation", CaptionState::Completed)?;
-        let source_ref = translated.source_ref.as_mut().ok_or_else(|| {
-            crate::error::AppError::state("Translation did not reference source.")
-        })?;
-        (mismatch.mutate)(source_ref);
-
-        assert!(
-            store.accept_caption(translated)?.is_none(),
-            "translation with a mismatched sourceRef {} was accepted",
-            mismatch.dimension
-        );
-    }
+    let mut translation = ongoing;
+    translation.lane = CaptionLane::Translation;
+    translation.state = CaptionState::Completed;
+    translation.source_ref = Some(SourceSnapshotRef {
+        generation: 1,
+        stream_id: active.stream_id,
+        unit_id: "ongoing".to_string(),
+        revision: 1,
+    });
+    assert!(
+        store
+            .accept_completed_source_for_translation(translation)?
+            .is_none()
+    );
 
     Ok(())
 }
@@ -232,10 +210,18 @@ fn linked_translation_produces_the_shared_v1_aggregate_snapshot() -> crate::erro
         unit_started_at_ms: Some(1_000),
         timestamp_ms: 1_200,
     };
-    assert!(store.accept_caption(source.clone())?.is_some());
-
-    let translation = translation_caption(&source, "完整的有界转写。", CaptionState::Completed)?;
-    assert!(store.accept_caption(translation)?.is_some());
+    let (_, reservation) = store
+        .accept_completed_source_for_translation(source.clone())?
+        .ok_or_else(|| crate::error::AppError::state("Source was not reserved."))?;
+    assert!(
+        reservation
+            .complete_translation(
+                "完整的有界转写。".to_string(),
+                "zh".to_string(),
+                source.timestamp_ms.saturating_add(1),
+            )?
+            .is_some()
+    );
 
     let expected = serde_json::from_str::<serde_json::Value>(include_str!(
         "../../../contracts/caption-aggregate-snapshot-v1.json"
@@ -821,6 +807,283 @@ fn unit_admissions_return_the_exact_open_and_abort_changes() -> crate::error::Ap
         CaptionAggregateChange::SourceUnitAborted { ref unit_id } if unit_id == "speech-10"
     ));
     assert!(aborted.snapshot.open_source_units.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn completed_source_reservation_is_atomic_with_admission_and_pins_history()
+-> crate::error::AppResult<()> {
+    let store = CaptionAggregateStore::default();
+    let active = store
+        .begin_generation(11)?
+        .active_stream
+        .ok_or_else(|| crate::error::AppError::state("Generation 11 was not active."))?;
+
+    for index in 0_u64..7 {
+        assert!(
+            store
+                .start_unit(11, &active.stream_id, format!("unit-{index}"), index * 10,)?
+                .is_some()
+        );
+    }
+
+    let (_, first_reservation) = store
+        .accept_completed_source_for_translation(source_caption(
+            11,
+            &active.stream_id,
+            "unit-0",
+            "pinned source text",
+            CaptionState::Completed,
+            0,
+        ))?
+        .ok_or_else(|| crate::error::AppError::state("Source was not reserved."))?;
+    let (_, second_reservation) = store
+        .accept_completed_source_for_translation(source_caption(
+            11,
+            &active.stream_id,
+            "unit-1",
+            "second pinned source text",
+            CaptionState::Completed,
+            10,
+        ))?
+        .ok_or_else(|| crate::error::AppError::state("Second source was not reserved."))?;
+    {
+        let state = store.lock()?;
+        assert_eq!(
+            state
+                .pinned_sources
+                .iter()
+                .map(|source| (
+                    source.unit.generation,
+                    source.unit.stream_id.as_str(),
+                    source.unit.unit_id.as_str(),
+                    source.revision,
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (11, active.stream_id.as_str(), "unit-0", 1),
+                (11, active.stream_id.as_str(), "unit-1", 1),
+            ]
+        );
+    }
+    for index in 2_u64..7 {
+        assert!(
+            store
+                .accept_caption(source_caption(
+                    11,
+                    &active.stream_id,
+                    &format!("unit-{index}"),
+                    format!("caption {index}"),
+                    CaptionState::Completed,
+                    index * 10,
+                ))?
+                .is_some()
+        );
+    }
+
+    let pinned = store.snapshot()?;
+    assert_eq!(pinned.captions.len(), COMPLETED_UNIT_LIMIT + 2);
+    for unit_id in ["unit-0", "unit-1"] {
+        assert!(
+            pinned
+                .captions
+                .iter()
+                .any(|caption| caption.unit_id.as_deref() == Some(unit_id))
+        );
+    }
+
+    drop(first_reservation);
+
+    let one_released = store.snapshot()?;
+    assert_eq!(one_released.captions.len(), COMPLETED_UNIT_LIMIT + 1);
+    assert!(
+        one_released
+            .captions
+            .iter()
+            .all(|caption| caption.unit_id.as_deref() != Some("unit-0"))
+    );
+    assert!(
+        one_released
+            .captions
+            .iter()
+            .any(|caption| caption.unit_id.as_deref() == Some("unit-1"))
+    );
+
+    drop(second_reservation);
+
+    let all_released = store.snapshot()?;
+    assert_eq!(all_released.captions.len(), COMPLETED_UNIT_LIMIT);
+    assert!(
+        all_released
+            .captions
+            .iter()
+            .all(|caption| caption.unit_id.as_deref() != Some("unit-1"))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn reservation_constructs_the_exact_completed_translation_without_exposing_text_in_debug()
+-> crate::error::AppResult<()> {
+    let store = CaptionAggregateStore::default();
+    let active = store
+        .begin_generation(12)?
+        .active_stream
+        .ok_or_else(|| crate::error::AppError::state("Generation 12 was not active."))?;
+    store.start_unit(12, &active.stream_id, "speech-12".to_string(), 100)?;
+
+    let mut ongoing = source_caption(
+        12,
+        &active.stream_id,
+        "speech-12",
+        "draft",
+        CaptionState::Ongoing,
+        100,
+    );
+    ongoing.revision = 2;
+    assert!(store.accept_caption(ongoing.clone())?.is_some());
+    let source = CaptionSnapshot {
+        revision: 3,
+        text: "private completed source".to_string(),
+        state: CaptionState::Completed,
+        timestamp_ms: 130,
+        ..ongoing
+    };
+    let (_, reservation) = store
+        .accept_completed_source_for_translation(source.clone())?
+        .ok_or_else(|| crate::error::AppError::state("Source was not reserved."))?;
+
+    assert_eq!(reservation.source(), &source);
+    let debug = format!("{reservation:?}");
+    assert!(!debug.contains("private completed source"));
+    assert!(debug.contains("speech-12"));
+
+    let update = reservation
+        .complete_translation(
+            "private translation".to_string(),
+            "zh-Hans".to_string(),
+            150,
+        )?
+        .ok_or_else(|| crate::error::AppError::state("Translation was not finalized."))?;
+    let CaptionAggregateChange::CaptionAccepted(translation) = update.change else {
+        return Err(crate::error::AppError::state(
+            "Translation finalization returned the wrong change.",
+        ));
+    };
+
+    assert_eq!(translation.generation, 12);
+    assert_eq!(translation.stream_id, active.stream_id);
+    assert_eq!(translation.unit_id.as_deref(), Some("speech-12"));
+    assert_eq!(translation.lane, CaptionLane::Translation);
+    assert_eq!(translation.revision, 1);
+    assert_eq!(translation.text, "private translation");
+    assert_eq!(translation.state, CaptionState::Completed);
+    assert_eq!(translation.language.as_deref(), Some("zh-Hans"));
+    assert_eq!(translation.unit_started_at_ms, Some(100));
+    assert_eq!(translation.timestamp_ms, 150);
+    assert_eq!(
+        translation.source_ref,
+        Some(SourceSnapshotRef {
+            generation: 12,
+            stream_id: active.stream_id,
+            unit_id: "speech-12".to_string(),
+            revision: 3,
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+fn generic_caption_admission_cannot_bypass_a_completed_source_reservation()
+-> crate::error::AppResult<()> {
+    let store = CaptionAggregateStore::default();
+    let active = store
+        .begin_generation(13)?
+        .active_stream
+        .ok_or_else(|| crate::error::AppError::state("Generation 13 was not active."))?;
+    store.start_unit(13, &active.stream_id, "speech-13".to_string(), 10)?;
+    let source = source_caption(
+        13,
+        &active.stream_id,
+        "speech-13",
+        "source",
+        CaptionState::Completed,
+        10,
+    );
+    let (_, _reservation) = store
+        .accept_completed_source_for_translation(source.clone())?
+        .ok_or_else(|| crate::error::AppError::state("Source was not reserved."))?;
+
+    assert!(
+        store
+            .accept_caption(translation_caption(
+                &source,
+                "bypass",
+                CaptionState::Completed,
+            )?)?
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn closing_or_replacing_a_generation_invalidates_its_reservations_and_retrims_history()
+-> crate::error::AppResult<()> {
+    for replace_generation in [false, true] {
+        let store = CaptionAggregateStore::default();
+        let active = store
+            .begin_generation(14)?
+            .active_stream
+            .ok_or_else(|| crate::error::AppError::state("Generation 14 was not active."))?;
+        for index in 0_u64..6 {
+            store.start_unit(14, &active.stream_id, format!("unit-{index}"), index * 10)?;
+        }
+        let (_, reservation) = store
+            .accept_completed_source_for_translation(source_caption(
+                14,
+                &active.stream_id,
+                "unit-0",
+                "stale source",
+                CaptionState::Completed,
+                0,
+            ))?
+            .ok_or_else(|| crate::error::AppError::state("Source was not reserved."))?;
+        for index in 1_u64..6 {
+            store.accept_caption(source_caption(
+                14,
+                &active.stream_id,
+                &format!("unit-{index}"),
+                format!("caption {index}"),
+                CaptionState::Completed,
+                index * 10,
+            ))?;
+        }
+        assert_eq!(store.snapshot()?.captions.len(), COMPLETED_UNIT_LIMIT + 1);
+
+        if replace_generation {
+            store.begin_generation(15)?;
+        } else {
+            store.close_generation(14)?;
+        }
+
+        assert_eq!(store.snapshot()?.captions.len(), COMPLETED_UNIT_LIMIT);
+        assert!(
+            reservation
+                .complete_translation("late".to_string(), "zh-Hans".to_string(), 100)?
+                .is_none()
+        );
+        assert!(
+            store
+                .snapshot()?
+                .captions
+                .iter()
+                .all(|caption| caption.text != "late")
+        );
+    }
 
     Ok(())
 }
