@@ -1,3 +1,4 @@
+<!-- Title: type(optional-scope): concise summary; omit issue and pull-request numbers. -->
 <!-- Replace N with the leaf issue this pull request fully resolves. -->
 Closes #N
 
