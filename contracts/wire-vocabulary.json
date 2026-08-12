@@ -15,6 +15,21 @@
   "diagnosticSeverities": ["info", "warning", "error"],
   "captionLanes": ["source", "translation"],
   "captionStates": ["ongoing", "completed"],
+  "translationUnitStates": ["pending", "completed", "failed"],
+  "translationFailureReasons": [
+    "translation.provider_authentication_failed",
+    "translation.provider_permission_denied",
+    "translation.provider_invalid_request",
+    "translation.provider_rate_limited",
+    "translation.provider_usage_limit",
+    "translation.provider_unavailable",
+    "translation.invalid_output",
+    "translation.deadline_exceeded",
+    "translation.backpressure",
+    "translation.source_too_large",
+    "translation.stopped",
+    "translation.failed"
+  ],
   "publicationModes": ["completed", "live"],
   "contentSelections": ["sourceOnly", "translationOnly", "bilingual"],
   "recognitionPaths": ["openai/gpt-transcribe", "openai/gpt-live-transcribe"],
@@ -49,5 +64,6 @@
     "stopping",
     "error"
   ],
+  "runtimeGenerationTranslationStates": ["inactive", "active", "degraded"],
   "chatboxPublicationStates": ["disabled", "ready", "unavailable"]
 }

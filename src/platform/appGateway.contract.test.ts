@@ -61,11 +61,12 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
     timestampMs: 1,
   };
   let captionAggregate: CaptionAggregateSnapshot = {
-    contractVersion: 1,
+    contractVersion: 2,
     snapshotRevision: 0,
     activeStream: null,
     openSourceUnits: [],
     captions: [],
+    translationUnits: [],
   };
 
   function nextEventId(prefix: string) {
@@ -121,7 +122,7 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
     >,
   ) {
     captionAggregate = {
-      contractVersion: 1,
+      contractVersion: 2,
       snapshotRevision: captionAggregate.snapshotRevision + 1,
       ...next,
     };
@@ -200,6 +201,7 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
             host: selection.osc.host,
             port: selection.osc.port,
           },
+          translationState: { state: "inactive" },
           uploadsMicrophoneAudio: true,
           uploadsSourceText: false,
         };
@@ -212,6 +214,7 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
           captions: captionAggregate.captions.filter(
             (caption) => caption.state === "completed",
           ),
+          translationUnits: [],
         });
         emitStatus("starting", "Starting runtime");
         generation = { ...generation, phase: "running" };
@@ -244,6 +247,7 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
             captions: captionAggregate.captions.filter(
               (caption) => caption.state === "completed",
             ),
+            translationUnits: [],
           });
           generation = null;
           emitStatus("stopped", "Runtime stopped");

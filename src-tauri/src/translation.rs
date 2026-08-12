@@ -8,14 +8,13 @@
     not(test),
     allow(
         dead_code,
-        reason = "GitHub issue #11 integrates this Phase 5 core with Runtime in its next child slice."
+        reason = "GitHub issue #25 activates prepared Translation at desktop Start."
     )
 )]
 
-use crate::caption::CaptionAggregateUpdate;
-use crate::caption::ReservedCompletedSource;
+use crate::caption::{CaptionAggregateUpdate, ReservedCompletedSource, TranslationFailureReason};
 use crate::config::{TranslationConfig, TranslationPath, TranslationTarget};
-use crate::credentials::ResolvedCredential;
+use crate::credentials::{CredentialId, CredentialStorage, ResolvedCredential};
 use crate::error::{AppError, AppResult};
 use crate::host_resolver::HostResolver;
 use std::collections::VecDeque;
@@ -60,18 +59,17 @@ pub(crate) enum TranslationFailureClass {
 }
 
 impl TranslationFailureClass {
-    /// Stable provider-neutral code for later Runtime diagnostics and UI copy.
-    pub(crate) const fn code(self) -> &'static str {
+    const fn reason(self) -> TranslationFailureReason {
         match self {
-            Self::Authentication => "translation.provider_authentication_failed",
-            Self::PermissionDenied => "translation.provider_permission_denied",
-            Self::InvalidRequest => "translation.provider_invalid_request",
-            Self::RateLimited => "translation.provider_rate_limited",
-            Self::UsageLimit => "translation.provider_usage_limit",
-            Self::ServiceUnavailable => "translation.provider_unavailable",
-            Self::InvalidOutput => "translation.invalid_output",
-            Self::DeadlineExceeded => "translation.deadline_exceeded",
-            Self::Unknown => "translation.failed",
+            Self::Authentication => TranslationFailureReason::ProviderAuthenticationFailed,
+            Self::PermissionDenied => TranslationFailureReason::ProviderPermissionDenied,
+            Self::InvalidRequest => TranslationFailureReason::ProviderInvalidRequest,
+            Self::RateLimited => TranslationFailureReason::ProviderRateLimited,
+            Self::UsageLimit => TranslationFailureReason::ProviderUsageLimit,
+            Self::ServiceUnavailable => TranslationFailureReason::ProviderUnavailable,
+            Self::InvalidOutput => TranslationFailureReason::InvalidOutput,
+            Self::DeadlineExceeded => TranslationFailureReason::DeadlineExceeded,
+            Self::Unknown => TranslationFailureReason::Failed,
         }
     }
 }
@@ -84,6 +82,59 @@ pub(crate) enum TranslationSubmitError {
     InvalidSource,
     Closed,
     Stopped,
+}
+
+impl TranslationSubmitError {
+    const fn reason(self) -> TranslationFailureReason {
+        match self {
+            Self::OutstandingLimit | Self::RetainedSourceLimit => {
+                TranslationFailureReason::Backpressure
+            }
+            Self::SourceTooLarge => TranslationFailureReason::SourceTooLarge,
+            Self::Stopped => TranslationFailureReason::Stopped,
+            Self::InvalidSource | Self::Closed => TranslationFailureReason::Failed,
+        }
+    }
+}
+
+/// A rejected admission still owns the exact Aggregate terminalization right.
+/// `fail` records why before releasing the reservation; dropping the fallback
+/// capability records a stable stopped outcome rather than erasing pending.
+pub(crate) struct TranslationSubmissionRejection {
+    kind: TranslationSubmitError,
+    reservation: Box<ReservedCompletedSource>,
+}
+
+impl TranslationSubmissionRejection {
+    fn new(kind: TranslationSubmitError, reservation: ReservedCompletedSource) -> Self {
+        Self {
+            kind,
+            reservation: Box::new(reservation),
+        }
+    }
+
+    pub(crate) const fn kind(&self) -> TranslationSubmitError {
+        self.kind
+    }
+
+    pub(crate) const fn reason(&self) -> TranslationFailureReason {
+        self.kind.reason()
+    }
+
+    pub(crate) fn fail(self) -> AppResult<Option<CaptionAggregateUpdate>> {
+        let reason = self.reason();
+        (*self.reservation).fail_translation(reason)
+    }
+}
+
+impl fmt::Debug for TranslationSubmissionRejection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TranslationSubmissionRejection")
+            .field("kind", &self.kind)
+            .field("reservation", &self.reservation)
+            .finish()
+    }
 }
 
 pub(crate) enum TranslationTerminalOutcome {
@@ -145,9 +196,21 @@ impl fmt::Debug for CompletedTranslation {
 pub(crate) struct FailedTranslation {
     pub(crate) source_ref: TranslationSourceRef,
     pub(crate) class: TranslationFailureClass,
-    // Failure releases the Aggregate reservation and Source-byte budget before
-    // publication, but keeps its outstanding slot until observed or dropped.
+    reservation: Box<ReservedCompletedSource>,
+    // Failure keeps both budgets until the consumer atomically records the
+    // terminal Aggregate state or drops this one-shot capability.
     _permit: TranslationPermit,
+}
+
+impl FailedTranslation {
+    pub(crate) const fn reason(&self) -> TranslationFailureReason {
+        self.class.reason()
+    }
+
+    pub(crate) fn fail(self) -> AppResult<Option<CaptionAggregateUpdate>> {
+        let reason = self.reason();
+        (*self.reservation).fail_translation(reason)
+    }
 }
 
 impl fmt::Debug for FailedTranslation {
@@ -230,27 +293,92 @@ pub(crate) struct TranslationModule {
     worker: Option<JoinHandle<()>>,
 }
 
+/// Provider owner and metadata created from one credential-bound selection.
+///
+/// Its private fields prevent Runtime from relabeling a Module after the
+/// provider target, endpoint, and secret have already been captured.
+pub(crate) struct BoundTranslationModule {
+    selection: TranslationConfig,
+    credential_id: CredentialId,
+    credential_storage: CredentialStorage,
+    credential_display_suffix: Option<String>,
+    credential_revision: u64,
+    module: TranslationModule,
+    outcomes: TranslationOutcomeReceiver,
+}
+
+pub(crate) struct BoundTranslationParts {
+    pub(crate) selection: TranslationConfig,
+    pub(crate) credential_id: CredentialId,
+    pub(crate) credential_storage: CredentialStorage,
+    pub(crate) credential_display_suffix: Option<String>,
+    pub(crate) credential_revision: u64,
+    pub(crate) module: TranslationModule,
+    pub(crate) outcomes: TranslationOutcomeReceiver,
+}
+
+impl BoundTranslationModule {
+    pub(crate) fn into_parts(self) -> BoundTranslationParts {
+        BoundTranslationParts {
+            selection: self.selection,
+            credential_id: self.credential_id,
+            credential_storage: self.credential_storage,
+            credential_display_suffix: self.credential_display_suffix,
+            credential_revision: self.credential_revision,
+            module: self.module,
+            outcomes: self.outcomes,
+        }
+    }
+
+    #[cfg(test)]
+    fn stop_for_test(mut self) -> AppResult<()> {
+        self.module.stop()
+    }
+}
+
 /// Prepares the one Phase 5 completed-text path without activating Runtime.
 ///
 /// The credential remains bound to the endpoint that selected it, while the
 /// provider and transport stay private behind the provider-neutral owner.
 pub(crate) fn openai_responses_completed_text_module(
-    selection: &TranslationConfig,
+    selection: TranslationConfig,
     credential: ResolvedCredential,
+    credential_revision: u64,
     resolver: HostResolver,
-) -> AppResult<(TranslationModule, TranslationOutcomeReceiver)> {
+) -> AppResult<BoundTranslationModule> {
     match selection.path {
         TranslationPath::OpenAiResponsesCompletedText => {}
     }
+    let credential_id = credential.id;
+    let credential_storage = credential.storage;
+    let credential_display_suffix = credential.display_suffix.clone();
     let adapter =
         openai_responses::OpenAiResponsesAdapter::new(&selection.endpoint, credential, resolver)
             .map_err(|_| AppError::runtime("Failed to prepare the Translation HTTP adapter."))?;
-    TranslationModule::start(
+    let (module, outcomes) = TranslationModule::start(
         selection.target,
         Arc::new(adapter),
         PolicyDependencies::real(),
-    )
+    )?;
+    Ok(BoundTranslationModule {
+        selection,
+        credential_id,
+        credential_storage,
+        credential_display_suffix,
+        credential_revision,
+        module,
+        outcomes,
+    })
 }
+
+#[cfg(test)]
+#[path = "translation/test_support.rs"]
+mod test_support;
+
+#[cfg(test)]
+pub(crate) use test_support::{
+    TestTranslationControl, TestTranslationResult, translation_module_for_test,
+};
 
 impl TranslationModule {
     fn start(
@@ -307,15 +435,26 @@ impl TranslationModule {
     pub(crate) fn try_submit(
         &self,
         reservation: ReservedCompletedSource,
-    ) -> Result<(), TranslationSubmitError> {
+    ) -> Result<(), TranslationSubmissionRejection> {
         if self.shared.stopped.load(Ordering::SeqCst) {
-            return Err(TranslationSubmitError::Stopped);
+            return Err(TranslationSubmissionRejection::new(
+                TranslationSubmitError::Stopped,
+                reservation,
+            ));
         }
         let source_bytes = reservation.source().text.len();
         if source_bytes > SOURCE_BYTE_LIMIT {
-            return Err(TranslationSubmitError::SourceTooLarge);
+            return Err(TranslationSubmissionRejection::new(
+                TranslationSubmitError::SourceTooLarge,
+                reservation,
+            ));
         }
-        let source_ref = source_ref(&reservation).ok_or(TranslationSubmitError::InvalidSource)?;
+        let Some(source_ref) = source_ref(&reservation) else {
+            return Err(TranslationSubmissionRejection::new(
+                TranslationSubmitError::InvalidSource,
+                reservation,
+            ));
+        };
         let admitted_at = InstantPoint(self.shared_clock_now());
         self.try_submit_prepared(reservation, source_ref, admitted_at, source_bytes)
     }
@@ -326,31 +465,47 @@ impl TranslationModule {
         source_ref: TranslationSourceRef,
         admitted_at: InstantPoint,
         source_bytes: usize,
-    ) -> Result<(), TranslationSubmitError> {
-        let mut state = self
-            .shared
-            .state
-            .lock()
-            .map_err(|_| TranslationSubmitError::Stopped)?;
+    ) -> Result<(), TranslationSubmissionRejection> {
+        let mut state = match self.shared.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                return Err(TranslationSubmissionRejection::new(
+                    TranslationSubmitError::Stopped,
+                    reservation,
+                ));
+            }
+        };
         if self.shared.stopped.load(Ordering::SeqCst) {
-            return Err(TranslationSubmitError::Stopped);
+            return Err(TranslationSubmissionRejection::new(
+                TranslationSubmitError::Stopped,
+                reservation,
+            ));
         }
         if !state.accepting {
-            return Err(TranslationSubmitError::Closed);
+            return Err(TranslationSubmissionRejection::new(
+                TranslationSubmitError::Closed,
+                reservation,
+            ));
         }
         let now = self.shared.clock.now();
         if now.saturating_sub(admitted_at.0) >= TOTAL_DEADLINE {
-            return Err(TranslationSubmitError::Closed);
+            return Err(TranslationSubmissionRejection::new(
+                TranslationSubmitError::Closed,
+                reservation,
+            ));
         }
-        let permit =
-            TranslationBudget::try_acquire(&self.shared.budget, source_bytes).map_err(|limit| {
-                match limit {
+        let permit = match TranslationBudget::try_acquire(&self.shared.budget, source_bytes) {
+            Ok(permit) => permit,
+            Err(limit) => {
+                let kind = match limit {
                     TranslationBudgetLimit::Outstanding => TranslationSubmitError::OutstandingLimit,
                     TranslationBudgetLimit::RetainedSource => {
                         TranslationSubmitError::RetainedSourceLimit
                     }
-                }
-            })?;
+                };
+                return Err(TranslationSubmissionRejection::new(kind, reservation));
+            }
+        };
         state.next_job_id = state.next_job_id.saturating_add(1);
         let job_id = state.next_job_id;
         state.pending.push_back(TranslationJob {
@@ -370,15 +525,26 @@ impl TranslationModule {
         &self,
         reservation: ReservedCompletedSource,
         after_prepare: impl FnOnce(),
-    ) -> Result<(), TranslationSubmitError> {
+    ) -> Result<(), TranslationSubmissionRejection> {
         if self.shared.stopped.load(Ordering::SeqCst) {
-            return Err(TranslationSubmitError::Stopped);
+            return Err(TranslationSubmissionRejection::new(
+                TranslationSubmitError::Stopped,
+                reservation,
+            ));
         }
         let source_bytes = reservation.source().text.len();
         if source_bytes > SOURCE_BYTE_LIMIT {
-            return Err(TranslationSubmitError::SourceTooLarge);
+            return Err(TranslationSubmissionRejection::new(
+                TranslationSubmitError::SourceTooLarge,
+                reservation,
+            ));
         }
-        let source_ref = source_ref(&reservation).ok_or(TranslationSubmitError::InvalidSource)?;
+        let Some(source_ref) = source_ref(&reservation) else {
+            return Err(TranslationSubmissionRejection::new(
+                TranslationSubmitError::InvalidSource,
+                reservation,
+            ));
+        };
         let admitted_at = InstantPoint(self.shared_clock_now());
         after_prepare();
         self.try_submit_prepared(reservation, source_ref, admitted_at, source_bytes)
@@ -485,18 +651,6 @@ struct TranslationPermit {
     budget: Arc<TranslationBudget>,
     source_bytes: usize,
     active: bool,
-}
-
-impl TranslationPermit {
-    fn release_source_bytes(&mut self) {
-        if self.source_bytes == 0 {
-            return;
-        }
-        if let Ok(mut state) = self.budget.state.lock() {
-            state.source_bytes = state.source_bytes.saturating_sub(self.source_bytes);
-            self.source_bytes = 0;
-        }
-    }
 }
 
 impl Drop for TranslationPermit {
@@ -1105,13 +1259,13 @@ fn finish_failure(shared: &TranslationShared, job_id: u64, class: TranslationFai
     let Some(mut active) = state.active.take().filter(|active| active.job_id == job_id) else {
         return;
     };
-    // Failed work releases its Aggregate reservation before the observable
-    // terminal failure enters the outcome queue.
-    drop(active.reservation.take());
-    active.permit.release_source_bytes();
+    let Some(reservation) = active.reservation.take() else {
+        return;
+    };
     let outcome = TranslationTerminalOutcome::Failed(FailedTranslation {
         source_ref: active.source_ref,
         class,
+        reservation: Box::new(reservation),
         _permit: active.permit,
     });
     state
@@ -1132,11 +1286,13 @@ fn fail_closed_after_unconfirmed_timeout(shared: &TranslationShared) {
     }
     failed.append(&mut state.pending);
     for mut job in failed {
-        drop(job.reservation.take());
-        job.permit.release_source_bytes();
+        let Some(reservation) = job.reservation.take() else {
+            continue;
+        };
         let outcome = TranslationTerminalOutcome::Failed(FailedTranslation {
             source_ref: job.source_ref,
             class: TranslationFailureClass::DeadlineExceeded,
+            reservation: Box::new(reservation),
             _permit: job.permit,
         });
         state

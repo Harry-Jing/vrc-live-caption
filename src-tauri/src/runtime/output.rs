@@ -4,7 +4,8 @@
 //! admission, linearized App/Chatbox commits, and publication lifecycle.
 
 use crate::caption::{
-    CaptionAggregateSnapshot, CaptionAggregateStore, CaptionAggregateUpdate, CaptionSnapshot,
+    CaptionAggregateSnapshot, CaptionAggregateStore, CaptionAggregateUpdate, CaptionLane,
+    CaptionSnapshot, CaptionState, TranslationFailureReason,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::chatbox::{
@@ -19,13 +20,20 @@ use crate::events::{
 use crate::generation_fence::{GenerationCommitter, GenerationFence};
 use crate::host_resolver::HostResolver;
 use crate::recognition::{RecognitionEvent, RecognitionUnitAbortReason};
+use crate::translation::TranslationTerminalOutcome;
+use crate::wall_clock::unix_timestamp_ms;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, mpsc::TryRecvError};
 use tauri::{AppHandle, Runtime};
+
+use super::PreparedTranslation;
+use super::translation::{GenerationTranslation, TranslationAdmission};
 
 pub(super) use crate::chatbox::ChatboxPublicationInit;
 
 type CaptionAggregateReporter = Arc<dyn Fn(CaptionAggregateSnapshot) + Send + Sync>;
+const TRANSLATION_DRAIN_LIMIT: usize = 8;
 
 #[derive(Clone)]
 pub(crate) struct RuntimeGeneration {
@@ -35,13 +43,22 @@ pub(crate) struct RuntimeGeneration {
     caption_reporter: CaptionAggregateReporter,
     generation_fence: GenerationFence,
     work_cancelled: Arc<AtomicBool>,
+    translation: Option<Arc<Mutex<GenerationTranslation>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RecognitionEventSubmitOutcome {
     Accepted,
+    AcceptedWithTranslationFailure(TranslationFailureReason),
     Ignored,
     Stopped,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct TranslationDrainReport {
+    pub(super) applied: usize,
+    pub(super) ignored: usize,
+    pub(super) degradation: Option<TranslationFailureReason>,
 }
 
 impl RuntimeGeneration {
@@ -49,6 +66,29 @@ impl RuntimeGeneration {
         app: &AppHandle<R>,
         generation_id: u64,
         caption_aggregate: CaptionAggregateStore,
+    ) -> AppResult<Self> {
+        Self::activate_inner(app, generation_id, caption_aggregate, None)
+    }
+
+    pub(super) fn activate_with_translation<R: Runtime>(
+        app: &AppHandle<R>,
+        generation_id: u64,
+        caption_aggregate: CaptionAggregateStore,
+        translation: PreparedTranslation,
+    ) -> AppResult<Self> {
+        Self::activate_inner(
+            app,
+            generation_id,
+            caption_aggregate,
+            Some(translation.into_generation()),
+        )
+    }
+
+    fn activate_inner<R: Runtime>(
+        app: &AppHandle<R>,
+        generation_id: u64,
+        caption_aggregate: CaptionAggregateStore,
+        translation: Option<GenerationTranslation>,
     ) -> AppResult<Self> {
         let snapshot = caption_aggregate.begin_generation(generation_id)?;
         let active = snapshot.active_stream.as_ref().ok_or_else(|| {
@@ -74,6 +114,7 @@ impl RuntimeGeneration {
             caption_reporter,
             generation_fence: GenerationFence::new(),
             work_cancelled: Arc::new(AtomicBool::new(false)),
+            translation: translation.map(|translation| Arc::new(Mutex::new(translation))),
         })
     }
 
@@ -91,6 +132,7 @@ impl RuntimeGeneration {
             caption_reporter: Arc::new(|_| {}),
             generation_fence: GenerationFence::new(),
             work_cancelled: Arc::new(AtomicBool::new(false)),
+            translation: None,
         }
     }
 
@@ -154,14 +196,11 @@ impl RuntimeGeneration {
         // after those commits finish; worker join happens at the caller.
         let publication_result = self.close_publication_at_boundary(publication, reason);
         let aggregate_result = self.close_caption_aggregate_at_boundary();
+        // Clearing Aggregate pending state must win before Module shutdown
+        // drops any still-owned reservation capabilities.
+        let translation_result = self.stop_translation();
 
-        match (publication_result, aggregate_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(publication_error), Err(aggregate_error)) => Err(AppError::state(format!(
-                "Runtime outputs could not close cleanly: {publication_error} {aggregate_error}"
-            ))),
-        }
+        combine_output_close_results(publication_result, aggregate_result, translation_result)
     }
 
     pub(crate) fn commit_if_active(&self, commit: impl FnOnce()) -> AppResult<bool> {
@@ -318,14 +357,133 @@ impl RuntimeGeneration {
                 }
             }
             RecognitionEvent::Caption(caption) => {
-                let Some(update) = self.accept_caption(caption)? else {
-                    return Ok(RecognitionEventSubmitOutcome::Ignored);
-                };
-                self.report_accepted_update(app, publisher, update);
+                return self.submit_caption(app, publisher, caption);
             }
         }
 
         Ok(RecognitionEventSubmitOutcome::Accepted)
+    }
+
+    fn submit_caption<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        publisher: Option<&ChatboxPublication>,
+        caption: CaptionSnapshot,
+    ) -> AppResult<RecognitionEventSubmitOutcome> {
+        let needs_translation = caption.lane == CaptionLane::Source
+            && caption.state == CaptionState::Completed
+            && self.translation.is_some();
+        if !needs_translation {
+            let Some(update) = self.accept_caption(caption)? else {
+                return Ok(RecognitionEventSubmitOutcome::Ignored);
+            };
+            self.report_accepted_update(app, publisher, update);
+            return Ok(RecognitionEventSubmitOutcome::Accepted);
+        }
+
+        let translation = self
+            .translation
+            .as_ref()
+            .ok_or_else(|| AppError::state("Active Translation owner was unavailable."))?;
+        // Take the owner lock before reserving the Source. If ownership is
+        // poisoned, the Aggregate remains untouched instead of acquiring a
+        // pending marker that no Module can consume.
+        let mut translation = translation
+            .lock()
+            .map_err(|_| AppError::state("Runtime Translation owner lock was poisoned."))?;
+        let Some((source_update, reservation)) = self
+            .caption_aggregate
+            .accept_completed_source_for_translation(caption)?
+        else {
+            return Ok(RecognitionEventSubmitOutcome::Ignored);
+        };
+        self.report_accepted_update(app, publisher, source_update);
+
+        match translation.submit(reservation)? {
+            TranslationAdmission::Submitted => Ok(RecognitionEventSubmitOutcome::Accepted),
+            TranslationAdmission::Rejected { reason, update } => {
+                if let Some(update) = update {
+                    self.report_accepted_update(app, publisher, *update);
+                }
+                Ok(RecognitionEventSubmitOutcome::AcceptedWithTranslationFailure(reason))
+            }
+        }
+    }
+
+    /// Applies a bounded batch without delaying recognition or Source output.
+    pub(super) fn drain_translation_outcomes<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        publisher: Option<&ChatboxPublication>,
+    ) -> AppResult<TranslationDrainReport> {
+        let Some(translation) = &self.translation else {
+            return Ok(TranslationDrainReport::default());
+        };
+        let mut report = TranslationDrainReport::default();
+
+        for _ in 0..TRANSLATION_DRAIN_LIMIT {
+            let outcome = {
+                let translation = translation
+                    .lock()
+                    .map_err(|_| AppError::state("Runtime Translation owner lock was poisoned."))?;
+                match translation.try_next() {
+                    Ok(outcome) => outcome,
+                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+                }
+            };
+            let failure_reason = match &outcome {
+                TranslationTerminalOutcome::Completed(_) => None,
+                TranslationTerminalOutcome::Failed(failed) => Some(failed.reason()),
+            };
+            let committed = self.try_commit(|| {
+                let update = match outcome {
+                    TranslationTerminalOutcome::Completed(completed) => {
+                        completed.complete(unix_timestamp_ms())?
+                    }
+                    TranslationTerminalOutcome::Failed(failed) => failed.fail()?,
+                };
+                if let Some(update) = update {
+                    self.report_accepted_update(app, publisher, update);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            })?;
+
+            match committed {
+                Some(Ok(true)) => {
+                    report.applied = report.applied.saturating_add(1);
+                    if let Some(reason) = failure_reason {
+                        translation
+                            .lock()
+                            .map_err(|_| {
+                                AppError::state("Runtime Translation owner lock was poisoned.")
+                            })?
+                            .record_degradation(reason);
+                    }
+                }
+                Some(Ok(false)) | None => {
+                    report.ignored = report.ignored.saturating_add(1);
+                }
+                Some(Err(error)) => return Err(error),
+            }
+        }
+
+        report.degradation = translation
+            .lock()
+            .map_err(|_| AppError::state("Runtime Translation owner lock was poisoned."))?
+            .degradation();
+        Ok(report)
+    }
+
+    fn stop_translation(&self) -> AppResult<()> {
+        let Some(translation) = &self.translation else {
+            return Ok(());
+        };
+        translation
+            .lock()
+            .map_err(|_| AppError::state("Runtime Translation owner lock was poisoned."))?
+            .stop()
     }
 
     pub(super) fn abort_open_source_units_for_reconnect<R: Runtime>(
@@ -397,6 +555,26 @@ impl RuntimeGeneration {
                 DiagnosticUpdate::from_error(&error, "Chatbox snapshot could not be observed"),
             ),
         }
+    }
+}
+
+fn combine_output_close_results(
+    publication: AppResult<()>,
+    aggregate: AppResult<()>,
+    translation: AppResult<()>,
+) -> AppResult<()> {
+    let errors = [publication.err(), aggregate.err(), translation.err()]
+        .into_iter()
+        .flatten()
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::state(format!(
+            "Runtime outputs could not close cleanly: {}",
+            errors.join(" ")
+        )))
     }
 }
 

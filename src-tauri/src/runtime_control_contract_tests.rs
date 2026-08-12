@@ -1,5 +1,7 @@
 use super::*;
-use crate::caption::{CaptionLane, CaptionState};
+use crate::caption::{
+    CaptionLane, CaptionState, SourceSnapshotRef, TranslationFailureReason, TranslationUnitSnapshot,
+};
 use crate::caption_pipeline::{
     CaptionBoundaryOwner, CaptionUnitBehavior, LaneUpdateBehavior, PublicationIncompatibility,
     PublicationPlan, RecognitionInputShape, ResolvedPublicationTiming, RevisionBehavior,
@@ -121,6 +123,32 @@ fn closed_rust_wire_values_match_the_shared_vocabulary() -> AppResult<()> {
             CaptionState::Ongoing => CaptionState::Ongoing,
             CaptionState::Completed => CaptionState::Completed,
         ))?,
+        "translationUnitStates": serialized_tag_values(exhaustive_values!(TranslationUnitSnapshot;
+            TranslationUnitSnapshot::Pending { .. } => TranslationUnitSnapshot::Pending {
+                source_ref: translation_source_ref(),
+            },
+            TranslationUnitSnapshot::Completed { .. } => TranslationUnitSnapshot::Completed {
+                source_ref: translation_source_ref(),
+            },
+            TranslationUnitSnapshot::Failed { .. } => TranslationUnitSnapshot::Failed {
+                source_ref: translation_source_ref(),
+                reason_code: TranslationFailureReason::Failed,
+            },
+        ), "state")?,
+        "translationFailureReasons": serialized_wire_values(exhaustive_values!(TranslationFailureReason;
+            TranslationFailureReason::ProviderAuthenticationFailed => TranslationFailureReason::ProviderAuthenticationFailed,
+            TranslationFailureReason::ProviderPermissionDenied => TranslationFailureReason::ProviderPermissionDenied,
+            TranslationFailureReason::ProviderInvalidRequest => TranslationFailureReason::ProviderInvalidRequest,
+            TranslationFailureReason::ProviderRateLimited => TranslationFailureReason::ProviderRateLimited,
+            TranslationFailureReason::ProviderUsageLimit => TranslationFailureReason::ProviderUsageLimit,
+            TranslationFailureReason::ProviderUnavailable => TranslationFailureReason::ProviderUnavailable,
+            TranslationFailureReason::InvalidOutput => TranslationFailureReason::InvalidOutput,
+            TranslationFailureReason::DeadlineExceeded => TranslationFailureReason::DeadlineExceeded,
+            TranslationFailureReason::Backpressure => TranslationFailureReason::Backpressure,
+            TranslationFailureReason::SourceTooLarge => TranslationFailureReason::SourceTooLarge,
+            TranslationFailureReason::Stopped => TranslationFailureReason::Stopped,
+            TranslationFailureReason::Failed => TranslationFailureReason::Failed,
+        ))?,
         "publicationModes": serialized_wire_values(exhaustive_values!(PublicationMode;
             PublicationMode::Completed => PublicationMode::Completed,
             PublicationMode::Live => PublicationMode::Live,
@@ -205,6 +233,13 @@ fn closed_rust_wire_values_match_the_shared_vocabulary() -> AppResult<()> {
             RuntimeGenerationPhase::Stopping => RuntimeGenerationPhase::Stopping,
             RuntimeGenerationPhase::Error => RuntimeGenerationPhase::Error,
         ))?,
+        "runtimeGenerationTranslationStates": serialized_tag_values(exhaustive_values!(RuntimeGenerationTranslationState;
+            RuntimeGenerationTranslationState::Inactive => RuntimeGenerationTranslationState::Inactive,
+            RuntimeGenerationTranslationState::Active => RuntimeGenerationTranslationState::Active,
+            RuntimeGenerationTranslationState::Degraded { .. } => RuntimeGenerationTranslationState::Degraded {
+                reason_code: crate::caption::TranslationFailureReason::ProviderUnavailable,
+            },
+        ), "state")?,
         "chatboxPublicationStates": serialized_tag_values(exhaustive_values!(ChatboxPublicationSnapshot;
             ChatboxPublicationSnapshot::Disabled { .. } => ChatboxPublicationSnapshot::Disabled { host: String::new(), port: 0 },
             ChatboxPublicationSnapshot::Ready { .. } => ChatboxPublicationSnapshot::Ready { host: String::new(), port: 0 },
@@ -220,8 +255,17 @@ fn closed_rust_wire_values_match_the_shared_vocabulary() -> AppResult<()> {
     Ok(())
 }
 
+fn translation_source_ref() -> SourceSnapshotRef {
+    SourceSnapshotRef {
+        generation: 1,
+        stream_id: "recognition-1-1".to_owned(),
+        unit_id: "speech-1-1".to_owned(),
+        revision: 1,
+    }
+}
+
 #[test]
-fn shared_v2_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Error> {
+fn shared_v3_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Error> {
     let config = serde_json::from_value::<AppConfig>(serde_json::json!({
         "schemaVersion": 2,
         "audio": { "inputDeviceId": null },
@@ -283,13 +327,14 @@ fn shared_v2_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Err
                 host: "127.0.0.1".to_string(),
                 port: 9000,
             },
+            translation_state: RuntimeGenerationTranslationState::Inactive,
             uploads_microphone_audio: true,
             uploads_source_text: false,
         }),
         pending_generation_changes: Vec::new(),
     };
     let expected = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../contracts/runtime-control-snapshot-v2.json"
+        "../../contracts/runtime-control-snapshot-v3.json"
     ))?;
 
     assert_eq!(serde_json::to_value(snapshot)?, expected);
@@ -298,6 +343,15 @@ fn shared_v2_fixture_matches_the_rust_serializer() -> Result<(), serde_json::Err
 
 #[test]
 fn every_struct_variant_field_uses_camel_case() -> Result<(), serde_json::Error> {
+    assert_eq!(
+        serde_json::to_value(RuntimeGenerationTranslationState::Degraded {
+            reason_code: crate::caption::TranslationFailureReason::ProviderUnavailable,
+        })?,
+        serde_json::json!({
+            "state": "degraded",
+            "reasonCode": "translation.provider_unavailable",
+        })
+    );
     assert_eq!(
         serde_json::to_value(ResolvedPublicationTiming::LiveUnit {
             observation_window_ms: 1_000,

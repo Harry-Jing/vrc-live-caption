@@ -209,14 +209,7 @@ fn translation_capabilities(translation: &TranslationConfig) -> TranslationCapab
 pub(crate) fn resolve_caption_pipeline_start_timing(
     plan: &CaptionPipelinePlan,
 ) -> AppResult<ResolvedPublicationTiming> {
-    let timing = plan.publication.resolved_timing().ok_or_else(|| {
-        AppError::config(format!(
-            "The selected recognition path and publication mode are incompatible ({}).",
-            plan.publication
-                .incompatibility_code()
-                .unwrap_or("publication.incompatible")
-        ))
-    })?;
+    let timing = resolve_caption_pipeline_timing(plan)?;
     if plan.translation.is_some() {
         return Err(AppError::config(
             "The selected Translation path is not implemented yet (translation.module_unavailable).",
@@ -224,6 +217,23 @@ pub(crate) fn resolve_caption_pipeline_start_timing(
     }
 
     Ok(timing)
+}
+
+/// Resolves planner compatibility without deciding whether production has
+/// composed every selected Module. The desktop Start preflight owns that
+/// availability gate until GitHub issue #25; generation-scoped Runtime accepts
+/// only prepared owners.
+pub(crate) fn resolve_caption_pipeline_timing(
+    plan: &CaptionPipelinePlan,
+) -> AppResult<ResolvedPublicationTiming> {
+    plan.publication.resolved_timing().ok_or_else(|| {
+        AppError::config(format!(
+            "The selected recognition path and publication mode are incompatible ({}).",
+            plan.publication
+                .incompatibility_code()
+                .unwrap_or("publication.incompatible")
+        ))
+    })
 }
 
 pub(crate) fn recognition_capabilities(

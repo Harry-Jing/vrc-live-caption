@@ -4,8 +4,8 @@ This is the only implementation-status document. Product intent lives in
 [product.md](./product.md), runtime boundaries in
 [architecture.md](./architecture.md), and durable decisions in [adr/](./adr/).
 
-Current state: **Phase 4 complete; Phase 5 is next.** The app remains in active
-development with no public release.
+Current state: **Phase 5 is in progress.** The app remains in active development
+with no public release.
 
 The sequence proves the outgoing experience on cloud recognition and
 translation before reproducing it locally. Local becomes the default only after
@@ -27,7 +27,9 @@ speech and mixed English/Chinese speech.
 
 ## Phase 5: Completed translation
 
-Status: **not started — next**.
+Status: **in progress**. Contracts, bounded provider transport, and
+generation-scoped terminal outcomes are implemented; settings, selected-content
+publication, and release validation remain.
 
 Goal: deliver the smallest reliable text-driven translation path, which is the
 original cross-language product need.

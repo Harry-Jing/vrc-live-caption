@@ -566,6 +566,34 @@ fn reservation(
         .ok_or_else(|| AppError::state("Test source was not reserved."))
 }
 
+fn accept_completed_source(
+    store: &CaptionAggregateStore,
+    generation: u64,
+    unit: &str,
+    text: impl Into<String>,
+) -> AppResult<CaptionSnapshot> {
+    let active = store
+        .begin_generation(generation)?
+        .active_stream
+        .ok_or_else(|| AppError::state("Test generation did not produce an active stream."))?;
+    store.start_unit(generation, &active.stream_id, unit.to_string(), 10)?;
+    let caption = CaptionSnapshot {
+        generation,
+        stream_id: active.stream_id,
+        unit_id: Some(unit.to_string()),
+        lane: CaptionLane::Source,
+        revision: 1,
+        text: text.into(),
+        state: CaptionState::Completed,
+        language: Some("en".to_string()),
+        source_ref: None,
+        unit_started_at_ms: Some(10),
+        timestamp_ms: 20,
+    };
+    store.accept_caption(caption.clone())?;
+    Ok(caption)
+}
+
 fn translation_credential(id: CredentialId) -> ResolvedCredential {
     ResolvedCredential {
         id,
@@ -600,17 +628,18 @@ fn production_factory_binds_each_endpoint_to_its_own_credential() -> AppResult<(
             target: TranslationTarget::English,
             endpoint,
         };
-        let (mut module, outcomes) = openai_responses_completed_text_module(
-            &selection,
+        let binding = openai_responses_completed_text_module(
+            selection.clone(),
             translation_credential(expected),
+            1,
             HostResolver::default(),
         )?;
-        module.stop()?;
-        drop(outcomes);
+        binding.stop_for_test()?;
 
         let error = openai_responses_completed_text_module(
-            &selection,
+            selection,
             translation_credential(mismatched),
+            1,
             HostResolver::default(),
         )
         .err()
@@ -685,29 +714,89 @@ fn admission_enforces_count_and_source_byte_budgets_without_waiting() -> AppResu
 
     for index in 0_u64..8 {
         assert_eq!(
-            module.try_submit(reservation(
-                &store,
-                2,
-                &format!("unit-{index}"),
-                "x".repeat(8 * 1024),
-            )?),
+            module
+                .try_submit(reservation(
+                    &store,
+                    2,
+                    &format!("unit-{index}"),
+                    "x".repeat(8 * 1024),
+                )?)
+                .map_err(|rejection| rejection.kind()),
             Ok(())
         );
     }
     assert_eq!(
-        module.try_submit(reservation(&store, 2, "ninth", "x")?),
+        module
+            .try_submit(reservation(&store, 2, "ninth", "x")?)
+            .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::OutstandingLimit)
     );
     assert_eq!(
-        module.try_submit(reservation(
-            &store,
-            2,
-            "oversized",
-            "x".repeat(16 * 1024 + 1),
-        )?),
+        module
+            .try_submit(reservation(
+                &store,
+                2,
+                "oversized",
+                "x".repeat(16 * 1024 + 1),
+            )?)
+            .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::SourceTooLarge)
     );
 
+    module.stop()?;
+    Ok(())
+}
+
+#[test]
+fn rejected_submission_retains_the_one_shot_failure_capability() -> AppResult<()> {
+    let store = CaptionAggregateStore::default();
+    let adapter = Arc::new(BlockingAdapter::default());
+    let (mut module, _outcomes) = TranslationModule::start_for_test(
+        TranslationTarget::SimplifiedChinese,
+        adapter,
+        TestPolicyDependencies::real(),
+    )?;
+    for index in 0_u64..OUTSTANDING_LIMIT as u64 {
+        module
+            .try_submit(reservation(
+                &store,
+                31,
+                &format!("admitted-{index}"),
+                "admitted source",
+            )?)
+            .map_err(|_| AppError::state("Budget setup source was rejected."))?;
+    }
+
+    let rejection = module
+        .try_submit(reservation(&store, 31, "rejected", "rejected source")?)
+        .err()
+        .ok_or_else(|| AppError::state("Over-budget source was unexpectedly admitted."))?;
+    assert_eq!(rejection.kind(), TranslationSubmitError::OutstandingLimit);
+    assert_eq!(
+        rejection.reason(),
+        crate::caption::TranslationFailureReason::Backpressure
+    );
+    assert!(!format!("{rejection:?}").contains("rejected source"));
+    assert!(store.snapshot()?.translation_units.iter().any(|unit| {
+        matches!(
+            unit,
+            crate::caption::TranslationUnitSnapshot::Pending { source_ref }
+                if source_ref.unit_id == "rejected"
+        )
+    }));
+
+    let update = rejection
+        .fail()?
+        .ok_or_else(|| AppError::state("Rejected Translation was not terminalized."))?;
+    assert!(matches!(
+        update.change,
+        crate::caption::CaptionAggregateChange::TranslationFailed(
+            crate::caption::TranslationUnitSnapshot::Failed {
+                reason_code: crate::caption::TranslationFailureReason::Backpressure,
+                ..
+            }
+        )
+    ));
     module.stop()?;
     Ok(())
 }
@@ -741,22 +830,26 @@ fn completed_outcomes_hold_source_bytes_until_finalized_or_dropped() -> AppResul
     }
 
     assert_eq!(
-        module.try_submit(reservation(
-            &store,
-            13,
-            "retained-limit",
-            "x".repeat(SOURCE_BYTE_LIMIT),
-        )?),
+        module
+            .try_submit(reservation(
+                &store,
+                13,
+                "retained-limit",
+                "x".repeat(SOURCE_BYTE_LIMIT),
+            )?)
+            .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::RetainedSourceLimit)
     );
     drop(held.pop());
     assert_eq!(
-        module.try_submit(reservation(
-            &store,
-            13,
-            "after-release",
-            "x".repeat(SOURCE_BYTE_LIMIT),
-        )?),
+        module
+            .try_submit(reservation(
+                &store,
+                13,
+                "after-release",
+                "x".repeat(SOURCE_BYTE_LIMIT),
+            )?)
+            .map_err(|rejection| rejection.kind()),
         Ok(())
     );
     module.stop()?;
@@ -792,7 +885,9 @@ fn unconsumed_outcomes_continue_to_hold_the_outstanding_slots() -> AppResult<()>
         std::thread::yield_now();
     }
     assert_eq!(
-        module.try_submit(reservation(&store, 14, "ninth", "x")?),
+        module
+            .try_submit(reservation(&store, 14, "ninth", "x")?)
+            .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::OutstandingLimit)
     );
     module.stop()?;
@@ -821,7 +916,9 @@ fn stop_releases_active_and_queued_reservations_and_suppresses_late_results() ->
     adapter.complete("late private translation");
     assert!(outcomes.recv_timeout(Duration::from_millis(50)).is_err());
     assert_eq!(
-        module.try_submit(reservation(&store, 3, "late", "late source")?),
+        module
+            .try_submit(reservation(&store, 3, "late", "late source")?)
+            .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::Stopped)
     );
 
@@ -1025,45 +1122,111 @@ fn terminal_provider_failures_preserve_the_closed_provider_neutral_class() -> Ap
 }
 
 #[test]
-fn provider_neutral_failure_classes_have_stable_translation_codes() {
+fn failed_outcome_keeps_its_source_reserved_until_failure_is_recorded() -> AppResult<()> {
+    let store = CaptionAggregateStore::default();
+    let adapter = ScriptedAdapter::with_results([Err(AdapterFailure {
+        class: TranslationFailureClass::ServiceUnavailable,
+        retryable: false,
+        retry_after: None,
+        request_outcome_ambiguous: false,
+    })]);
+    let (mut module, outcomes) = TranslationModule::start_for_test(
+        TranslationTarget::SimplifiedChinese,
+        Arc::new(adapter),
+        TestPolicyDependencies::real(),
+    )?;
+    module
+        .try_submit(reservation(
+            &store,
+            30,
+            "failed",
+            "source retained through failure",
+        )?)
+        .map_err(|_| AppError::state("Failure-retention source was rejected."))?;
+
+    let outcome = outcomes
+        .recv_timeout(TEST_TIMEOUT)
+        .map_err(|_| AppError::state("Failure-retention outcome was not received."))?;
+    let TranslationTerminalOutcome::Failed(failed) = outcome else {
+        return Err(AppError::state(
+            "Failure-retention work unexpectedly completed.",
+        ));
+    };
+    for index in 0_u64..6 {
+        accept_completed_source(
+            &store,
+            30,
+            &format!("pressure-{index}"),
+            format!("pressure source {index}"),
+        )?;
+    }
+    assert!(
+        store
+            .snapshot()?
+            .captions
+            .iter()
+            .any(|caption| caption.unit_id.as_deref() == Some("failed"))
+    );
+
+    let update = failed
+        .fail()?
+        .ok_or_else(|| AppError::state("Translation failure was not recorded."))?;
+    assert!(matches!(
+        update.change,
+        crate::caption::CaptionAggregateChange::TranslationFailed(
+            crate::caption::TranslationUnitSnapshot::Failed {
+                reason_code: crate::caption::TranslationFailureReason::ProviderUnavailable,
+                ..
+            }
+        )
+    ));
+    module.stop()?;
+    Ok(())
+}
+
+#[test]
+fn provider_neutral_failure_classes_map_to_closed_aggregate_reasons() {
     let cases = [
         (
             TranslationFailureClass::Authentication,
-            "translation.provider_authentication_failed",
+            crate::caption::TranslationFailureReason::ProviderAuthenticationFailed,
         ),
         (
             TranslationFailureClass::PermissionDenied,
-            "translation.provider_permission_denied",
+            crate::caption::TranslationFailureReason::ProviderPermissionDenied,
         ),
         (
             TranslationFailureClass::InvalidRequest,
-            "translation.provider_invalid_request",
+            crate::caption::TranslationFailureReason::ProviderInvalidRequest,
         ),
         (
             TranslationFailureClass::RateLimited,
-            "translation.provider_rate_limited",
+            crate::caption::TranslationFailureReason::ProviderRateLimited,
         ),
         (
             TranslationFailureClass::UsageLimit,
-            "translation.provider_usage_limit",
+            crate::caption::TranslationFailureReason::ProviderUsageLimit,
         ),
         (
             TranslationFailureClass::ServiceUnavailable,
-            "translation.provider_unavailable",
+            crate::caption::TranslationFailureReason::ProviderUnavailable,
         ),
         (
             TranslationFailureClass::InvalidOutput,
-            "translation.invalid_output",
+            crate::caption::TranslationFailureReason::InvalidOutput,
         ),
         (
             TranslationFailureClass::DeadlineExceeded,
-            "translation.deadline_exceeded",
+            crate::caption::TranslationFailureReason::DeadlineExceeded,
         ),
-        (TranslationFailureClass::Unknown, "translation.failed"),
+        (
+            TranslationFailureClass::Unknown,
+            crate::caption::TranslationFailureReason::Failed,
+        ),
     ];
 
-    for (class, expected) in cases {
-        assert_eq!(class.code(), expected);
+    for (class, expected_reason) in cases {
+        assert_eq!(class.reason(), expected_reason);
     }
 }
 
@@ -1251,7 +1414,9 @@ fn unconfirmed_attempt_timeout_fails_closed_without_starting_more_work() -> AppR
     }
     assert_eq!(adapter.calls(), 1);
     assert_eq!(
-        module.try_submit(reservation(&store, 10, "after-close", "private source")?),
+        module
+            .try_submit(reservation(&store, 10, "after-close", "private source")?)
+            .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::Closed)
     );
     module.stop()?;
@@ -1304,12 +1469,14 @@ fn late_ambiguous_result_keeps_its_fail_closed_semantics() -> AppResult<()> {
     }
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(matches!(
-        module.try_submit(reservation(
-            &store,
-            29,
-            "closed-admission",
-            "later private source"
-        )?),
+        module
+            .try_submit(reservation(
+                &store,
+                29,
+                "closed-admission",
+                "later private source",
+            )?)
+            .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::Closed)
     ));
     module.stop()?;
@@ -1445,7 +1612,9 @@ fn dropping_outcome_receiver_stops_admission_and_releases_work() -> AppResult<()
 
     drop(outcomes);
     assert_eq!(
-        module.try_submit(reservation(&store, 15, "late", "late source")?),
+        module
+            .try_submit(reservation(&store, 15, "late", "late source")?)
+            .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::Stopped)
     );
     module.stop()?;
@@ -1465,7 +1634,10 @@ fn stop_wins_an_admission_race_after_submission_preparation() -> AppResult<()> {
     let shared = Arc::clone(&module.shared);
     let result = module.try_submit_with_hook(prepared, move || shared.request_stop());
 
-    assert_eq!(result, Err(TranslationSubmitError::Stopped));
+    assert_eq!(
+        result.map_err(|rejection| rejection.kind()),
+        Err(TranslationSubmitError::Stopped)
+    );
     module.stop()?;
     Ok(())
 }

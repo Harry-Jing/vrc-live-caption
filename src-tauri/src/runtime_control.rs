@@ -1,5 +1,6 @@
 //! Authoritative desired settings and effective runtime-generation state.
 
+use crate::caption::TranslationFailureReason;
 use crate::caption_pipeline::{CaptionPipelinePlan, plan_caption_pipeline};
 use crate::config::{
     AppConfig, AudioConfig, ContentSelection, OscConfig, PublicationConfig, RecognitionConfig,
@@ -11,7 +12,7 @@ use crate::wall_clock::unix_timestamp_ms;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 
-pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 2;
+pub(crate) const RUNTIME_CONTROL_CONTRACT_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,8 +79,23 @@ pub(crate) struct RuntimeGenerationSnapshot {
     pub(crate) caption_pipeline_plan: CaptionPipelinePlan,
     pub(crate) credentials: Vec<RuntimeGenerationCredentialSnapshot>,
     pub(crate) chatbox_publication: ChatboxPublicationSnapshot,
+    pub(crate) translation_state: RuntimeGenerationTranslationState,
     pub(crate) uploads_microphone_audio: bool,
     pub(crate) uploads_source_text: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "state",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub(crate) enum RuntimeGenerationTranslationState {
+    Inactive,
+    Active,
+    Degraded {
+        reason_code: TranslationFailureReason,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -284,6 +300,16 @@ pub(crate) struct RuntimeStatusRecorder {
     inner: Arc<Mutex<RuntimeControlState>>,
 }
 
+/// Generation-fenced capability for Translation health only.
+///
+/// A late outcome can neither mutate a replacement generation nor turn a
+/// per-unit Translation failure into a whole-runtime failure.
+#[derive(Clone)]
+pub(crate) struct RuntimeTranslationStatusRecorder {
+    inner: Arc<Mutex<RuntimeControlState>>,
+    generation_id: u64,
+}
+
 #[derive(Clone)]
 pub(crate) struct RuntimeStartSelection {
     pub(crate) config: AppConfig,
@@ -418,6 +444,17 @@ impl RuntimeControlStore {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn translation_status_recorder(
+        &self,
+        generation_id: u64,
+    ) -> RuntimeTranslationStatusRecorder {
+        RuntimeTranslationStatusRecorder {
+            inner: Arc::clone(&self.inner),
+            generation_id,
+        }
+    }
+
     fn lock(&self) -> AppResult<std::sync::MutexGuard<'_, RuntimeControlState>> {
         self.inner
             .lock()
@@ -481,6 +518,16 @@ impl RuntimeControlStore {
 }
 
 impl RuntimeStatusRecorder {
+    pub(crate) fn translation_recorder(
+        &self,
+        generation_id: u64,
+    ) -> RuntimeTranslationStatusRecorder {
+        RuntimeTranslationStatusRecorder {
+            inner: Arc::clone(&self.inner),
+            generation_id,
+        }
+    }
+
     pub(crate) fn record(&self, status: RuntimeStatusEvent) -> AppResult<RuntimeControlSnapshot> {
         let mut control = self
             .inner
@@ -520,6 +567,35 @@ impl RuntimeStatusRecorder {
         }
         RuntimeControlStore::advance_revision(&mut control);
         Ok(RuntimeControlStore::snapshot_from(&control))
+    }
+}
+
+impl RuntimeTranslationStatusRecorder {
+    pub(crate) fn record_degraded(
+        &self,
+        reason_code: TranslationFailureReason,
+    ) -> AppResult<Option<RuntimeControlSnapshot>> {
+        let mut control = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::state("Runtime control state lock was poisoned."))?;
+        let Some(generation) = control
+            .generation
+            .as_mut()
+            .filter(|generation| generation.id == self.generation_id)
+        else {
+            return Ok(None);
+        };
+        match generation.translation_state {
+            RuntimeGenerationTranslationState::Inactive
+            | RuntimeGenerationTranslationState::Degraded { .. } => return Ok(None),
+            RuntimeGenerationTranslationState::Active => {
+                generation.translation_state =
+                    RuntimeGenerationTranslationState::Degraded { reason_code };
+            }
+        }
+        RuntimeControlStore::advance_revision(&mut control);
+        Ok(Some(RuntimeControlStore::snapshot_from(&control)))
     }
 }
 

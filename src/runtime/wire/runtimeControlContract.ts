@@ -8,7 +8,12 @@ import {
   type TranslationConfig,
   type TranslationEndpoint,
 } from "../appConfig";
-import { CAPTION_LANES, type CaptionLane } from "../captionAggregate";
+import {
+  CAPTION_LANES,
+  TRANSLATION_FAILURE_REASONS,
+  type CaptionLane,
+  type TranslationFailureReason,
+} from "../captionAggregate";
 import {
   CAPTION_BOUNDARY_OWNERS,
   CAPTION_UNIT_BEHAVIORS,
@@ -48,6 +53,7 @@ import {
   CREDENTIAL_STATUS_STATES,
   CREDENTIAL_STORAGES,
   RUNTIME_GENERATION_PHASES,
+  RUNTIME_GENERATION_TRANSLATION_STATES,
   RUNTIME_PENDING_GENERATION_CHANGES,
   RUNTIME_CONTROL_CONTRACT_VERSION,
   type ChatboxPublicationSnapshot,
@@ -58,6 +64,7 @@ import {
   type RuntimeGenerationCredentialSnapshot,
   type RuntimeGenerationPhase,
   type RuntimeGenerationSnapshot,
+  type RuntimeGenerationTranslationState,
   type RuntimePendingGenerationChange,
 } from "../runtimeControl";
 import {
@@ -791,6 +798,36 @@ function decodeChatboxPublication(
   }
 }
 
+function decodeRuntimeGenerationTranslationState(
+  value: unknown,
+  path: string,
+): RuntimeGenerationTranslationState {
+  const tagged = record(value, path);
+  const state = literal(
+    tagged["state"],
+    `${path}.state`,
+    RUNTIME_GENERATION_TRANSLATION_STATES,
+  );
+
+  switch (state) {
+    case "inactive":
+    case "active":
+      exactRecord(value, path, ["state"]);
+      return { state };
+    case "degraded": {
+      const input = exactRecord(value, path, ["state", "reasonCode"]);
+      return {
+        state,
+        reasonCode: literal<TranslationFailureReason>(
+          input["reasonCode"],
+          `${path}.reasonCode`,
+          TRANSLATION_FAILURE_REASONS,
+        ),
+      };
+    }
+  }
+}
+
 function decodeRuntimeGenerationSnapshot(
   value: unknown,
   path: string,
@@ -803,6 +840,7 @@ function decodeRuntimeGenerationSnapshot(
     "captionPipelinePlan",
     "credentials",
     "chatboxPublication",
+    "translationState",
     "uploadsMicrophoneAudio",
     "uploadsSourceText",
   ]);
@@ -872,6 +910,19 @@ function decodeRuntimeGenerationSnapshot(
     expectedCredentialIds,
     `${path}.credentials`,
   );
+  const translationState = decodeRuntimeGenerationTranslationState(
+    input["translationState"],
+    `${path}.translationState`,
+  );
+  if (
+    (translationState.state === "inactive") !==
+    (selection.translation === null)
+  ) {
+    throw new RuntimeControlContractError(
+      `${path}.translationState`,
+      "expected state to match the effective Translation selection",
+    );
+  }
   const uploadsSourceText = boolean(
     input["uploadsSourceText"],
     `${path}.uploadsSourceText`,
@@ -902,6 +953,7 @@ function decodeRuntimeGenerationSnapshot(
       input["chatboxPublication"],
       `${path}.chatboxPublication`,
     ),
+    translationState,
     uploadsMicrophoneAudio: boolean(
       input["uploadsMicrophoneAudio"],
       `${path}.uploadsMicrophoneAudio`,

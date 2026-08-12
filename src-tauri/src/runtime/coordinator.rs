@@ -10,13 +10,15 @@ use crate::config::AudioConfig;
 use crate::error::{AppError, AppResult};
 use crate::events::{
     AudioLevelEvent, DiagnosticCategory, DiagnosticUpdate, emit_audio_level, emit_diagnostic,
-    record_and_emit_runtime_status,
+    emit_runtime_control_changed, record_and_emit_runtime_status,
 };
 use crate::recognition::{
     OwnedRecognitionAudioFrame, RecognitionModule, RecognitionSignal, RecognitionSubmitError,
     RunningRecognition,
 };
-use crate::runtime_control::{RuntimeStatus, RuntimeStatusRecorder};
+use crate::runtime_control::{
+    RuntimeStatus, RuntimeStatusRecorder, RuntimeTranslationStatusRecorder,
+};
 use crate::wall_clock::unix_timestamp_ms;
 use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 use std::time::Duration;
@@ -208,11 +210,14 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
         status_recorder,
         open_capture,
     };
+    let translation_status_recorder =
+        status_recorder.translation_recorder(generation.generation_id());
 
     loop {
         if generation.is_work_cancelled() || generation.is_hard_stop_requested() {
             return Ok(());
         }
+        drain_translation_outcomes(app, publisher, generation, &translation_status_recorder)?;
 
         loop {
             let signal = match recognition.signals.try_recv() {
@@ -233,6 +238,7 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
             {
                 return Ok(());
             }
+            drain_translation_outcomes(app, publisher, generation, &translation_status_recorder)?;
         }
 
         let Some(active) = active_capture.as_mut() else {
@@ -254,6 +260,7 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
             {
                 return Ok(());
             }
+            drain_translation_outcomes(app, publisher, generation, &translation_status_recorder)?;
             continue;
         };
 
@@ -442,6 +449,15 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
             }
             RecognitionSignal::Event(event) => {
                 let outcome = generation.submit_recognition_event(app, publisher, event)?;
+                if let RecognitionEventSubmitOutcome::AcceptedWithTranslationFailure(reason) =
+                    outcome
+                {
+                    record_translation_degradation(
+                        app,
+                        &status_recorder.translation_recorder(generation.generation_id()),
+                        reason,
+                    )?;
+                }
                 Ok(if outcome == RecognitionEventSubmitOutcome::Stopped {
                     RecognitionCoordinatorFlow::Stopped
                 } else {
@@ -450,6 +466,32 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
             }
         }
     }
+}
+
+fn drain_translation_outcomes<R: Runtime>(
+    app: &AppHandle<R>,
+    publisher: Option<&ChatboxPublication>,
+    generation: &RuntimeGeneration,
+    recorder: &RuntimeTranslationStatusRecorder,
+) -> AppResult<()> {
+    if let Some(reason) = generation
+        .drain_translation_outcomes(app, publisher)?
+        .degradation
+    {
+        record_translation_degradation(app, recorder, reason)?;
+    }
+    Ok(())
+}
+
+fn record_translation_degradation<R: Runtime>(
+    app: &AppHandle<R>,
+    recorder: &RuntimeTranslationStatusRecorder,
+    reason: crate::caption::TranslationFailureReason,
+) -> AppResult<()> {
+    if let Some(snapshot) = recorder.record_degraded(reason)? {
+        emit_runtime_control_changed(app, snapshot);
+    }
+    Ok(())
 }
 
 fn finish_unexpected_recognition_owner<R: Runtime>(

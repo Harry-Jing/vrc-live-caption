@@ -4,11 +4,16 @@ import {
   CAPTION_LANES,
   CAPTION_STATES,
   CAPTION_AGGREGATE_CONTRACT_VERSION,
+  TRANSLATION_FAILURE_REASONS,
+  TRANSLATION_UNIT_STATES,
   type CaptionAggregateSnapshot,
   type CaptionLane,
   type CaptionSnapshot,
   type CaptionState,
   type SourceSnapshotRef,
+  type TranslationFailureReason,
+  type TranslationUnitSnapshot,
+  type TranslationUnitState,
 } from "../captionAggregate";
 import { createDecoders } from "./contractDecoding";
 
@@ -19,9 +24,8 @@ export class CaptionAggregateContractError extends Error {
   }
 }
 
-const { exactRecord, array, string, safeInteger, literal } = createDecoders(
-  CaptionAggregateContractError,
-);
+const { record, exactRecord, array, string, safeInteger, literal } =
+  createDecoders(CaptionAggregateContractError);
 
 function nonEmptyString(value: unknown, path: string): string {
   const decoded = string(value, path);
@@ -65,6 +69,55 @@ function decodeSourceRef(
     unitId: nonEmptyString(input["unitId"], `${path}.unitId`),
     revision: safeInteger(input["revision"], `${path}.revision`, 1),
   };
+}
+
+function decodeRequiredSourceRef(value: unknown, path: string) {
+  const sourceRef = decodeSourceRef(value, path);
+
+  if (sourceRef === null) {
+    throw new CaptionAggregateContractError(
+      path,
+      "expected an exact source snapshot reference",
+    );
+  }
+
+  return sourceRef;
+}
+
+function decodeTranslationUnit(
+  value: unknown,
+  index: number,
+): TranslationUnitSnapshot {
+  const path = `$.translationUnits[${String(index)}]`;
+  const candidate = record(value, path);
+  const state = literal<TranslationUnitState>(
+    candidate["state"],
+    `${path}.state`,
+    TRANSLATION_UNIT_STATES,
+  );
+  const input = exactRecord(
+    candidate,
+    path,
+    state === "failed"
+      ? ["state", "sourceRef", "reasonCode"]
+      : ["state", "sourceRef"],
+  );
+  const sourceRef = decodeRequiredSourceRef(
+    input["sourceRef"],
+    `${path}.sourceRef`,
+  );
+
+  return state === "failed"
+    ? {
+        state,
+        sourceRef,
+        reasonCode: literal<TranslationFailureReason>(
+          input["reasonCode"],
+          `${path}.reasonCode`,
+          TRANSLATION_FAILURE_REASONS,
+        ),
+      }
+    : { state, sourceRef };
 }
 
 function decodeCaption(value: unknown, index: number): CaptionSnapshot {
@@ -140,6 +193,28 @@ function sourceReferenceMatches(
   );
 }
 
+function sourceRefsEqual(
+  left: SourceSnapshotRef | null,
+  right: SourceSnapshotRef,
+) {
+  return (
+    left !== null &&
+    left.generation === right.generation &&
+    left.streamId === right.streamId &&
+    left.unitId === right.unitId &&
+    left.revision === right.revision
+  );
+}
+
+function sourceRefKey(sourceRef: SourceSnapshotRef) {
+  return JSON.stringify([
+    sourceRef.generation,
+    sourceRef.streamId,
+    sourceRef.unitId,
+    sourceRef.revision,
+  ]);
+}
+
 export function decodeCaptionAggregateSnapshot(
   value: unknown,
 ): CaptionAggregateSnapshot {
@@ -149,6 +224,7 @@ export function decodeCaptionAggregateSnapshot(
     "activeStream",
     "openSourceUnits",
     "captions",
+    "translationUnits",
   ]);
 
   if (input["contractVersion"] !== CAPTION_AGGREGATE_CONTRACT_VERSION) {
@@ -218,6 +294,10 @@ export function decodeCaptionAggregateSnapshot(
   }
 
   const captions = array(input["captions"], "$.captions").map(decodeCaption);
+  const translationUnits = array(
+    input["translationUnits"],
+    "$.translationUnits",
+  ).map(decodeTranslationUnit);
   const openSourceUnitIds = new Set(
     openSourceUnits.map((openSourceUnit) => openSourceUnit.unitId),
   );
@@ -292,6 +372,83 @@ export function decodeCaptionAggregateSnapshot(
     }
   }
 
+  const translationSourceRefs = new Set<string>();
+  for (const translationUnit of translationUnits) {
+    const sourceKey = sourceRefKey(translationUnit.sourceRef);
+    if (translationSourceRefs.has(sourceKey)) {
+      throw new CaptionAggregateContractError(
+        "$.translationUnits",
+        "translation unit source references must be unique",
+      );
+    }
+    translationSourceRefs.add(sourceKey);
+
+    const matchingSources = captions.filter(
+      (caption) =>
+        caption.lane === "source" &&
+        caption.state === "completed" &&
+        sourceRefsEqual(translationUnit.sourceRef, {
+          generation: caption.generation,
+          streamId: caption.streamId,
+          unitId: caption.unitId ?? "",
+          revision: caption.revision,
+        }),
+    );
+    if (matchingSources.length !== 1) {
+      throw new CaptionAggregateContractError(
+        "$.translationUnits.sourceRef",
+        "translation units must reference one exact retained completed source snapshot",
+      );
+    }
+
+    if (
+      translationUnit.state === "pending" &&
+      (activeStream === null ||
+        translationUnit.sourceRef.generation !== activeStream.generation ||
+        translationUnit.sourceRef.streamId !== activeStream.streamId)
+    ) {
+      throw new CaptionAggregateContractError(
+        "$.translationUnits",
+        "pending translation units must belong to the active caption stream",
+      );
+    }
+
+    const matchingTranslations = captions.filter(
+      (caption) =>
+        caption.lane === "translation" &&
+        sourceRefsEqual(caption.sourceRef, translationUnit.sourceRef),
+    );
+    if (
+      (translationUnit.state === "completed" &&
+        (matchingTranslations.length !== 1 ||
+          matchingTranslations[0]?.state !== "completed")) ||
+      (translationUnit.state !== "completed" &&
+        matchingTranslations.length !== 0)
+    ) {
+      throw new CaptionAggregateContractError(
+        "$.translationUnits",
+        "only completed translation units may have one exact completed Translation caption",
+      );
+    }
+  }
+
+  if (
+    captions.some(
+      (caption) =>
+        caption.lane === "translation" &&
+        !translationUnits.some(
+          (translationUnit) =>
+            translationUnit.state === "completed" &&
+            sourceRefsEqual(caption.sourceRef, translationUnit.sourceRef),
+        ),
+    )
+  ) {
+    throw new CaptionAggregateContractError(
+      "$.captions",
+      "Translation captions require one exact completed translation unit",
+    );
+  }
+
   return {
     contractVersion: CAPTION_AGGREGATE_CONTRACT_VERSION,
     snapshotRevision: safeInteger(
@@ -302,5 +459,6 @@ export function decodeCaptionAggregateSnapshot(
     activeStream,
     openSourceUnits,
     captions,
+    translationUnits,
   };
 }

@@ -1,6 +1,6 @@
 import type { CaptionPreviewStatus } from "./presentation";
 
-export const CAPTION_AGGREGATE_CONTRACT_VERSION = 1 as const;
+export const CAPTION_AGGREGATE_CONTRACT_VERSION = 2 as const;
 
 export const CAPTION_LANES = ["source", "translation"] as const;
 export type CaptionLane = (typeof CAPTION_LANES)[number];
@@ -14,6 +14,45 @@ export type SourceSnapshotRef = Readonly<{
   unitId: string;
   revision: number;
 }>;
+
+export const TRANSLATION_UNIT_STATES = [
+  "pending",
+  "completed",
+  "failed",
+] as const;
+export type TranslationUnitState = (typeof TRANSLATION_UNIT_STATES)[number];
+
+export const TRANSLATION_FAILURE_REASONS = [
+  "translation.provider_authentication_failed",
+  "translation.provider_permission_denied",
+  "translation.provider_invalid_request",
+  "translation.provider_rate_limited",
+  "translation.provider_usage_limit",
+  "translation.provider_unavailable",
+  "translation.invalid_output",
+  "translation.deadline_exceeded",
+  "translation.backpressure",
+  "translation.source_too_large",
+  "translation.stopped",
+  "translation.failed",
+] as const;
+export type TranslationFailureReason =
+  (typeof TRANSLATION_FAILURE_REASONS)[number];
+
+export type TranslationUnitSnapshot =
+  | Readonly<{
+      state: "pending";
+      sourceRef: SourceSnapshotRef;
+    }>
+  | Readonly<{
+      state: "completed";
+      sourceRef: SourceSnapshotRef;
+    }>
+  | Readonly<{
+      state: "failed";
+      sourceRef: SourceSnapshotRef;
+      reasonCode: TranslationFailureReason;
+    }>;
 
 export type CaptionSnapshot = Readonly<{
   generation: number;
@@ -43,6 +82,7 @@ export type CaptionAggregateSnapshot = Readonly<{
   }> | null;
   openSourceUnits: readonly OpenSourceUnit[];
   captions: readonly CaptionSnapshot[];
+  translationUnits: readonly TranslationUnitSnapshot[];
 }>;
 
 export type CaptionDisplay = CaptionSnapshot & Readonly<{ id: string }>;

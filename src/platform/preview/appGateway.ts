@@ -188,6 +188,7 @@ export function createPreviewAppGateway(): AppGateway {
     activeStream: null,
     openSourceUnits: [],
     captions: [],
+    translationUnits: [],
   };
   let latestStatus: RuntimeStatusEvent = {
     status: "idle",
@@ -384,6 +385,7 @@ export function createPreviewAppGateway(): AppGateway {
         host: selection.osc.host,
         port: selection.osc.port,
       },
+      translationState: { state: "inactive" },
       uploadsMicrophoneAudio: true,
       uploadsSourceText: false,
     };
@@ -422,6 +424,7 @@ export function createPreviewAppGateway(): AppGateway {
       captions: captionAggregate.captions.filter(
         (caption) => caption.state === "completed",
       ),
+      translationUnits: [],
     });
     emitStatus("starting", "Starting browser preview runtime");
     generation = { ...generation, phase: "running" };
@@ -459,6 +462,7 @@ export function createPreviewAppGateway(): AppGateway {
       captions: captionAggregate.captions.filter(
         (caption) => caption.state === "completed",
       ),
+      translationUnits: [],
     });
     generation = null;
     emitStatus("stopped", "Browser preview runtime stopped");

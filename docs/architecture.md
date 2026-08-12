@@ -146,11 +146,11 @@ contains the active caption stream, open Source units, and bounded recent
 snapshots. Unit identity follows application correlation rather than provider
 item identifiers or wall-clock order.
 
-The current Aggregate contract represents both lanes even though no Translation
-Module is implemented. Each lane has its own monotonic revision chain, and
-completion is terminal for that lane, not the whole caption unit. A Translation
-snapshot identifies the exact completed Source snapshot it consumed, preventing
-timing or display order from becoming a correlation contract
+The Aggregate contract represents both lanes plus pending, completed, and
+failed Translation-unit outcomes. Each lane has its own monotonic revision
+chain, and completion is terminal for that lane, not the whole caption unit. A
+Translation snapshot identifies the exact completed Source snapshot it
+consumed, preventing timing or display order from becoming a correlation contract
 ([ADR 0020](./adr/0020-link-translations-to-exact-source-snapshots.md)).
 
 The Aggregate may retain bounded completed captions from older runtime
@@ -163,9 +163,8 @@ Capabilities belong to a complete path, not a model name. A path declares the
 input shape, boundary ownership, update and revision behavior, produced lanes,
 and supported publication timing.
 
-Current planning resolves source-only publication. Translation content selection
-must extend the same planner for path capabilities, publication mode, and output
-constraints rather than introduce a separate one. An incompatible request
+Planning resolves source-only, translation-only, and bilingual content through
+the same path capabilities and publication constraints. An incompatible request
 remains explicit instead of causing a silent path or mode change
 ([ADR 0006](./adr/0006-publication-timing-is-completed-or-live.md)).
 
@@ -217,10 +216,12 @@ Admitting translation work must pin its exact completed Source snapshot until a
 terminal outcome or Stop, so bounded history trimming cannot remove that Source
 snapshot while translation work is in flight.
 
-Start captures the resolved Translation path and explicit target as immutable
-generation state. Phase 5 planning permits Translation only with Completed
-publication; Live remains incompatible until its update shape is evaluated.
-Provider and endpoint rules stay behind the Module boundary
+Prepared Runtime generations capture the resolved Translation path, target,
+endpoint, and credential as one immutable owner. Production Start keeps active
+Translation gated until [issue #25](https://github.com/Harry-Jing/vrc-live-caption/issues/25)
+connects selected-content publication. Phase 5 planning permits Translation only
+with Completed publication; Live remains incompatible until its update shape is
+evaluated. Provider and endpoint rules stay behind the Module boundary
 ([ADR 0015](./adr/0015-cloud-connections-honor-explicit-routes-and-endpoints.md),
 [ADR 0021](./adr/0021-use-openai-responses-for-completed-translation.md)).
 

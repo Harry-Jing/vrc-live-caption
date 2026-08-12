@@ -72,7 +72,7 @@ impl ResponsesEndpoint {
     }
 }
 
-fn required_credential_id(endpoint: &TranslationEndpoint) -> CredentialId {
+pub(super) fn required_credential_id(endpoint: &TranslationEndpoint) -> CredentialId {
     match endpoint {
         TranslationEndpoint::Official => CredentialId::OpenAi,
         TranslationEndpoint::Custom { .. } => CredentialId::CustomTranslation,

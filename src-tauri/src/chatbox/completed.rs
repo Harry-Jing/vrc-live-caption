@@ -279,6 +279,7 @@ impl CompletedChatboxPublisher {
                     })
             }
             CaptionAggregateChange::CaptionAccepted(_) => None,
+            CaptionAggregateChange::TranslationFailed(_) => None,
         };
 
         match input {

@@ -1,7 +1,7 @@
 import { createRenderer, defineComponent } from "vue";
 import { expect, test, vi } from "vitest";
-import captionAggregateFixture from "../../contracts/caption-aggregate-snapshot-v1.json?raw";
-import runtimeControlFixture from "../../contracts/runtime-control-snapshot-v2.json?raw";
+import captionAggregateFixture from "../../contracts/caption-aggregate-snapshot-v2.json?raw";
+import runtimeControlFixture from "../../contracts/runtime-control-snapshot-v3.json?raw";
 import type {
   AppGateway,
   RuntimeControlSnapshotListener,
@@ -131,6 +131,7 @@ function mountRuntimeHarness() {
     activeStream: { generation: 7, streamId: "recognition-7-1" },
     openSourceUnits: [{ unitId: "speech-7-1", startedAtMs: 1_000 }],
     captions: [],
+    translationUnits: [],
   };
   const stoppedCaption = {
     ...initialCaption,

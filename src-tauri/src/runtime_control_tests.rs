@@ -1,4 +1,5 @@
 use super::*;
+use crate::caption::TranslationFailureReason;
 use crate::config::{
     ContentSelection, TranslationConfig, TranslationEndpoint, TranslationPath, TranslationTarget,
 };
@@ -31,8 +32,18 @@ fn generation_snapshot(config: &AppConfig, generation: u64) -> RuntimeGeneration
             host: config.osc.host.clone(),
             port: config.osc.port,
         },
+        translation_state: if RuntimeGenerationSelection::from(config)
+            .translation
+            .is_some()
+        {
+            RuntimeGenerationTranslationState::Active
+        } else {
+            RuntimeGenerationTranslationState::Inactive
+        },
         uploads_microphone_audio: false,
-        uploads_source_text: false,
+        uploads_source_text: RuntimeGenerationSelection::from(config)
+            .translation
+            .is_some(),
     }
 }
 
@@ -244,7 +255,7 @@ fn snapshot_has_a_versioned_authoritative_shape() -> AppResult<()> {
     let value = serde_json::to_value(snapshot)
         .map_err(|error| AppError::state(format!("Failed to serialize snapshot: {error}")))?;
 
-    assert_eq!(value["contractVersion"], serde_json::json!(2));
+    assert_eq!(value["contractVersion"], serde_json::json!(3));
     assert_eq!(value["revision"], serde_json::json!(0));
     assert_eq!(value["desired"]["revision"], serde_json::json!(0));
     assert_eq!(
@@ -258,6 +269,89 @@ fn snapshot_has_a_versioned_authoritative_shape() -> AppResult<()> {
     assert!(value["generation"].is_null());
     assert_eq!(value["pendingGenerationChanges"], serde_json::json!([]));
 
+    Ok(())
+}
+
+#[test]
+fn source_only_generation_exposes_translation_as_inactive() -> AppResult<()> {
+    let store = RuntimeControlStore::default();
+    let selected = config_with_translation(TranslationTarget::SimplifiedChinese);
+    store.install_starting_generation(generation_snapshot(&selected, 20))?;
+
+    let generation = store
+        .snapshot()?
+        .generation
+        .ok_or_else(|| AppError::state("Source-only generation was not installed."))?;
+    assert!(matches!(
+        generation.translation_state,
+        RuntimeGenerationTranslationState::Inactive
+    ));
+    assert!(generation.selection.translation.is_none());
+    assert!(!generation.uploads_source_text);
+    Ok(())
+}
+
+#[test]
+fn translation_degradation_is_generation_scoped_and_sticky() -> AppResult<()> {
+    let store = RuntimeControlStore::default();
+    let mut selected = config_with_translation(TranslationTarget::SimplifiedChinese);
+    selected.publication.content = ContentSelection::Bilingual;
+    store.install_starting_generation(generation_snapshot(&selected, 20))?;
+    let old = store.translation_status_recorder(20);
+    store.install_starting_generation(generation_snapshot(&selected, 21))?;
+    let current = store.translation_status_recorder(21);
+    let before = store.snapshot()?.revision;
+
+    assert!(
+        old.record_degraded(TranslationFailureReason::Failed)?
+            .is_none()
+    );
+    assert_eq!(store.snapshot()?.revision, before);
+    let degraded = current
+        .record_degraded(TranslationFailureReason::ProviderUnavailable)?
+        .ok_or_else(|| AppError::state("Current generation was not degraded."))?;
+    assert_eq!(degraded.revision, before + 1);
+    assert_eq!(degraded.runtime_status.status, RuntimeStatus::Starting);
+    assert!(matches!(
+        degraded
+            .generation
+            .as_ref()
+            .map(|generation| &generation.translation_state),
+        Some(RuntimeGenerationTranslationState::Degraded {
+            reason_code: TranslationFailureReason::ProviderUnavailable,
+        })
+    ));
+    assert!(
+        current
+            .record_degraded(TranslationFailureReason::DeadlineExceeded)?
+            .is_none()
+    );
+    assert_eq!(store.snapshot()?.revision, degraded.revision);
+    Ok(())
+}
+
+#[test]
+fn inactive_translation_cannot_be_degraded() -> AppResult<()> {
+    let store = RuntimeControlStore::default();
+    let selected = AppConfig::default();
+    store.install_starting_generation(generation_snapshot(&selected, 22))?;
+    let before = store.snapshot()?;
+
+    assert!(
+        store
+            .translation_status_recorder(22)
+            .record_degraded(TranslationFailureReason::ProviderUnavailable)?
+            .is_none()
+    );
+    let after = store.snapshot()?;
+    assert_eq!(after.revision, before.revision);
+    assert!(matches!(
+        after
+            .generation
+            .as_ref()
+            .map(|generation| &generation.translation_state),
+        Some(RuntimeGenerationTranslationState::Inactive)
+    ));
     Ok(())
 }
 

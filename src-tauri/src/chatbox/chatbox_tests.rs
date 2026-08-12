@@ -220,6 +220,7 @@ fn completed_snapshot_for(
             unit_started_at_ms: Some(100),
             timestamp_ms: 100 + revision,
         }],
+        translation_units: Vec::new(),
     }
 }
 
@@ -240,6 +241,7 @@ fn open_snapshot(revision: u64, unit_id: Option<&str>) -> CaptionAggregateSnapsh
             })
             .unwrap_or_default(),
         captions: Vec::new(),
+        translation_units: Vec::new(),
     }
 }
 

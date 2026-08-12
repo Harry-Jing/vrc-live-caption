@@ -1,11 +1,13 @@
+use super::PreparedTranslation;
 use super::coordinator::RuntimeExecution;
 use super::output::{ChatboxPublicationInit, RuntimeGeneration, initialize_chatbox_publication};
 use super::supervisor::run_runtime_thread;
 
 use crate::caption::CaptionAggregateStore;
-use crate::caption_pipeline::{plan_caption_pipeline, resolve_caption_pipeline_start_timing};
+use crate::caption_pipeline::{plan_caption_pipeline, resolve_caption_pipeline_timing};
 use crate::chatbox::{ChatboxPacer, ChatboxPublication};
 use crate::config::AppConfig;
+use crate::credentials::CredentialId;
 use crate::error::{AppError, AppResult};
 use crate::events::{
     DiagnosticCategory, DiagnosticUpdate, emit_diagnostic, record_and_emit_runtime_status,
@@ -14,7 +16,8 @@ use crate::host_resolver::HostResolver;
 use crate::recognition::RecognitionModule;
 use crate::runtime_control::{
     ChatboxPublicationSnapshot, RuntimeGenerationCredentialSnapshot, RuntimeGenerationPhase,
-    RuntimeGenerationSelection, RuntimeGenerationSnapshot, RuntimeStatus, RuntimeStatusRecorder,
+    RuntimeGenerationSelection, RuntimeGenerationSnapshot, RuntimeGenerationTranslationState,
+    RuntimeStatus, RuntimeStatusRecorder,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -43,6 +46,7 @@ pub(crate) struct RuntimeStartRequest {
     pub(crate) caption_aggregate: CaptionAggregateStore,
     pub(crate) chatbox_host_resolver: HostResolver,
     pub(crate) prepared_recognition: PreparedRecognition,
+    pub(crate) prepared_translation: Option<PreparedTranslation>,
     pub(crate) generation_id: u64,
     pub(crate) config_revision: u64,
     pub(crate) status_recorder: RuntimeStatusRecorder,
@@ -66,12 +70,18 @@ impl PreparedRecognition {
     pub(crate) fn cloud(
         module: RecognitionModule,
         credential: RuntimeGenerationCredentialSnapshot,
-    ) -> Self {
-        Self {
+    ) -> AppResult<Self> {
+        if credential.id != CredentialId::OpenAi {
+            return Err(AppError::state(
+                "Prepared cloud Recognition requires OpenAI credential metadata.",
+            ));
+        }
+
+        Ok(Self {
             module,
             credentials: vec![credential],
             uploads_microphone_audio: true,
-        }
+        })
     }
 }
 
@@ -163,6 +173,7 @@ impl RuntimeManager {
             caption_aggregate,
             chatbox_host_resolver,
             prepared_recognition,
+            prepared_translation,
             generation_id,
             config_revision,
             status_recorder,
@@ -170,12 +181,19 @@ impl RuntimeManager {
         } = request;
         let PreparedRecognition {
             module: recognition_module,
-            credentials,
+            mut credentials,
             uploads_microphone_audio,
         } = prepared_recognition;
         config.validate()?;
         let caption_pipeline_plan = plan_caption_pipeline(&config);
-        let publication_timing = resolve_caption_pipeline_start_timing(&caption_pipeline_plan)?;
+        let publication_timing = resolve_caption_pipeline_timing(&caption_pipeline_plan)?;
+        let generation_selection = RuntimeGenerationSelection::from(&config);
+        let (prepared_translation, translation_state, uploads_source_text) =
+            validate_prepared_translation(
+                generation_selection.translation.as_ref(),
+                prepared_translation,
+                &mut credentials,
+            )?;
 
         let mut guard = self
             .handle
@@ -200,7 +218,15 @@ impl RuntimeManager {
             ));
         }
 
-        let generation = RuntimeGeneration::activate(&app, generation_id, caption_aggregate)?;
+        let generation = match prepared_translation {
+            Some(prepared_translation) => RuntimeGeneration::activate_with_translation(
+                &app,
+                generation_id,
+                caption_aggregate,
+                prepared_translation,
+            )?,
+            None => RuntimeGeneration::activate(&app, generation_id, caption_aggregate)?,
+        };
         let start_cancelled = || !self.stop_epoch_unchanged(expected_stop_epoch);
         let publisher_init = initialize_chatbox_publication(
             &app,
@@ -260,12 +286,13 @@ impl RuntimeManager {
             id: generation_id,
             phase: RuntimeGenerationPhase::Starting,
             started_from_config_revision: config_revision,
-            selection: RuntimeGenerationSelection::from(&config),
+            selection: generation_selection,
             caption_pipeline_plan,
             credentials,
             chatbox_publication,
+            translation_state,
             uploads_microphone_audio,
-            uploads_source_text: false,
+            uploads_source_text,
         };
         if let Err(error) = install_generation(generation_snapshot) {
             let _ = generation.request_stop(publisher.as_ref());
@@ -392,6 +419,75 @@ impl RuntimeManager {
 
         Ok(())
     }
+}
+
+fn validate_prepared_translation(
+    selection: Option<&crate::config::TranslationConfig>,
+    prepared: Option<PreparedTranslation>,
+    credentials: &mut Vec<RuntimeGenerationCredentialSnapshot>,
+) -> AppResult<(
+    Option<PreparedTranslation>,
+    RuntimeGenerationTranslationState,
+    bool,
+)> {
+    let (selection, prepared) = match (selection, prepared) {
+        (None, None) => {
+            return Ok((None, RuntimeGenerationTranslationState::Inactive, false));
+        }
+        (Some(_), None) => {
+            return Err(AppError::config(
+                "The selected Translation path is not implemented yet \
+                 (translation.module_unavailable).",
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(AppError::state(
+                "Source-only Runtime cannot own a prepared Translation Module.",
+            ));
+        }
+        (Some(selection), Some(prepared)) => (selection, prepared),
+    };
+
+    if prepared.selection() != selection {
+        return Err(AppError::state(
+            "Prepared Translation selection does not match the active generation.",
+        ));
+    }
+    merge_generation_credential(credentials, prepared.credential())?;
+
+    Ok((
+        Some(prepared),
+        RuntimeGenerationTranslationState::Active,
+        true,
+    ))
+}
+
+fn merge_generation_credential(
+    credentials: &mut Vec<RuntimeGenerationCredentialSnapshot>,
+    prepared: &RuntimeGenerationCredentialSnapshot,
+) -> AppResult<()> {
+    let mut matching = credentials
+        .iter()
+        .filter(|credential| credential.id == prepared.id);
+    let Some(existing) = matching.next() else {
+        credentials.push(prepared.clone());
+        return Ok(());
+    };
+    if matching.next().is_some() {
+        return Err(AppError::state(
+            "Prepared generation contains duplicate credential metadata.",
+        ));
+    }
+    if existing.storage != prepared.storage
+        || existing.display_suffix != prepared.display_suffix
+        || existing.revision != prepared.revision
+    {
+        return Err(AppError::state(
+            "Prepared Modules disagree about shared credential metadata.",
+        ));
+    }
+
+    Ok(())
 }
 
 fn clear_finished_runtime<R: Runtime>(

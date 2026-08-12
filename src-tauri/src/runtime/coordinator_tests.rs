@@ -1,10 +1,18 @@
 use super::*;
-use crate::caption::{CaptionAggregateSnapshot, CaptionAggregateStore};
+use crate::caption::{CaptionAggregateSnapshot, CaptionAggregateStore, TranslationFailureReason};
+use crate::caption_pipeline::plan_caption_pipeline;
+use crate::config::{
+    AppConfig, ContentSelection, PublicationConfig, TranslationConfig, TranslationEndpoint,
+    TranslationPath, TranslationTarget,
+};
 use crate::recognition::{
     RecognitionDriver, RecognitionDriverIo, RecognitionEvent, RecognitionGenerationScope,
     RecognitionModule,
 };
-use crate::runtime_control::RuntimeControlStore;
+use crate::runtime_control::{
+    ChatboxPublicationSnapshot, RuntimeControlStore, RuntimeGenerationPhase,
+    RuntimeGenerationSelection, RuntimeGenerationSnapshot, RuntimeGenerationTranslationState,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -24,6 +32,59 @@ struct ReadyUntilStoppedDriver;
 
 struct DropTrackedRecognitionDriver {
     dropped: Arc<AtomicBool>,
+}
+
+#[test]
+fn translation_degradation_is_recorded_without_marking_the_runtime_failed() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let config = AppConfig {
+        translation: Some(TranslationConfig {
+            path: TranslationPath::OpenAiResponsesCompletedText,
+            target: TranslationTarget::SimplifiedChinese,
+            endpoint: TranslationEndpoint::Official,
+        }),
+        publication: PublicationConfig {
+            content: ContentSelection::Bilingual,
+            ..PublicationConfig::default()
+        },
+        ..AppConfig::default()
+    };
+    control.install_starting_generation(RuntimeGenerationSnapshot {
+        id: 1,
+        phase: RuntimeGenerationPhase::Running,
+        started_from_config_revision: 0,
+        selection: RuntimeGenerationSelection::from(&config),
+        caption_pipeline_plan: plan_caption_pipeline(&config),
+        credentials: Vec::new(),
+        chatbox_publication: ChatboxPublicationSnapshot::Disabled {
+            host: config.osc.host.clone(),
+            port: config.osc.port,
+        },
+        translation_state: RuntimeGenerationTranslationState::Active,
+        uploads_microphone_audio: false,
+        uploads_source_text: true,
+    })?;
+    let status_recorder = control.status_recorder();
+
+    record_translation_degradation(
+        app.handle(),
+        &status_recorder.translation_recorder(1),
+        TranslationFailureReason::ProviderUnavailable,
+    )?;
+
+    let snapshot = control.snapshot()?;
+    assert_eq!(snapshot.runtime_status.status, RuntimeStatus::Starting);
+    assert!(matches!(
+        snapshot
+            .generation
+            .as_ref()
+            .map(|generation| &generation.translation_state),
+        Some(RuntimeGenerationTranslationState::Degraded {
+            reason_code: TranslationFailureReason::ProviderUnavailable,
+        })
+    ));
+    Ok(())
 }
 
 impl Drop for DropTrackedRecognitionDriver {

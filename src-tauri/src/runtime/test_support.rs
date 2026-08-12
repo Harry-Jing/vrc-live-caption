@@ -72,6 +72,7 @@ pub(super) fn inactive_caption_update(revision: u64) -> CaptionAggregateUpdate {
             active_stream: None,
             open_source_units: Vec::new(),
             captions: Vec::new(),
+            translation_units: Vec::new(),
         },
         change: CaptionAggregateChange::SourceUnitAborted {
             unit_id: "inactive-unit".to_string(),

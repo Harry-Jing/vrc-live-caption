@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import wireVocabularyFixture from "../../../contracts/wire-vocabulary.json?raw";
-import { CAPTION_LANES, CAPTION_STATES } from "../captionAggregate";
+import {
+  CAPTION_LANES,
+  CAPTION_STATES,
+  TRANSLATION_FAILURE_REASONS,
+  TRANSLATION_UNIT_STATES,
+} from "../captionAggregate";
 import {
   CAPTION_BOUNDARY_OWNERS,
   CAPTION_UNIT_BEHAVIORS,
@@ -24,6 +29,7 @@ import {
   CREDENTIAL_STATUS_STATES,
   CREDENTIAL_STORAGES,
   RUNTIME_GENERATION_PHASES,
+  RUNTIME_GENERATION_TRANSLATION_STATES,
   RUNTIME_PENDING_GENERATION_CHANGES,
 } from "../runtimeControl";
 import {
@@ -42,6 +48,8 @@ test("closed frontend wire values match the shared vocabulary", () => {
     diagnosticSeverities: DIAGNOSTIC_SEVERITIES,
     captionLanes: CAPTION_LANES,
     captionStates: CAPTION_STATES,
+    translationUnitStates: TRANSLATION_UNIT_STATES,
+    translationFailureReasons: TRANSLATION_FAILURE_REASONS,
     publicationModes: PUBLICATION_MODES,
     contentSelections: CONTENT_SELECTIONS,
     recognitionPaths: RECOGNITION_PATHS,
@@ -59,6 +67,7 @@ test("closed frontend wire values match the shared vocabulary", () => {
     publicationIncompatibilityReasons: PUBLICATION_INCOMPATIBILITY_REASONS,
     runtimePendingGenerationChanges: RUNTIME_PENDING_GENERATION_CHANGES,
     runtimeGenerationPhases: RUNTIME_GENERATION_PHASES,
+    runtimeGenerationTranslationStates: RUNTIME_GENERATION_TRANSLATION_STATES,
     chatboxPublicationStates: CHATBOX_PUBLICATION_STATES,
   });
 });
