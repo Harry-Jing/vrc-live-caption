@@ -14,8 +14,10 @@
 
 use crate::caption::CaptionAggregateUpdate;
 use crate::caption::ReservedCompletedSource;
-use crate::config::TranslationTarget;
+use crate::config::{TranslationConfig, TranslationPath, TranslationTarget};
+use crate::credentials::ResolvedCredential;
 use crate::error::{AppError, AppResult};
+use crate::host_resolver::HostResolver;
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -23,6 +25,8 @@ use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+mod openai_responses;
 
 const OUTSTANDING_LIMIT: usize = 8;
 const RETAINED_SOURCE_BYTE_LIMIT: usize = 64 * 1024;
@@ -32,7 +36,6 @@ const TOTAL_DEADLINE: Duration = Duration::from_secs(12);
 const ATTEMPT_DEADLINE: Duration = Duration::from_secs(5);
 const MAX_ATTEMPTS: u8 = 2;
 const RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
-const RETRY_AFTER_LIMIT: Duration = Duration::from_secs(1);
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +57,23 @@ pub(crate) enum TranslationFailureClass {
     InvalidOutput,
     DeadlineExceeded,
     Unknown,
+}
+
+impl TranslationFailureClass {
+    /// Stable provider-neutral code for later Runtime diagnostics and UI copy.
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::Authentication => "translation.provider_authentication_failed",
+            Self::PermissionDenied => "translation.provider_permission_denied",
+            Self::InvalidRequest => "translation.provider_invalid_request",
+            Self::RateLimited => "translation.provider_rate_limited",
+            Self::UsageLimit => "translation.provider_usage_limit",
+            Self::ServiceUnavailable => "translation.provider_unavailable",
+            Self::InvalidOutput => "translation.invalid_output",
+            Self::DeadlineExceeded => "translation.deadline_exceeded",
+            Self::Unknown => "translation.failed",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,6 +228,28 @@ impl Drop for TranslationOutcomeReceiver {
 pub(crate) struct TranslationModule {
     shared: Arc<TranslationShared>,
     worker: Option<JoinHandle<()>>,
+}
+
+/// Prepares the one Phase 5 completed-text path without activating Runtime.
+///
+/// The credential remains bound to the endpoint that selected it, while the
+/// provider and transport stay private behind the provider-neutral owner.
+pub(crate) fn openai_responses_completed_text_module(
+    selection: &TranslationConfig,
+    credential: ResolvedCredential,
+    resolver: HostResolver,
+) -> AppResult<(TranslationModule, TranslationOutcomeReceiver)> {
+    match selection.path {
+        TranslationPath::OpenAiResponsesCompletedText => {}
+    }
+    let adapter =
+        openai_responses::OpenAiResponsesAdapter::new(&selection.endpoint, credential, resolver)
+            .map_err(|_| AppError::runtime("Failed to prepare the Translation HTTP adapter."))?;
+    TranslationModule::start(
+        selection.target,
+        Arc::new(adapter),
+        PolicyDependencies::real(),
+    )
 }
 
 impl TranslationModule {
@@ -623,8 +665,8 @@ struct CompletedTextRequest {
 }
 
 struct AttemptControl {
-    deadline: Duration,
-    total_deadline: Duration,
+    attempt_budget: Duration,
+    total_budget: Duration,
 }
 
 struct AdapterCompletion {
@@ -641,11 +683,14 @@ struct AdapterFailure {
     class: TranslationFailureClass,
     retryable: bool,
     retry_after: Option<Duration>,
+    // The adapter cannot prove whether the provider accepted the request.
+    // The owner must close admission, not merely finish this one unit.
+    request_outcome_ambiguous: bool,
 }
 
 trait CompletedTextAdapter: Send + Sync + 'static {
-    /// Begins one external call and returns immediately after the provider
-    /// request has started.
+    /// Authorizes one external call and returns its cancellation handle without
+    /// waiting for the provider result.
     ///
     /// Implementations must keep both `begin` and `ActiveTranslationCall::cancel`
     /// bounded and cancellation-aware. They execute on an isolated attempt
@@ -749,8 +794,8 @@ fn process_work(
             target,
         };
         let control = AttemptControl {
-            deadline: attempt_deadline,
-            total_deadline,
+            attempt_budget: attempt_deadline.saturating_sub(now),
+            total_budget: total_deadline.saturating_sub(now),
         };
         let attempt_result = run_attempt(
             shared,
@@ -759,6 +804,7 @@ fn process_work(
             control,
             dependencies.clock.as_ref(),
             attempt_deadline,
+            total_deadline,
         );
         let now = dependencies.clock.now();
         let result = match attempt_result {
@@ -773,12 +819,20 @@ fn process_work(
                 class: TranslationFailureClass::DeadlineExceeded,
                 retryable: true,
                 retry_after: None,
+                request_outcome_ambiguous: false,
             }),
+            // Preserve an ambiguous provider outcome even if it arrives just
+            // after the owner's deadline. Reclassifying it as a normal timeout
+            // would authorize an overlapping physical request.
+            AttemptResult::Returned(Err(failure)) if failure.request_outcome_ambiguous => {
+                Err(failure)
+            }
             AttemptResult::Returned(result) if now <= attempt_deadline => result,
             AttemptResult::Returned(_) => Err(AdapterFailure {
                 class: TranslationFailureClass::DeadlineExceeded,
                 retryable: true,
                 retry_after: None,
+                request_outcome_ambiguous: false,
             }),
         };
 
@@ -798,6 +852,10 @@ fn process_work(
                 return;
             }
             Err(failure) => {
+                if failure.request_outcome_ambiguous {
+                    fail_closed_after_unconfirmed_timeout(shared);
+                    return;
+                }
                 if !failure.retryable || attempt >= MAX_ATTEMPTS {
                     finish_failure(shared, work.job_id, failure.class);
                     return;
@@ -811,11 +869,15 @@ fn process_work(
                     );
                     return;
                 }
-                let requested_delay = failure
-                    .retry_after
-                    .map(|delay| delay.min(RETRY_AFTER_LIMIT))
-                    .unwrap_or_else(|| dependencies.jitter.delay(RETRY_BASE_DELAY));
                 let remaining = total_deadline.saturating_sub(now);
+                let requested_delay = match failure.retry_after {
+                    Some(delay) if delay >= remaining => {
+                        finish_failure(shared, work.job_id, failure.class);
+                        return;
+                    }
+                    Some(delay) => delay,
+                    None => dependencies.jitter.delay(RETRY_BASE_DELAY),
+                };
                 let delay = requested_delay.min(remaining);
                 if !dependencies
                     .delay
@@ -860,8 +922,8 @@ fn run_attempt(
     control: AttemptControl,
     clock: &dyn TranslationClock,
     deadline: Duration,
+    total_deadline: Duration,
 ) -> AttemptResult {
-    let total_deadline = control.total_deadline;
     let (event_sender, event_receiver) = sync_channel(2);
     let completion_event_sender = event_sender.clone();
     // Capacity two permits an authorized Begin and a racing Stop cancellation
@@ -905,6 +967,7 @@ fn run_attempt(
                                     class: TranslationFailureClass::Unknown,
                                     retryable: false,
                                     retry_after: None,
+                                    request_outcome_ambiguous: false,
                                 }),
                             ));
                             break;
@@ -996,6 +1059,7 @@ fn unknown_attempt_failure() -> AttemptResult {
         class: TranslationFailureClass::Unknown,
         retryable: false,
         retry_after: None,
+        request_outcome_ambiguous: false,
     }))
 }
 

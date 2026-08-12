@@ -227,6 +227,10 @@ impl ApiBaseUrl {
 
         Ok(Self(url))
     }
+
+    pub(crate) fn as_url(&self) -> &Url {
+        &self.0
+    }
 }
 
 fn has_valid_percent_encoding(value: &str) -> bool {

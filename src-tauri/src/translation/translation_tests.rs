@@ -1,6 +1,10 @@
 use super::*;
 use crate::caption::{CaptionAggregateStore, CaptionLane, CaptionSnapshot, CaptionState};
+use crate::config::{ApiBaseUrl, TranslationConfig, TranslationEndpoint, TranslationPath};
+use crate::credentials::{CredentialId, CredentialStorage, ResolvedCredential};
 use crate::error::{AppError, AppResult};
+use crate::host_resolver::HostResolver;
+use secrecy::SecretString;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -17,7 +21,7 @@ struct ScriptedAdapterState {
     results: VecDeque<Result<String, AdapterFailure>>,
     sources: Vec<String>,
     targets: Vec<TranslationTarget>,
-    deadlines: Vec<(Duration, Duration)>,
+    budgets: Vec<(Duration, Duration)>,
 }
 
 impl ScriptedAdapter {
@@ -30,7 +34,7 @@ impl ScriptedAdapter {
                     .collect(),
                 sources: Vec::new(),
                 targets: Vec::new(),
-                deadlines: Vec::new(),
+                budgets: Vec::new(),
             })),
         }
     }
@@ -49,10 +53,10 @@ impl ScriptedAdapter {
             .unwrap_or_default()
     }
 
-    fn deadlines(&self) -> Vec<(Duration, Duration)> {
+    fn budgets(&self) -> Vec<(Duration, Duration)> {
         self.state
             .lock()
-            .map(|state| state.deadlines.clone())
+            .map(|state| state.budgets.clone())
             .unwrap_or_default()
     }
 
@@ -62,7 +66,7 @@ impl ScriptedAdapter {
                 results: results.into_iter().collect(),
                 sources: Vec::new(),
                 targets: Vec::new(),
-                deadlines: Vec::new(),
+                budgets: Vec::new(),
             })),
         }
     }
@@ -79,16 +83,18 @@ impl CompletedTextAdapter for ScriptedAdapter {
             class: TranslationFailureClass::Unknown,
             retryable: false,
             retry_after: None,
+            request_outcome_ambiguous: false,
         })?;
         state.sources.push(request.source_text);
         state.targets.push(request.target);
         state
-            .deadlines
-            .push((control.deadline, control.total_deadline));
+            .budgets
+            .push((control.attempt_budget, control.total_budget));
         let result = state.results.pop_front().unwrap_or(Err(AdapterFailure {
             class: TranslationFailureClass::Unknown,
             retryable: false,
             retry_after: None,
+            request_outcome_ambiguous: false,
         }));
         drop(state);
         completion.finish(result);
@@ -209,6 +215,33 @@ impl RetryJitter for FixedJitter {
 struct QueuedNearDeadlineAdapter {
     clock: Arc<ManualClock>,
     calls: std::sync::atomic::AtomicU64,
+    budgets: Mutex<Vec<(Duration, Duration)>>,
+}
+
+#[derive(Clone)]
+struct LateAmbiguousAdapter {
+    clock: Arc<ManualClock>,
+    calls: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl CompletedTextAdapter for LateAmbiguousAdapter {
+    fn begin(
+        &self,
+        _request: CompletedTextRequest,
+        _control: AttemptControl,
+        completion: AdapterCompletion,
+    ) -> Result<Box<dyn ActiveTranslationCall>, AdapterFailure> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.clock
+            .advance(ATTEMPT_DEADLINE + Duration::from_millis(1));
+        completion.finish(Err(AdapterFailure {
+            class: TranslationFailureClass::DeadlineExceeded,
+            retryable: false,
+            retry_after: None,
+            request_outcome_ambiguous: true,
+        }));
+        Ok(Box::new(NoopActiveCall))
+    }
 }
 
 impl QueuedNearDeadlineAdapter {
@@ -216,11 +249,19 @@ impl QueuedNearDeadlineAdapter {
         Self {
             clock,
             calls: std::sync::atomic::AtomicU64::new(0),
+            budgets: Mutex::new(Vec::new()),
         }
     }
 
     fn calls(&self) -> u64 {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    fn budgets(&self) -> Vec<(Duration, Duration)> {
+        self.budgets
+            .lock()
+            .map(|budgets| budgets.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -228,9 +269,12 @@ impl CompletedTextAdapter for QueuedNearDeadlineAdapter {
     fn begin(
         &self,
         _request: CompletedTextRequest,
-        _control: AttemptControl,
+        control: AttemptControl,
         completion: AdapterCompletion,
     ) -> Result<Box<dyn ActiveTranslationCall>, AdapterFailure> {
+        if let Ok(mut budgets) = self.budgets.lock() {
+            budgets.push((control.attempt_budget, control.total_budget));
+        }
         let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         if call <= 2 {
             self.clock.advance(Duration::from_millis(4_900));
@@ -241,6 +285,7 @@ impl CompletedTextAdapter for QueuedNearDeadlineAdapter {
                 class: TranslationFailureClass::RateLimited,
                 retryable: true,
                 retry_after: Some(Duration::from_secs(30)),
+                request_outcome_ambiguous: false,
             }));
         }
         Ok(Box::new(NoopActiveCall))
@@ -345,6 +390,7 @@ impl CompletedTextAdapter for BlockingAdapter {
             class: TranslationFailureClass::Unknown,
             retryable: false,
             retry_after: None,
+            request_outcome_ambiguous: false,
         })?;
         state.calls = state.calls.saturating_add(1);
         state.completion = Some(completion);
@@ -518,6 +564,60 @@ fn reservation(
         .accept_completed_source_for_translation(caption)?
         .map(|(_, reservation)| reservation)
         .ok_or_else(|| AppError::state("Test source was not reserved."))
+}
+
+fn translation_credential(id: CredentialId) -> ResolvedCredential {
+    ResolvedCredential {
+        id,
+        secret: SecretString::from("test-translation-secret"),
+        storage: CredentialStorage::SystemCredentialStore,
+        display_suffix: Some("test".to_string()),
+    }
+}
+
+#[test]
+fn production_factory_binds_each_endpoint_to_its_own_credential() -> AppResult<()> {
+    let custom_base =
+        ApiBaseUrl::parse("https://translation.example.test/api/v1").map_err(AppError::config)?;
+    let cases = [
+        (
+            TranslationEndpoint::Official,
+            CredentialId::OpenAi,
+            CredentialId::CustomTranslation,
+        ),
+        (
+            TranslationEndpoint::Custom {
+                api_base_url: custom_base,
+            },
+            CredentialId::CustomTranslation,
+            CredentialId::OpenAi,
+        ),
+    ];
+
+    for (endpoint, expected, mismatched) in cases {
+        let selection = TranslationConfig {
+            path: TranslationPath::OpenAiResponsesCompletedText,
+            target: TranslationTarget::English,
+            endpoint,
+        };
+        let (mut module, outcomes) = openai_responses_completed_text_module(
+            &selection,
+            translation_credential(expected),
+            HostResolver::default(),
+        )?;
+        module.stop()?;
+        drop(outcomes);
+
+        let error = openai_responses_completed_text_module(
+            &selection,
+            translation_credential(mismatched),
+            HostResolver::default(),
+        )
+        .err()
+        .ok_or_else(|| AppError::state("A mismatched Translation credential was accepted."))?;
+        assert_eq!(error.code(), "runtime.failed");
+    }
+    Ok(())
 }
 
 #[test]
@@ -759,6 +859,7 @@ fn retryable_failure_uses_two_attempts_and_the_deterministic_backoff() -> AppRes
             class: TranslationFailureClass::ServiceUnavailable,
             retryable: true,
             retry_after: None,
+            request_outcome_ambiguous: false,
         }),
         Ok("translated".to_string()),
     ]);
@@ -791,10 +892,10 @@ fn retryable_failure_uses_two_attempts_and_the_deterministic_backoff() -> AppRes
         ]
     );
     assert_eq!(
-        adapter.deadlines(),
+        adapter.budgets(),
         [
             (Duration::from_secs(5), Duration::from_secs(12)),
-            (Duration::from_millis(5_250), Duration::from_secs(12),),
+            (Duration::from_secs(5), Duration::from_millis(11_750)),
         ]
     );
     assert_eq!(delay.waits(), [Duration::from_millis(250)]);
@@ -851,6 +952,7 @@ fn stop_cancels_retry_backoff_before_another_call_starts() -> AppResult<()> {
             class: TranslationFailureClass::ServiceUnavailable,
             retryable: true,
             retry_after: None,
+            request_outcome_ambiguous: false,
         }),
         Ok("must not run".to_string()),
     ]);
@@ -892,6 +994,7 @@ fn terminal_provider_failures_preserve_the_closed_provider_neutral_class() -> Ap
             class,
             retryable: false,
             retry_after: None,
+            request_outcome_ambiguous: false,
         })]);
         let (mut module, outcomes) = TranslationModule::start_for_test(
             TranslationTarget::SimplifiedChinese,
@@ -922,13 +1025,57 @@ fn terminal_provider_failures_preserve_the_closed_provider_neutral_class() -> Ap
 }
 
 #[test]
-fn retry_after_is_capped_and_never_extends_the_total_deadline() -> AppResult<()> {
+fn provider_neutral_failure_classes_have_stable_translation_codes() {
+    let cases = [
+        (
+            TranslationFailureClass::Authentication,
+            "translation.provider_authentication_failed",
+        ),
+        (
+            TranslationFailureClass::PermissionDenied,
+            "translation.provider_permission_denied",
+        ),
+        (
+            TranslationFailureClass::InvalidRequest,
+            "translation.provider_invalid_request",
+        ),
+        (
+            TranslationFailureClass::RateLimited,
+            "translation.provider_rate_limited",
+        ),
+        (
+            TranslationFailureClass::UsageLimit,
+            "translation.provider_usage_limit",
+        ),
+        (
+            TranslationFailureClass::ServiceUnavailable,
+            "translation.provider_unavailable",
+        ),
+        (
+            TranslationFailureClass::InvalidOutput,
+            "translation.invalid_output",
+        ),
+        (
+            TranslationFailureClass::DeadlineExceeded,
+            "translation.deadline_exceeded",
+        ),
+        (TranslationFailureClass::Unknown, "translation.failed"),
+    ];
+
+    for (class, expected) in cases {
+        assert_eq!(class.code(), expected);
+    }
+}
+
+#[test]
+fn retry_after_beyond_the_total_budget_finishes_without_an_early_retry() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
     let adapter = ScriptedAdapter::with_results([
         Err(AdapterFailure {
             class: TranslationFailureClass::RateLimited,
             retryable: true,
             retry_after: Some(Duration::from_secs(30)),
+            request_outcome_ambiguous: false,
         }),
         Ok("translated".to_string()),
     ]);
@@ -941,7 +1088,7 @@ fn retry_after_is_capped_and_never_extends_the_total_deadline() -> AppResult<()>
     };
     let (mut module, outcomes) = TranslationModule::start_for_test(
         TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter),
+        Arc::new(adapter.clone()),
         dependencies,
     )?;
     module
@@ -950,15 +1097,62 @@ fn retry_after_is_capped_and_never_extends_the_total_deadline() -> AppResult<()>
 
     assert!(matches!(
         outcomes.recv_timeout(TEST_TIMEOUT),
-        Ok(TranslationTerminalOutcome::Completed(_))
+        Ok(TranslationTerminalOutcome::Failed(FailedTranslation {
+            class: TranslationFailureClass::RateLimited,
+            ..
+        }))
     ));
-    assert_eq!(delay.waits(), [Duration::from_secs(1)]);
+    assert_eq!(adapter.sources().len(), 1);
+    assert!(delay.waits().is_empty());
     module.stop()?;
     Ok(())
 }
 
 #[test]
-fn retry_delay_is_shortened_to_the_remaining_total_budget() -> AppResult<()> {
+fn retry_after_within_the_total_budget_is_honored_without_jitter() -> AppResult<()> {
+    let store = CaptionAggregateStore::default();
+    let adapter = ScriptedAdapter::with_results([
+        Err(AdapterFailure {
+            class: TranslationFailureClass::RateLimited,
+            retryable: true,
+            retry_after: Some(Duration::from_secs(2)),
+            request_outcome_ambiguous: false,
+        }),
+        Ok("translated".to_string()),
+    ]);
+    let clock = Arc::new(ManualClock::default());
+    let delay = Arc::new(AdvancingDelay::new(Arc::clone(&clock)));
+    let dependencies = TestPolicyDependencies {
+        clock,
+        delay: delay.clone(),
+        jitter: Arc::new(FixedJitter(Duration::from_millis(300))),
+    };
+    let (mut module, outcomes) = TranslationModule::start_for_test(
+        TranslationTarget::SimplifiedChinese,
+        Arc::new(adapter.clone()),
+        dependencies,
+    )?;
+    module
+        .try_submit(reservation(
+            &store,
+            26,
+            "retry-after-within-budget",
+            "private source",
+        )?)
+        .map_err(|_| AppError::state("Retry-After test source was rejected."))?;
+
+    assert!(matches!(
+        outcomes.recv_timeout(TEST_TIMEOUT),
+        Ok(TranslationTerminalOutcome::Completed(_))
+    ));
+    assert_eq!(adapter.sources().len(), 2);
+    assert_eq!(delay.waits(), [Duration::from_secs(2)]);
+    module.stop()?;
+    Ok(())
+}
+
+#[test]
+fn queued_work_does_not_shorten_retry_after_to_fit_the_remaining_budget() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
     let clock = Arc::new(ManualClock::default());
     let adapter = Arc::new(QueuedNearDeadlineAdapter::new(Arc::clone(&clock)));
@@ -993,12 +1187,22 @@ fn retry_delay_is_shortened_to_the_remaining_total_budget() -> AppResult<()> {
     assert!(matches!(
         outcome,
         TranslationTerminalOutcome::Failed(FailedTranslation {
-            class: TranslationFailureClass::DeadlineExceeded,
+            class: TranslationFailureClass::RateLimited,
             ..
         })
     ));
     assert_eq!(adapter.calls(), 3);
-    assert_eq!(delay.waits(), [Duration::from_millis(300)]);
+    let budgets = adapter.budgets();
+    assert_eq!(budgets.len(), 3);
+    assert_eq!(
+        budgets[0],
+        (Duration::from_secs(5), Duration::from_secs(12))
+    );
+    assert!(budgets[1].0 <= Duration::from_secs(5));
+    assert!(budgets[1].1 <= Duration::from_millis(7_100));
+    assert_eq!(budgets[2].0, budgets[2].1);
+    assert!(budgets[2].1 <= Duration::from_millis(2_200));
+    assert!(delay.waits().is_empty());
     module.stop()?;
     Ok(())
 }
@@ -1052,6 +1256,63 @@ fn unconfirmed_attempt_timeout_fails_closed_without_starting_more_work() -> AppR
     );
     module.stop()?;
     adapter.release();
+    Ok(())
+}
+
+#[test]
+fn late_ambiguous_result_keeps_its_fail_closed_semantics() -> AppResult<()> {
+    let store = CaptionAggregateStore::default();
+    let clock = Arc::new(ManualClock::default());
+    let calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let adapter = LateAmbiguousAdapter {
+        clock: Arc::clone(&clock),
+        calls: Arc::clone(&calls),
+    };
+    let dependencies = TestPolicyDependencies {
+        clock,
+        delay: Arc::new(SystemDelay),
+        jitter: Arc::new(FixedJitter(Duration::from_millis(250))),
+    };
+    let (mut module, outcomes) = TranslationModule::start_for_test(
+        TranslationTarget::SimplifiedChinese,
+        Arc::new(adapter),
+        dependencies,
+    )?;
+    module
+        .try_submit(reservation(&store, 29, "late-ambiguous", "private source")?)
+        .map_err(|_| AppError::state("Late ambiguous source was rejected."))?;
+    module
+        .try_submit(reservation(
+            &store,
+            29,
+            "must-not-start",
+            "queued private source",
+        )?)
+        .map_err(|_| AppError::state("Queued ambiguous source was rejected."))?;
+
+    for _ in 0..2 {
+        let outcome = outcomes
+            .recv_timeout(TEST_TIMEOUT)
+            .map_err(|_| AppError::state("Ambiguous failure was not received."))?;
+        assert!(matches!(
+            outcome,
+            TranslationTerminalOutcome::Failed(FailedTranslation {
+                class: TranslationFailureClass::DeadlineExceeded,
+                ..
+            })
+        ));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        module.try_submit(reservation(
+            &store,
+            29,
+            "closed-admission",
+            "later private source"
+        )?),
+        Err(TranslationSubmitError::Closed)
+    ));
+    module.stop()?;
     Ok(())
 }
 
