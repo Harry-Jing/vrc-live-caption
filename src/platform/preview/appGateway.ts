@@ -28,6 +28,10 @@ import type {
   RuntimeStatus,
   RuntimeStatusEvent,
 } from "../../runtime/runtimeEvents";
+import {
+  createPreviewTranslationScenarioSeed,
+  previewTranslationScenarioFromSearch,
+} from "./translationScenarios";
 
 const PREVIEW_DEFAULT_CONFIG: AppConfig = {
   schemaVersion: APP_CONFIG_SCHEMA_VERSION,
@@ -163,38 +167,62 @@ export function previewCaptionPipelinePlan(
   };
 }
 
-export function createPreviewAppGateway(): AppGateway {
+export function createPreviewAppGateway(search = ""): AppGateway {
+  const requestedTranslationScenario =
+    previewTranslationScenarioFromSearch(search);
+  const translationScenario = requestedTranslationScenario
+    ? createPreviewTranslationScenarioSeed(requestedTranslationScenario)
+    : null;
   const subscriptions = new Set<Readonly<{ listener: RuntimeEventListener }>>();
   const controlSubscriptions = new Set<
     Readonly<{ listener: (snapshot: RuntimeControlSnapshot) => void }>
   >();
-  let config = structuredClone(PREVIEW_DEFAULT_CONFIG);
+  let config = structuredClone(
+    translationScenario?.config ?? PREVIEW_DEFAULT_CONFIG,
+  );
   const credentialSuffixes: Record<CredentialId, string | null> = {
-    openai: null,
-    customTranslation: null,
+    openai: translationScenario?.credentialSuffixes.openai ?? null,
+    customTranslation:
+      translationScenario?.credentialSuffixes.customTranslation ?? null,
   };
   const credentialRevisions: Record<CredentialId, number> = {
-    openai: 0,
-    customTranslation: 0,
+    openai:
+      translationScenario?.generation?.credentials.find(
+        ({ id }) => id === "openai",
+      )?.revision ?? 0,
+    customTranslation:
+      translationScenario?.generation?.credentials.find(
+        ({ id }) => id === "customTranslation",
+      )?.revision ?? 0,
   };
   let configRevision = 1;
   let controlRevision = 1;
-  let nextGeneration = 0;
-  let generation: RuntimeGenerationSnapshot | null = null;
+  let nextGeneration = translationScenario?.generation?.id ?? 0;
+  let generation: RuntimeGenerationSnapshot | null =
+    translationScenario?.generation == null
+      ? null
+      : {
+          ...structuredClone(translationScenario.generation),
+          captionPipelinePlan: previewCaptionPipelinePlan(config),
+        };
   let nextEventNumber = 1;
-  let captionAggregate: CaptionAggregateSnapshot = {
-    contractVersion: CAPTION_AGGREGATE_CONTRACT_VERSION,
-    snapshotRevision: 0,
-    activeStream: null,
-    openSourceUnits: [],
-    captions: [],
-    translationUnits: [],
-  };
-  let latestStatus: RuntimeStatusEvent = {
-    status: "idle",
-    message: "Runtime is idle",
-    timestampMs: Date.now(),
-  };
+  let captionAggregate: CaptionAggregateSnapshot = structuredClone(
+    translationScenario?.captionAggregate ?? {
+      contractVersion: CAPTION_AGGREGATE_CONTRACT_VERSION,
+      snapshotRevision: 0,
+      activeStream: null,
+      openSourceUnits: [],
+      captions: [],
+      translationUnits: [],
+    },
+  );
+  let latestStatus: RuntimeStatusEvent = structuredClone(
+    translationScenario?.runtimeStatus ?? {
+      status: "idle",
+      message: "Runtime is idle",
+      timestampMs: Date.now(),
+    },
+  );
 
   function nextPreviewEventId(prefix: string) {
     nextEventNumber += 1;

@@ -63,6 +63,7 @@ function createRuntimeStoreHarness() {
     activeStream: { generation: 8, streamId: "recognition-8-1" },
   };
   const pendingStart = deferred<RuntimeControlSnapshot>();
+  const pendingStop = deferred<RuntimeControlSnapshot>();
   const unsubscribeEvents = vi.fn();
   const unsubscribeControl = vi.fn();
   const callOrder: string[] = [];
@@ -72,6 +73,7 @@ function createRuntimeStoreHarness() {
   let controlListener: RuntimeControlSnapshotListener = () => undefined;
 
   const startRuntime = vi.fn(() => pendingStart.promise);
+  const stopRuntime = vi.fn(() => pendingStop.promise);
   const sendOscTestMessage = vi.fn(() => Promise.resolve());
   const getRuntimeControlSnapshot = vi.fn(() => {
     callOrder.push("getRuntimeControlSnapshot");
@@ -90,7 +92,7 @@ function createRuntimeStoreHarness() {
     },
     sendOscTestMessage,
     startRuntime,
-    stopRuntime: () => Promise.resolve(initialControl),
+    stopRuntime,
     getRuntimeControlSnapshot,
     getCaptionAggregateSnapshot() {
       callOrder.push("getCaptionAggregateSnapshot");
@@ -121,10 +123,14 @@ function createRuntimeStoreHarness() {
     controlListener,
     eventListener,
     getRuntimeControlSnapshot,
+    fixtureCaption,
+    initialControl,
     pendingStart,
+    pendingStop,
     runningCaption,
     runningControl,
     startRuntime,
+    stopRuntime,
     sendOscTestMessage,
     store: createRuntimeStore(gateway),
     unsubscribeControl,
@@ -133,7 +139,42 @@ function createRuntimeStoreHarness() {
       currentControl = runningControl;
       currentCaption = runningCaption;
     },
+    useSnapshots(
+      control: RuntimeControlSnapshot,
+      captions: CaptionAggregateSnapshot,
+    ) {
+      currentControl = control;
+      currentCaption = captions;
+    },
   };
+}
+
+function useTranslationSnapshots(
+  harness: ReturnType<typeof createRuntimeStoreHarness>,
+) {
+  const generation = harness.runningControl.generation;
+  const translation = harness.runningControl.desired.config.translation;
+  if (generation === null || translation === null) {
+    throw new Error("Translation fixtures require a generation and selection.");
+  }
+
+  harness.useSnapshots(
+    {
+      ...harness.runningControl,
+      generation: {
+        ...generation,
+        id: 7,
+        selection: {
+          ...generation.selection,
+          publication: { mode: "completed", content: "bilingual" },
+          translation,
+        },
+        translationState: { state: "active" },
+        uploadsSourceText: true,
+      },
+    },
+    harness.fixtureCaption,
+  );
 }
 
 afterEach(() => {
@@ -206,6 +247,54 @@ test("retains a structured runtime action failure", async () => {
   expect(harness.store.runtime.runtimeFailure.value).toEqual({
     code: "osc.send_failed",
     message: "Chatbox send failed.",
+  });
+  harness.store.dispose();
+});
+
+test("reconstructs the same Translation view from authoritative pulls", async () => {
+  const first = createRuntimeStoreHarness();
+  const reconnected = createRuntimeStoreHarness();
+  useTranslationSnapshots(first);
+  useTranslationSnapshots(reconnected);
+
+  await first.store.connect();
+  await reconnected.store.connect();
+
+  expect(reconnected.store.runtime.translationPresentation.value).toEqual(
+    first.store.runtime.translationPresentation.value,
+  );
+  expect(
+    reconnected.store.runtime.translationPresentation.value.units,
+  ).toHaveLength(3);
+
+  first.store.dispose();
+  reconnected.store.dispose();
+});
+
+test("hides admitted Translation units immediately when Stop is requested", async () => {
+  const harness = createRuntimeStoreHarness();
+  useTranslationSnapshots(harness);
+  await harness.store.connect();
+  expect(
+    harness.store.runtime.translationPresentation.value.units,
+  ).toHaveLength(3);
+
+  const stop = harness.store.runtime.runAction("stop");
+  await Promise.resolve();
+
+  expect(harness.store.runtime.translationPresentation.value.units).toEqual([]);
+
+  harness.pendingStop.resolve({
+    ...harness.initialControl,
+    revision: 3,
+    runtimeStatus: { status: "stopped", timestampMs: 300 },
+    desired: harness.runningControl.desired,
+  });
+  await stop;
+
+  expect(harness.store.runtime.translationPresentation.value).toMatchObject({
+    state: "inactive",
+    units: [],
   });
   harness.store.dispose();
 });

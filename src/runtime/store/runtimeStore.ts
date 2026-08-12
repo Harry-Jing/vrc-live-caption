@@ -31,6 +31,7 @@ import {
   type RuntimeStateInput,
 } from "../runtimeState";
 import type { RuntimeStatusEvent } from "../runtimeEvents";
+import { translationPresentation as projectTranslationPresentation } from "../translationPresentation";
 import { createAudioInputState } from "./audioInput";
 
 const RUNTIME_CONTROL_RECONCILE_INTERVAL_MS = 500;
@@ -155,6 +156,14 @@ export function createRuntimeStore(gateway: AppGateway) {
     selectCaptionAggregateView(
       captionAggregateState.value,
       desiredConfig.value?.ui.showOngoingPreview ?? true,
+    ),
+  );
+  const translationPresentation = computed(() =>
+    projectTranslationPresentation(
+      currentGeneration.value,
+      captionAggregateState.value.admission === "open"
+        ? captionAggregateState.value.snapshot
+        : null,
     ),
   );
   const runtimeStatus = computed(() => runtimeView.value.runtimeStatus);
@@ -607,6 +616,7 @@ export function createRuntimeStore(gateway: AppGateway) {
       saveConfig,
       saveCredential,
       settingsFailure,
+      translationPresentation,
       visibleCaptionText,
     },
   };

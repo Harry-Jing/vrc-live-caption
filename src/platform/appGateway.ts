@@ -35,7 +35,9 @@ export function createAppGateway(): AppGateway {
   }
 
   if (import.meta.env.DEV) {
-    return createPreviewAppGateway();
+    return createPreviewAppGateway(
+      typeof location === "undefined" ? "" : location.search,
+    );
   }
 
   return createUnsupportedAppGateway();
