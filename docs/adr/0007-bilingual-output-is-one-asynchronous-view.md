@@ -1,16 +1,11 @@
 # Bilingual output is one asynchronous view
 
-Bilingual Chatbox messages render source above translation in a single
-message. The measured Chatbox budget is shared flexibly rather than split
-50/50, and spare capacity leans toward the translation: if you chose bilingual,
-the translation is the part you are showing to other players. In Live, source
-may run ahead of the translation so fresh text is never blocked by strict
-sentence alignment; the app still keeps exact source/translation linkage
-internally. The current layout evidence lives in the
-[VRChat Chatbox reference](../research/vrchat-chatbox-reference.md).
+Bilingual is one content selection. When Translation succeeds, Completed
+publication pairs it with its exact Source and renders Source above Translation.
+The measured Chatbox budget is shared flexibly with spare capacity leaning
+toward Translation; fixed 50/50 allocation would waste useful space
+([layout evidence](../research/vrchat-chatbox-reference.md)).
 
-Consequences: normal delay may leave the translation one unit behind. If
-translation fails, the bilingual selection stays, the app shows a degraded
-state, and stale translations are dropped rather than shown under newer
-source text. Observer testing must confirm that loose alignment is less
-confusing than strict-alignment latency.
+Missing Translation is never replaced by stale text. Pagination and terminal
+failure behavior are defined in [Product](../product.md#bilingual-output).
+Future Live alignment remains a separate decision.

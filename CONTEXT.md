@@ -84,7 +84,7 @@ The user's timing choice: **Completed** publishes completed snapshots only;
 _Avoid_: Content selection, streaming toggle
 
 **Content selection**:
-The lanes the user wants to publish: source, translation, or both.
+The user's lane choice: **Source-only**, **Translation-only**, or **Bilingual**.
 _Avoid_: Publication mode
 
 **Publication policy**:

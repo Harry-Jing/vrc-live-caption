@@ -26,8 +26,9 @@ latency, stability, and resource use while VRChat is running
   ([ADR 0010](./adr/0010-stop-is-a-hard-cutoff.md)).
 - **Failures are visible.** Recovery may discard uncertain speech, but it must
   not duplicate, mis-correlate, or secretly reroute it.
-- **Cloud use is honest.** Settings disclose when microphone audio is uploaded,
-  and credentials stay out of ordinary config, logs, and diagnostics.
+- **Cloud use is honest.** Settings disclose when microphone audio or completed
+  Source text is uploaded and which selected path receives it. Credentials stay
+  out of ordinary config, logs, and diagnostics.
 - **VRChat constraints shape output.** Pacing, layout, and pagination follow the
   measured Chatbox behavior in the
   [VRChat reference](./research/vrchat-chatbox-reference.md).
@@ -59,10 +60,14 @@ incompatible, the app offers explicit alternatives instead of selecting one
 
 ### Content
 
-The target choices are source-only, translation-only, and bilingual output.
-Bilingual output places source and translation in one asynchronous view, with
-space leaning toward the translation rather than a fixed 50/50 split
+The content choices are Source-only, Translation-only, and Bilingual output.
+Bilingual output places Source and Translation in one asynchronous view, with
+space leaning toward Translation rather than a fixed 50/50 split
 ([ADR 0007](./adr/0007-bilingual-output-is-one-asynchronous-view.md)).
+
+Content that includes Translation requires an explicit target. UI locale,
+recognition hints, and detected Source language never infer it. The first
+catalog is English (`en`) and Simplified Chinese (`zh-Hans`).
 
 ### Local backend
 
@@ -84,9 +89,15 @@ paginated without truncating the beginning or end.
 
 ### Bilingual output
 
-Source and translation progress independently. Source may lead; a late
-translation cannot attach to newer or unrelated speech. Translation failure is
-visible and does not silently change the user's content selection.
+When Translation succeeds, Completed Chatbox publication pairs it with its exact
+Source and renders Source above Translation. Across pages, each selected lane's
+text appears losslessly once; an exhausted shorter lane is not repeated, and
+the longer lane may continue alone.
+
+On terminal Translation failure, the App shows the failed unit and degraded
+state. Translation-only omits it; Bilingual publishes Source as a partial
+result, stays selected, and tries Translation again for later units. Live
+alignment remains a separate decision.
 
 ### Long speech
 

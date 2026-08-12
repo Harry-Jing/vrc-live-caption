@@ -43,3 +43,4 @@ After merging to `main`, ADR numbers are stable identifiers.
 ## Translation boundary
 
 - [0020 — Link translations to exact source snapshots](./0020-link-translations-to-exact-source-snapshots.md)
+- [0021 — Use OpenAI Responses for completed translation](./0021-use-openai-responses-for-completed-translation.md)

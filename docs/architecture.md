@@ -207,13 +207,22 @@ capture begins.
 
 ### Translation
 
-The first Translation Module consumes completed Source snapshots and emits
-correlated Translation snapshots. Work is bounded and cancellable; a stale,
-timed-out, or late result cannot overwrite another source revision or unit.
+The first Translation Module consumes completed Source snapshots. Each accepted
+unit resolves exactly once as either one terminal correlated Translation
+snapshot or a provider-neutral failure; it does not emit ongoing Translation
+revisions. Work is bounded and cancellable, and a stale, timed-out, or late
+result cannot overwrite another source revision or unit.
 
 Admitting translation work must pin its exact completed Source snapshot until a
 terminal outcome or Stop, so bounded history trimming cannot remove that Source
 snapshot while translation work is in flight.
+
+Start captures the resolved Translation path and explicit target as immutable
+generation state. Phase 5 planning permits Translation only with Completed
+publication; Live remains incompatible until its update shape is evaluated.
+Provider and endpoint rules stay behind the Module boundary
+([ADR 0015](./adr/0015-cloud-connections-honor-explicit-routes-and-endpoints.md),
+[ADR 0021](./adr/0021-use-openai-responses-for-completed-translation.md)).
 
 Transcript-driven and direct-audio translation remain different path shapes.
 Repeatedly translating every unstable source revision is not the default Live
