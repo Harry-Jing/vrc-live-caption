@@ -24,7 +24,7 @@ const recognition: CaptionPipelinePlan["recognition"] = {
 function captionPipelinePlan(
   publication: PublicationPlan,
 ): CaptionPipelinePlan {
-  return { recognition, publication };
+  return { recognition, translation: null, publication };
 }
 
 const incompatibleLivePlan = captionPipelinePlan({

@@ -3,14 +3,32 @@ import type { CaptionLane } from "./captionAggregate";
 export const PUBLICATION_MODES = ["completed", "live"] as const;
 export type PublicationMode = (typeof PUBLICATION_MODES)[number];
 
+export const CONTENT_SELECTIONS = [
+  "sourceOnly",
+  "translationOnly",
+  "bilingual",
+] as const;
+export type ContentSelection = (typeof CONTENT_SELECTIONS)[number];
+
 export const RECOGNITION_PATHS = [
   "openai/gpt-transcribe",
   "openai/gpt-live-transcribe",
 ] as const;
 export type RecognitionPath = (typeof RECOGNITION_PATHS)[number];
 
+export const TRANSLATION_PATHS = ["openai/responses-completed-text"] as const;
+export type TranslationPath = (typeof TRANSLATION_PATHS)[number];
+
+export const TRANSLATION_TARGETS = ["en", "zh-Hans"] as const;
+export type TranslationTarget = (typeof TRANSLATION_TARGETS)[number];
+
+export const TRANSLATION_ENDPOINT_KINDS = ["official", "custom"] as const;
+
 export const RECOGNITION_INPUT_SHAPES = ["continuousAudioFrames"] as const;
 export type RecognitionInputShape = (typeof RECOGNITION_INPUT_SHAPES)[number];
+
+export const TRANSLATION_INPUT_SHAPES = ["completedSourceSnapshots"] as const;
+export type TranslationInputShape = (typeof TRANSLATION_INPUT_SHAPES)[number];
 
 export const CAPTION_BOUNDARY_OWNERS = ["application"] as const;
 export type CaptionBoundaryOwner = (typeof CAPTION_BOUNDARY_OWNERS)[number];
@@ -50,6 +68,16 @@ export type RecognitionCapabilityProfile = Readonly<{
   }>[];
 }>;
 
+export type TranslationCapabilityProfile = Readonly<{
+  path: TranslationPath;
+  inputShape: TranslationInputShape;
+  lanes: readonly Readonly<{
+    lane: CaptionLane;
+    updates: LaneUpdateBehavior;
+    revisions: RevisionBehavior;
+  }>[];
+}>;
+
 export type ResolvedPublicationTiming =
   | Readonly<{ timing: "completed" }>
   | Readonly<{ timing: "liveUnit"; observationWindowMs: number }>;
@@ -76,5 +104,6 @@ export type PublicationPlan =
 
 export type CaptionPipelinePlan = Readonly<{
   recognition: RecognitionCapabilityProfile;
+  translation: TranslationCapabilityProfile | null;
   publication: PublicationPlan;
 }>;

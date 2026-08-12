@@ -62,12 +62,13 @@ fn prepared_cloud_recognition_binds_generation_disclosure_to_its_module() -> App
     );
     let PreparedRecognition {
         module,
-        credential: prepared_credential,
+        credentials,
         uploads_microphone_audio,
     } = prepared;
 
     drop(module);
-    let prepared_credential = prepared_credential
+    let prepared_credential = credentials
+        .first()
         .ok_or_else(|| AppError::state("Prepared cloud recognition lost its credential."))?;
     assert_eq!(prepared_credential.id, credential.id);
     assert_eq!(prepared_credential.storage, credential.storage);
@@ -132,10 +133,12 @@ fn runtime_starts_the_prepared_module_with_its_bound_generation_metadata() -> Ap
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| AppError::state("Prepared generation snapshot was not installed."))?;
     let snapshot_credential = snapshot
-        .credential
+        .credentials
+        .first()
         .ok_or_else(|| AppError::state("Prepared generation omitted its credential metadata."))?;
     assert_eq!(snapshot_credential.revision, 3);
     assert!(snapshot.uploads_microphone_audio);
+    assert!(!snapshot.uploads_source_text);
 
     manager.stop(app.handle(), &status_recorder)?;
     assert_eq!(completed_runs.load(Ordering::SeqCst), 1);

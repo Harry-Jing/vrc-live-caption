@@ -4,7 +4,7 @@ This directory holds shared evidence for the Rust/TypeScript boundary. The
 artifacts complement the Rust types, TypeScript decoders, and tests; payload
 fixtures are representative compatibility scenarios, not complete JSON Schema.
 
-- `*-v1.json` files are versioned payload scenarios consumed by both languages.
+- `*-vN.json` files are versioned payload scenarios consumed by both languages.
 - `tauri-ipc.json` is the exact manifest of command and event identifiers in one
   application build.
 - `wire-vocabulary.json` is the exact manifest of closed enum values and tagged

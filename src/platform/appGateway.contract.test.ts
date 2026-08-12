@@ -16,9 +16,10 @@ import {
 } from "../runtime/appConfig";
 import type { AudioProbeRequest } from "../runtime/audio";
 import type { CaptionAggregateSnapshot } from "../runtime/captionAggregate";
-import type {
-  RuntimeControlSnapshot,
-  RuntimeGenerationSnapshot,
+import {
+  RUNTIME_CONTROL_CONTRACT_VERSION,
+  type RuntimeControlSnapshot,
+  type RuntimeGenerationSnapshot,
 } from "../runtime/runtimeControl";
 import type {
   DiagnosticCategory,
@@ -32,12 +33,13 @@ const fakeInitialConfig: AppConfig = {
     path: "openai/gpt-transcribe",
     expectedLanguages: ["en"],
   },
+  translation: null,
   osc: {
     host: "127.0.0.1",
     port: 9000,
     enabled: true,
   },
-  publication: { mode: "completed" },
+  publication: { mode: "completed", content: "sourceOnly" },
   ui: { showOngoingPreview: true },
 };
 
@@ -90,14 +92,17 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
 
   function controlSnapshot(): RuntimeControlSnapshot {
     return {
-      contractVersion: 1,
+      contractVersion: RUNTIME_CONTROL_CONTRACT_VERSION,
       revision: controlRevision,
       runtimeStatus: { ...latestStatus },
       desired: {
         revision: configRevision,
         config: structuredClone(config),
         captionPipelinePlan: previewCaptionPipelinePlan(config),
-        credentials: [],
+        credentials: [
+          { state: "unconfigured", id: "openai" },
+          { state: "unconfigured", id: "customTranslation" },
+        ],
       },
       generation: generation ? structuredClone(generation) : null,
       pendingGenerationChanges: [],
@@ -172,6 +177,7 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
         const selection = {
           audio: structuredClone(config.audio),
           recognition: structuredClone(config.recognition),
+          translation: null,
           osc: structuredClone(config.osc),
           publication: structuredClone(config.publication),
         };
@@ -181,13 +187,21 @@ function createFakeTauriIpcBridge(): TauriIpcBridge {
           startedFromConfigRevision: configRevision,
           selection,
           captionPipelinePlan: previewCaptionPipelinePlan(config),
-          credential: null,
+          credentials: [
+            {
+              id: "openai",
+              storage: "systemCredentialStore",
+              displaySuffix: null,
+              revision: 0,
+            },
+          ],
           chatboxPublication: {
             state: selection.osc.enabled ? "ready" : "disabled",
             host: selection.osc.host,
             port: selection.osc.port,
           },
           uploadsMicrophoneAudio: true,
+          uploadsSourceText: false,
         };
         emitCaptionAggregateUpdate({
           activeStream: {

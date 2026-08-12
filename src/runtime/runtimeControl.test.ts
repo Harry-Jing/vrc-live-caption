@@ -18,8 +18,9 @@ const desiredConfig: AppConfig = {
     path: "openai/gpt-live-transcribe",
     expectedLanguages: ["zh", "en"],
   },
+  translation: null,
   osc: { enabled: false, host: "192.0.2.20", port: 9010 },
-  publication: { mode: "live" },
+  publication: { mode: "live", content: "sourceOnly" },
   ui: { showOngoingPreview: false },
 };
 const desiredCaptionPipelinePlan: CaptionPipelinePlan = {
@@ -36,6 +37,7 @@ const desiredCaptionPipelinePlan: CaptionPipelinePlan = {
       },
     ],
   },
+  translation: null,
   publication: {
     state: "compatible",
     mode: "live",
@@ -57,6 +59,7 @@ const generationCaptionPipelinePlan: CaptionPipelinePlan = {
       },
     ],
   },
+  translation: null,
   publication: {
     state: "compatible",
     mode: "completed",
@@ -73,6 +76,7 @@ test("classifies every current app config field into generation selection or run
   const selection = {
     audio: desiredConfig.audio,
     recognition: desiredConfig.recognition,
+    translation: desiredConfig.translation,
     osc: desiredConfig.osc,
     publication: desiredConfig.publication,
   } satisfies RuntimeGenerationSelection;
@@ -82,6 +86,7 @@ test("classifies every current app config field into generation selection or run
     "osc",
     "publication",
     "recognition",
+    "translation",
   ]);
   expect(selection).not.toHaveProperty("schemaVersion");
   expect(selection).not.toHaveProperty("ui");
@@ -89,7 +94,7 @@ test("classifies every current app config field into generation selection or run
 
 test("projects desired settings separately from the immutable active generation", () => {
   const snapshot: RuntimeControlSnapshot = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 4,
     runtimeStatus: {
       status: "running",
@@ -117,26 +122,31 @@ test("projects desired settings separately from the immutable active generation"
           path: "openai/gpt-transcribe",
           expectedLanguages: ["en"],
         },
+        translation: null,
         osc: { enabled: true, host: "127.0.0.1", port: 9000 },
-        publication: { mode: "completed" },
+        publication: { mode: "completed", content: "sourceOnly" },
       },
       captionPipelinePlan: generationCaptionPipelinePlan,
-      credential: {
-        id: "openai",
-        storage: "systemCredentialStore",
-        displaySuffix: "cdef",
-        revision: 1,
-      },
+      credentials: [
+        {
+          id: "openai",
+          storage: "systemCredentialStore",
+          displaySuffix: "cdef",
+          revision: 1,
+        },
+      ],
       chatboxPublication: {
         state: "ready",
         host: "127.0.0.1",
         port: 9000,
       },
       uploadsMicrophoneAudio: true,
+      uploadsSourceText: false,
     },
     pendingGenerationChanges: [
       "microphone",
       "recognition",
+      "translation",
       "chatboxOutput",
       "publication",
     ],
@@ -152,8 +162,9 @@ test("projects desired settings separately from the immutable active generation"
       path: "openai/gpt-transcribe",
       expectedLanguages: ["en"],
     },
+    translation: null,
     osc: { enabled: true, host: "127.0.0.1", port: 9000 },
-    publication: { mode: "completed" },
+    publication: { mode: "completed", content: "sourceOnly" },
   });
   expect(projection.currentGeneration).toBe(snapshot.generation);
   expect(projection.desiredCaptionPipelinePlan).toBe(
@@ -165,16 +176,18 @@ test("projects desired settings separately from the immutable active generation"
   expect(projection.pendingGenerationChanges).toEqual([
     "microphone",
     "recognition",
+    "translation",
     "chatboxOutput",
     "publication",
   ]);
   expect(projection.currentGenerationUploadsMicrophoneAudio).toBe(true);
+  expect(projection.currentGenerationUploadsSourceText).toBe(false);
   expect(projection.credentialStatuses.openai?.state).toBe("unconfigured");
 });
 
 test("ignores duplicate and older authoritative control snapshots", () => {
   const current = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 8,
     runtimeStatus: { status: "running", timestampMs: 80 },
     desired: {
@@ -198,7 +211,7 @@ test("ignores duplicate and older authoritative control snapshots", () => {
 
 test("accepts a newer snapshot even when its display timestamp is lower", () => {
   const current = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 3,
     runtimeStatus: { status: "idle", timestampMs: 30 },
     desired: {
@@ -231,11 +244,12 @@ test("accepts a newer snapshot even when its display timestamp is lower", () => 
   expect(projection.currentGenerationCaptionPipelinePlan).toBeNull();
   expect(projection.currentGenerationSelection).toBeNull();
   expect(projection.currentGenerationUploadsMicrophoneAudio).toBe(false);
+  expect(projection.currentGenerationUploadsSourceText).toBe(false);
 });
 
 test("requests a control pull when a legacy status outpaces a missed control event", () => {
   const startingSnapshot = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 4,
     runtimeStatus: {
       status: "starting",
@@ -274,7 +288,7 @@ test("requests a control pull when a legacy status outpaces a missed control eve
 
 test("requests a control pull for an accepted same-timestamp status mismatch", () => {
   const snapshot = {
-    contractVersion: 1,
+    contractVersion: 2,
     revision: 4,
     runtimeStatus: { status: "starting", timestampMs: 40 },
     desired: {

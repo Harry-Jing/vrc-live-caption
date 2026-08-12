@@ -3,9 +3,9 @@ import type { AppFailure } from "./appFailure";
 import type { CaptionPipelinePlan } from "./captionPipeline";
 import type { RuntimeStatusEvent } from "./runtimeEvents";
 
-export const RUNTIME_CONTROL_CONTRACT_VERSION = 1 as const;
+export const RUNTIME_CONTROL_CONTRACT_VERSION = 2 as const;
 
-export const CREDENTIAL_IDS = ["openai"] as const;
+export const CREDENTIAL_IDS = ["openai", "customTranslation"] as const;
 export type CredentialId = (typeof CREDENTIAL_IDS)[number];
 
 export const CREDENTIAL_STORAGES = [
@@ -40,6 +40,7 @@ export type CredentialStatus =
 export const RUNTIME_PENDING_GENERATION_CHANGES = [
   "microphone",
   "recognition",
+  "translation",
   "credential",
   "chatboxOutput",
   "publication",
@@ -98,9 +99,10 @@ export type RuntimeGenerationSnapshot = Readonly<{
   startedFromConfigRevision: number;
   selection: RuntimeGenerationSelection;
   captionPipelinePlan: CaptionPipelinePlan;
-  credential: RuntimeGenerationCredentialSnapshot | null;
+  credentials: readonly RuntimeGenerationCredentialSnapshot[];
   chatboxPublication: ChatboxPublicationSnapshot;
   uploadsMicrophoneAudio: boolean;
+  uploadsSourceText: boolean;
 }>;
 
 export type RuntimeControlSnapshot = Readonly<{
@@ -125,6 +127,7 @@ export type RuntimeControlProjection = Readonly<{
   currentGenerationSelection: RuntimeGenerationSelection | null;
   pendingGenerationChanges: readonly RuntimePendingGenerationChange[];
   currentGenerationUploadsMicrophoneAudio: boolean;
+  currentGenerationUploadsSourceText: boolean;
   credentialStatuses: Partial<Record<CredentialId, CredentialStatus>>;
 }>;
 
@@ -172,6 +175,7 @@ export function projectRuntimeControlSnapshot(
       currentGenerationSelection: null,
       pendingGenerationChanges: [],
       currentGenerationUploadsMicrophoneAudio: false,
+      currentGenerationUploadsSourceText: false,
       credentialStatuses: {},
     };
   }
@@ -190,6 +194,8 @@ export function projectRuntimeControlSnapshot(
     pendingGenerationChanges: snapshot.pendingGenerationChanges,
     currentGenerationUploadsMicrophoneAudio:
       snapshot.generation?.uploadsMicrophoneAudio ?? false,
+    currentGenerationUploadsSourceText:
+      snapshot.generation?.uploadsSourceText ?? false,
     credentialStatuses,
   };
 }

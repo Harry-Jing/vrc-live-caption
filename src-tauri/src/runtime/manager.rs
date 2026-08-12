@@ -3,7 +3,7 @@ use super::output::{ChatboxPublicationInit, RuntimeGeneration, initialize_chatbo
 use super::supervisor::run_runtime_thread;
 
 use crate::caption::CaptionAggregateStore;
-use crate::caption_pipeline::{plan_caption_pipeline, publication_timing_for_start};
+use crate::caption_pipeline::{plan_caption_pipeline, resolve_caption_pipeline_start_timing};
 use crate::chatbox::{ChatboxPacer, ChatboxPublication};
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
@@ -58,7 +58,7 @@ pub(crate) struct RuntimeStartRequest {
 /// to Runtime.
 pub(crate) struct PreparedRecognition {
     module: RecognitionModule,
-    credential: Option<RuntimeGenerationCredentialSnapshot>,
+    credentials: Vec<RuntimeGenerationCredentialSnapshot>,
     uploads_microphone_audio: bool,
 }
 
@@ -69,7 +69,7 @@ impl PreparedRecognition {
     ) -> Self {
         Self {
             module,
-            credential: Some(credential),
+            credentials: vec![credential],
             uploads_microphone_audio: true,
         }
     }
@@ -170,12 +170,12 @@ impl RuntimeManager {
         } = request;
         let PreparedRecognition {
             module: recognition_module,
-            credential,
+            credentials,
             uploads_microphone_audio,
         } = prepared_recognition;
         config.validate()?;
         let caption_pipeline_plan = plan_caption_pipeline(&config);
-        let publication_timing = publication_timing_for_start(&caption_pipeline_plan)?;
+        let publication_timing = resolve_caption_pipeline_start_timing(&caption_pipeline_plan)?;
 
         let mut guard = self
             .handle
@@ -262,9 +262,10 @@ impl RuntimeManager {
             started_from_config_revision: config_revision,
             selection: RuntimeGenerationSelection::from(&config),
             caption_pipeline_plan,
-            credential,
+            credentials,
             chatbox_publication,
             uploads_microphone_audio,
+            uploads_source_text: false,
         };
         if let Err(error) = install_generation(generation_snapshot) {
             let _ = generation.request_stop(publisher.as_ref());

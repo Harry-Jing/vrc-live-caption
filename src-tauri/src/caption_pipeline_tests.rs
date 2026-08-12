@@ -1,6 +1,9 @@
 use super::*;
 use crate::caption::CaptionLane;
-use crate::config::{PublicationMode, RecognitionConfig, RecognitionPath};
+use crate::config::{
+    ContentSelection, PublicationMode, RecognitionConfig, RecognitionPath, TranslationConfig,
+    TranslationEndpoint, TranslationPath, TranslationTarget,
+};
 
 fn recognition(path: RecognitionPath) -> RecognitionConfig {
     RecognitionConfig {
@@ -146,11 +149,173 @@ fn caption_pipeline_requires_at_least_one_selected_lane() {
 }
 
 #[test]
+fn translation_only_completed_activates_the_completed_translation_profile() {
+    let mut config = crate::config::AppConfig {
+        translation: Some(TranslationConfig {
+            path: TranslationPath::OpenAiResponsesCompletedText,
+            target: TranslationTarget::SimplifiedChinese,
+            endpoint: TranslationEndpoint::Official,
+        }),
+        ..Default::default()
+    };
+    config.publication.content = ContentSelection::TranslationOnly;
+
+    let plan = plan_caption_pipeline(&config);
+
+    assert_eq!(
+        plan.translation,
+        Some(TranslationCapabilityProfile {
+            path: TranslationPath::OpenAiResponsesCompletedText,
+            input_shape: TranslationInputShape::CompletedSourceSnapshots,
+            lanes: vec![LaneCapabilities {
+                lane: CaptionLane::Translation,
+                updates: LaneUpdateBehavior::CompletedOnly,
+                revisions: RevisionBehavior::AppendOnly,
+            }],
+        })
+    );
+    assert_eq!(
+        plan.publication,
+        PublicationPlan::Compatible {
+            mode: PublicationMode::Completed,
+            timing: ResolvedPublicationTiming::Completed,
+            selected_lanes: vec![CaptionLane::Translation],
+        }
+    );
+}
+
+#[test]
+fn bilingual_live_reports_translation_as_the_unsupported_lane() {
+    let mut config = crate::config::AppConfig::default();
+    config.recognition.path = RecognitionPath::OpenAiGptLiveTranscribe;
+    config.translation = Some(TranslationConfig {
+        path: TranslationPath::OpenAiResponsesCompletedText,
+        target: TranslationTarget::English,
+        endpoint: TranslationEndpoint::Official,
+    });
+    config.publication.mode = PublicationMode::Live;
+    config.publication.content = ContentSelection::Bilingual;
+
+    let plan = plan_caption_pipeline(&config);
+
+    assert_eq!(
+        plan.publication,
+        PublicationPlan::Incompatible {
+            requested_mode: PublicationMode::Live,
+            selected_lanes: vec![CaptionLane::Source, CaptionLane::Translation],
+            reason: PublicationIncompatibility::ModeUnsupported {
+                lanes: vec![CaptionLane::Translation],
+            },
+            supported_modes: vec![PublicationMode::Completed],
+        }
+    );
+    assert_eq!(config.publication.mode, PublicationMode::Live);
+    assert_eq!(config.publication.content, ContentSelection::Bilingual);
+}
+
+#[test]
+fn remaining_translation_content_mode_cells_are_planned_explicitly() {
+    let cases = [
+        (
+            ContentSelection::TranslationOnly,
+            PublicationMode::Live,
+            PublicationPlan::Incompatible {
+                requested_mode: PublicationMode::Live,
+                selected_lanes: vec![CaptionLane::Translation],
+                reason: PublicationIncompatibility::ModeUnsupported {
+                    lanes: vec![CaptionLane::Translation],
+                },
+                supported_modes: vec![PublicationMode::Completed],
+            },
+        ),
+        (
+            ContentSelection::Bilingual,
+            PublicationMode::Completed,
+            PublicationPlan::Compatible {
+                mode: PublicationMode::Completed,
+                timing: ResolvedPublicationTiming::Completed,
+                selected_lanes: vec![CaptionLane::Source, CaptionLane::Translation],
+            },
+        ),
+    ];
+
+    for (content, mode, expected) in cases {
+        let mut config = crate::config::AppConfig::default();
+        config.recognition.path = RecognitionPath::OpenAiGptLiveTranscribe;
+        config.translation = Some(TranslationConfig {
+            path: TranslationPath::OpenAiResponsesCompletedText,
+            target: TranslationTarget::English,
+            endpoint: TranslationEndpoint::Official,
+        });
+        config.publication.mode = mode;
+        config.publication.content = content;
+
+        let plan = plan_caption_pipeline(&config);
+
+        assert!(plan.translation.is_some());
+        assert_eq!(plan.publication, expected);
+        assert_eq!(config.publication.mode, mode);
+        assert_eq!(config.publication.content, content);
+    }
+}
+
+#[test]
+fn source_only_keeps_saved_translation_dormant() {
+    let mut config = crate::config::AppConfig::default();
+    config.recognition.path = RecognitionPath::OpenAiGptLiveTranscribe;
+    config.translation = Some(TranslationConfig {
+        path: TranslationPath::OpenAiResponsesCompletedText,
+        target: TranslationTarget::SimplifiedChinese,
+        endpoint: TranslationEndpoint::Official,
+    });
+    config.publication.mode = PublicationMode::Live;
+
+    let plan = plan_caption_pipeline(&config);
+
+    assert_eq!(plan.translation, None);
+    assert_eq!(
+        plan.publication,
+        PublicationPlan::Compatible {
+            mode: PublicationMode::Live,
+            timing: ResolvedPublicationTiming::LiveUnit {
+                observation_window_ms: LIVE_OBSERVATION_MILLIS,
+            },
+            selected_lanes: vec![CaptionLane::Source],
+        }
+    );
+}
+
+#[test]
+fn active_translation_fails_start_until_the_translation_module_exists()
+-> crate::error::AppResult<()> {
+    let mut config = crate::config::AppConfig {
+        translation: Some(TranslationConfig {
+            path: TranslationPath::OpenAiResponsesCompletedText,
+            target: TranslationTarget::SimplifiedChinese,
+            endpoint: TranslationEndpoint::Official,
+        }),
+        ..Default::default()
+    };
+    config.publication.content = ContentSelection::TranslationOnly;
+    let plan = plan_caption_pipeline(&config);
+
+    let error = resolve_caption_pipeline_start_timing(&plan)
+        .err()
+        .ok_or_else(|| {
+            crate::error::AppError::state("Translation unexpectedly became startable.")
+        })?;
+
+    assert_eq!(error.code(), "config.invalid");
+    assert!(error.to_string().contains("translation.module_unavailable"));
+    Ok(())
+}
+
+#[test]
 fn incompatible_plan_has_one_startability_error() -> crate::error::AppResult<()> {
     let mut config = crate::config::AppConfig::default();
     config.publication.mode = PublicationMode::Live;
 
-    let error = publication_timing_for_start(&plan_caption_pipeline(&config))
+    let error = resolve_caption_pipeline_start_timing(&plan_caption_pipeline(&config))
         .err()
         .ok_or_else(|| {
             crate::error::AppError::state(
