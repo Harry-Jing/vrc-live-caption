@@ -216,7 +216,8 @@ fn incompatible_publication_fails_before_openai_credentials_are_resolved() -> Ap
 }
 
 #[test]
-fn desktop_keeps_active_translation_behind_the_production_start_gate() -> AppResult<()> {
+fn desktop_rejects_missing_active_translation_credentials_before_installing_a_generation()
+-> AppResult<()> {
     let app = tauri::test::mock_builder()
         .manage(AppState::default())
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
@@ -233,14 +234,14 @@ fn desktop_keeps_active_translation_behind_the_production_start_gate() -> AppRes
     config.publication.content = crate::config::ContentSelection::TranslationOnly;
     state.control.replace_saved_config(config)?;
 
-    let error = state
-        .start_runtime(app.handle())
-        .err()
-        .ok_or_else(|| AppError::state("Desktop Start bypassed the Translation gate."))?;
+    let error = state.start_runtime(app.handle()).err().ok_or_else(|| {
+        AppError::state("Desktop Start accepted missing active cloud credentials.")
+    })?;
     let snapshot = state.runtime_control_snapshot()?;
 
-    assert_eq!(error.code(), "config.invalid");
-    assert!(error.to_string().contains("translation.module_unavailable"));
+    assert_eq!(error.code(), "config.secret_failed");
+    assert!(error.to_string().contains("API key"));
+    assert!(!error.to_string().contains("translation.module_unavailable"));
     assert!(snapshot.generation.is_none());
     assert_eq!(snapshot.runtime_status.status, RuntimeStatus::Error);
     Ok(())

@@ -4,14 +4,6 @@
 //! provider. This owner keeps correlation, resource limits, retries, and Stop
 //! semantics on the application side of the provider boundary.
 
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "GitHub issue #25 activates prepared Translation at desktop Start."
-    )
-)]
-
 use crate::caption::{CaptionAggregateUpdate, ReservedCompletedSource, TranslationFailureReason};
 use crate::config::{TranslationConfig, TranslationPath, TranslationTarget};
 use crate::credentials::{CredentialId, CredentialStorage, ResolvedCredential};
@@ -113,6 +105,7 @@ impl TranslationSubmissionRejection {
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn kind(&self) -> TranslationSubmitError {
         self.kind
     }
@@ -143,6 +136,7 @@ pub(crate) enum TranslationTerminalOutcome {
 }
 
 impl TranslationTerminalOutcome {
+    #[cfg(test)]
     pub(crate) fn source_ref(&self) -> &TranslationSourceRef {
         match self {
             Self::Completed(completed) => &completed.source_ref,
@@ -246,6 +240,7 @@ impl TranslationOutcomeReceiver {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn recv_timeout(
         &self,
         timeout: Duration,
@@ -369,6 +364,10 @@ pub(crate) fn openai_responses_completed_text_module(
         module,
         outcomes,
     })
+}
+
+pub(crate) fn translation_credential_id(selection: &TranslationConfig) -> CredentialId {
+    openai_responses::required_credential_id(&selection.endpoint)
 }
 
 #[cfg(test)]

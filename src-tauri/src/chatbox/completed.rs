@@ -10,7 +10,7 @@ use super::common::{
     PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
     TYPING_REASSERT_INTERVAL, describe_layout_error,
 };
-use super::layout::paginate_completed;
+use super::layout::{paginate_bilingual_completed, paginate_completed};
 use super::pacer::{ChatboxAttemptPermit, ChatboxPacer};
 use super::transport::ChatboxTransport;
 use crate::caption::{CaptionAggregateChange, CaptionAggregateUpdate, CaptionLane, CaptionState};
@@ -74,10 +74,41 @@ pub(crate) enum CompletedPublisherDiagnostic {
     },
 }
 
-enum CompletedPublisherInput {
-    Started { unit_id: String },
-    Completed { unit_id: String, text: String },
-    Aborted { unit_id: String },
+pub(super) enum CompletedPublicationContent {
+    Monolingual(String),
+    Bilingual { source: String, translation: String },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PublicationAdmission {
+    Append,
+    ResolveReserved,
+}
+
+pub(super) enum CompletedPublisherInput {
+    Started {
+        unit_id: String,
+    },
+    PublicationReserved {
+        unit_id: String,
+    },
+    PublicationOmitted {
+        unit_id: String,
+    },
+    SourceResolved {
+        unit_id: String,
+    },
+    Completed {
+        unit_id: String,
+        text: String,
+    },
+    ContentReady {
+        unit_id: String,
+        content: CompletedPublicationContent,
+    },
+    Aborted {
+        unit_id: String,
+    },
 }
 
 #[derive(Clone)]
@@ -120,6 +151,7 @@ struct CompletedUnit {
     sequence: u64,
     unit_id: String,
     pages: Vec<String>,
+    ready: bool,
     next_page: usize,
     started: bool,
     accepted_at: Instant,
@@ -300,7 +332,10 @@ impl CompletedChatboxPublisher {
     }
 
     /// Submits one complete lifecycle event without waiting for pacing or OSC.
-    fn try_submit(&self, event: CompletedPublisherInput) -> AppResult<PublisherSubmitOutcome> {
+    pub(super) fn try_submit(
+        &self,
+        event: CompletedPublisherInput,
+    ) -> AppResult<PublisherSubmitOutcome> {
         match event {
             CompletedPublisherInput::Started { unit_id } => {
                 let mut state = self.lock_state()?;
@@ -315,7 +350,54 @@ impl CompletedChatboxPublisher {
                     self.signal_worker_locked();
                 }
             }
+            CompletedPublisherInput::PublicationReserved { unit_id } => {
+                let mut state = self.lock_state()?;
+                if state.lifecycle != PublisherLifecycle::Running
+                    || self.shared.committer.is_closed()
+                {
+                    return Ok(PublisherSubmitOutcome::Closed);
+                }
+                if !state.units.iter().any(|unit| unit.unit_id == unit_id) {
+                    let sequence = state.next_sequence;
+                    state.next_sequence = state.next_sequence.wrapping_add(1);
+                    state.units.push_back(CompletedUnit {
+                        sequence,
+                        unit_id,
+                        pages: Vec::new(),
+                        ready: false,
+                        next_page: 0,
+                        started: false,
+                        accepted_at: self.shared.pacer.now(),
+                        sent_pages: 0,
+                        sent_bytes: 0,
+                        target: None,
+                    });
+                }
+                self.signal_worker_locked();
+            }
+            CompletedPublisherInput::PublicationOmitted { unit_id } => {
+                let mut state = self.lock_state()?;
+                if state.lifecycle != PublisherLifecycle::Running
+                    || self.shared.committer.is_closed()
+                {
+                    return Ok(PublisherSubmitOutcome::Closed);
+                }
+                remove_unstarted_unit(&mut state, &unit_id)?;
+                self.signal_worker_locked();
+            }
             CompletedPublisherInput::Aborted { unit_id } => {
+                let mut state = self.lock_state()?;
+                if state.lifecycle != PublisherLifecycle::Running
+                    || self.shared.committer.is_closed()
+                {
+                    return Ok(PublisherSubmitOutcome::Closed);
+                }
+
+                resolve_activity(&mut state, &unit_id);
+                remove_unstarted_unit(&mut state, &unit_id)?;
+                self.signal_worker_locked();
+            }
+            CompletedPublisherInput::SourceResolved { unit_id } => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
                     || self.shared.committer.is_closed()
@@ -327,7 +409,11 @@ impl CompletedChatboxPublisher {
                 self.signal_worker_locked();
             }
             CompletedPublisherInput::Completed { unit_id, text } => {
-                return self.try_submit_completed(unit_id, text);
+                return self
+                    .try_submit_completed(unit_id, CompletedPublicationContent::Monolingual(text));
+            }
+            CompletedPublisherInput::ContentReady { unit_id, content } => {
+                return self.try_resolve_reserved(unit_id, content);
             }
         }
 
@@ -421,12 +507,41 @@ impl CompletedChatboxPublisher {
         self.worker_join.join()
     }
 
+    pub(super) fn admission_outcome(&self) -> AppResult<PublisherSubmitOutcome> {
+        let state = self.lock_state()?;
+        Ok(
+            if state.lifecycle == PublisherLifecycle::Running && !self.shared.committer.is_closed()
+            {
+                PublisherSubmitOutcome::Handled
+            } else {
+                PublisherSubmitOutcome::Closed
+            },
+        )
+    }
+
     fn try_submit_completed(
         &self,
         unit_id: String,
-        text: String,
+        content: CompletedPublicationContent,
     ) -> AppResult<PublisherSubmitOutcome> {
-        let pages = match paginate_completed(&text) {
+        self.try_admit_content(unit_id, content, PublicationAdmission::Append)
+    }
+
+    fn try_resolve_reserved(
+        &self,
+        unit_id: String,
+        content: CompletedPublicationContent,
+    ) -> AppResult<PublisherSubmitOutcome> {
+        self.try_admit_content(unit_id, content, PublicationAdmission::ResolveReserved)
+    }
+
+    fn try_admit_content(
+        &self,
+        unit_id: String,
+        content: CompletedPublicationContent,
+        admission: PublicationAdmission,
+    ) -> AppResult<PublisherSubmitOutcome> {
+        let pages = match paginate_content(content) {
             Ok(pages) => pages,
             Err(error) => {
                 let mut state = self.lock_state()?;
@@ -435,7 +550,7 @@ impl CompletedChatboxPublisher {
                 {
                     return Ok(PublisherSubmitOutcome::Closed);
                 }
-                resolve_activity(&mut state, &unit_id);
+                discard_admission(&mut state, &unit_id, admission)?;
                 state
                     .diagnostics
                     .push_back(CompletedPublisherDiagnostic::LayoutFailed {
@@ -451,15 +566,24 @@ impl CompletedChatboxPublisher {
         if state.lifecycle != PublisherLifecycle::Running || self.shared.committer.is_closed() {
             return Ok(PublisherSubmitOutcome::Closed);
         }
-
+        if admission == PublicationAdmission::ResolveReserved
+            && !has_unresolved_reservation(&state, &unit_id)
+        {
+            return Ok(PublisherSubmitOutcome::Handled);
+        }
         if pages.is_empty() {
-            resolve_activity(&mut state, &unit_id);
+            discard_admission(&mut state, &unit_id, admission)?;
             self.signal_worker_locked();
             return Ok(PublisherSubmitOutcome::Handled);
         }
 
         let now = self.shared.pacer.now();
         expire_unstarted_units(&mut state, now, self.shared.limits.max_unstarted_age)?;
+        if admission == PublicationAdmission::ResolveReserved
+            && !has_unresolved_reservation(&state, &unit_id)
+        {
+            return Ok(PublisherSubmitOutcome::Handled);
+        }
         let page_count = pages.len();
         let protected_pages = state
             .units
@@ -467,11 +591,10 @@ impl CompletedChatboxPublisher {
             .filter(|unit| unit.started)
             .map(CompletedUnit::remaining_pages)
             .unwrap_or(0);
-
         if page_count > self.shared.limits.max_resident_pages
             || protected_pages.saturating_add(page_count) > self.shared.limits.max_resident_pages
         {
-            resolve_activity(&mut state, &unit_id);
+            discard_admission(&mut state, &unit_id, admission)?;
             state
                 .diagnostics
                 .push_back(CompletedPublisherDiagnostic::UnitRejectedOverload {
@@ -485,8 +608,12 @@ impl CompletedChatboxPublisher {
         while state.resident_pages.saturating_add(page_count)
             > self.shared.limits.max_resident_pages
         {
-            let Some(position) = state.units.iter().position(|unit| !unit.started) else {
-                resolve_activity(&mut state, &unit_id);
+            let Some(position) = state
+                .units
+                .iter()
+                .position(|unit| unit.ready && !unit.started)
+            else {
+                discard_admission(&mut state, &unit_id, admission)?;
                 state
                     .diagnostics
                     .push_back(CompletedPublisherDiagnostic::UnitRejectedOverload {
@@ -515,22 +642,38 @@ impl CompletedChatboxPublisher {
                 });
         }
 
-        let sequence = state.next_sequence;
-        state.next_sequence = state.next_sequence.wrapping_add(1);
+        match admission {
+            PublicationAdmission::Append => {
+                let sequence = state.next_sequence;
+                state.next_sequence = state.next_sequence.wrapping_add(1);
+                state.units.push_back(CompletedUnit {
+                    sequence,
+                    unit_id,
+                    pages,
+                    ready: true,
+                    next_page: 0,
+                    started: false,
+                    accepted_at: now,
+                    sent_pages: 0,
+                    sent_bytes: 0,
+                    target: None,
+                });
+            }
+            PublicationAdmission::ResolveReserved => {
+                let Some(unit) = state
+                    .units
+                    .iter_mut()
+                    .find(|unit| unit.unit_id == unit_id && !unit.ready)
+                else {
+                    return Ok(PublisherSubmitOutcome::Handled);
+                };
+                unit.pages = pages;
+                unit.ready = true;
+                unit.accepted_at = now;
+            }
+        }
         state.resident_pages += page_count;
-        state.units.push_back(CompletedUnit {
-            sequence,
-            unit_id,
-            pages,
-            next_page: 0,
-            started: false,
-            accepted_at: now,
-            sent_pages: 0,
-            sent_bytes: 0,
-            target: None,
-        });
         self.signal_worker_locked();
-
         Ok(PublisherSubmitOutcome::Handled)
     }
 
@@ -546,6 +689,19 @@ impl CompletedChatboxPublisher {
             .interrupt_text_wait
             .store(true, Ordering::SeqCst);
         self.shared.wake.notify_all();
+    }
+}
+
+fn paginate_content(
+    content: CompletedPublicationContent,
+) -> Result<Vec<String>, super::layout::ChatboxLayoutError> {
+    match content {
+        CompletedPublicationContent::Monolingual(text) => paginate_completed(&text),
+        CompletedPublicationContent::Bilingual {
+            source,
+            translation,
+        } => paginate_bilingual_completed(&source, &translation)
+            .map(|pages| pages.into_iter().map(|page| page.rendered_text()).collect()),
     }
 }
 
@@ -687,7 +843,7 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
             return Ok(WorkerItem::Diagnostic(diagnostic));
         }
 
-        if let Some(unit) = state.units.front() {
+        if let Some(unit) = state.units.front().filter(|unit| unit.ready) {
             let Some(text) = unit.pages.get(unit.next_page).cloned() else {
                 return Err(AppError::state(
                     "Completed publisher unit had no current page.",
@@ -935,7 +1091,9 @@ fn expire_unstarted_units(
 ) -> AppResult<()> {
     loop {
         let position = state.units.iter().position(|unit| {
-            !unit.started && now.saturating_duration_since(unit.accepted_at) >= max_age
+            unit.ready
+                && !unit.started
+                && now.saturating_duration_since(unit.accepted_at) >= max_age
         });
         let Some(position) = position else {
             return Ok(());
@@ -957,6 +1115,47 @@ fn expire_unstarted_units(
                 unit_id: expired.unit_id,
                 page_count: expired_pages,
             });
+    }
+}
+
+fn remove_unstarted_unit(state: &mut PublisherState, unit_id: &str) -> AppResult<()> {
+    let Some(position) = state
+        .units
+        .iter()
+        .position(|unit| unit.unit_id == unit_id && !unit.started)
+    else {
+        return Ok(());
+    };
+    let Some(removed) = state.units.remove(position) else {
+        return Err(AppError::state(
+            "Completed publisher could not remove a reserved unit.",
+        ));
+    };
+    state.resident_pages = state
+        .resident_pages
+        .checked_sub(removed.remaining_pages())
+        .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
+    Ok(())
+}
+
+fn has_unresolved_reservation(state: &PublisherState, unit_id: &str) -> bool {
+    state
+        .units
+        .iter()
+        .any(|unit| unit.unit_id == unit_id && !unit.ready)
+}
+
+fn discard_admission(
+    state: &mut PublisherState,
+    unit_id: &str,
+    admission: PublicationAdmission,
+) -> AppResult<()> {
+    match admission {
+        PublicationAdmission::Append => {
+            resolve_activity(state, unit_id);
+            Ok(())
+        }
+        PublicationAdmission::ResolveReserved => remove_unstarted_unit(state, unit_id),
     }
 }
 

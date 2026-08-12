@@ -21,11 +21,11 @@ Vue application
          -> audio capture
          -> Recognition Module -> Recognition Driver
          -> Caption Aggregate
+            -> Translation Module
          -> publication plan
          -> App view + Chatbox publishers
 
 Planned:
-  Caption Aggregate -> Translation Module
   Recognition Module -> local worker Driver
   separate incoming-audio pipeline
 ```
@@ -157,6 +157,25 @@ The Aggregate may retain bounded completed captions from older runtime
 generations for the app view. Stop removes ongoing work and rejects late output
 without turning retained completed captions into an active session.
 
+### Translation boundary
+
+The completed-text Translation Module consumes exact completed Source
+reservations. Each accepted unit resolves once as either a terminal correlated
+Translation snapshot or a provider-neutral failure; it emits no ongoing
+Translation revisions. Admission, retained Source text, attempts, retries,
+deadlines, and cancellation are bounded, and Stop rejects late outcomes.
+
+Desktop Start resolves and binds the selected target, Official or Custom
+endpoint, and endpoint-specific credential before capture can open. The
+generation owns that immutable prepared Module. Source-only keeps saved
+Translation settings and credentials dormant and does not create the owner.
+
+The current path is the OpenAI Responses completed-text profile selected in
+[ADR 0021](./adr/0021-use-openai-responses-for-completed-translation.md). Its
+provider protocol, source text, raw responses, and plaintext secret stay behind
+the Module boundary. The selected endpoint and non-secret Custom URL remain
+visible as ordinary generation configuration.
+
 ### Pipeline planning
 
 Capabilities belong to a complete path, not a model name. A path declares the
@@ -182,14 +201,23 @@ Publisher instances are generation-scoped. Stop discards their queued caption
 text rather than draining it. Typing indication is lifecycle control outside the
 text-send pacer.
 
+For Completed Translation content, a private coordinator reserves Source
+admission order in the same bounded publisher queue. Translation-only waits for
+the exact terminal result and omits failures. Bilingual publishes an exact
+Source/Translation pair through the bilingual layout, or Source alone as a
+visible partial success after Translation failure. Later terminal units cannot
+overtake an earlier pending unit, and pending Translation does not extend Source
+typing activity.
+
 OSC, pacing, layout, wrapping, clipping, and validation constraints are defined
 by the [VRChat Chatbox reference](./research/vrchat-chatbox-reference.md).
 
 ### Network and secrets
 
 Service credentials are resolved at desktop composition and bound to the
-prepared recognition path without exposing plaintext to Runtime Control or the
-frontend. Config and diagnostics carry only redacted credential status.
+prepared recognition or Translation path without exposing plaintext to Runtime
+Control or the frontend. Config and diagnostics carry only redacted credential
+status.
 
 Cloud connections follow the user's selected system or explicit environment
 proxy route. Unsupported or malformed selected proxy configurations fail closed;
@@ -204,26 +232,12 @@ capture begins.
 
 ## Planned extension seams
 
-### Translation
+### Live translation
 
-The first Translation Module consumes completed Source snapshots. Each accepted
-unit resolves exactly once as either one terminal correlated Translation
-snapshot or a provider-neutral failure; it does not emit ongoing Translation
-revisions. Work is bounded and cancellable, and a stale, timed-out, or late
-result cannot overwrite another source revision or unit.
-
-Admitting translation work must pin its exact completed Source snapshot until a
-terminal outcome or Stop, so bounded history trimming cannot remove that Source
-snapshot while translation work is in flight.
-
-Prepared Runtime generations capture the resolved Translation path, target,
-endpoint, and credential as one immutable owner. Production Start keeps active
-Translation gated until [issue #25](https://github.com/Harry-Jing/vrc-live-caption/issues/25)
-connects selected-content publication. Phase 5 planning permits Translation only
-with Completed publication; Live remains incompatible until its update shape is
-evaluated. Provider and endpoint rules stay behind the Module boundary
-([ADR 0015](./adr/0015-cloud-connections-honor-explicit-routes-and-endpoints.md),
-[ADR 0021](./adr/0021-use-openai-responses-for-completed-translation.md)).
+Phase 5 permits Translation only with Completed publication. Live remains
+incompatible until its update shape is evaluated. Provider and endpoint rules
+stay behind the Module boundary
+([ADR 0015](./adr/0015-cloud-connections-honor-explicit-routes-and-endpoints.md)).
 
 Transcript-driven and direct-audio translation remain different path shapes.
 Repeatedly translating every unstable source revision is not the default Live

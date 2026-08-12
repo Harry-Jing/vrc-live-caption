@@ -55,6 +55,7 @@ impl ResponsesEndpoint {
         }
     }
 
+    #[cfg(test)]
     fn url(&self) -> &Url {
         &self.url
     }

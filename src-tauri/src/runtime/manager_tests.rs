@@ -347,8 +347,7 @@ fn custom_translation_adds_its_bound_credential_to_the_generation() -> AppResult
 }
 
 #[test]
-fn active_translation_without_a_prepared_owner_keeps_the_module_unavailable_gate() -> AppResult<()>
-{
+fn active_translation_without_a_prepared_owner_fails_the_runtime_invariant() -> AppResult<()> {
     let app = tauri::test::mock_app();
     let manager = RuntimeManager::default();
     let mut config = AppConfig {
@@ -373,8 +372,8 @@ fn active_translation_without_a_prepared_owner_keeps_the_module_unavailable_gate
         .err()
         .ok_or_else(|| AppError::state("Active Translation started without a prepared owner."))?;
 
-    assert_eq!(error.code(), "config.invalid");
-    assert!(error.to_string().contains("translation.module_unavailable"));
+    assert_eq!(error.code(), "runtime.state_failed");
+    assert!(error.to_string().contains("prepared Translation owner"));
     assert!(
         manager
             .handle
