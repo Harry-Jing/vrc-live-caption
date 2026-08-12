@@ -40,6 +40,15 @@ hyper-util = { version = "0.1.20", default-features = false, features = ["client
 tauri-plugin-clipboard-manager = "2.3.2"
 url = "2.5.8"
 percent-encoding = "2.3.2"
+# Existing WebSocket transport does not provide the bounded, redirect-free
+# async HTTP response lifecycle needed by the Responses Adapter.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider"] }
+# A narrow dedicated runtime lets Translation own cancellation and deadlines
+# without coupling its provider Adapter to Tauri's executor.
+tokio = { version = "1.53.1", features = ["net", "rt-multi-thread", "time"] }
+# Retry-After permits IMF-fixdate as well as delta-seconds; use a focused,
+# standards-tested parser instead of duplicating HTTP date handling.
+httpdate = "1.0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus-secret-service-keyring-store = { version = "1.0.0", features = ["crypto-rust"] }

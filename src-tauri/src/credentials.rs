@@ -3,8 +3,9 @@
 //! Secrets are stored in the operating system credential store when available.
 //! The frontend can save, delete, and inspect status, but it cannot read back
 //! plaintext secrets. During Start, the desktop composition boundary resolves a
-//! plaintext secret and binds it inside the prepared Recognition Module. Runtime
-//! control state and frontend-facing snapshots expose only non-secret metadata.
+//! plaintext secret and binds it inside the selected prepared cloud Module.
+//! Runtime control state and frontend-facing snapshots expose only non-secret
+//! metadata.
 
 use crate::error::{AppError, AppResult};
 use keyring_core::{Entry, Error as KeyringError};
@@ -64,6 +65,7 @@ pub(crate) struct CredentialFailure {
 }
 
 pub(crate) struct ResolvedCredential {
+    pub(crate) id: CredentialId,
     pub(crate) secret: SecretString,
     pub(crate) storage: CredentialStorage,
     pub(crate) display_suffix: Option<String>,
@@ -139,24 +141,48 @@ pub(crate) fn delete_credential(id: CredentialId) -> AppResult<()> {
 }
 
 pub(crate) fn resolve_openai_credential() -> AppResult<ResolvedCredential> {
-    match read_system_secret(OPENAI_ACCOUNT) {
+    resolve_credential(CredentialId::OpenAi)
+}
+
+pub(crate) fn resolve_credential(id: CredentialId) -> AppResult<ResolvedCredential> {
+    resolve_credential_from_sources(id, read_system_secret, environment_openai_secret)
+}
+
+fn resolve_credential_from_sources(
+    id: CredentialId,
+    read_system: impl FnOnce(&str) -> AppResult<Option<SecretString>>,
+    read_openai_environment: impl FnOnce() -> Option<SecretString>,
+) -> AppResult<ResolvedCredential> {
+    let account = match id {
+        CredentialId::OpenAi => OPENAI_ACCOUNT,
+        CredentialId::CustomTranslation => CUSTOM_TRANSLATION_ACCOUNT,
+    };
+    match read_system(account) {
         Ok(Some(secret)) => Ok(resolved_credential(
+            id,
             secret,
             CredentialStorage::SystemCredentialStore,
         )),
-        Ok(None) => environment_openai_secret()
-            .map(|secret| resolved_credential(secret, CredentialStorage::Environment))
+        Ok(None) if id == CredentialId::OpenAi => read_openai_environment()
+            .map(|secret| resolved_credential(id, secret, CredentialStorage::Environment))
             .ok_or_else(missing_openai_api_key),
-        Err(error) => environment_openai_secret()
-            .map(|secret| resolved_credential(secret, CredentialStorage::Environment))
+        Err(error) if id == CredentialId::OpenAi => read_openai_environment()
+            .map(|secret| resolved_credential(id, secret, CredentialStorage::Environment))
             .ok_or(error),
+        Ok(None) => Err(missing_custom_translation_api_key()),
+        Err(error) => Err(error),
     }
 }
 
-fn resolved_credential(secret: SecretString, storage: CredentialStorage) -> ResolvedCredential {
+fn resolved_credential(
+    id: CredentialId,
+    secret: SecretString,
+    storage: CredentialStorage,
+) -> ResolvedCredential {
     let display_suffix = display_suffix(secret.expose_secret());
 
     ResolvedCredential {
+        id,
         secret,
         storage,
         display_suffix,
@@ -215,8 +241,14 @@ fn environment_openai_secret() -> Option<SecretString> {
 
 fn missing_openai_api_key() -> AppError {
     AppError::secret(format!(
-        "OpenAI API key is not saved. Add it in Settings or set {OPENAI_API_KEY_ENV} before starting cloud recognition."
+        "OpenAI API key is not saved. Add it in Settings or set {OPENAI_API_KEY_ENV} before starting an OpenAI cloud feature."
     ))
+}
+
+fn missing_custom_translation_api_key() -> AppError {
+    AppError::secret(
+        "Custom Translation API key is not saved. Add it in Settings before starting Translation.",
+    )
 }
 
 fn normalize_secret(secret: &str) -> AppResult<SecretString> {
@@ -337,94 +369,5 @@ fn system_credential_store() -> Result<std::sync::Arc<keyring_core::CredentialSt
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn display_suffix_uses_at_most_last_four_characters() {
-        assert_eq!(display_suffix("sk-test-abcdef"), Some("cdef".to_string()));
-        assert_eq!(display_suffix("abc"), Some("abc".to_string()));
-        assert_eq!(display_suffix(""), None);
-    }
-
-    #[test]
-    fn normalize_secret_rejects_empty_or_control_text() {
-        assert!(normalize_secret("  ").is_err());
-        assert!(normalize_secret("abc\ndef").is_err());
-        assert!(normalize_secret(" sk-valid ").is_ok());
-    }
-
-    #[test]
-    fn test_credential_statuses_expose_both_ids_without_opening_the_real_store() {
-        let statuses = credential_statuses();
-        assert_eq!(
-            statuses,
-            vec![
-                CredentialStatus::Unconfigured {
-                    id: CredentialId::OpenAi,
-                },
-                CredentialStatus::Unconfigured {
-                    id: CredentialId::CustomTranslation,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn custom_translation_credential_id_has_its_own_wire_value() {
-        let value = serde_json::to_value(CredentialStatus::unconfigured(
-            CredentialId::CustomTranslation,
-        ))
-        .unwrap_or_else(|error| serde_json::json!({ "serializationError": error.to_string() }));
-
-        assert_eq!(
-            value,
-            serde_json::json!({
-                "state": "unconfigured",
-                "id": "customTranslation",
-            })
-        );
-        assert_ne!(CredentialId::CustomTranslation, CredentialId::OpenAi);
-        assert_eq!(
-            CredentialStatus::unconfigured(CredentialId::OpenAi),
-            CredentialStatus::Unconfigured {
-                id: CredentialId::OpenAi,
-            }
-        );
-    }
-
-    #[test]
-    fn unconfigured_status_serializes_without_configured_only_fields() {
-        let value = serde_json::to_value(CredentialStatus::unconfigured(CredentialId::OpenAi))
-            .unwrap_or_else(|error| serde_json::json!({ "serializationError": error.to_string() }));
-
-        assert_eq!(
-            value,
-            serde_json::json!({
-                "state": "unconfigured",
-                "id": "openai",
-            })
-        );
-    }
-
-    #[test]
-    fn unavailable_status_serializes_the_stable_application_failure() {
-        let value = serde_json::to_value(CredentialStatus::unavailable(
-            CredentialId::OpenAi,
-            &AppError::secret("System credential store is unavailable."),
-        ))
-        .unwrap_or_else(|error| serde_json::json!({ "serializationError": error.to_string() }));
-
-        assert_eq!(
-            value,
-            serde_json::json!({
-                "state": "unavailable",
-                "id": "openai",
-                "failure": {
-                    "code": "config.secret_failed",
-                    "message": "System credential store is unavailable.",
-                },
-            })
-        );
-    }
-}
+#[path = "credentials_tests.rs"]
+mod tests;
