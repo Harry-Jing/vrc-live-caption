@@ -9,6 +9,19 @@ fixtures are representative compatibility scenarios, not complete JSON Schema.
   application build.
 - `wire-vocabulary.json` is the exact manifest of closed enum values and tagged
   union discriminators shared across the boundary.
+- `chatbox-layout-cases-v1.json` is a portable synthetic corpus consumed by the
+  Rust Chatbox tests. It contains exact payloads, relations, and independently
+  computed Unicode facts, but no screenshots, runtime observations, layout
+  predictions, or expected publisher output. Its embedded source hashes pin the
+  reviewed 178-case corpus projection; normal builds and tests require no
+  external research tools or VRChat installation.
+
+`chatbox-layout-cases-v1.json` is generator-owned canonical JSON. Do not edit or
+reformat it by hand. A corpus maintainer updates it with the standalone,
+dependency-locked `chatbox-corpus export-live-caption <output>` command, reviews
+the embedded source and manifest hashes, and then runs the Rust contract and
+Chatbox behavior tests in this repository. The generator is an authoring tool,
+not a build or CI dependency.
 
 ## Compatibility baseline
 

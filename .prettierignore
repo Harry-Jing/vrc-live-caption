@@ -10,6 +10,7 @@ src-tauri/target/
 src-tauri/gen/
 components.d.ts
 .pnpm-store/
+contracts/chatbox-layout-cases-v1.json
 
 # Tool-managed or prose-heavy files
 pnpm-lock.yaml

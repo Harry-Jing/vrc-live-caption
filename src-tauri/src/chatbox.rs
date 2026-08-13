@@ -247,3 +247,7 @@ impl ChatboxPublication {
 #[cfg(test)]
 #[path = "chatbox/chatbox_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "chatbox/contract_tests.rs"]
+mod contract_tests;
