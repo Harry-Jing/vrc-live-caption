@@ -72,6 +72,55 @@ impl PreparedChatboxText {
     }
 }
 
+/// Read-only prediction of how one prepared Chatbox payload lays out.
+///
+/// Break offsets are UTF-16 boundaries at which the following rendered logical
+/// line starts. Explicit offsets therefore include the complete separator
+/// (CRLF is one break at the boundary after both code units); a terminal
+/// separator adds neither a new visible row nor an offset. Visible lines are
+/// capped at VRChat's verified nine-line limit while logical lines retain the
+/// full model result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
+pub(crate) struct ChatboxLayoutTrace {
+    logical_line_count: usize,
+    visible_line_count: usize,
+    soft_break_utf16_offsets: Vec<usize>,
+    explicit_break_utf16_offsets: Vec<usize>,
+    clipped: bool,
+}
+
+#[cfg(test)]
+impl ChatboxLayoutTrace {
+    pub(crate) fn logical_line_count(&self) -> usize {
+        self.logical_line_count
+    }
+
+    pub(crate) fn visible_line_count(&self) -> usize {
+        self.visible_line_count
+    }
+
+    pub(crate) fn soft_break_utf16_offsets(&self) -> &[usize] {
+        &self.soft_break_utf16_offsets
+    }
+
+    pub(crate) fn explicit_break_utf16_offsets(&self) -> &[usize] {
+        &self.explicit_break_utf16_offsets
+    }
+
+    pub(crate) fn clipped(&self) -> bool {
+        self.clipped
+    }
+}
+
+/// Applies the same preparation and layout model as publication, but returns
+/// observation data without selecting, mutating, or sending a payload.
+#[cfg(test)]
+pub(crate) fn trace_layout(text: &str) -> Result<ChatboxLayoutTrace, ChatboxLayoutError> {
+    let text = prepare_source_text(text);
+    Ok(LayoutText::new(text.as_ref())?.trace())
+}
+
 /// Prepares one independently safe Chatbox message without silently selecting
 /// one page from a longer input.
 pub(crate) fn prepare_single_message(
@@ -202,6 +251,25 @@ struct LayoutGrapheme<'text> {
     can_break_after: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LayoutBreakKind {
+    Soft,
+    Explicit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LayoutBreak {
+    next_line_start: usize,
+    page_end_at_visible_cap: usize,
+    kind: LayoutBreakKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LineScan {
+    layout_break: Option<LayoutBreak>,
+    latest_legal_break: Option<usize>,
+}
+
 impl<'text> LayoutText<'text> {
     fn new(text: &'text str) -> Result<Self, ChatboxLayoutError> {
         let break_opportunities = linebreaks(text).collect::<HashMap<_, _>>();
@@ -257,33 +325,66 @@ impl<'text> LayoutText<'text> {
     }
 
     fn next_page_end(&self, page_start: usize) -> usize {
-        let mut cursor = page_start;
+        let page_budget_end = self.page_budget_end(page_start);
+        let budget_clips_text = page_budget_end < self.graphemes.len();
         let mut line_start = page_start;
-        let mut line_width = 0;
         let mut line_count = 1;
-        let mut last_legal_break = None;
         let mut last_legal_page_break = None;
 
-        while cursor < self.graphemes.len() {
-            let grapheme = &self.graphemes[cursor];
-            if self.utf16_units(page_start, cursor + 1) > CHATBOX_MAX_UTF16_UNITS {
-                return last_legal_page_break
-                    .filter(|boundary| *boundary > page_start)
-                    .unwrap_or(cursor);
+        while line_start < page_budget_end {
+            let line = self.scan_line(line_start, page_budget_end);
+            if let Some(boundary) = line.latest_legal_break {
+                last_legal_page_break = Some(boundary);
             }
 
-            if grapheme.explicit_line_break {
-                if line_count == CHATBOX_MAX_VISIBLE_LINES {
-                    return cursor;
-                }
+            let Some(layout_break) = line.layout_break else {
+                break;
+            };
+            if line_count == CHATBOX_MAX_VISIBLE_LINES {
+                return match layout_break.kind {
+                    LayoutBreakKind::Explicit => layout_break.page_end_at_visible_cap,
+                    LayoutBreakKind::Soft => last_legal_page_break
+                        .filter(|boundary| *boundary > page_start)
+                        .unwrap_or(layout_break.page_end_at_visible_cap),
+                };
+            }
 
-                cursor += 1;
-                last_legal_page_break = Some(cursor);
-                line_count += 1;
-                line_start = cursor;
-                line_width = 0;
-                last_legal_break = None;
-                continue;
+            line_count += 1;
+            line_start = layout_break.next_line_start;
+        }
+
+        if budget_clips_text {
+            last_legal_page_break
+                .filter(|boundary| *boundary > page_start)
+                .unwrap_or(page_budget_end)
+        } else {
+            self.graphemes.len()
+        }
+    }
+
+    fn page_budget_end(&self, page_start: usize) -> usize {
+        (page_start..self.graphemes.len())
+            .take_while(|end| self.utf16_units(page_start, end + 1) <= CHATBOX_MAX_UTF16_UNITS)
+            .last()
+            .map_or(page_start, |end| end + 1)
+    }
+
+    fn scan_line(&self, line_start: usize, scan_end: usize) -> LineScan {
+        let mut cursor = line_start;
+        let mut line_width = 0;
+        let mut last_legal_break = None;
+
+        while cursor < scan_end {
+            let grapheme = &self.graphemes[cursor];
+            if grapheme.explicit_line_break {
+                return LineScan {
+                    layout_break: Some(LayoutBreak {
+                        next_line_start: cursor + 1,
+                        page_end_at_visible_cap: cursor,
+                        kind: LayoutBreakKind::Explicit,
+                    }),
+                    latest_legal_break: Some(cursor + 1),
+                };
             }
 
             let candidate_width = line_width + grapheme.advance_units;
@@ -292,7 +393,6 @@ impl<'text> LayoutText<'text> {
                 cursor += 1;
                 if grapheme.can_break_after {
                     last_legal_break = Some(cursor);
-                    last_legal_page_break = Some(cursor);
                 }
                 continue;
             }
@@ -310,27 +410,63 @@ impl<'text> LayoutText<'text> {
                 (cursor + 1, false)
             };
 
-            if line_count == CHATBOX_MAX_VISIBLE_LINES {
-                return if line_end_is_legal {
-                    line_end
-                } else {
-                    last_legal_page_break
-                        .filter(|boundary| *boundary > page_start)
-                        .unwrap_or(line_end)
-                };
-            }
-
-            if line_end_is_legal {
-                last_legal_page_break = Some(line_end);
-            }
-            line_count += 1;
-            line_start = line_end;
-            cursor = line_end;
-            line_width = 0;
-            last_legal_break = None;
+            return LineScan {
+                layout_break: Some(LayoutBreak {
+                    next_line_start: line_end,
+                    page_end_at_visible_cap: line_end,
+                    kind: LayoutBreakKind::Soft,
+                }),
+                latest_legal_break: line_end_is_legal.then_some(line_end),
+            };
         }
 
-        self.graphemes.len()
+        LineScan {
+            layout_break: None,
+            latest_legal_break: last_legal_break,
+        }
+    }
+
+    #[cfg(test)]
+    fn trace(&self) -> ChatboxLayoutTrace {
+        if self.graphemes.is_empty() {
+            return ChatboxLayoutTrace {
+                logical_line_count: 0,
+                visible_line_count: 0,
+                soft_break_utf16_offsets: Vec::new(),
+                explicit_break_utf16_offsets: Vec::new(),
+                clipped: false,
+            };
+        }
+
+        let mut line_start = 0;
+        let mut soft_break_utf16_offsets = Vec::new();
+        let mut explicit_break_utf16_offsets = Vec::new();
+        while line_start < self.graphemes.len() {
+            let line = self.scan_line(line_start, self.graphemes.len());
+            let Some(layout_break) = line.layout_break else {
+                break;
+            };
+            if layout_break.next_line_start == self.graphemes.len() {
+                break;
+            }
+            let utf16_offset = self.utf16_prefix[layout_break.next_line_start];
+            match layout_break.kind {
+                LayoutBreakKind::Soft => soft_break_utf16_offsets.push(utf16_offset),
+                LayoutBreakKind::Explicit => explicit_break_utf16_offsets.push(utf16_offset),
+            }
+            line_start = layout_break.next_line_start;
+        }
+
+        let logical_line_count =
+            1 + soft_break_utf16_offsets.len() + explicit_break_utf16_offsets.len();
+        let visible_line_count = logical_line_count.min(CHATBOX_MAX_VISIBLE_LINES);
+        ChatboxLayoutTrace {
+            logical_line_count,
+            visible_line_count,
+            soft_break_utf16_offsets,
+            explicit_break_utf16_offsets,
+            clipped: logical_line_count > visible_line_count,
+        }
     }
 
     fn standalone_safe_page(
@@ -536,11 +672,45 @@ fn fits_chatbox_width(advance_units: u32) -> bool {
 }
 
 fn grapheme_advance_units(grapheme: &str) -> u32 {
+    if requires_conservative_sequence_width(grapheme) {
+        return MAX_GRAPHEME_ADVANCE_UNITS;
+    }
+
     grapheme
         .chars()
         .map(character_advance_units)
         .fold(0, u32::saturating_add)
         .min(MAX_GRAPHEME_ADVANCE_UNITS)
+}
+
+fn requires_conservative_sequence_width(grapheme: &str) -> bool {
+    let mut characters = grapheme.chars();
+    let Some(base) = characters.next() else {
+        return false;
+    };
+    if base.is_whitespace() && characters.clone().all(is_variation_selector) {
+        return false;
+    }
+
+    std::iter::once(base)
+        .chain(characters)
+        .any(is_complex_sequence_marker)
+}
+
+fn is_complex_sequence_marker(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x200D
+            | 0x20E3
+            | 0xFE00..=0xFE0F
+            | 0x1F3FB..=0x1F3FF
+            | 0xE0020..=0xE007F
+            | 0xE0100..=0xE01EF
+    )
+}
+
+fn is_variation_selector(character: char) -> bool {
+    matches!(character as u32, 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
 }
 
 fn character_advance_units(character: char) -> u32 {

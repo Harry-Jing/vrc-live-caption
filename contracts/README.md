@@ -15,6 +15,13 @@ fixtures are representative compatibility scenarios, not complete JSON Schema.
   predictions, or expected publisher output. Its embedded source hashes pin the
   reviewed 178-case corpus projection; normal builds and tests require no
   external research tools or VRChat installation.
+- `chatbox-layout-runtime-observations-2026.3.1-1885-81193b80fa-v1.json`
+  contains a small, build-scoped selection of high-confidence runtime results
+  joined to that portable corpus by Case ID and payload SHA-256. It is evidence
+  for 49 layout-model trace comparisons and three explicit preparation-policy
+  cases, not a claim about other VRChat builds, XR modes, viewpoints, or
+  language correctness. The `v1` suffix versions this observation fixture's
+  schema; it is not a corpus generation or VRChat version.
 
 `chatbox-layout-cases-v1.json` is generator-owned canonical JSON. Do not edit or
 reformat it by hand. A corpus maintainer updates it with the standalone,

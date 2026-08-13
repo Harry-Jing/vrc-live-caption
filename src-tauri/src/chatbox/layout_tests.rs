@@ -1,7 +1,7 @@
 use super::{
-    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, PreparedChatboxText, fits_chatbox_width,
-    grapheme_advance_units, is_break_space_grapheme, paginate_completed, prepare_single_message,
-    render_live_viewport,
+    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, MAX_GRAPHEME_ADVANCE_UNITS, PreparedChatboxText,
+    fits_chatbox_width, grapheme_advance_units, is_break_space_grapheme, paginate_completed,
+    prepare_single_message, render_live_viewport, trace_layout,
 };
 use proptest::prelude::*;
 use std::collections::HashSet;
@@ -189,6 +189,84 @@ fn prepared_control_policy_text() -> impl Strategy<Value = (String, String)> {
 }
 
 #[test]
+fn layout_trace_reports_the_verified_ascii_soft_wrap_boundary() -> Result<(), String> {
+    let one_line = trace_layout(&"x".repeat(29)).map_err(|error| format!("{error:?}"))?;
+    let two_lines = trace_layout(&"x".repeat(30)).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(one_line.logical_line_count(), 1);
+    assert_eq!(one_line.visible_line_count(), 1);
+    assert!(one_line.soft_break_utf16_offsets().is_empty());
+    assert!(one_line.explicit_break_utf16_offsets().is_empty());
+    assert!(!one_line.clipped());
+
+    assert_eq!(two_lines.logical_line_count(), 2);
+    assert_eq!(two_lines.visible_line_count(), 2);
+    assert_eq!(two_lines.soft_break_utf16_offsets(), &[29]);
+    assert!(two_lines.explicit_break_utf16_offsets().is_empty());
+    assert!(!two_lines.clipped());
+    Ok(())
+}
+
+#[test]
+fn layout_trace_uses_prepared_utf16_offsets_for_verified_separators() -> Result<(), String> {
+    let source = "😀\na\r\nb\u{000B}c\u{2028}d\u{2029}e\rf\u{0085}g\u{000C}h";
+    let trace = trace_layout(source).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(trace.logical_line_count(), 6);
+    assert_eq!(trace.visible_line_count(), 6);
+    assert!(trace.soft_break_utf16_offsets().is_empty());
+    assert_eq!(trace.explicit_break_utf16_offsets(), &[3, 6, 8, 10, 12]);
+    assert!(!trace.clipped());
+    Ok(())
+}
+
+#[test]
+fn layout_trace_distinguishes_logical_lines_from_the_nine_visible_lines() -> Result<(), String> {
+    let nine_lines =
+        trace_layout("1\n2\n3\n4\n5\n6\n7\n8\n9").map_err(|error| format!("{error:?}"))?;
+    let ten_lines =
+        trace_layout("1\n2\n3\n4\n5\n6\n7\n8\n9\n0").map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(nine_lines.logical_line_count(), 9);
+    assert_eq!(nine_lines.visible_line_count(), 9);
+    assert_eq!(
+        nine_lines.explicit_break_utf16_offsets(),
+        &[2, 4, 6, 8, 10, 12, 14, 16]
+    );
+    assert!(!nine_lines.clipped());
+
+    assert_eq!(ten_lines.logical_line_count(), 10);
+    assert_eq!(ten_lines.visible_line_count(), 9);
+    assert_eq!(
+        ten_lines.explicit_break_utf16_offsets(),
+        &[2, 4, 6, 8, 10, 12, 14, 16, 18]
+    );
+    assert!(ten_lines.clipped());
+
+    let trailing_separator = trace_layout("alpha\n").map_err(|error| format!("{error:?}"))?;
+    assert_eq!(trailing_separator.logical_line_count(), 1);
+    assert!(trailing_separator.explicit_break_utf16_offsets().is_empty());
+    Ok(())
+}
+
+#[test]
+fn layout_trace_applies_tmp_kinsoku_to_soft_break_offsets() -> Result<(), String> {
+    let opening =
+        trace_layout(&format!("{}「中", "中".repeat(14))).map_err(|error| format!("{error:?}"))?;
+    let closing =
+        trace_layout(&format!("{}。", "中".repeat(15))).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(opening.logical_line_count(), 2);
+    assert_eq!(opening.soft_break_utf16_offsets(), &[14]);
+    assert!(opening.explicit_break_utf16_offsets().is_empty());
+
+    assert_eq!(closing.logical_line_count(), 2);
+    assert_eq!(closing.soft_break_utf16_offsets(), &[14]);
+    assert!(closing.explicit_break_utf16_offsets().is_empty());
+    Ok(())
+}
+
+#[test]
 fn single_view_prepares_exactly_one_independently_safe_message() -> Result<(), String> {
     let prepared = prepare_single_message("first line\n  second  line")
         .map_err(|error| format!("{error:?}"))?
@@ -359,6 +437,26 @@ fn measured_glyph_advances_match_vrchat_capacity_anchors() {
         }
 
         assert_eq!(actual_capacity, expected_capacity, "{name}");
+    }
+}
+
+#[test]
+fn unshaped_variation_and_keycap_sequences_reserve_a_full_line() {
+    let cases = [
+        ("CJK ideographic variation sequence", "葛\u{E0100}"),
+        ("emoji keycap sequence", "1\u{FE0F}\u{20E3}"),
+        ("isolated emoji variation selector", "\u{FE0F}"),
+        ("isolated ideographic variation selector", "\u{E0100}"),
+        ("isolated zero-width joiner", "\u{200D}"),
+        ("isolated keycap mark", "\u{20E3}"),
+        ("isolated emoji tag", "\u{E0067}"),
+    ];
+
+    for (name, grapheme) in cases {
+        assert_eq!(grapheme.graphemes(true).count(), 1, "{name}");
+        let advance = grapheme_advance_units(grapheme);
+        assert_eq!(advance, MAX_GRAPHEME_ADVANCE_UNITS, "{name}");
+        assert!(fits_chatbox_width(advance), "{name}");
     }
 }
 
