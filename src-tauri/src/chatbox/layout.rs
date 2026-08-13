@@ -62,6 +62,7 @@ const LATIN_1_ADVANCES: [u16; 96] = [
 // selected either these glyphs or these pairs at runtime. Negative adjustments
 // are deliberately omitted: applying them could make the prediction narrower
 // than the rendered text. The table is ordered by Unicode scalar pair.
+// Keep the extracted pair grouping stable so future table updates stay reviewable.
 #[rustfmt::skip]
 const POSITIVE_KERNING_PAIRS: [(char, char, u16); 105] = [
     ('"', 'T', 20), ('"', 'V', 20), ('"', 'W', 20), ('"', 'Y', 10), ('"', 'Ý', 10),
