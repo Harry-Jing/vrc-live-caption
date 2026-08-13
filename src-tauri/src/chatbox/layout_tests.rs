@@ -1,6 +1,7 @@
 use super::{
-    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, MAX_GRAPHEME_ADVANCE_UNITS, PreparedChatboxText,
-    fits_chatbox_width, grapheme_advance_units, is_break_space_grapheme, paginate_completed,
+    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, MAX_GRAPHEME_ADVANCE_UNITS,
+    POSITIVE_KERNING_PAIRS, PreparedChatboxText, fits_chatbox_width, grapheme_advance_units,
+    is_break_space_grapheme, paginate_completed, positive_kerning_adjustment,
     prepare_single_message, render_live_viewport, trace_layout,
 };
 use proptest::prelude::*;
@@ -208,6 +209,98 @@ fn layout_trace_reports_the_verified_ascii_soft_wrap_boundary() -> Result<(), St
 }
 
 #[test]
+fn positive_kerning_can_push_an_otherwise_fitting_line_past_the_width_limit() -> Result<(), String>
+{
+    // Both strings have 15,456 units of unkerned advance. The extracted
+    // primary-font GPOS pair for `¿J` adds the maximum positive adjustment
+    // (+100); reversing only that pair leaves the same base advances.
+    let prefix = format!("{}{}", "x".repeat(21), " ".repeat(14));
+    let without_positive_pair =
+        trace_layout(&format!("{prefix}J¿")).map_err(|error| format!("{error:?}"))?;
+    let with_positive_pair =
+        trace_layout(&format!("{prefix}¿J")).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(without_positive_pair.logical_line_count(), 1);
+    assert_eq!(with_positive_pair.logical_line_count(), 2);
+    assert_eq!(with_positive_pair.soft_break_utf16_offsets(), &[35]);
+    Ok(())
+}
+
+#[test]
+fn positive_kerning_table_matches_the_hash_pinned_font_extraction() {
+    assert_eq!(POSITIVE_KERNING_PAIRS.len(), 105);
+    assert!(
+        POSITIVE_KERNING_PAIRS
+            .windows(2)
+            .all(|pairs| (pairs[0].0, pairs[0].1) < (pairs[1].0, pairs[1].1))
+    );
+    assert!(
+        POSITIVE_KERNING_PAIRS
+            .iter()
+            .all(|&(_, _, adjustment)| adjustment > 0)
+    );
+    assert_eq!(
+        POSITIVE_KERNING_PAIRS
+            .iter()
+            .map(|&(_, _, adjustment)| adjustment)
+            .max(),
+        Some(100)
+    );
+    assert_eq!(positive_kerning_adjustment('T', 'T'), 20);
+    assert_eq!(positive_kerning_adjustment('\u{00BF}', 'J'), 100);
+    assert_eq!(positive_kerning_adjustment('A', 'V'), 0);
+}
+
+#[test]
+fn positive_kerning_context_resets_at_line_boundaries() -> Result<(), String> {
+    // The first line's final `¿J` pair triggers a soft wrap before J. The J-led
+    // second line has 15,458 base units: it fits only when the pair from the
+    // preceding line is not carried across the boundary.
+    let second_line = format!("J{}{}", "x".repeat(17), "i".repeat(24));
+    let soft = trace_layout(&format!(
+        "{}{}¿{second_line}",
+        "x".repeat(11),
+        "z".repeat(19)
+    ))
+    .map_err(|error| format!("{error:?}"))?;
+    let explicit =
+        trace_layout(&format!("¿\n{second_line}")).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(soft.logical_line_count(), 2);
+    assert_eq!(soft.soft_break_utf16_offsets(), &[31]);
+    assert_eq!(explicit.logical_line_count(), 2);
+    assert_eq!(explicit.explicit_break_utf16_offsets(), &[2]);
+    assert!(explicit.soft_break_utf16_offsets().is_empty());
+    Ok(())
+}
+
+#[test]
+fn completed_pages_remain_safe_when_positive_kerning_creates_a_tenth_line() -> Result<(), String> {
+    // Eight conservative full-line graphemes put the final unbroken run on
+    // line nine. Its base advances fit, but the +100 `¿J` pair creates a real
+    // tenth line while the whole source remains well below 144 UTF-16 units.
+    let prefix = format!("{}{}{}", "😀".repeat(8), "x".repeat(11), "z".repeat(19));
+    let fitting = trace_layout(&format!("{prefix}J¿")).map_err(|error| format!("{error:?}"))?;
+    let input = format!("{prefix}¿J");
+    let widened = trace_layout(&input).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(fitting.logical_line_count(), 9);
+    assert_eq!(widened.logical_line_count(), 10);
+    assert!(widened.clipped());
+
+    let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(pages.len(), 2);
+    assert_eq!(concat_prepared(&pages), input);
+    for page in pages {
+        let trace = trace_layout(page.as_str()).map_err(|error| format!("{error:?}"))?;
+        assert!(trace.logical_line_count() <= 9);
+        assert!(!trace.clipped());
+    }
+    Ok(())
+}
+
+#[test]
 fn layout_trace_uses_prepared_utf16_offsets_for_verified_separators() -> Result<(), String> {
     let source = "😀\na\r\nb\u{000B}c\u{2028}d\u{2029}e\rf\u{0085}g\u{000C}h";
     let trace = trace_layout(source).map_err(|error| format!("{error:?}"))?;
@@ -246,6 +339,20 @@ fn layout_trace_distinguishes_logical_lines_from_the_nine_visible_lines() -> Res
     let trailing_separator = trace_layout("alpha\n").map_err(|error| format!("{error:?}"))?;
     assert_eq!(trailing_separator.logical_line_count(), 1);
     assert!(trailing_separator.explicit_break_utf16_offsets().is_empty());
+    Ok(())
+}
+
+#[test]
+fn terminal_separator_stays_with_nine_lines_but_a_real_tenth_line_does_not() -> Result<(), String> {
+    let nine_lines = "1\n2\n3\n4\n5\n6\n7\n8\n9";
+    let terminal_separator = format!("{nine_lines}\n");
+    let terminal_pages =
+        paginate_completed(&terminal_separator).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(prepared_texts(&terminal_pages), vec![terminal_separator]);
+
+    let tenth_line = format!("{nine_lines}\n0");
+    let tenth_line_pages = paginate_completed(&tenth_line).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(prepared_texts(&tenth_line_pages), vec![nine_lines, "\n0"]);
     Ok(())
 }
 

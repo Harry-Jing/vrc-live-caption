@@ -1,11 +1,25 @@
 use super::layout::{
-    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, paginate_completed, prepare_single_message,
-    render_live_viewport, trace_layout,
+    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, PreparedChatboxText, paginate_completed,
+    prepare_single_message, render_live_viewport, trace_layout,
 };
+use super::pacer::{ChatboxPacer, Clock};
+use super::transport::{ChatboxSendReceipt, ChatboxTransport};
+use super::{ChatboxPublication, PublisherCloseReason, PublisherSubmitOutcome};
+use crate::caption::{
+    ActiveCaptionStream, CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateChange,
+    CaptionAggregateSnapshot, CaptionAggregateUpdate, CaptionLane, CaptionSnapshot, CaptionState,
+};
+use crate::caption_pipeline::ResolvedPublicationTiming;
+use crate::error::{AppError, AppResult};
+use crate::events::DiagnosticUpdate;
+use crate::generation_fence::GenerationFence;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
 const FIXTURE: &str = include_str!("../../../contracts/chatbox-layout-cases-v1.json");
@@ -16,6 +30,7 @@ const EXPECTED_CASE_COUNT: usize = 178;
 const EXPECTED_RUNTIME_OBSERVATION_COUNT: usize = 52;
 const EXPECTED_COMPLETED_TARGET_COUNT: usize = 98;
 const EXPECTED_LIVE_TARGET_COUNT: usize = 96;
+const EXPECTED_LAYOUT_TARGET_COUNT: usize = 169;
 const EXPECTED_SOURCE_SHA256: &str =
     "f4899d95d0a2fac74a96423608cd4d9b88fa3afe28737c747356fcd3d4190731";
 const EXPECTED_MANIFEST_SHA256: &str =
@@ -49,6 +64,18 @@ const PREPARED_PAYLOAD_OVERRIDES: [(&str, &str, &str); 3] = [
         "one two three four five six seven eight nine",
     ),
 ];
+
+const SHARED_FACADE_REPLAY_CASE_IDS: [&str; 6] = [
+    "LINES-CR-BASIC",
+    "LIMIT-ASCII-OVER",
+    "LINES-NINE-LF",
+    "KINSOKU-CLOSE-PROBE",
+    "MIX-THREE-WRITING-SYSTEMS",
+    "PRODUCT-EMOJI-BILINGUAL",
+];
+
+const LIVE_ONLY_FACADE_REPLAY_CASE_IDS: [&str; 2] =
+    ["LIVE-NATURAL-WORD-BOUNDARY", "LIVE-OVERSIZED-OLD-GRAPHEME"];
 
 #[test]
 fn portable_chatbox_corpus_has_stable_identity_and_unicode_facts()
@@ -365,6 +392,200 @@ fn live_targets_form_bounded_newest_standalone_suffixes() -> Result<(), String> 
 }
 
 #[test]
+fn layout_targets_are_traceable_without_runtime_observation_expectations() -> Result<(), String> {
+    let fixture = serde_json::from_str::<Value>(FIXTURE).map_err(|error| error.to_string())?;
+    let cases = fixture["cases"]
+        .as_array()
+        .ok_or("Chatbox fixture cases must be an array.")?;
+    let mut target_count = 0;
+
+    for case in cases {
+        if !has_test_target(case, "layout")? {
+            continue;
+        }
+        target_count += 1;
+
+        let case_id = required_string(case, "case_id")?;
+        let payload = required_string(case, "payload")?;
+        let prepared_source = expected_prepared_payload(case_id, payload)?;
+        let oversized = first_oversized_grapheme_utf16_units(prepared_source.as_ref());
+        let first = trace_layout(payload);
+        let second = trace_layout(payload);
+        assert_eq!(
+            first, second,
+            "layout trace was not deterministic: {case_id}"
+        );
+
+        if let Some(utf16_units) = oversized {
+            assert_eq!(
+                first,
+                Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units }),
+                "layout trace returned the wrong oversized-EGC error: {case_id}"
+            );
+            continue;
+        }
+
+        let trace = first.map_err(|error| {
+            format!("layout trace rejected representable case {case_id}: {error:?}")
+        })?;
+        assert!(
+            trace.visible_line_count() <= 9,
+            "layout trace exceeded the visible-line cap: {case_id}"
+        );
+        assert!(
+            trace.logical_line_count() >= trace.visible_line_count(),
+            "layout trace reported more visible than logical lines: {case_id}"
+        );
+        assert_eq!(
+            trace.clipped(),
+            trace.logical_line_count() > trace.visible_line_count(),
+            "layout trace clipping flag was internally inconsistent: {case_id}"
+        );
+
+        let egc_ends = prepared_source
+            .graphemes(true)
+            .scan(0, |offset, grapheme| {
+                *offset += grapheme.encode_utf16().count();
+                Some(*offset)
+            })
+            .collect::<HashSet<_>>();
+        assert_trace_breaks_are_safe(case_id, trace.soft_break_utf16_offsets(), &egc_ends)?;
+        assert_trace_breaks_are_safe(case_id, trace.explicit_break_utf16_offsets(), &egc_ends)?;
+        assert!(
+            trace
+                .soft_break_utf16_offsets()
+                .iter()
+                .all(|offset| !trace.explicit_break_utf16_offsets().contains(offset)),
+            "layout trace classified one break as both soft and explicit: {case_id}"
+        );
+    }
+
+    assert_eq!(target_count, EXPECTED_LAYOUT_TARGET_COUNT);
+    Ok(())
+}
+
+#[test]
+fn completed_facade_replays_layered_corpus_cases_without_rewriting_pages() -> AppResult<()> {
+    let fixture = parse_fixture()?;
+    let (publication, receiver) = start_corpus_publication(ResolvedPublicationTiming::Completed)?;
+
+    for (index, case_id) in SHARED_FACADE_REPLAY_CASE_IDS.iter().enumerate() {
+        let case = corpus_case(&fixture, case_id)?;
+        assert!(has_test_target(case, "completed-pagination").map_err(AppError::state)?);
+        let payload = required_string(case, "payload").map_err(AppError::state)?;
+        let expected = paginate_completed(payload).map_err(|error| {
+            AppError::state(format!(
+                "Replay case {case_id} unexpectedly failed: {error:?}"
+            ))
+        })?;
+        assert!(
+            !expected.is_empty(),
+            "Replay case emitted no pages: {case_id}"
+        );
+
+        let revision = u64::try_from(index + 1)
+            .map_err(|_| AppError::state("Corpus replay revision overflowed."))?;
+        assert_eq!(
+            publication.try_submit(&corpus_update(revision, case_id, payload))?,
+            PublisherSubmitOutcome::Handled
+        );
+        for expected_page in expected {
+            assert_eq!(
+                receive_corpus_text(&receiver)?,
+                expected_page.as_str(),
+                "Completed facade rewrote a prepared corpus page: {case_id}"
+            );
+        }
+    }
+
+    close_corpus_publication(&publication)?;
+    assert_no_corpus_text(&receiver);
+    Ok(())
+}
+
+#[test]
+fn live_facade_replays_layered_corpus_cases_without_rewriting_viewports() -> AppResult<()> {
+    let fixture = parse_fixture()?;
+    let (publication, receiver) = start_corpus_publication(ResolvedPublicationTiming::LiveUnit {
+        observation_window_ms: 1_000,
+    })?;
+    let case_ids = SHARED_FACADE_REPLAY_CASE_IDS
+        .iter()
+        .chain(LIVE_ONLY_FACADE_REPLAY_CASE_IDS.iter());
+
+    for (index, case_id) in case_ids.enumerate() {
+        let case = corpus_case(&fixture, case_id)?;
+        assert!(has_test_target(case, "live-window").map_err(AppError::state)?);
+        let payload = required_string(case, "payload").map_err(AppError::state)?;
+        let expected = render_live_viewport(payload)
+            .map_err(|error| {
+                AppError::state(format!(
+                    "Replay case {case_id} unexpectedly failed: {error:?}"
+                ))
+            })?
+            .ok_or_else(|| AppError::state(format!("Replay case had no viewport: {case_id}")))?;
+
+        let revision = u64::try_from(index + 1)
+            .map_err(|_| AppError::state("Corpus replay revision overflowed."))?;
+        assert_eq!(
+            publication.try_submit(&corpus_update(revision, case_id, payload))?,
+            PublisherSubmitOutcome::Handled
+        );
+        assert_eq!(
+            receive_corpus_text(&receiver)?,
+            expected.as_str(),
+            "Live facade rewrote a prepared corpus viewport: {case_id}"
+        );
+    }
+
+    close_corpus_publication(&publication)?;
+    assert_no_corpus_text(&receiver);
+    Ok(())
+}
+
+#[test]
+fn oversized_newest_egc_is_reported_and_never_reaches_either_facade_transport() -> AppResult<()> {
+    let fixture = parse_fixture()?;
+    let case_id = "LIVE-OVERSIZED-NEW-GRAPHEME";
+    let case = corpus_case(&fixture, case_id)?;
+    let payload = required_string(case, "payload").map_err(AppError::state)?;
+    let utf16_units = first_oversized_grapheme_utf16_units(payload).ok_or_else(|| {
+        AppError::state("Oversized replay case no longer contains an oversized EGC.")
+    })?;
+    assert_eq!(
+        paginate_completed(payload),
+        Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units })
+    );
+    assert_eq!(
+        render_live_viewport(payload),
+        Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units })
+    );
+
+    for timing in [
+        ResolvedPublicationTiming::Completed,
+        ResolvedPublicationTiming::LiveUnit {
+            observation_window_ms: 1_000,
+        },
+    ] {
+        let (publication, receiver, diagnostics) =
+            start_corpus_publication_with_diagnostics(timing)?;
+        assert_eq!(
+            publication.try_submit(&corpus_update(1, case_id, payload))?,
+            PublisherSubmitOutcome::Handled
+        );
+        diagnostics
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|error| {
+                AppError::runtime(format!("Facade did not report the oversized EGC: {error}"))
+            })?;
+        assert_no_corpus_text(&receiver);
+        close_corpus_publication(&publication)?;
+    }
+
+    Ok(())
+}
+
+#[test]
 fn build_scoped_runtime_observations_match_the_layout_trace() -> Result<(), String> {
     let portable = serde_json::from_str::<Value>(FIXTURE).map_err(|error| error.to_string())?;
     let observations =
@@ -485,6 +706,174 @@ fn build_scoped_runtime_observations_match_the_layout_trace() -> Result<(), Stri
     assert_no_forbidden_expectation_fields(&observations);
     assert!(!RUNTIME_OBSERVATIONS.contains("\"payload\""));
     assert!(!RUNTIME_OBSERVATIONS.contains("C:\\\\Users\\\\"));
+    Ok(())
+}
+
+struct AdvancingClock {
+    now: Mutex<Instant>,
+}
+
+impl AdvancingClock {
+    fn new() -> Self {
+        Self {
+            now: Mutex::new(Instant::now()),
+        }
+    }
+}
+
+impl Clock for AdvancingClock {
+    fn now(&self) -> Instant {
+        self.now
+            .lock()
+            .map(|now| *now)
+            .unwrap_or_else(|poisoned| *poisoned.into_inner())
+    }
+
+    fn sleep(&self, duration: Duration) {
+        let mut now = match self.now.lock() {
+            Ok(now) => now,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *now += duration;
+    }
+}
+
+struct CorpusRecordingTransport {
+    texts: mpsc::Sender<String>,
+}
+
+impl ChatboxTransport for CorpusRecordingTransport {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
+        self.texts
+            .send(text.as_str().to_string())
+            .map_err(|_| AppError::state("Corpus transport receiver was dropped."))?;
+        Ok(ChatboxSendReceipt {
+            target: "corpus-recording".to_string(),
+            byte_count: text.as_str().len(),
+        })
+    }
+
+    fn send_typing(&self, _is_typing: bool) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+fn parse_fixture() -> AppResult<Value> {
+    serde_json::from_str(FIXTURE)
+        .map_err(|error| AppError::state(format!("Chatbox corpus was invalid JSON: {error}")))
+}
+
+fn corpus_case<'a>(fixture: &'a Value, case_id: &str) -> AppResult<&'a Value> {
+    fixture["cases"]
+        .as_array()
+        .and_then(|cases| {
+            cases
+                .iter()
+                .find(|case| case["case_id"].as_str() == Some(case_id))
+        })
+        .ok_or_else(|| AppError::state(format!("Chatbox corpus case was missing: {case_id}")))
+}
+
+fn start_corpus_publication(
+    timing: ResolvedPublicationTiming,
+) -> AppResult<(ChatboxPublication, Receiver<String>)> {
+    start_corpus_publication_with_reporter(timing, Arc::new(|_| {}))
+}
+
+fn start_corpus_publication_with_diagnostics(
+    timing: ResolvedPublicationTiming,
+) -> AppResult<(ChatboxPublication, Receiver<String>, Receiver<()>)> {
+    let (diagnostics, diagnostic_receiver) = mpsc::channel();
+    let reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync> = Arc::new(move |_| {
+        let _ = diagnostics.send(());
+    });
+    let (publication, receiver) = start_corpus_publication_with_reporter(timing, reporter)?;
+    Ok((publication, receiver, diagnostic_receiver))
+}
+
+fn start_corpus_publication_with_reporter(
+    timing: ResolvedPublicationTiming,
+    reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync>,
+) -> AppResult<(ChatboxPublication, Receiver<String>)> {
+    let (texts, receiver) = mpsc::channel();
+    let transport: Arc<dyn ChatboxTransport> = Arc::new(CorpusRecordingTransport { texts });
+    let fence = GenerationFence::new();
+    let publication = ChatboxPublication::start_with_transport(
+        transport,
+        ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
+        1,
+        fence.committer(),
+        timing,
+        reporter,
+    )?;
+    Ok((publication, receiver))
+}
+
+fn corpus_update(revision: u64, case_id: &str, text: &str) -> CaptionAggregateUpdate {
+    let stream_id = "corpus-replay-1".to_string();
+    let caption = CaptionSnapshot {
+        generation: 1,
+        stream_id: stream_id.clone(),
+        unit_id: Some(case_id.to_string()),
+        lane: CaptionLane::Source,
+        revision,
+        text: text.to_string(),
+        state: CaptionState::Completed,
+        language: None,
+        source_ref: None,
+        unit_started_at_ms: Some(revision),
+        timestamp_ms: revision,
+    };
+    CaptionAggregateUpdate {
+        snapshot: CaptionAggregateSnapshot {
+            contract_version: CAPTION_AGGREGATE_CONTRACT_VERSION,
+            snapshot_revision: revision,
+            active_stream: Some(ActiveCaptionStream {
+                generation: 1,
+                stream_id,
+            }),
+            open_source_units: Vec::new(),
+            captions: vec![caption.clone()],
+            translation_units: Vec::new(),
+        },
+        change: CaptionAggregateChange::CaptionAccepted(caption),
+    }
+}
+
+fn receive_corpus_text(receiver: &Receiver<String>) -> AppResult<String> {
+    receiver
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|error| {
+            AppError::runtime(format!(
+                "Corpus replay transport did not receive text: {error}"
+            ))
+        })
+}
+
+fn assert_no_corpus_text(receiver: &Receiver<String>) {
+    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+}
+
+fn close_corpus_publication(publication: &ChatboxPublication) -> AppResult<()> {
+    publication.request_close(PublisherCloseReason::Stop)?;
+    publication.join()
+}
+
+fn assert_trace_breaks_are_safe(
+    case_id: &str,
+    offsets: &[usize],
+    egc_ends: &HashSet<usize>,
+) -> Result<(), String> {
+    if !offsets.windows(2).all(|pair| pair[0] < pair[1]) {
+        return Err(format!(
+            "layout trace break offsets were not strictly increasing: {case_id}"
+        ));
+    }
+    if !offsets.iter().all(|offset| egc_ends.contains(offset)) {
+        return Err(format!(
+            "layout trace break offset split an EGC or exceeded the payload: {case_id}"
+        ));
+    }
     Ok(())
 }
 

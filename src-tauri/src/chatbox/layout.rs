@@ -55,6 +55,56 @@ const LATIN_1_ADVANCES: [u16; 96] = [
     605, 618, 605, 605, 605, 605, 605, 572, 605, 618, 618, 618, 618, 510, 615, 510,
 ];
 
+// Positive GPOS `kern` xAdvance pairs extracted from the hash-pinned raw
+// NotoSans-Regular font whose SHA-256 is
+// 6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9.
+// This is a source-derived conservative model, not proof that a VRChat client
+// selected either these glyphs or these pairs at runtime. Negative adjustments
+// are deliberately omitted: applying them could make the prediction narrower
+// than the rendered text. The table is ordered by Unicode scalar pair.
+#[rustfmt::skip]
+const POSITIVE_KERNING_PAIRS: [(char, char, u16); 105] = [
+    ('"', 'T', 20), ('"', 'V', 20), ('"', 'W', 20), ('"', 'Y', 10), ('"', 'Ý', 10),
+    ('\'', 'T', 20), ('\'', 'V', 20), ('\'', 'W', 20), ('\'', 'Y', 10), ('\'', 'Ý', 10),
+    ('(', 'J', 90), ('(', 'j', 40),
+    ('A', 'J', 50),
+    ('E', 'J', 60),
+    ('F', ')', 20), ('F', '?', 20), ('F', ']', 20), ('F', '}', 20),
+    ('T', '?', 20), ('T', 'T', 20),
+    ('V', '?', 20),
+    ('W', '?', 20),
+    ('Y', '?', 20),
+    ('[', 'J', 90), ('[', 'j', 40),
+    ('c', '"', 20), ('c', '\'', 20), ('c', '’', 20), ('c', '”', 20),
+    ('f', '"', 60), ('f', '\'', 60), ('f', ')', 40), ('f', ']', 40), ('f', '}', 40),
+    ('f', '’', 60), ('f', '”', 60),
+    ('r', '"', 40), ('r', '\'', 40), ('r', '’', 40), ('r', '”', 40),
+    ('t', '"', 20), ('t', '\'', 20), ('t', '’', 20), ('t', '”', 20),
+    ('v', '"', 40), ('v', '\'', 40), ('v', '?', 20), ('v', '’', 40), ('v', '”', 40),
+    ('w', '"', 40), ('w', '\'', 40), ('w', '?', 20), ('w', '’', 40), ('w', '”', 40),
+    ('y', '"', 40), ('y', '\'', 40), ('y', '?', 20), ('y', '’', 40), ('y', '”', 40),
+    ('{', 'J', 90), ('{', 'j', 40),
+    ('¡', 'J', 50),
+    ('¿', 'J', 100),
+    ('À', 'J', 50), ('Á', 'J', 50), ('Â', 'J', 50),
+    ('Ã', 'J', 50), ('Ä', 'J', 50), ('Å', 'J', 50),
+    ('Æ', 'J', 60),
+    ('È', 'J', 60), ('É', 'J', 60), ('Ê', 'J', 60), ('Ë', 'J', 60),
+    ('Ý', '?', 20),
+    ('ý', '"', 40), ('ý', '\'', 40), ('ý', '?', 20),
+    ('ý', '’', 40), ('ý', '”', 40),
+    ('ÿ', '"', 40), ('ÿ', '\'', 40), ('ÿ', '?', 20),
+    ('ÿ', '’', 40), ('ÿ', '”', 40),
+    ('‘', 'T', 20), ('‘', 'V', 20), ('‘', 'W', 20),
+    ('‘', 'Y', 10), ('‘', 'Ý', 10),
+    ('’', 'T', 20), ('’', 'V', 20), ('’', 'W', 20),
+    ('’', 'Y', 10), ('’', 'Ý', 10),
+    ('“', 'T', 20), ('“', 'V', 20), ('“', 'W', 20),
+    ('“', 'Y', 10), ('“', 'Ý', 10),
+    ('”', 'T', 20), ('”', 'V', 20), ('”', 'W', 20),
+    ('”', 'Y', 10), ('”', 'Ý', 10),
+];
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ChatboxLayoutError {
     GraphemeExceedsInputBudget { utf16_units: usize },
@@ -246,6 +296,7 @@ struct LayoutText<'text> {
 struct LayoutGrapheme<'text> {
     text: &'text str,
     advance_units: u32,
+    kerning_character: Option<char>,
     explicit_line_break: bool,
     break_space: bool,
     can_break_after: bool,
@@ -298,6 +349,9 @@ impl<'text> LayoutText<'text> {
                 } else {
                     grapheme_advance_units(grapheme)
                 },
+                kerning_character: (!explicit_line_break)
+                    .then(|| measurable_kerning_character(grapheme))
+                    .flatten(),
                 explicit_line_break,
                 break_space,
                 can_break_after: false,
@@ -342,6 +396,11 @@ impl<'text> LayoutText<'text> {
             };
             if line_count == CHATBOX_MAX_VISIBLE_LINES {
                 return match layout_break.kind {
+                    LayoutBreakKind::Explicit
+                        if layout_break.next_line_start == self.graphemes.len() =>
+                    {
+                        layout_break.next_line_start
+                    }
                     LayoutBreakKind::Explicit => layout_break.page_end_at_visible_cap,
                     LayoutBreakKind::Soft => last_legal_page_break
                         .filter(|boundary| *boundary > page_start)
@@ -371,7 +430,7 @@ impl<'text> LayoutText<'text> {
 
     fn scan_line(&self, line_start: usize, scan_end: usize) -> LineScan {
         let mut cursor = line_start;
-        let mut line_width = 0;
+        let mut line_width = 0_u32;
         let mut last_legal_break = None;
 
         while cursor < scan_end {
@@ -387,7 +446,17 @@ impl<'text> LayoutText<'text> {
                 };
             }
 
-            let candidate_width = line_width + grapheme.advance_units;
+            let positive_kerning = if cursor == line_start {
+                0
+            } else {
+                self.graphemes[cursor - 1]
+                    .kerning_character
+                    .zip(grapheme.kerning_character)
+                    .map_or(0, |(left, right)| positive_kerning_adjustment(left, right))
+            };
+            let candidate_width = line_width
+                .saturating_add(positive_kerning)
+                .saturating_add(grapheme.advance_units);
             if fits_chatbox_width(candidate_width) {
                 line_width = candidate_width;
                 cursor += 1;
@@ -669,6 +738,38 @@ fn is_break_space_grapheme(grapheme: &str) -> bool {
 
 fn fits_chatbox_width(advance_units: u32) -> bool {
     advance_units * FONT_SIZE_PX <= CHATBOX_WIDTH_PX * FONT_UNITS_PER_EM
+}
+
+fn positive_kerning_adjustment(left: char, right: char) -> u32 {
+    POSITIVE_KERNING_PAIRS
+        .binary_search_by_key(&(left, right), |&(pair_left, pair_right, _)| {
+            (pair_left, pair_right)
+        })
+        .map_or(0, |index| u32::from(POSITIVE_KERNING_PAIRS[index].2))
+}
+
+fn measurable_kerning_character(grapheme: &str) -> Option<char> {
+    if requires_conservative_sequence_width(grapheme) {
+        return None;
+    }
+
+    let mut base = None;
+    for character in grapheme.chars() {
+        if is_zero_advance_modifier(character) {
+            continue;
+        }
+        if base.is_some() || !has_primary_font_advance(character) {
+            return None;
+        }
+        base = Some(character);
+    }
+    base
+}
+
+fn has_primary_font_advance(character: char) -> bool {
+    (' '..='~').contains(&character)
+        || ('\u{00A0}'..='\u{00FF}').contains(&character)
+        || common_noto_punctuation_advance(character).is_some()
 }
 
 fn grapheme_advance_units(grapheme: &str) -> u32 {
