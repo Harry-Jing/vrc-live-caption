@@ -100,6 +100,17 @@ struct RecordingTransport {
     next_text_attempt: Mutex<usize>,
 }
 
+struct BlockFirstTextTransport {
+    recording: RecordingTransport,
+    first_attempt: Mutex<FirstTextAttemptState>,
+    changed: Condvar,
+}
+
+struct FirstTextAttemptState {
+    started: bool,
+    released: bool,
+}
+
 struct PanicOnTypingTransport {
     recording: RecordingTransport,
     panic_on_typing_on: Mutex<bool>,
@@ -111,6 +122,46 @@ impl PanicOnTypingTransport {
             recording: RecordingTransport::new([]),
             panic_on_typing_on: Mutex::new(true),
         }
+    }
+}
+
+impl BlockFirstTextTransport {
+    fn new() -> Self {
+        Self {
+            recording: RecordingTransport::new([]),
+            first_attempt: Mutex::new(FirstTextAttemptState {
+                started: false,
+                released: false,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn wait_for_first_attempt(&self) -> AppResult<()> {
+        let state = self
+            .first_attempt
+            .lock()
+            .map_err(|_| AppError::state("Blocking transport lock was poisoned."))?;
+        let (state, timeout) = self
+            .changed
+            .wait_timeout_while(state, Duration::from_secs(1), |state| !state.started)
+            .map_err(|_| AppError::state("Blocking transport lock was poisoned."))?;
+        if timeout.timed_out() && !state.started {
+            return Err(AppError::runtime(
+                "Live publisher did not begin its first text attempt.",
+            ));
+        }
+        Ok(())
+    }
+
+    fn release_first_attempt(&self) -> AppResult<()> {
+        let mut state = self
+            .first_attempt
+            .lock()
+            .map_err(|_| AppError::state("Blocking transport lock was poisoned."))?;
+        state.released = true;
+        self.changed.notify_all();
+        Ok(())
     }
 }
 
@@ -241,6 +292,31 @@ impl ChatboxTransport for RecordingTransport {
 
     fn send_typing(&self, is_typing: bool) -> AppResult<()> {
         self.record(TransportEvent::Typing(is_typing))
+    }
+}
+
+impl ChatboxTransport for BlockFirstTextTransport {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
+        let mut state = self
+            .first_attempt
+            .lock()
+            .map_err(|_| AppError::state("Blocking transport lock was poisoned."))?;
+        if !state.started {
+            state.started = true;
+            self.changed.notify_all();
+            while !state.released {
+                state = self
+                    .changed
+                    .wait(state)
+                    .map_err(|_| AppError::state("Blocking transport lock was poisoned."))?;
+            }
+        }
+        drop(state);
+        self.recording.send_text(text)
+    }
+
+    fn send_typing(&self, is_typing: bool) -> AppResult<()> {
+        self.recording.send_typing(is_typing)
     }
 }
 
@@ -445,7 +521,7 @@ fn rejects_zero_live_observation_delay() {
 }
 
 #[test]
-fn open_source_unit_reasserts_typing_four_seconds_after_typing_attempt_and_cleans_up_once()
+fn open_source_unit_reasserts_typing_on_the_best_effort_interval_and_cleans_up_once()
 -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
@@ -714,6 +790,212 @@ fn newer_snapshot_replaces_candidate_while_pacer_is_waiting() -> AppResult<()> {
 }
 
 #[test]
+fn newer_snapshot_waits_as_pending_after_an_older_view_is_admitted() -> AppResult<()> {
+    let clock = Arc::new(ManualClock::new());
+    let transport = Arc::new(BlockFirstTextTransport::new());
+    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let publisher = LiveChatboxPublisher::start(
+        transport.clone(),
+        pacer,
+        1,
+        open_committer(),
+        ResolvedPublicationTiming::LiveUnit {
+            observation_window_ms: 1_000,
+        },
+        reporter(),
+    )?;
+
+    observe(
+        &publisher,
+        &snapshot(
+            1,
+            &[],
+            vec![caption(
+                Some("unit-1"),
+                1,
+                "admitted older view",
+                CaptionState::Completed,
+            )],
+        ),
+    )?;
+    transport.wait_for_first_attempt()?;
+
+    observe(
+        &publisher,
+        &snapshot(
+            2,
+            &[],
+            vec![caption(
+                Some("unit-1"),
+                2,
+                "pending newer view",
+                CaptionState::Completed,
+            )],
+        ),
+    )?;
+    let (pending_view, in_flight_view, admitted_view_was_recorded_as_history) = {
+        let state = publisher
+            .shared
+            .state
+            .lock()
+            .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?;
+        (
+            state
+                .pending_candidate
+                .as_ref()
+                .map(|candidate| candidate.view.as_str().to_string()),
+            state
+                .in_flight_candidate
+                .as_ref()
+                .map(|candidate| candidate.view.as_str().to_string()),
+            state.last_attempted.is_some(),
+        )
+    };
+    let output_gate_available_during_transport = match publisher.shared.output_gate.try_lock() {
+        Ok(gate) => {
+            drop(gate);
+            true
+        }
+        Err(std::sync::TryLockError::WouldBlock) => false,
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            return Err(AppError::state("Live output test gate was poisoned."));
+        }
+    };
+
+    transport.release_first_attempt()?;
+    assert_eq!(
+        transport.recording.wait_for_texts(1)?,
+        ["admitted older view"]
+    );
+    clock.wait_for_sleep()?;
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(
+        transport.recording.wait_for_texts(2)?,
+        ["admitted older view", "pending newer view"]
+    );
+    close(&publisher)?;
+
+    assert_eq!(pending_view.as_deref(), Some("pending newer view"));
+    assert_eq!(in_flight_view.as_deref(), Some("admitted older view"));
+    assert!(
+        !admitted_view_was_recorded_as_history,
+        "an admitted transport attempt must remain in-flight until it completes"
+    );
+    assert!(
+        output_gate_available_during_transport,
+        "the output admission gate must not be held across transport"
+    );
+    Ok(())
+}
+
+#[test]
+fn close_waits_for_an_admitted_view_and_rejects_later_observations() -> AppResult<()> {
+    let clock = Arc::new(ManualClock::new());
+    let transport = Arc::new(BlockFirstTextTransport::new());
+    let publisher = LiveChatboxPublisher::start(
+        transport.clone(),
+        ChatboxPacer::with_clock(clock),
+        1,
+        open_committer(),
+        ResolvedPublicationTiming::LiveUnit {
+            observation_window_ms: 1_000,
+        },
+        reporter(),
+    )?;
+
+    observe(
+        &publisher,
+        &snapshot(
+            1,
+            &[],
+            vec![caption(
+                Some("unit-1"),
+                1,
+                "admitted before close",
+                CaptionState::Completed,
+            )],
+        ),
+    )?;
+    transport.wait_for_first_attempt()?;
+    observe(
+        &publisher,
+        &snapshot(
+            2,
+            &[],
+            vec![caption(
+                Some("unit-1"),
+                2,
+                "pending at close",
+                CaptionState::Completed,
+            )],
+        ),
+    )?;
+
+    let closer = publisher.clone();
+    let (closed_sender, closed_receiver) = std::sync::mpsc::channel();
+    let close_thread = thread::spawn(move || {
+        let _ = closed_sender.send(closer.request_close(PublisherCloseReason::Stop));
+    });
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let is_closing = publisher
+            .shared
+            .state
+            .lock()
+            .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?
+            .lifecycle
+            != PublisherLifecycle::Running;
+        if is_closing {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(AppError::runtime(
+                "Live publisher did not establish its close boundary.",
+            ));
+        }
+        thread::yield_now();
+    }
+
+    let late_outcome = publisher.try_observe(&snapshot(
+        3,
+        &[],
+        vec![caption(
+            Some("unit-1"),
+            3,
+            "too late",
+            CaptionState::Completed,
+        )],
+    ))?;
+    let close_returned_before_transport =
+        closed_receiver.recv_timeout(Duration::from_millis(50)).ok();
+    let close_returned_early = close_returned_before_transport.is_some();
+
+    transport.release_first_attempt()?;
+    let close_result = match close_returned_before_transport {
+        Some(result) => result,
+        None => closed_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Live publisher close did not finish."))?,
+    };
+    close_result?;
+    close_thread
+        .join()
+        .map_err(|_| AppError::runtime("Live publisher close thread panicked."))?;
+    publisher.join()?;
+
+    assert_eq!(late_outcome, PublisherSubmitOutcome::Closed);
+    assert!(
+        !close_returned_early,
+        "close returned before the admitted transport attempt completed"
+    );
+    assert_eq!(
+        transport.recording.text_events()?,
+        ["admitted before close"]
+    );
+    Ok(())
+}
+
+#[test]
 fn identical_completion_is_not_resent_after_successful_ongoing_view() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
@@ -977,7 +1259,7 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
         .state
         .lock()
         .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?
-        .candidate = Some(selected.clone());
+        .pending_candidate = Some(selected.clone());
     let candidate_shared = Arc::clone(&publisher.shared);
     let candidate_attempt =
         thread::spawn(move || process_live_candidate(&candidate_shared, selected));

@@ -1,9 +1,10 @@
 //! Latest-wins Live publication for the VRChat Chatbox.
 //!
 //! The publisher observes application-authoritative caption aggregates. It
-//! never reconstructs provider deltas and never queues historical Live
-//! revisions. One worker owns observation timing, process-wide pacing, OSC
-//! attempts, and the Stop cleanup; producers only replace in-memory state.
+//! never reconstructs provider deltas or queues historical pending revisions.
+//! A newer observation replaces only pending work; an admitted OSC attempt
+//! remains in flight and completes independently. One worker owns observation
+//! timing, process-wide pacing, OSC attempts, and the Stop cleanup.
 
 use super::PreparedChatboxText;
 use super::common::{
@@ -88,7 +89,9 @@ struct LivePublisherState {
     highest_snapshot_revision: u64,
     stream_id: Option<String>,
     unit_first_seen: HashMap<String, Instant>,
-    candidate: Option<LiveCandidate>,
+    pending_candidate: Option<LiveCandidate>,
+    in_flight_candidate: Option<LiveCandidateAttempt>,
+    typing_in_flight: bool,
     last_attempted: Option<LiveCandidateAttempt>,
     last_published: Option<PublishedLiveView>,
     last_layout_failure: Option<LiveCandidateIdentity>,
@@ -125,6 +128,13 @@ struct LiveCandidateAttempt {
 }
 
 impl LiveCandidateAttempt {
+    fn from_candidate(candidate: &LiveCandidate) -> Self {
+        Self {
+            identity: candidate.identity.clone(),
+            view: candidate.view.clone(),
+        }
+    }
+
     fn matches(&self, candidate: &LiveCandidate) -> bool {
         self.identity == candidate.identity && self.view == candidate.view
     }
@@ -184,7 +194,9 @@ impl LiveChatboxPublisher {
                 highest_snapshot_revision: 0,
                 stream_id: None,
                 unit_first_seen: HashMap::new(),
-                candidate: None,
+                pending_candidate: None,
+                in_flight_candidate: None,
+                typing_in_flight: false,
                 last_attempted: None,
                 last_published: None,
                 last_layout_failure: None,
@@ -263,7 +275,7 @@ impl LiveChatboxPublisher {
         if state.stream_id.as_deref() != Some(active.stream_id.as_str()) {
             state.stream_id = Some(active.stream_id.clone());
             state.unit_first_seen.clear();
-            state.candidate = None;
+            state.pending_candidate = None;
             state.last_attempted = None;
             state.last_layout_failure = None;
         }
@@ -306,7 +318,7 @@ impl LiveChatboxPublisher {
             ),
             None => None,
         };
-        state.candidate = candidate;
+        state.pending_candidate = candidate;
         refresh_typing_desired(&mut state);
 
         self.shared
@@ -379,14 +391,27 @@ impl LiveChatboxPublisher {
         self.shared.wake.notify_all();
         drop(state);
 
-        // The worker holds this only around its final candidate check and OSC
-        // call. Producers never take it, so a slow transport cannot block
-        // recognition ingestion while request_close still gets a linearizable
-        // cutoff before it returns.
-        let (_output, output_gate_was_poisoned) = match self.shared.output_gate.lock() {
+        // Taking the admission gate after marking Closing linearizes this
+        // cutoff against the worker's final state check. Pending work was
+        // discarded above; an attempt admitted before the cutoff may finish,
+        // and its in-flight state makes close wait without holding a mutex
+        // across slow transport.
+        let (output, output_gate_was_poisoned) = match self.shared.output_gate.lock() {
             Ok(output) => (output, false),
             Err(poisoned) => (poisoned.into_inner(), true),
         };
+        drop(output);
+        let (mut state, wait_state_was_poisoned) = match self.shared.state.lock() {
+            Ok(state) => (state, false),
+            Err(poisoned) => (poisoned.into_inner(), true),
+        };
+        while state.in_flight_candidate.is_some() || state.typing_in_flight {
+            state = match self.shared.wake.wait(state) {
+                Ok(state) => state,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+        }
+        drop(state);
         let cleanup_note = if perform_poison_cleanup {
             match self.shared.transport.send_typing(false) {
                 Ok(()) => " A best-effort typing-off cleanup was attempted.",
@@ -396,7 +421,7 @@ impl LiveChatboxPublisher {
             ""
         };
 
-        if state_was_poisoned || output_gate_was_poisoned {
+        if state_was_poisoned || output_gate_was_poisoned || wait_state_was_poisoned {
             Err(AppError::state(format!(
                 "Live publisher synchronization was poisoned while closing; shutdown was still requested.{cleanup_note}"
             )))
@@ -522,6 +547,8 @@ fn emergency_close_after_worker_failure(shared: &LivePublisherShared, failure_re
         }
     };
     discard_live_candidate_on_close(&mut state, reason);
+    state.in_flight_candidate = None;
+    state.typing_in_flight = false;
     state.lifecycle = PublisherLifecycle::Closed;
     let mut diagnostics = state.diagnostics.drain(..).collect::<Vec<_>>();
     diagnostics.push(LivePublisherDiagnostic::WorkerFailed {
@@ -598,7 +625,7 @@ fn next_live_worker_item(shared: &LivePublisherShared) -> AppResult<LiveWorkerIt
             .typing_desired
             .then_some(state.next_typing_reassert_at)
             .flatten();
-        if let Some(candidate) = state.candidate.as_ref() {
+        if let Some(candidate) = state.pending_candidate.as_ref() {
             // The aggregate viewport can change when a non-head caption is
             // removed even though the head caption identity stays unchanged.
             let already_attempted = state
@@ -643,7 +670,7 @@ fn discard_live_candidate_on_close(state: &mut LivePublisherState, reason: Publi
             .diagnostics
             .push_back(LivePublisherDiagnostic::DraftDiscardedOnClose { reason });
     }
-    state.candidate = None;
+    state.pending_candidate = None;
 }
 
 fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate) -> AppResult<()> {
@@ -658,15 +685,17 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
         .output_gate
         .lock()
         .map_err(|_| AppError::state("Live publisher output gate was poisoned."))?;
+    let mut output_guard = Some(output_guard);
     let send_result = shared.committer.try_commit(|| {
         let mut state = shared
             .state
             .lock()
             .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?;
         let is_current = state.lifecycle == PublisherLifecycle::Running
-            && state.candidate.as_ref().is_some_and(|candidate| {
+            && state.pending_candidate.as_ref().is_some_and(|candidate| {
                 candidate.identity == selected.identity && candidate.view == selected.view
             })
+            && state.in_flight_candidate.is_none()
             && state
                 .last_attempted
                 .as_ref()
@@ -677,17 +706,16 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
         if !is_current || shared.pacer.now() < selected.ready_at {
             return Ok(None);
         }
-        state.last_attempted = Some(LiveCandidateAttempt {
-            identity: selected.identity.clone(),
-            view: selected.view.clone(),
-        });
+        state.pending_candidate = None;
+        state.in_flight_candidate = Some(LiveCandidateAttempt::from_candidate(&selected));
         drop(state);
+        drop(output_guard.take());
         Ok(Some(
             permit.attempt(|| shared.transport.send_text(&selected.view)),
         ))
     })?;
+    drop(output_guard);
     let Some(send_result) = send_result else {
-        drop(output_guard);
         thread::yield_now();
         return Ok(());
     };
@@ -698,6 +726,17 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
         .state
         .lock()
         .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?;
+    let Some(attempt) = state.in_flight_candidate.take() else {
+        return Err(AppError::state(
+            "Live publisher lost its in-flight candidate before transport completed.",
+        ));
+    };
+    if !attempt.matches(&selected) {
+        return Err(AppError::state(
+            "Live publisher completed a different candidate than the one in flight.",
+        ));
+    }
+    state.last_attempted = Some(attempt);
     match send_result {
         Ok(receipt) => {
             state.last_published = Some(PublishedLiveView {
@@ -735,25 +774,30 @@ fn process_typing(shared: &LivePublisherShared, epoch: u64, is_typing: bool) -> 
         .output_gate
         .lock()
         .map_err(|_| AppError::state("Live publisher output gate was poisoned."))?;
-    let should_attempt = {
-        let state = shared
+    let mut output_guard = Some(output_guard);
+    let transport_result = shared.committer.try_commit(|| {
+        let mut state = shared
             .state
             .lock()
             .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?;
-        state.lifecycle == PublisherLifecycle::Running
+        let should_attempt = state.lifecycle == PublisherLifecycle::Running
             && state.typing_epoch == epoch
             && state.typing_desired == is_typing
-    };
-    if !should_attempt {
-        return Ok(());
-    }
-
-    let transport_result = shared
-        .committer
-        .try_commit(|| shared.transport.send_typing(is_typing))?;
-    let Some(result) = transport_result else {
-        drop(output_guard);
+            && !state.typing_in_flight;
+        if !should_attempt {
+            return Ok(None);
+        }
+        state.typing_in_flight = true;
+        drop(state);
+        drop(output_guard.take());
+        Ok(Some(shared.transport.send_typing(is_typing)))
+    })?;
+    drop(output_guard);
+    let Some(transport_result) = transport_result else {
         thread::yield_now();
+        return Ok(());
+    };
+    let Some(result) = transport_result? else {
         return Ok(());
     };
     let attempted_at = shared.pacer.now();
@@ -761,6 +805,7 @@ fn process_typing(shared: &LivePublisherShared, epoch: u64, is_typing: bool) -> 
         .state
         .lock()
         .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?;
+    state.typing_in_flight = false;
     if is_typing
         && state.lifecycle == PublisherLifecycle::Running
         && state.typing_epoch == epoch
@@ -803,11 +848,15 @@ fn refresh_typing_desired(state: &mut LivePublisherState) {
 }
 
 fn candidate_needs_publication(state: &LivePublisherState) -> bool {
-    state.candidate.as_ref().is_some_and(|candidate| {
+    state.pending_candidate.as_ref().is_some_and(|candidate| {
         state
-            .last_attempted
+            .in_flight_candidate
             .as_ref()
             .is_none_or(|attempt| !attempt.matches(candidate))
+            && state
+                .last_attempted
+                .as_ref()
+                .is_none_or(|attempt| !attempt.matches(candidate))
             && state.last_published.as_ref().is_none_or(|published| {
                 published.scope != candidate.identity.scope || published.view != candidate.view
             })
