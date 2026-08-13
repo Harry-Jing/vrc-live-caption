@@ -665,6 +665,39 @@ fn facade_selects_live_publication_without_exposing_its_worker() -> AppResult<()
 }
 
 #[test]
+fn completed_facade_sends_the_centrally_prepared_control_policy() -> AppResult<()> {
+    let (publication, receiver) = start_completed()?;
+
+    assert_eq!(
+        publication.try_submit(&completed_update(
+            1,
+            "unit-1",
+            "one\rtwo\r\nthree\u{0085}four\u{000C}five",
+            true,
+        ))?,
+        PublisherSubmitOutcome::Handled
+    );
+    assert_eq!(wait_for_text(&receiver)?, "one two\r\nthree four five");
+
+    close(&publication)
+}
+
+#[test]
+fn live_facade_preserves_edge_separators_and_prepared_spaces() -> AppResult<()> {
+    let (publication, receiver) = start_live()?;
+    let source = "\r\n\n\u{000B}\u{2028}\u{2029}\rnewest\u{0085}\u{000C}";
+    let expected = "\r\n\n\u{000B}\u{2028}\u{2029} newest  ";
+
+    assert_eq!(
+        publication.try_submit(&completed_update(1, "unit-1", source, true))?,
+        PublisherSubmitOutcome::Handled
+    );
+    assert_eq!(wait_for_text(&receiver)?, expected);
+
+    close(&publication)
+}
+
+#[test]
 fn active_publication_reports_closed_after_facade_shutdown() -> AppResult<()> {
     let (completed, _receiver) = start_completed()?;
     close(&completed)?;

@@ -2,7 +2,7 @@ use super::super::layout::{PreparedChatboxText, prepare_single_message};
 use super::super::pacer::{ChatboxPacer, Clock};
 use super::*;
 use crate::host_resolver::HostResolver;
-use rosc::decoder;
+use rosc::{decoder, encoder};
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::thread;
@@ -143,6 +143,28 @@ fn prepared_page_is_sent_without_rewriting_whitespace() -> AppResult<()> {
 }
 
 #[test]
+fn prepared_controls_are_sent_as_the_exact_product_policy() -> AppResult<()> {
+    let transport = Arc::new(ScriptedOscTransport::new([false]));
+    let sender = ChatboxOscSender::with_transport(transport.clone());
+    let page = prepared_text("one\u{000C}two\r\nthree\u{0085}four\rfive")?;
+
+    sender.send_text(&page)?;
+
+    assert_eq!(
+        transport.packets(),
+        vec![OscPacket::Message(OscMessage {
+            addr: "/chatbox/input".to_string(),
+            args: vec![
+                OscType::String("one two\r\nthree four five".to_string()),
+                OscType::Bool(true),
+                OscType::Bool(false),
+            ],
+        })]
+    );
+    Ok(())
+}
+
+#[test]
 fn runtime_restart_and_osc_test_share_actual_attempt_history() -> AppResult<()> {
     let clock = Arc::new(AdvancingClock::new());
     let pacer = ChatboxPacer::with_clock(clock.clone());
@@ -206,14 +228,25 @@ fn udp_transport_sends_exact_text_and_typing_packets() -> AppResult<()> {
         &|| false,
     )?;
 
-    let text = prepared_text("exact\n  page")?;
+    let text = prepared_text(
+        "exact\u{000C}page\r\nvt\u{000B}line\u{2028}para\u{2029}nel\u{0085}cr\rdone",
+    )?;
     sender.send_text(&text)?;
     sender.send_typing(false)?;
 
-    assert_eq!(
-        receive_packet(&receiver)?,
-        chatbox_input_packet("exact\n  page")
-    );
+    let expected_text_packet = OscPacket::Message(OscMessage {
+        addr: "/chatbox/input".to_string(),
+        args: vec![
+            OscType::String(
+                "exact page\r\nvt\u{000B}line\u{2028}para\u{2029}nel cr done".to_string(),
+            ),
+            OscType::Bool(true),
+            OscType::Bool(false),
+        ],
+    });
+    let expected_text_bytes = encoder::encode(&expected_text_packet)
+        .map_err(|error| AppError::osc_encode(error.to_string()))?;
+    assert_eq!(receive_datagram(&receiver)?, expected_text_bytes);
     assert_eq!(receive_packet(&receiver)?, typing_indicator_packet(false));
     Ok(())
 }
@@ -305,13 +338,18 @@ fn hostname_resolution_cancellation_maps_to_an_osc_error() -> AppResult<()> {
 }
 
 fn receive_packet(receiver: &UdpSocket) -> AppResult<OscPacket> {
+    let buffer = receive_datagram(receiver)?;
+    let (_, packet) =
+        decoder::decode_udp(&buffer).map_err(|error| AppError::osc_encode(error.to_string()))?;
+    Ok(packet)
+}
+
+fn receive_datagram(receiver: &UdpSocket) -> AppResult<Vec<u8>> {
     let mut buffer = [0_u8; 1024];
     let (size, _) = receiver
         .recv_from(&mut buffer)
         .map_err(|error| AppError::osc_send("test receiver", error.to_string()))?;
-    let (_, packet) = decoder::decode_udp(&buffer[..size])
-        .map_err(|error| AppError::osc_encode(error.to_string()))?;
-    Ok(packet)
+    Ok(buffer[..size].to_vec())
 }
 
 fn prepared_text(text: &str) -> AppResult<PreparedChatboxText> {

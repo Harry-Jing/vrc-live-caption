@@ -818,7 +818,7 @@ fn compose_recent_source(captions: &[&CaptionSnapshot]) -> String {
     captions
         .iter()
         .rev()
-        .map(|caption| caption.text.trim())
+        .map(|caption| caption.text.as_str())
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
         .join(" ")

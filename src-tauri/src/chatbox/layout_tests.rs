@@ -133,7 +133,9 @@ fn representative_grapheme_text() -> impl Strategy<Value = String> {
         "👍🏽",
         "\n",
         "\r\n",
+        "\u{000B}",
         "\u{2028}",
+        "\u{2029}",
         " ",
         " \u{FE0F}",
         "「",
@@ -155,6 +157,37 @@ fn representative_grapheme_text() -> impl Strategy<Value = String> {
     prop::collection::vec(atom, 0..=MAX_GENERATED_GRAPHEME_ATOMS).prop_map(|atoms| atoms.concat())
 }
 
+fn prepared_control_policy_text() -> impl Strategy<Value = (String, String)> {
+    let atom = prop::sample::select(vec![
+        ("x", "x"),
+        ("中", "中"),
+        ("\r", " "),
+        ("\u{0085}", " "),
+        ("\u{000C}", " "),
+        ("\r\n", "\r\n"),
+        ("\r\r\n", " \r\n"),
+        ("\u{000B}", "\u{000B}"),
+        ("\u{2028}", "\u{2028}"),
+        ("\u{2029}", "\u{2029}"),
+        ("\u{0301}", "\u{0301}"),
+        ("e\u{0301}", "e\u{0301}"),
+    ]);
+
+    prop::collection::vec(atom, 0..=MAX_GENERATED_GRAPHEME_ATOMS).prop_map(|atoms| {
+        let raw = atoms
+            .iter()
+            .map(|(raw, _)| *raw)
+            .collect::<Vec<_>>()
+            .concat();
+        let expected = atoms
+            .iter()
+            .map(|(_, expected)| *expected)
+            .collect::<Vec<_>>()
+            .concat();
+        (raw, expected)
+    })
+}
+
 #[test]
 fn single_view_prepares_exactly_one_independently_safe_message() -> Result<(), String> {
     let prepared = prepare_single_message("first line\n  second  line")
@@ -171,11 +204,88 @@ fn single_view_prepares_exactly_one_independently_safe_message() -> Result<(), S
 }
 
 #[test]
-fn completed_layout_preserves_explicit_line_breaks() -> Result<(), String> {
+fn preparation_replaces_ambiguous_controls_and_preserves_verified_text() -> Result<(), String> {
+    let source = "\rA\r\nB\u{0085}C\u{000C}D\u{000B}E\u{2028}F\u{2029}G\nCafé|Cafe\u{0301}";
+    let expected = " A\r\nB C D\u{000B}E\u{2028}F\u{2029}G\nCafé|Cafe\u{0301}";
+
+    let prepared = prepare_single_message(source)
+        .map_err(|error| format!("{error:?}"))?
+        .ok_or("nonempty prepared message was omitted")?;
+
+    assert_eq!(prepared.as_str(), expected);
+
+    let adjacent = prepare_single_message("\r\r\n\u{0085}\u{000C}")
+        .map_err(|error| format!("{error:?}"))?
+        .ok_or("nonempty adjacent controls were omitted")?;
+    assert_eq!(adjacent.as_str(), " \r\n  ");
+    Ok(())
+}
+
+#[test]
+fn preparation_replaces_nel_before_line_measurement() -> Result<(), String> {
+    let source = concat!(
+        "a\u{0085}b\n",
+        "c\n",
+        "d\n",
+        "e\n",
+        "f\n",
+        "g\n",
+        "h\n",
+        "i\n",
+        "j",
+    );
+    let expected = "a b\nc\nd\ne\nf\ng\nh\ni\nj";
+
+    let prepared = prepare_single_message(source)
+        .map_err(|error| format!("{error:?}"))?
+        .ok_or("nonempty prepared message was omitted")?;
+
+    assert_eq!(prepared.as_str(), expected);
+    Ok(())
+}
+
+#[test]
+fn preparation_precedes_the_utf16_pagination_boundary() -> Result<(), String> {
+    let within_source = format!("{}\u{0085}x", "x".repeat(142));
+    let within_expected = format!("{} x", "x".repeat(142));
+    let source = format!("{}\u{0085}x", "x".repeat(143));
+    let expected = format!("{} x", "x".repeat(143));
+
+    let within = prepare_single_message(&within_source)
+        .map_err(|error| format!("{error:?}"))?
+        .ok_or("144-unit prepared message was omitted")?;
+    let pages = paginate_completed(&source).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(within.as_str(), within_expected);
+    assert_eq!(within.as_str().encode_utf16().count(), 144);
+    assert_eq!(pages.len(), 2);
+    assert_eq!(concat_prepared(&pages), expected);
+    assert!(
+        pages
+            .iter()
+            .all(|page| page.as_str().encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS)
+    );
+
+    let changed_grapheme_source = format!("{X_143}\u{0085}\u{0301}");
+    let changed_grapheme_pages =
+        paginate_completed(&changed_grapheme_source).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(
+        prepared_texts(&changed_grapheme_pages),
+        vec![X_143, " \u{0301}"]
+    );
+    Ok(())
+}
+
+#[test]
+fn completed_preparation_preserves_verified_breaks_and_replaces_ambiguous_controls()
+-> Result<(), String> {
     let cases = [
         ("LF", "one\ntwo\n中", "one\ntwo\n中"),
         ("CRLF", "one\r\ntwo", "one\r\ntwo"),
-        ("CR", "one\rtwo", "one\rtwo"),
+        ("vertical tab", "one\u{000B}two", "one\u{000B}two"),
+        ("bare CR", "one\rtwo", "one two"),
+        ("NEL", "one\u{0085}two", "one two"),
+        ("form feed", "one\u{000C}two", "one two"),
         (
             "Unicode line and paragraph separators",
             "甲\u{2028}乙\u{2029}丙",
@@ -626,9 +736,20 @@ fn live_viewport_discards_an_unrepresentable_old_grapheme_and_keeps_new_content(
 
     let viewport = require_live_view(&input)?;
 
-    assert_eq!(viewport.as_str(), "newest");
+    assert_eq!(viewport.as_str(), " newest");
     let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
     assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
+    Ok(())
+}
+
+#[test]
+fn live_viewport_preserves_prepared_separators_after_oversized_history() -> Result<(), String> {
+    let oversized = format!("e{}", "\u{301}".repeat(CHATBOX_MAX_UTF16_UNITS));
+    let input = format!("{oversized}\r\n\rnew");
+
+    let viewport = require_live_view(&input)?;
+
+    assert_eq!(viewport.as_str(), "\r\n new");
     Ok(())
 }
 
@@ -680,6 +801,36 @@ proptest! {
                 prop_assert!(false, "Completed pagination returned its single-view-only error for {page_count} pages");
             }
         }
+    }
+
+    #[test]
+    fn control_preparation_is_bounded_and_matches_the_authored_oracle(
+        (raw, expected) in prepared_control_policy_text(),
+    ) {
+        let result = paginate_completed(&raw);
+        prop_assert!(
+            result.is_ok(),
+            "authored control-policy atoms must be representable: {result:?}"
+        );
+        let pages = result.unwrap_or_default();
+        let pages_are_nonempty_and_bounded = pages.iter().all(|page| {
+            !page.as_str().is_empty()
+                && page.as_str().encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS
+        });
+        let prepared_boundaries = expected
+            .grapheme_indices(true)
+            .map(|(index, _)| index)
+            .chain(std::iter::once(expected.len()))
+            .collect::<HashSet<_>>();
+        let mut prepared_offset = 0;
+        let every_page_ends_at_a_prepared_grapheme = pages.iter().all(|page| {
+            prepared_offset += page.as_str().len();
+            prepared_boundaries.contains(&prepared_offset)
+        });
+
+        prop_assert_eq!(concat_prepared(&pages), expected);
+        prop_assert!(pages_are_nonempty_and_bounded || raw.is_empty());
+        prop_assert!(every_page_ends_at_a_prepared_grapheme);
     }
 
     #[test]

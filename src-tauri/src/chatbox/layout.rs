@@ -1,14 +1,17 @@
 //! Pure text layout for VRChat Chatbox Completed pages and Live viewports.
 //!
-//! The module has no runtime, pacing, OSC, or queue dependencies. It simulates
-//! VRChat's fixed 280 px TextMeshPro width, nine visible lines, and conservative
-//! 144 UTF-16 input budget. Completed layout returns every page in source order;
-//! Live layout returns one safe viewport retaining the newest source text. Soft
-//! wraps choose boundaries but are not inserted into returned text; explicit
-//! source line breaks and other graphemes remain unchanged. Unsupported Unicode
-//! graphemes conservatively reserve a whole line. Every returned page or
-//! viewport is revalidated from start-of-text context.
+//! The module has no runtime, pacing, OSC, or queue dependencies. Before any
+//! measurement it applies the product control policy: verified line separators
+//! and Unicode normalization are preserved, while bare CR, NEL, and form feed
+//! become one ASCII space each. It then simulates VRChat's fixed 280-unit
+//! TextMeshPro width, nine visible lines, and conservative 144 UTF-16 input
+//! budget. Completed layout returns every prepared page in order; Live layout
+//! returns one safe viewport retaining the newest prepared text. Soft wraps
+//! choose boundaries but are not inserted into returned text. Unsupported
+//! Unicode graphemes conservatively reserve a whole line. Every returned page
+//! or viewport is revalidated from start-of-text context.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use unicode_linebreak::{BreakOpportunity, linebreaks};
 use unicode_segmentation::UnicodeSegmentation;
@@ -82,7 +85,7 @@ pub(crate) fn prepare_single_message(
     }
 }
 
-/// Returns every safe Completed page in source order.
+/// Returns every safe Completed page in prepared-source order.
 ///
 /// An empty caption has no pages. A single grapheme that is itself larger than
 /// VRChat's complete input budget cannot be represented without violating one
@@ -90,11 +93,13 @@ pub(crate) fn prepare_single_message(
 pub(crate) fn paginate_completed(
     text: &str,
 ) -> Result<Vec<PreparedChatboxText>, ChatboxLayoutError> {
+    let text = prepare_source_text(text);
+    let text = text.as_ref();
     if text.is_empty() {
         return Ok(Vec::new());
     }
 
-    let prepared = PreparedText::new(text)?;
+    let prepared = LayoutText::new(text)?;
     let mut pages = Vec::new();
     let mut page_start = 0;
 
@@ -119,6 +124,8 @@ pub(crate) fn paginate_completed(
 pub(crate) fn render_live_viewport(
     text: &str,
 ) -> Result<Option<PreparedChatboxText>, ChatboxLayoutError> {
+    let text = prepare_source_text(text);
+    let text = text.as_ref();
     if text.is_empty() {
         return Ok(None);
     }
@@ -137,7 +144,7 @@ pub(crate) fn render_live_viewport(
     }
     let text = match newest_oversized {
         Some((end, utf16_units)) if end < text.len() => {
-            let Some(suffix) = text.get(end..).map(str::trim_start) else {
+            let Some(suffix) = text.get(end..) else {
                 return Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units });
             };
             if suffix.is_empty() {
@@ -151,7 +158,7 @@ pub(crate) fn render_live_viewport(
         None => text,
     };
 
-    let prepared = PreparedText::new(text)?;
+    let prepared = LayoutText::new(text)?;
     let end = prepared.graphemes.len();
     let mut earliest_safe_start = 0;
 
@@ -182,7 +189,7 @@ pub(crate) fn render_live_viewport(
     )))
 }
 
-struct PreparedText<'text> {
+struct LayoutText<'text> {
     graphemes: Vec<LayoutGrapheme<'text>>,
     utf16_prefix: Vec<usize>,
 }
@@ -195,7 +202,7 @@ struct LayoutGrapheme<'text> {
     can_break_after: bool,
 }
 
-impl<'text> PreparedText<'text> {
+impl<'text> LayoutText<'text> {
     fn new(text: &'text str) -> Result<Self, ChatboxLayoutError> {
         let break_opportunities = linebreaks(text).collect::<HashMap<_, _>>();
         let mut graphemes = Vec::new();
@@ -339,7 +346,7 @@ impl<'text> PreparedText<'text> {
                 .map(|grapheme| grapheme.text)
                 .collect();
             let safe_byte_len = {
-                let standalone = PreparedText::new(&candidate)?;
+                let standalone = LayoutText::new(&candidate)?;
                 let standalone_end = standalone.next_page_end(0);
                 (standalone_end != standalone.graphemes.len()).then(|| {
                     standalone.graphemes[..standalone_end]
@@ -393,7 +400,7 @@ impl<'text> PreparedText<'text> {
 
     fn suffix_is_standalone_safe(&self, start: usize) -> Result<bool, ChatboxLayoutError> {
         let candidate = self.text_between(start, self.graphemes.len());
-        let standalone = PreparedText::new(&candidate)?;
+        let standalone = LayoutText::new(&candidate)?;
 
         Ok(standalone.next_page_end(0) == standalone.graphemes.len())
     }
@@ -408,6 +415,29 @@ impl<'text> PreparedText<'text> {
             .map(|grapheme| grapheme.text)
             .collect()
     }
+}
+
+/// Applies the product-side control policy before any indexing, measurement,
+/// pagination, or transmission. CRLF is one verified line break and stays
+/// intact; ambiguous standalone controls become one ordinary space each.
+fn prepare_source_text(text: &str) -> Cow<'_, str> {
+    if !text
+        .chars()
+        .any(|character| matches!(character, '\r' | '\u{000C}' | '\u{0085}'))
+    {
+        return Cow::Borrowed(text);
+    }
+
+    let mut prepared = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '\r' if characters.peek() == Some(&'\n') => prepared.push(character),
+            '\r' | '\u{000C}' | '\u{0085}' => prepared.push(' '),
+            _ => prepared.push(character),
+        }
+    }
+    Cow::Owned(prepared)
 }
 
 fn grapheme_break_opportunity(
@@ -607,12 +637,10 @@ fn has_verified_chinese_fullwidth_advance(character: char) -> bool {
 }
 
 fn is_explicit_line_break(grapheme: &str) -> bool {
-    grapheme.chars().any(|character| {
-        matches!(
-            character,
-            '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
-        )
-    })
+    matches!(
+        grapheme,
+        "\n" | "\r\n" | "\u{000B}" | "\u{2028}" | "\u{2029}"
+    )
 }
 
 #[cfg(test)]

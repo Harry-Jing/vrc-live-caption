@@ -491,16 +491,18 @@ evidence above. They are intentionally stronger than VRChat's native behavior.
    dependency or tailoring.
 4. Prefer a legal break that fits. If none exists, break only at a safe grapheme
    boundary and account for that emergency behavior explicitly.
-5. Re-layout each Completed page from start-of-text context. Preserve source
-   order and content across pages; do not rely on VRChat to continue an
+5. Re-layout each Completed page from start-of-text context. Preserve prepared
+   text order and content across pages; do not rely on VRChat to continue an
    oversized string.
 6. For Live output, send a latest-wins safe viewport. Do not send a raw
    oversized caption and expect VRChat to retain the newest suffix; it retains
    the old prefix on the tested build.
-7. Do not count bare CR or NEL as an explicit visual line. Either model their
-   observed behavior or sanitize them before layout and send. Keep FORM FEED
-   unknown until it is measured. The current layout implementation still counts
-   all three as visual lines; that is a known model gap, not VRChat behavior.
+7. Preserve Unicode normalization and the verified CRLF, LF, VT, LINE SEPARATOR,
+   and PARAGRAPH SEPARATOR controls. Before both layout and send, replace each
+   bare CR, NEL, and FORM FEED with one ASCII space. Bare CR and NEL are unsafe
+   to pass through because their observed rendering is not a normal line break;
+   FORM FEED uses the same conservative product policy while its client behavior
+   remains unknown.
 8. Scripts requiring shaping or bidi reordering need shaped glyph advances.
    When the implementation cannot shape a grapheme confidently, reserve space
    conservatively rather than underestimating it.
