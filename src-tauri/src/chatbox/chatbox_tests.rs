@@ -103,13 +103,13 @@ struct TracingTransport {
 }
 
 impl ChatboxTransport for RecordingTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
         self.texts
-            .send(text.to_string())
+            .send(text.as_str().to_string())
             .map_err(|_| AppError::state("Recording transport receiver was dropped."))?;
         Ok(ChatboxSendReceipt {
             target: "recording".to_string(),
-            byte_count: text.len(),
+            byte_count: text.as_str().len(),
         })
     }
 
@@ -119,13 +119,13 @@ impl ChatboxTransport for RecordingTransport {
 }
 
 impl ChatboxTransport for TracingTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
         self.events
-            .send(PublicationEvent::Text(text.to_string()))
+            .send(PublicationEvent::Text(text.as_str().to_string()))
             .map_err(|_| AppError::state("Tracing transport receiver was dropped."))?;
         Ok(ChatboxSendReceipt {
             target: "tracing".to_string(),
-            byte_count: text.len(),
+            byte_count: text.as_str().len(),
         })
     }
 
@@ -134,6 +134,17 @@ impl ChatboxTransport for TracingTransport {
             .send(PublicationEvent::Typing(is_typing))
             .map_err(|_| AppError::state("Tracing transport receiver was dropped."))
     }
+}
+
+#[test]
+fn text_transport_accepts_only_prepared_chatbox_text() {
+    fn assert_signature<T: ChatboxTransport>() {
+        let send: fn(&T, &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> =
+            <T as ChatboxTransport>::send_text;
+        let _ = send;
+    }
+
+    assert_signature::<RecordingTransport>();
 }
 
 fn reporter() -> Arc<dyn Fn(DiagnosticUpdate) + Send + Sync> {

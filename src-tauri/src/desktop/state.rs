@@ -9,7 +9,10 @@
 use crate::audio::{AudioProbeRequest, AudioProbeResult, probe_audio_input as run_audio_probe};
 use crate::caption::{CaptionAggregateSnapshot, CaptionAggregateStore};
 use crate::caption_pipeline::{plan_caption_pipeline, resolve_caption_pipeline_start_timing};
-use crate::chatbox::{ChatboxOscSender, ChatboxPacer, ChatboxSendReceipt, OSC_TEST_MESSAGE};
+use crate::chatbox::{
+    ChatboxOscSender, ChatboxPacer, ChatboxSendReceipt, OSC_TEST_MESSAGE, describe_layout_error,
+    prepare_single_message,
+};
 use crate::config::AppConfig;
 use crate::credentials::{
     CredentialId, credential_statuses, delete_credential, resolve_openai_credential,
@@ -227,10 +230,18 @@ impl AppState {
     pub(super) fn send_osc_test_message(&self) -> AppResult<ChatboxSendReceipt> {
         let osc_config = self.control.effective_osc_config()?;
         let sender = ChatboxOscSender::new(&osc_config, &self.chatbox_host_resolver, &|| false)?;
+        let text = prepare_single_message(OSC_TEST_MESSAGE)
+            .map_err(|error| {
+                AppError::state(format!(
+                    "OSC test message could not be prepared: {}",
+                    describe_layout_error(error)
+                ))
+            })?
+            .ok_or_else(|| AppError::state("OSC test message must not be empty."))?;
         self.chatbox_pacer
             .wait_for_turn(None)?
             .ok_or_else(|| AppError::state("OSC Test pacing was cancelled."))?
-            .attempt(|| sender.send_text(OSC_TEST_MESSAGE))
+            .attempt(|| sender.send_text(&text))
     }
 
     fn runtime_status_recorder(&self) -> RuntimeStatusRecorder {

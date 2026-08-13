@@ -5,6 +5,7 @@
 //! revisions. One worker owns observation timing, process-wide pacing, OSC
 //! attempts, and the Stop cleanup; producers only replace in-memory state.
 
+use super::PreparedChatboxText;
 use super::common::{
     PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
     TYPING_REASSERT_INTERVAL, describe_layout_error,
@@ -114,13 +115,13 @@ struct LiveCandidateIdentity {
 #[derive(Clone)]
 struct LiveCandidate {
     identity: LiveCandidateIdentity,
-    view: String,
+    view: PreparedChatboxText,
     ready_at: Instant,
 }
 
 struct LiveCandidateAttempt {
     identity: LiveCandidateIdentity,
-    view: String,
+    view: PreparedChatboxText,
 }
 
 impl LiveCandidateAttempt {
@@ -131,7 +132,7 @@ impl LiveCandidateAttempt {
 
 struct PublishedLiveView {
     scope: LiveScope,
-    view: String,
+    view: PreparedChatboxText,
 }
 
 enum LiveWorkerItem {
@@ -428,12 +429,12 @@ impl LiveChatboxPublisher {
         let ready_at = self.candidate_ready_at(state, source_captions, now)?;
 
         match render_live_viewport(recent_source_text) {
-            Ok(view) if !view.is_empty() => Some(LiveCandidate {
+            Ok(Some(view)) => Some(LiveCandidate {
                 identity,
                 view,
                 ready_at,
             }),
-            Ok(_) => None,
+            Ok(None) => None,
             Err(error) => {
                 if state.last_layout_failure.as_ref() != Some(&identity) {
                     state.last_layout_failure = Some(identity.clone());

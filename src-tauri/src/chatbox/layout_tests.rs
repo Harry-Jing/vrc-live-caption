@@ -1,6 +1,7 @@
 use super::{
-    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, fits_chatbox_width, grapheme_advance_units,
-    is_break_space_grapheme, paginate_completed, render_live_viewport,
+    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, PreparedChatboxText, fits_chatbox_width,
+    grapheme_advance_units, is_break_space_grapheme, paginate_completed, prepare_single_message,
+    render_live_viewport,
 };
 use proptest::prelude::*;
 use std::collections::HashSet;
@@ -105,6 +106,20 @@ const STANDALONE_SKIN_TONE_9: &str = "🏽 🏽 🏽 🏽 🏽 🏽 🏽 🏽 �
 const ARABIC_9: &str = "ممممممممم";
 const WIDE_PUNCTUATION_9: &str = "⸻⸻⸻⸻⸻⸻⸻⸻⸻";
 
+fn prepared_texts(pages: &[PreparedChatboxText]) -> Vec<&str> {
+    pages.iter().map(PreparedChatboxText::as_str).collect()
+}
+
+fn concat_prepared(pages: &[PreparedChatboxText]) -> String {
+    pages.iter().map(PreparedChatboxText::as_str).collect()
+}
+
+fn require_live_view(input: &str) -> Result<PreparedChatboxText, String> {
+    render_live_viewport(input)
+        .map_err(|error| format!("{error:?}"))?
+        .ok_or_else(|| "nonempty Live input produced no viewport".to_owned())
+}
+
 fn representative_grapheme_text() -> impl Strategy<Value = String> {
     let representable_atom = prop::sample::select(vec![
         "a",
@@ -141,6 +156,21 @@ fn representative_grapheme_text() -> impl Strategy<Value = String> {
 }
 
 #[test]
+fn single_view_prepares_exactly_one_independently_safe_message() -> Result<(), String> {
+    let prepared = prepare_single_message("first line\n  second  line")
+        .map_err(|error| format!("{error:?}"))?
+        .ok_or("nonempty single view was omitted")?;
+
+    assert_eq!(prepared.as_str(), "first line\n  second  line");
+    assert_eq!(prepare_single_message(""), Ok(None));
+    assert_eq!(
+        prepare_single_message(&format!("{X_144}x")),
+        Err(ChatboxLayoutError::RequiresPagination { page_count: 2 })
+    );
+    Ok(())
+}
+
+#[test]
 fn completed_layout_preserves_explicit_line_breaks() -> Result<(), String> {
     let cases = [
         ("LF", "one\ntwo\n中", "one\ntwo\n中"),
@@ -160,7 +190,7 @@ fn completed_layout_preserves_explicit_line_breaks() -> Result<(), String> {
 
     for (name, input, expected) in cases {
         let pages = paginate_completed(input).map_err(|error| format!("{error:?}"))?;
-        assert_eq!(pages, vec![expected.to_string()], "{name}");
+        assert_eq!(prepared_texts(&pages), vec![expected], "{name}");
     }
 
     Ok(())
@@ -186,7 +216,7 @@ fn completed_layout_paginates_continuous_chinese_after_nine_lines() -> Result<()
     let input = format!("{CJK_135}中");
     let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
 
-    assert_eq!(pages, vec![CJK_135.to_string(), "中".to_string()]);
+    assert_eq!(prepared_texts(&pages), vec![CJK_135, "中"]);
 
     Ok(())
 }
@@ -292,21 +322,27 @@ fn completed_layout_matches_language_and_length_fixtures() -> Result<(), String>
 
     for case in cases {
         let pages = paginate_completed(&case.input).map_err(|error| format!("{error:?}"))?;
-        assert_eq!(pages, case.expected, "{}", case.name);
-        assert_eq!(pages.concat(), case.input, "{} lost content", case.name);
+        let expected = case.expected.iter().map(String::as_str).collect::<Vec<_>>();
+        assert_eq!(prepared_texts(&pages), expected, "{}", case.name);
+        assert_eq!(
+            concat_prepared(&pages),
+            case.input,
+            "{} lost content",
+            case.name
+        );
         assert!(
             pages
                 .iter()
-                .all(|page| page.encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS),
+                .all(|page| page.as_str().encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS),
             "{} exceeded the UTF-16 budget",
             case.name
         );
         for page in &pages {
             let standalone_pages =
-                paginate_completed(page).map_err(|error| format!("{error:?}"))?;
+                paginate_completed(page.as_str()).map_err(|error| format!("{error:?}"))?;
             assert_eq!(
-                standalone_pages,
-                vec![page.clone()],
+                prepared_texts(&standalone_pages),
+                vec![page.as_str()],
                 "{} returned a page that is unsafe on its own",
                 case.name
             );
@@ -368,8 +404,9 @@ fn completed_layout_keeps_tmp_punctuation_off_page_seams() -> Result<(), String>
 
     for (name, input, expected) in cases {
         let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
-        assert_eq!(pages, expected, "{name}");
-        assert_eq!(pages.concat(), input, "{name} lost content");
+        let expected = expected.iter().map(String::as_str).collect::<Vec<_>>();
+        assert_eq!(prepared_texts(&pages), expected, "{name}");
+        assert_eq!(concat_prepared(&pages), input, "{name} lost content");
     }
 
     Ok(())
@@ -405,8 +442,9 @@ fn completed_layout_never_splits_unicode_graphemes() -> Result<(), String> {
 
     for (name, input, expected) in cases {
         let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
-        assert_eq!(pages, expected, "{name}");
-        assert_eq!(pages.concat(), input, "{name} lost content");
+        let expected = expected.iter().map(String::as_str).collect::<Vec<_>>();
+        assert_eq!(prepared_texts(&pages), expected, "{name}");
+        assert_eq!(concat_prepared(&pages), input, "{name} lost content");
     }
 
     Ok(())
@@ -416,22 +454,22 @@ fn completed_layout_never_splits_unicode_graphemes() -> Result<(), String> {
 fn completed_layout_round_trips_other_unicode_best_effort() -> Result<(), String> {
     let arabic_input = format!("{ARABIC_9}م");
     let arabic_pages = paginate_completed(&arabic_input).map_err(|error| format!("{error:?}"))?;
-    assert_eq!(arabic_pages, vec![ARABIC_9.to_string(), "م".to_string()]);
+    assert_eq!(prepared_texts(&arabic_pages), vec![ARABIC_9, "م"]);
 
     let wide_punctuation_input = format!("{WIDE_PUNCTUATION_9}⸻");
     let wide_punctuation_pages =
         paginate_completed(&wide_punctuation_input).map_err(|error| format!("{error:?}"))?;
     assert_eq!(
-        wide_punctuation_pages,
-        vec![WIDE_PUNCTUATION_9.to_string(), "⸻".to_string()]
+        prepared_texts(&wide_punctuation_pages),
+        vec![WIDE_PUNCTUATION_9, "⸻"]
     );
 
     let standalone_skin_tone_input = format!("{STANDALONE_SKIN_TONE_9} 🏽 ");
     let standalone_skin_tone_pages =
         paginate_completed(&standalone_skin_tone_input).map_err(|error| format!("{error:?}"))?;
     assert_eq!(
-        standalone_skin_tone_pages,
-        vec![STANDALONE_SKIN_TONE_9.to_string(), " 🏽 ".to_string()]
+        prepared_texts(&standalone_skin_tone_pages),
+        vec![STANDALONE_SKIN_TONE_9, " 🏽 "]
     );
 
     let inputs = [
@@ -451,15 +489,15 @@ fn completed_layout_round_trips_other_unicode_best_effort() -> Result<(), String
 
         assert!(!pages.is_empty());
         for page in &pages {
-            assert!(!page.is_empty());
-            assert!(page.encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS);
+            assert!(!page.as_str().is_empty());
+            assert!(page.as_str().encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS);
             let standalone_pages =
-                paginate_completed(page).map_err(|error| format!("{error:?}"))?;
-            assert_eq!(standalone_pages, vec![page.clone()]);
-            byte_offset += page.len();
+                paginate_completed(page.as_str()).map_err(|error| format!("{error:?}"))?;
+            assert_eq!(prepared_texts(&standalone_pages), vec![page.as_str()]);
+            byte_offset += page.as_str().len();
             assert!(boundaries.contains(&byte_offset));
         }
-        assert_eq!(pages.concat(), input);
+        assert_eq!(concat_prepared(&pages), input);
     }
 
     Ok(())
@@ -482,12 +520,12 @@ fn completed_layout_rejects_one_grapheme_larger_than_vrchat_input() {
 fn live_viewport_keeps_a_full_recent_ascii_suffix_instead_of_the_last_completed_page()
 -> Result<(), String> {
     let input = format!("{X_144}x");
-    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+    let viewport = require_live_view(&input)?;
 
-    assert_eq!(viewport, X_144);
+    assert_eq!(viewport.as_str(), X_144);
     assert_ne!(
-        viewport,
-        paginate_completed(&input).map_err(|error| format!("{error:?}"))?[1]
+        viewport.as_str(),
+        paginate_completed(&input).map_err(|error| format!("{error:?}"))?[1].as_str()
     );
 
     Ok(())
@@ -496,10 +534,11 @@ fn live_viewport_keeps_a_full_recent_ascii_suffix_instead_of_the_last_completed_
 #[test]
 fn live_viewport_prefers_a_recent_word_and_punctuation_boundary() -> Result<(), String> {
     let input = format!("{X_144} previous context. latest, newest.");
-    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+    let viewport = require_live_view(&input)?;
 
-    assert_eq!(viewport, "previous context. latest, newest.");
-    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+    assert_eq!(viewport.as_str(), "previous context. latest, newest.");
+    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
 
     Ok(())
 }
@@ -515,10 +554,11 @@ fn live_viewport_keeps_the_newest_nine_lines_without_a_leading_blank_line() -> R
         .collect::<Vec<_>>()
         .join("\n");
 
-    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+    let viewport = require_live_view(&input)?;
 
-    assert_eq!(viewport, expected);
-    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+    assert_eq!(viewport.as_str(), expected);
+    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
 
     Ok(())
 }
@@ -527,11 +567,12 @@ fn live_viewport_keeps_the_newest_nine_lines_without_a_leading_blank_line() -> R
 fn live_viewport_keeps_the_newest_chinese_content_within_nine_lines() -> Result<(), String> {
     let input = format!("{CJK_135}新");
     let expected = format!("{CJK_134}新");
-    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+    let viewport = require_live_view(&input)?;
 
-    assert_eq!(viewport, expected);
-    assert!(viewport.ends_with('新'));
-    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+    assert_eq!(viewport.as_str(), expected);
+    assert!(viewport.as_str().ends_with('新'));
+    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
 
     Ok(())
 }
@@ -539,11 +580,12 @@ fn live_viewport_keeps_the_newest_chinese_content_within_nine_lines() -> Result<
 #[test]
 fn live_viewport_never_splits_an_emoji_grapheme() -> Result<(), String> {
     let input = format!("👍🏽{TONED_EMOJI_9}");
-    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+    let viewport = require_live_view(&input)?;
 
-    assert_eq!(viewport, TONED_EMOJI_9);
-    assert_eq!(viewport.graphemes(true).count(), 9);
-    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+    assert_eq!(viewport.as_str(), TONED_EMOJI_9);
+    assert_eq!(viewport.as_str().graphemes(true).count(), 9);
+    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
 
     Ok(())
 }
@@ -551,11 +593,14 @@ fn live_viewport_never_splits_an_emoji_grapheme() -> Result<(), String> {
 #[test]
 fn live_viewport_falls_back_to_a_grapheme_boundary_for_one_long_token() -> Result<(), String> {
     let input = format!("x{X_144}");
-    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+    let viewport = require_live_view(&input)?;
 
-    assert_eq!(viewport, X_144);
-    assert!(input.ends_with(&viewport));
-    assert_eq!(viewport.encode_utf16().count(), CHATBOX_MAX_UTF16_UNITS);
+    assert_eq!(viewport.as_str(), X_144);
+    assert!(input.ends_with(viewport.as_str()));
+    assert_eq!(
+        viewport.as_str().encode_utf16().count(),
+        CHATBOX_MAX_UTF16_UNITS
+    );
 
     Ok(())
 }
@@ -563,11 +608,12 @@ fn live_viewport_falls_back_to_a_grapheme_boundary_for_one_long_token() -> Resul
 #[test]
 fn live_viewport_preserves_tmp_punctuation_seams_at_its_start() -> Result<(), String> {
     let input = format!("{CJK_135}。");
-    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+    let viewport = require_live_view(&input)?;
 
-    assert!(viewport.ends_with("中。"));
-    assert!(!viewport.starts_with('。'));
-    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+    assert!(viewport.as_str().ends_with("中。"));
+    assert!(!viewport.as_str().starts_with('。'));
+    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
 
     Ok(())
 }
@@ -578,10 +624,11 @@ fn live_viewport_discards_an_unrepresentable_old_grapheme_and_keeps_new_content(
     let oversized = format!("e{}", "\u{301}".repeat(CHATBOX_MAX_UTF16_UNITS));
     let input = format!("{oversized} newest");
 
-    let viewport = render_live_viewport(&input).map_err(|error| format!("{error:?}"))?;
+    let viewport = require_live_view(&input)?;
 
-    assert_eq!(viewport, "newest");
-    assert_eq!(paginate_completed(&viewport), Ok(vec![viewport.clone()]));
+    assert_eq!(viewport.as_str(), "newest");
+    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
     Ok(())
 }
 
@@ -615,12 +662,12 @@ proptest! {
         match first {
             Ok(pages) => {
                 prop_assert_eq!(pages.is_empty(), input.is_empty());
-                prop_assert!(pages.iter().all(|page| !page.is_empty()));
+                prop_assert!(pages.iter().all(|page| !page.as_str().is_empty()));
                 let every_page_is_within_budget = pages.iter().all(|page| {
-                    page.encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS
+                    page.as_str().encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS
                 });
                 prop_assert!(every_page_is_within_budget);
-                prop_assert_eq!(pages.concat(), input);
+                prop_assert_eq!(concat_prepared(&pages), input);
             }
             Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units }) => {
                 prop_assert!(utf16_units > CHATBOX_MAX_UTF16_UNITS);
@@ -628,6 +675,9 @@ proptest! {
                     grapheme.encode_utf16().count() > CHATBOX_MAX_UTF16_UNITS
                 });
                 prop_assert!(contains_oversized_grapheme);
+            }
+            Err(ChatboxLayoutError::RequiresPagination { page_count }) => {
+                prop_assert!(false, "Completed pagination returned its single-view-only error for {page_count} pages");
             }
         }
     }
@@ -640,8 +690,10 @@ proptest! {
         let second = render_live_viewport(&input);
 
         prop_assert_eq!(&first, &second);
-        if let Ok(viewport) = first {
-            prop_assert!(viewport.encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS);
+        if let Ok(Some(viewport)) = first {
+            prop_assert!(
+                viewport.as_str().encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS
+            );
         }
     }
 }

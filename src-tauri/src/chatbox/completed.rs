@@ -6,6 +6,7 @@
 //! diagnostics. No producer waits for a Chatbox pacing opportunity or network
 //! operation.
 
+use super::PreparedChatboxText;
 use super::common::{
     PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
     TYPING_REASSERT_INTERVAL, describe_layout_error,
@@ -119,7 +120,7 @@ struct PublisherState {
 struct CompletedUnit {
     sequence: u64,
     unit_id: String,
-    pages: Vec<String>,
+    pages: Vec<PreparedChatboxText>,
     next_page: usize,
     started: bool,
     accepted_at: Instant,
@@ -144,7 +145,7 @@ enum WorkerItem {
     Page {
         sequence: u64,
         page_index: usize,
-        text: String,
+        text: PreparedChatboxText,
     },
     Exit,
 }
@@ -812,7 +813,7 @@ fn attempt_selected_page(
     shared: &PublisherShared,
     sequence: u64,
     page_index: usize,
-    text: &str,
+    text: &PreparedChatboxText,
     permit: ChatboxAttemptPermit<'_>,
 ) -> AppResult<()> {
     {

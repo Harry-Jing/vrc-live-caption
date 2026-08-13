@@ -4,7 +4,9 @@ use crate::caption::{
     CaptionAggregateUpdate,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
-use crate::chatbox::{ChatboxPacer, ChatboxPublication, ChatboxSendReceipt, ChatboxTransport};
+use crate::chatbox::{
+    ChatboxPacer, ChatboxPublication, ChatboxSendReceipt, ChatboxTransport, PreparedChatboxText,
+};
 use crate::error::{AppError, AppResult};
 use crate::events::DiagnosticUpdate;
 use std::sync::Arc;
@@ -16,17 +18,19 @@ pub(super) struct RecordingChatboxTransport {
 }
 
 impl ChatboxTransport for RecordingChatboxTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
-        self.text_sender.send(text.to_string()).map_err(|_| {
-            AppError::osc_send(
-                "runtime test transport",
-                "Text receiver disconnected.".to_string(),
-            )
-        })?;
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
+        self.text_sender
+            .send(text.as_str().to_string())
+            .map_err(|_| {
+                AppError::osc_send(
+                    "runtime test transport",
+                    "Text receiver disconnected.".to_string(),
+                )
+            })?;
 
         Ok(ChatboxSendReceipt {
             target: "runtime-test".to_string(),
-            byte_count: text.len(),
+            byte_count: text.as_str().len(),
         })
     }
 

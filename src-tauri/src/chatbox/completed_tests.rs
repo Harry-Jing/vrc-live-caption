@@ -1,3 +1,4 @@
+use super::super::layout::PreparedChatboxText;
 use super::super::pacer::Clock;
 use super::super::transport::ChatboxSendReceipt;
 use super::*;
@@ -215,11 +216,11 @@ impl RecordingTransport {
 }
 
 impl ChatboxTransport for RecordingTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
-        self.record(TransportEvent::Text(text.to_string()))?;
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
+        self.record(TransportEvent::Text(text.as_str().to_string()))?;
         Ok(ChatboxSendReceipt {
             target: "recording".to_string(),
-            byte_count: text.len(),
+            byte_count: text.as_str().len(),
         })
     }
 
@@ -251,9 +252,9 @@ impl BlockFirstTextTransport {
 }
 
 impl ChatboxTransport for BlockFirstTextTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
         self.recording
-            .record(TransportEvent::Text(text.to_string()))?;
+            .record(TransportEvent::Text(text.as_str().to_string()))?;
 
         if self.should_block.swap(false, Ordering::SeqCst) {
             if let Ok(mut entered) = self.entered.lock()
@@ -270,7 +271,7 @@ impl ChatboxTransport for BlockFirstTextTransport {
 
         Ok(ChatboxSendReceipt {
             target: "blocking".to_string(),
-            byte_count: text.len(),
+            byte_count: text.as_str().len(),
         })
     }
 
@@ -302,7 +303,7 @@ impl BlockTypingReassertTransport {
 }
 
 impl ChatboxTransport for BlockTypingReassertTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
         self.recording.send_text(text)
     }
 
@@ -399,9 +400,9 @@ impl ScriptedTransport {
 }
 
 impl ChatboxTransport for ScriptedTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
         let attempt = self.next_text_attempt.fetch_add(1, Ordering::SeqCst);
-        self.record(TransportEvent::Text(text.to_string()))?;
+        self.record(TransportEvent::Text(text.as_str().to_string()))?;
         if self.failed_text_attempts.contains(&attempt) {
             return Err(AppError::osc_send(
                 "scripted",
@@ -411,7 +412,7 @@ impl ChatboxTransport for ScriptedTransport {
 
         Ok(ChatboxSendReceipt {
             target: "scripted".to_string(),
-            byte_count: text.len(),
+            byte_count: text.as_str().len(),
         })
     }
 
@@ -509,6 +510,17 @@ fn submit_handled(
     Ok(())
 }
 
+fn prepared_strings(text: &str) -> AppResult<Vec<String>> {
+    paginate_completed(text)
+        .map(|pages| {
+            pages
+                .into_iter()
+                .map(|page| page.as_str().to_string())
+                .collect()
+        })
+        .map_err(|error| AppError::runtime(describe_layout_error(error)))
+}
+
 fn advance_publisher_clock(
     clock: &ControlledClock,
     publisher: &CompletedChatboxPublisher,
@@ -579,8 +591,7 @@ fn publishes_every_exact_page_in_order() -> AppResult<()> {
         },
     )?;
     let text = "中".repeat(136);
-    let expected_pages = paginate_completed(&text)
-        .map_err(|error| AppError::runtime(describe_layout_error(error)))?;
+    let expected_pages = prepared_strings(&text)?;
 
     submit_handled(
         &publisher,
@@ -749,10 +760,7 @@ fn overload_drops_only_the_oldest_whole_unstarted_unit() -> AppResult<()> {
         })
         .collect::<Vec<_>>();
     let mut expected_pages = vec!["B".to_string()];
-    expected_pages.extend(
-        paginate_completed(&"中".repeat(136))
-            .map_err(|error| AppError::runtime(describe_layout_error(error)))?,
-    );
+    expected_pages.extend(prepared_strings(&"中".repeat(136))?);
     assert_eq!(sent_pages, expected_pages);
     assert_eq!(events.first(), Some(&TransportEvent::Typing(true)));
     assert_eq!(events.last(), Some(&TransportEvent::Typing(false)));
@@ -793,8 +801,7 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
         },
     )?;
     let first_text = "中".repeat(271);
-    let first_pages = paginate_completed(&first_text)
-        .map_err(|error| AppError::runtime(describe_layout_error(error)))?;
+    let first_pages = prepared_strings(&first_text)?;
     assert_eq!(first_pages.len(), 3);
 
     for (unit_id, text) in [("unit-a", first_text), ("unit-b", "B".to_string())] {
@@ -884,8 +891,7 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
         },
     )?;
     let first_text = "中".repeat(136);
-    let first_pages = paginate_completed(&first_text)
-        .map_err(|error| AppError::runtime(describe_layout_error(error)))?;
+    let first_pages = prepared_strings(&first_text)?;
     assert_eq!(first_pages.len(), 2);
 
     for (unit_id, text) in [("unit-a", first_text), ("unit-b", "B".to_string())] {
@@ -1650,8 +1656,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
             max_unstarted_age: Duration::from_secs(30),
         },
     )?;
-    let pages = paginate_completed(&"中".repeat(136))
-        .map_err(|error| AppError::runtime(describe_layout_error(error)))?;
+    let pages = prepared_strings(&"中".repeat(136))?;
 
     submit_handled(
         &publisher,

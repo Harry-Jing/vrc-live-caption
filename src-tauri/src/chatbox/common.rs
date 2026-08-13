@@ -101,5 +101,8 @@ pub(crate) fn describe_layout_error(error: ChatboxLayoutError) -> String {
         ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units } => format!(
             "One grapheme requires {utf16_units} UTF-16 units, exceeding the {CHATBOX_MAX_UTF16_UNITS}-unit Chatbox input budget."
         ),
+        ChatboxLayoutError::RequiresPagination { page_count } => format!(
+            "The text requires {page_count} Chatbox messages, but this operation accepts one message."
+        ),
     }
 }

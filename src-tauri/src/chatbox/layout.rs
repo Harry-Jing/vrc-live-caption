@@ -55,6 +55,31 @@ const LATIN_1_ADVANCES: [u16; 96] = [
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ChatboxLayoutError {
     GraphemeExceedsInputBudget { utf16_units: usize },
+    RequiresPagination { page_count: usize },
+}
+
+/// Exact text that has passed the Chatbox preparation and standalone-layout
+/// invariants. The transport can inspect it but cannot construct or mutate it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PreparedChatboxText(String);
+
+impl PreparedChatboxText {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Prepares one independently safe Chatbox message without silently selecting
+/// one page from a longer input.
+pub(crate) fn prepare_single_message(
+    text: &str,
+) -> Result<Option<PreparedChatboxText>, ChatboxLayoutError> {
+    let mut pages = paginate_completed(text)?;
+    match pages.len() {
+        0 => Ok(None),
+        1 => Ok(pages.pop()),
+        page_count => Err(ChatboxLayoutError::RequiresPagination { page_count }),
+    }
 }
 
 /// Returns every safe Completed page in source order.
@@ -62,7 +87,9 @@ pub(crate) enum ChatboxLayoutError {
 /// An empty caption has no pages. A single grapheme that is itself larger than
 /// VRChat's complete input budget cannot be represented without violating one
 /// of the layout invariants, so that pathological input returns an error.
-pub(crate) fn paginate_completed(text: &str) -> Result<Vec<String>, ChatboxLayoutError> {
+pub(crate) fn paginate_completed(
+    text: &str,
+) -> Result<Vec<PreparedChatboxText>, ChatboxLayoutError> {
     if text.is_empty() {
         return Ok(Vec::new());
     }
@@ -74,7 +101,7 @@ pub(crate) fn paginate_completed(text: &str) -> Result<Vec<String>, ChatboxLayou
     while page_start < prepared.graphemes.len() {
         let proposed_end = prepared.next_page_end(page_start);
         let (page_end, page) = prepared.standalone_safe_page(page_start, proposed_end)?;
-        pages.push(page);
+        pages.push(PreparedChatboxText(page));
         page_start = page_end;
     }
 
@@ -89,9 +116,11 @@ pub(crate) fn paginate_completed(text: &str) -> Result<Vec<String>, ChatboxLayou
 /// punctuation boundary when one exists. A single uninterrupted token falls
 /// back to the first safe grapheme boundary instead of discarding almost the
 /// whole useful view.
-pub(crate) fn render_live_viewport(text: &str) -> Result<String, ChatboxLayoutError> {
+pub(crate) fn render_live_viewport(
+    text: &str,
+) -> Result<Option<PreparedChatboxText>, ChatboxLayoutError> {
     if text.is_empty() {
-        return Ok(String::new());
+        return Ok(None);
     }
 
     // Completed pagination must reject an unrepresentable grapheme because it
@@ -148,7 +177,9 @@ pub(crate) fn render_live_viewport(text: &str) -> Result<String, ChatboxLayoutEr
         }
     }
 
-    Ok(prepared.text_between(preferred_start, end))
+    Ok(Some(PreparedChatboxText(
+        prepared.text_between(preferred_start, end),
+    )))
 }
 
 struct PreparedText<'text> {

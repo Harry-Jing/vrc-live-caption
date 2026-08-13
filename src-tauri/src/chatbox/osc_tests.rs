@@ -1,3 +1,4 @@
+use super::super::layout::{PreparedChatboxText, prepare_single_message};
 use super::super::pacer::{ChatboxPacer, Clock};
 use super::*;
 use crate::host_resolver::HostResolver;
@@ -123,11 +124,21 @@ fn chatbox_packets_use_the_vrchat_contract() {
 fn prepared_page_is_sent_without_rewriting_whitespace() -> AppResult<()> {
     let transport = Arc::new(ScriptedOscTransport::new([false]));
     let sender = ChatboxOscSender::with_transport(transport.clone());
-    let page = "first line\n  second  line";
+    let page = prepared_text("first line\n  second  line")?;
 
-    sender.send_text(page)?;
+    sender.send_text(&page)?;
 
-    assert_eq!(transport.packets(), vec![chatbox_input_packet(page)]);
+    assert_eq!(
+        transport.packets(),
+        vec![OscPacket::Message(OscMessage {
+            addr: "/chatbox/input".to_string(),
+            args: vec![
+                OscType::String("first line\n  second  line".to_string()),
+                OscType::Bool(true),
+                OscType::Bool(false),
+            ],
+        })]
+    );
     Ok(())
 }
 
@@ -138,10 +149,11 @@ fn runtime_restart_and_osc_test_share_actual_attempt_history() -> AppResult<()> 
 
     for text in ["runtime one", OSC_TEST_MESSAGE, "runtime two"] {
         let sender = ChatboxOscSender::with_transport(Arc::new(ScriptedOscTransport::new([false])));
+        let text = prepared_text(text)?;
         pacer
             .wait_for_turn(None)?
             .ok_or_else(|| AppError::runtime("OSC attempt was cancelled."))?
-            .attempt(|| sender.send_text(text))?;
+            .attempt(|| sender.send_text(&text))?;
     }
 
     assert_eq!(clock.total_sleep(), Duration::from_secs(2));
@@ -154,18 +166,20 @@ fn failed_transport_attempt_still_reserves_the_next_opportunity() -> AppResult<(
     let pacer = ChatboxPacer::with_clock(clock.clone());
     let failing = ChatboxOscSender::with_transport(Arc::new(ScriptedOscTransport::new([true])));
     let succeeding = ChatboxOscSender::with_transport(Arc::new(ScriptedOscTransport::new([false])));
+    let failed_text = prepared_text("failed")?;
+    let succeeded_text = prepared_text("succeeded")?;
 
     assert!(
         pacer
             .wait_for_turn(None)?
             .ok_or_else(|| AppError::runtime("Failed OSC attempt was cancelled."))?
-            .attempt(|| failing.send_text("failed"))
+            .attempt(|| failing.send_text(&failed_text))
             .is_err()
     );
     pacer
         .wait_for_turn(None)?
         .ok_or_else(|| AppError::runtime("Follow-up OSC attempt was cancelled."))?
-        .attempt(|| succeeding.send_text("succeeded"))?;
+        .attempt(|| succeeding.send_text(&succeeded_text))?;
 
     assert_eq!(clock.total_sleep(), Duration::from_secs(1));
     Ok(())
@@ -192,7 +206,8 @@ fn udp_transport_sends_exact_text_and_typing_packets() -> AppResult<()> {
         &|| false,
     )?;
 
-    sender.send_text("exact\n  page")?;
+    let text = prepared_text("exact\n  page")?;
+    sender.send_text(&text)?;
     sender.send_typing(false)?;
 
     assert_eq!(
@@ -231,7 +246,8 @@ fn hostname_resolution_uses_the_injected_resolver() -> AppResult<()> {
         &|| false,
     )?;
 
-    sender.send_text("resolved target")?;
+    let text = prepared_text("resolved target")?;
+    sender.send_text(&text)?;
 
     assert_eq!(
         receive_packet(&receiver)?,
@@ -296,4 +312,12 @@ fn receive_packet(receiver: &UdpSocket) -> AppResult<OscPacket> {
     let (_, packet) = decoder::decode_udp(&buffer[..size])
         .map_err(|error| AppError::osc_encode(error.to_string()))?;
     Ok(packet)
+}
+
+fn prepared_text(text: &str) -> AppResult<PreparedChatboxText> {
+    prepare_single_message(text)
+        .map_err(|error| {
+            AppError::runtime(format!("OSC test text could not be prepared: {error:?}"))
+        })?
+        .ok_or_else(|| AppError::runtime("OSC test text must not be empty."))
 }

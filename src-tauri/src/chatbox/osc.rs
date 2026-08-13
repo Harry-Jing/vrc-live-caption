@@ -5,6 +5,7 @@
 //! cancellation belong to the independent Chatbox publisher. The OSC Test
 //! command acquires the same process-wide pacer before calling this transport.
 
+use super::PreparedChatboxText;
 use super::transport::{ChatboxSendReceipt, ChatboxTransport};
 use crate::config::OscConfig;
 use crate::error::{AppError, AppResult};
@@ -84,8 +85,10 @@ impl ChatboxOscSender {
         Self { transport }
     }
 
-    pub(crate) fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
-        let byte_count = self.transport.send_packet(&chatbox_input_packet(text))?;
+    pub(crate) fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
+        let byte_count = self
+            .transport
+            .send_packet(&chatbox_input_packet(text.as_str()))?;
 
         Ok(ChatboxSendReceipt {
             target: self.transport.target().to_string(),
@@ -119,7 +122,7 @@ fn map_resolution_error(target: &str, error: HostResolutionError) -> AppError {
 }
 
 impl ChatboxTransport for ChatboxOscSender {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
         Self::send_text(self, text)
     }
 

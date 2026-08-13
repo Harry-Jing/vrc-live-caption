@@ -15,7 +15,8 @@ mod osc;
 mod pacer;
 mod transport;
 
-pub(crate) use common::{PublisherCloseReason, PublisherSubmitOutcome};
+pub(crate) use common::{PublisherCloseReason, PublisherSubmitOutcome, describe_layout_error};
+pub(crate) use layout::{PreparedChatboxText, prepare_single_message};
 pub(crate) use osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
 pub(crate) use pacer::ChatboxPacer;
 pub(crate) use transport::{ChatboxSendReceipt, ChatboxTransport};

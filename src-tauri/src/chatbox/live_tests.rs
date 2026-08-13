@@ -1,3 +1,4 @@
+use super::super::layout::{PreparedChatboxText, prepare_single_message};
 use super::super::pacer::Clock;
 use super::super::transport::ChatboxSendReceipt;
 use super::*;
@@ -215,7 +216,7 @@ impl RecordingTransport {
 }
 
 impl ChatboxTransport for RecordingTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
         let attempt = {
             let mut next = self
                 .next_text_attempt
@@ -225,7 +226,7 @@ impl ChatboxTransport for RecordingTransport {
             *next = next.saturating_add(1);
             attempt
         };
-        self.record(TransportEvent::Text(text.to_string()))?;
+        self.record(TransportEvent::Text(text.as_str().to_string()))?;
         if self.failed_text_attempts.contains(&attempt) {
             return Err(AppError::osc_send(
                 "recording",
@@ -234,7 +235,7 @@ impl ChatboxTransport for RecordingTransport {
         }
         Ok(ChatboxSendReceipt {
             target: "recording".to_string(),
-            byte_count: text.len(),
+            byte_count: text.as_str().len(),
         })
     }
 
@@ -244,7 +245,7 @@ impl ChatboxTransport for RecordingTransport {
 }
 
 impl ChatboxTransport for PanicOnTypingTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
         self.recording.send_text(text)
     }
 
@@ -966,7 +967,9 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
             revision: 1,
             state: CaptionState::Completed,
         },
-        view: "never attempted".to_string(),
+        view: prepare_single_message("never attempted")
+            .map_err(|error| AppError::runtime(describe_layout_error(error)))?
+            .ok_or_else(|| AppError::runtime("Live test candidate must not be empty."))?,
         ready_at: publisher.shared.pacer.now(),
     };
     publisher
