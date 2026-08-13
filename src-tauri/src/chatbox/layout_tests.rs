@@ -65,12 +65,6 @@ const HELLO_20_WITH_SPACE: &str = concat!(
     "hello hello hello hello hello hello hello hello hello hello ",
     "hello hello hello hello hello hello hello hello hello hello ",
 );
-const HELLO_VS_20_WITH_SPACE: &str = concat!(
-    "hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}",
-    "hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}",
-    "hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}",
-    "hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}hello \u{FE0F}",
-);
 const X_30: &str = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 const MIXED_9_LINES: &str = concat!(
     "中中中中中xxxxxxxxxx\n",
@@ -552,6 +546,7 @@ fn unshaped_variation_and_keycap_sequences_reserve_a_full_line() {
     let cases = [
         ("CJK ideographic variation sequence", "葛\u{E0100}"),
         ("emoji keycap sequence", "1\u{FE0F}\u{20E3}"),
+        ("space with emoji variation selector", " \u{FE0F}"),
         ("isolated emoji variation selector", "\u{FE0F}"),
         ("isolated ideographic variation selector", "\u{E0100}"),
         ("isolated zero-width joiner", "\u{200D}"),
@@ -565,6 +560,29 @@ fn unshaped_variation_and_keycap_sequences_reserve_a_full_line() {
         assert_eq!(advance, MAX_GRAPHEME_ADVANCE_UNITS, "{name}");
         assert!(fits_chatbox_width(advance), "{name}");
     }
+}
+
+#[test]
+fn whitespace_cannot_hide_an_ideographic_variation_selector_from_layout() -> Result<(), String> {
+    // U+E0100 produced a visible missing-glyph marker on the measured build.
+    // Unicode groups it with the preceding space, but TMP still processes the
+    // selector scalar, so treating the whole EGC as an ordinary space can hide
+    // enough width to cross the nine-line safety boundary.
+    let input = format!("{}{}x", "😀".repeat(7), " \u{E0100}".repeat(43));
+    assert_eq!(input.encode_utf16().count(), CHATBOX_MAX_UTF16_UNITS);
+
+    let source_trace = trace_layout(&input).map_err(|error| format!("{error:?}"))?;
+    assert!(source_trace.clipped());
+
+    let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
+    assert!(pages.len() > 1);
+    assert_eq!(concat_prepared(&pages), input);
+    for page in pages {
+        let trace = trace_layout(page.as_str()).map_err(|error| format!("{error:?}"))?;
+        assert!(trace.logical_line_count() <= 9);
+        assert!(!trace.clipped());
+    }
+    Ok(())
 }
 
 #[test]
@@ -600,11 +618,6 @@ fn completed_layout_matches_language_and_length_fixtures() -> Result<(), String>
             name: "English avoids splitting a word across pages",
             input: format!("{HELLO_20_WITH_SPACE}{X_30}"),
             expected: vec![HELLO_20_WITH_SPACE.to_string(), X_30.to_string()],
-        },
-        Case {
-            name: "space modifier preserves the English word boundary",
-            input: format!("{HELLO_VS_20_WITH_SPACE}{X_30}"),
-            expected: vec![HELLO_VS_20_WITH_SPACE.to_string(), X_30.to_string()],
         },
         Case {
             name: "mixed text with explicit tenth line",

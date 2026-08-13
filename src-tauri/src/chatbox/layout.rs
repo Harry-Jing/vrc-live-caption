@@ -786,17 +786,7 @@ fn grapheme_advance_units(grapheme: &str) -> u32 {
 }
 
 fn requires_conservative_sequence_width(grapheme: &str) -> bool {
-    let mut characters = grapheme.chars();
-    let Some(base) = characters.next() else {
-        return false;
-    };
-    if base.is_whitespace() && characters.clone().all(is_variation_selector) {
-        return false;
-    }
-
-    std::iter::once(base)
-        .chain(characters)
-        .any(is_complex_sequence_marker)
+    grapheme.chars().any(is_complex_sequence_marker)
 }
 
 fn is_complex_sequence_marker(character: char) -> bool {
@@ -809,10 +799,6 @@ fn is_complex_sequence_marker(character: char) -> bool {
             | 0xE0020..=0xE007F
             | 0xE0100..=0xE01EF
     )
-}
-
-fn is_variation_selector(character: char) -> bool {
-    matches!(character as u32, 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
 }
 
 fn character_advance_units(character: char) -> u32 {
