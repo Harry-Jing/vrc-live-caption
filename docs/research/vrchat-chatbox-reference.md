@@ -483,6 +483,10 @@ evidence above. They are intentionally stronger than VRChat's native behavior.
 1. Wrap against 280 local units and no more than 9 visual lines.
 2. Use measured glyph advances for the verified fonts. Do not use a fixed
    character count or treat narrow ASCII punctuation as full-width CJK text.
+   A conservative model may apply positive pair adjustments from a hash-pinned
+   raw font, but must not present them as observed runtime glyph provenance.
+   Ignoring negative adjustments is safer than making a page narrower without
+   equivalent runtime evidence.
 3. Use Unicode line-break opportunities as a baseline, then apply the extracted
    TMP leading/following restrictions. The current model uses
    `unicode-linebreak` 0.1.5: Unicode 15.0 data with the crate's documented

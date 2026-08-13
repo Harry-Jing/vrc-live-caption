@@ -176,11 +176,23 @@ facade. They share process-wide send pacing but apply different queue semantics:
 - Completed preserves ordered caption units and lossless pagination within its
   bounded admission policy.
 - Live recomputes a latest-wins viewport and may skip obsolete revisions instead
-  of replaying them as history.
+  of replaying them as history. Its worker atomically moves the selected
+  pending viewport into an in-flight attempt before transport. New observations
+  remain non-blocking and replace only the next pending viewport; Stop discards
+  pending work but waits for an already-admitted attempt to finish.
+
+Both workers pass text through one pure preparation and layout boundary before
+storing a sendable page or viewport. That boundary applies the product control
+policy and returns opaque prepared text. The OSC test uses the same boundary,
+and the transport accepts only prepared text without constructing or rewriting
+it. The layout model includes only positive kerning adjustments from the
+hash-pinned primary raw font and reserves a full line for graphemes it cannot
+measure confidently, so uncertain shaping cannot make a page less conservative.
 
 Publisher instances are generation-scoped. Stop discards their queued caption
 text rather than draining it. Typing indication is lifecycle control outside the
-text-send pacer.
+text-send pacer. Periodic typing-on reassertions are best effort only, not a
+keepalive guarantee, because their reset behavior has not been verified.
 
 OSC, pacing, layout, wrapping, clipping, and validation constraints are defined
 by the [VRChat Chatbox reference](./research/vrchat-chatbox-reference.md).

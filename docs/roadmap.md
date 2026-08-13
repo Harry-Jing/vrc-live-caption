@@ -25,6 +25,12 @@ Phase 4 passed authenticated provider smoke tests for both selected OpenAI paths
 and a native Windows/VRChat real-microphone matrix on 2026-08-10, including long
 speech and mixed English/Chinese speech.
 
+A post-foundation Chatbox fidelity pass now covers preparation and layout with a
+portable corpus and a build-scoped runtime-observation fixture. Native replay of
+application-generated Completed pages and Live viewports remains pending; the
+existing evidence does not establish behavior for other VRChat builds, XR
+modes, or observer viewpoints.
+
 ## Phase 5: Completed translation
 
 Status: **in progress**. Contracts, bounded provider transport, and

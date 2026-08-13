@@ -1145,7 +1145,7 @@ fn overlapping_activity_keeps_typing_on_until_the_last_unit_resolves() -> AppRes
 }
 
 #[test]
-fn active_typing_is_reasserted_before_vrchat_hides_it() -> AppResult<()> {
+fn active_typing_is_reasserted_on_the_best_effort_interval() -> AppResult<()> {
     let clock = Arc::new(ControlledClock::new());
     let transport_clock: Arc<dyn Clock> = clock.clone();
     let transport = Arc::new(ScriptedTransport::new(transport_clock, []));

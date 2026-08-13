@@ -1,8 +1,10 @@
 # Contract artifacts
 
-This directory holds shared evidence for the Rust/TypeScript boundary. The
-artifacts complement the Rust types, TypeScript decoders, and tests; payload
-fixtures are representative compatibility scenarios, not complete JSON Schema.
+This directory holds versioned contract artifacts and portable regression
+evidence. Some fixtures define the Rust/TypeScript boundary; others pin external
+evidence independently of one implementation module. The artifacts complement
+the Rust types, TypeScript decoders, and tests; payload fixtures are
+representative compatibility scenarios, not complete JSON Schema.
 
 - `*-vN.json` files are versioned payload scenarios consumed by both languages.
 - `tauri-ipc.json` is the exact manifest of command and event identifiers in one
@@ -29,6 +31,10 @@ dependency-locked `chatbox-corpus export-live-caption <output>` command, reviews
 the embedded source and manifest hashes, and then runs the Rust contract and
 Chatbox behavior tests in this repository. The generator is an authoring tool,
 not a build or CI dependency.
+
+After a VRChat update, add a new build-named runtime-observation fixture. Keep
+the prior build's file intact so a current result cannot silently rewrite older
+evidence.
 
 ## Compatibility baseline
 
