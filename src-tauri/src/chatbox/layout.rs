@@ -467,18 +467,24 @@ impl<'text> LayoutText<'text> {
                 continue;
             }
 
-            let (line_end, line_end_is_legal) = if grapheme.break_space && grapheme.can_break_after
-            {
-                (cursor + 1, true)
-            } else if let Some(boundary) =
-                last_legal_break.filter(|boundary| *boundary > line_start)
-            {
-                (boundary, true)
-            } else if cursor > line_start {
-                (cursor, false)
-            } else {
-                (cursor + 1, false)
-            };
+            // Ordinary trailing spaces can be consumed by a soft wrap. A
+            // selector-bearing space is still a legal break opportunity, but
+            // its conservative full-line advance represents a visible or
+            // otherwise unshaped scalar and must move to the next line.
+            let discardable_break_space =
+                grapheme.break_space && !requires_conservative_sequence_width(grapheme.text);
+            let (line_end, line_end_is_legal) =
+                if discardable_break_space && grapheme.can_break_after {
+                    (cursor + 1, true)
+                } else if let Some(boundary) =
+                    last_legal_break.filter(|boundary| *boundary > line_start)
+                {
+                    (boundary, true)
+                } else if cursor > line_start {
+                    (cursor, false)
+                } else {
+                    (cursor + 1, false)
+                };
 
             return LineScan {
                 layout_break: Some(LayoutBreak {

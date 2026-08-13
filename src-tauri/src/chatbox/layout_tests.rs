@@ -586,6 +586,25 @@ fn whitespace_cannot_hide_an_ideographic_variation_selector_from_layout() -> Res
 }
 
 #[test]
+fn selector_bearing_space_cannot_be_discarded_at_the_nine_line_boundary() -> Result<(), String> {
+    let input = format!("{}{}", "😀".repeat(8), " \u{E0100}".repeat(2));
+
+    let source_trace = trace_layout(&input).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(source_trace.logical_line_count(), 10);
+    assert!(source_trace.clipped());
+
+    let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(pages.len(), 2);
+    assert_eq!(concat_prepared(&pages), input);
+    for page in pages {
+        let trace = trace_layout(page.as_str()).map_err(|error| format!("{error:?}"))?;
+        assert!(trace.logical_line_count() <= 9);
+        assert!(!trace.clipped());
+    }
+    Ok(())
+}
+
+#[test]
 fn completed_layout_matches_language_and_length_fixtures() -> Result<(), String> {
     struct Case {
         name: &'static str,
