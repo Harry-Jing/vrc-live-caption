@@ -511,7 +511,7 @@ fn submit_handled(
 }
 
 fn prepared_strings(text: &str) -> AppResult<Vec<String>> {
-    paginate_completed(text)
+    prepare_completed_pages(text)
         .map(|pages| {
             pages
                 .into_iter()
@@ -1402,7 +1402,7 @@ fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<(
     let transport_clock: Arc<dyn Clock> = clock.clone();
     let transport = Arc::new(ScriptedTransport::new(transport_clock, []));
     let text = "中".repeat(811);
-    let page_count = paginate_completed(&text)
+    let page_count = prepare_completed_pages(&text)
         .map_err(|error| AppError::runtime(describe_layout_error(error)))?
         .len();
     assert!(page_count >= 6);

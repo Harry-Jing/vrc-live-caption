@@ -1,4 +1,4 @@
-//! Pure text layout for VRChat Chatbox Completed pages and Live viewports.
+//! Pure Chatbox text preparation and layout for Completed pages and Live viewports.
 //!
 //! The module has no runtime, pacing, OSC, or queue dependencies. Before any
 //! measurement it applies the product control policy: verified line separators
@@ -20,7 +20,7 @@ mod model;
 
 use model::{
     TMP_FOLLOWING_CHARACTERS, TMP_LEADING_CHARACTERS, fits_chatbox_width, grapheme_advance_units,
-    is_zero_advance_modifier, measurable_kerning_character, positive_kerning_adjustment,
+    has_modeled_zero_advance, measurable_kerning_character, positive_kerning_adjustment,
     requires_conservative_sequence_width,
 };
 
@@ -54,7 +54,7 @@ impl PreparedChatboxText {
 /// full model result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg(test)]
-pub(crate) struct ChatboxLayoutTrace {
+pub(crate) struct ChatboxLayoutPrediction {
     logical_line_count: usize,
     visible_line_count: usize,
     soft_break_utf16_offsets: Vec<usize>,
@@ -63,7 +63,7 @@ pub(crate) struct ChatboxLayoutTrace {
 }
 
 #[cfg(test)]
-impl ChatboxLayoutTrace {
+impl ChatboxLayoutPrediction {
     pub(crate) fn logical_line_count(&self) -> usize {
         self.logical_line_count
     }
@@ -80,17 +80,17 @@ impl ChatboxLayoutTrace {
         &self.explicit_break_utf16_offsets
     }
 
-    pub(crate) fn clipped(&self) -> bool {
+    pub(crate) fn is_clipped(&self) -> bool {
         self.clipped
     }
 }
 
-/// Applies the same preparation and layout model as publication, but returns
-/// observation data without selecting, mutating, or sending a payload.
+/// Applies the same preparation and layout model as publication, but returns a
+/// prediction without selecting, mutating, or sending a payload.
 #[cfg(test)]
-pub(crate) fn trace_layout(text: &str) -> Result<ChatboxLayoutTrace, ChatboxLayoutError> {
-    let text = prepare_source_text(text);
-    Ok(LayoutText::new(text.as_ref())?.trace())
+pub(crate) fn predict_layout(text: &str) -> Result<ChatboxLayoutPrediction, ChatboxLayoutError> {
+    let text = apply_control_character_policy(text);
+    Ok(LayoutText::new(text.as_ref())?.predict())
 }
 
 /// Prepares one independently safe Chatbox message without silently selecting
@@ -98,7 +98,7 @@ pub(crate) fn trace_layout(text: &str) -> Result<ChatboxLayoutTrace, ChatboxLayo
 pub(crate) fn prepare_single_message(
     text: &str,
 ) -> Result<Option<PreparedChatboxText>, ChatboxLayoutError> {
-    let mut pages = paginate_completed(text)?;
+    let mut pages = prepare_completed_pages(text)?;
     match pages.len() {
         0 => Ok(None),
         1 => Ok(pages.pop()),
@@ -106,15 +106,15 @@ pub(crate) fn prepare_single_message(
     }
 }
 
-/// Returns every safe Completed page in prepared-source order.
+/// Returns every safe Completed page in prepared-input order.
 ///
 /// An empty caption has no pages. A single grapheme that is itself larger than
 /// VRChat's complete input budget cannot be represented without violating one
 /// of the layout invariants, so that pathological input returns an error.
-pub(crate) fn paginate_completed(
+pub(crate) fn prepare_completed_pages(
     text: &str,
 ) -> Result<Vec<PreparedChatboxText>, ChatboxLayoutError> {
-    let text = prepare_source_text(text);
+    let text = apply_control_character_policy(text);
     let text = text.as_ref();
     if text.is_empty() {
         return Ok(Vec::new());
@@ -142,10 +142,10 @@ pub(crate) fn paginate_completed(
 /// punctuation boundary when one exists. A single uninterrupted token falls
 /// back to the first safe grapheme boundary instead of discarding almost the
 /// whole useful view.
-pub(crate) fn render_live_viewport(
+pub(crate) fn prepare_live_viewport(
     text: &str,
 ) -> Result<Option<PreparedChatboxText>, ChatboxLayoutError> {
-    let text = prepare_source_text(text);
+    let text = apply_control_character_policy(text);
     let text = text.as_ref();
     if text.is_empty() {
         return Ok(None);
@@ -301,14 +301,14 @@ impl<'text> LayoutText<'text> {
     }
 
     fn next_page_end(&self, page_start: usize) -> usize {
-        let page_budget_end = self.page_budget_end(page_start);
-        let budget_clips_text = page_budget_end < self.graphemes.len();
+        let utf16_budget_end = self.utf16_budget_end(page_start);
+        let budget_clips_text = utf16_budget_end < self.graphemes.len();
         let mut line_start = page_start;
         let mut line_count = 1;
         let mut last_legal_page_break = None;
 
-        while line_start < page_budget_end {
-            let line = self.scan_line(line_start, page_budget_end);
+        while line_start < utf16_budget_end {
+            let line = self.scan_line(line_start, utf16_budget_end);
             if let Some(boundary) = line.latest_legal_break {
                 last_legal_page_break = Some(boundary);
             }
@@ -337,13 +337,13 @@ impl<'text> LayoutText<'text> {
         if budget_clips_text {
             last_legal_page_break
                 .filter(|boundary| *boundary > page_start)
-                .unwrap_or(page_budget_end)
+                .unwrap_or(utf16_budget_end)
         } else {
             self.graphemes.len()
         }
     }
 
-    fn page_budget_end(&self, page_start: usize) -> usize {
+    fn utf16_budget_end(&self, page_start: usize) -> usize {
         (page_start..self.graphemes.len())
             .take_while(|end| self.utf16_units(page_start, end + 1) <= CHATBOX_MAX_UTF16_UNITS)
             .last()
@@ -424,9 +424,9 @@ impl<'text> LayoutText<'text> {
     }
 
     #[cfg(test)]
-    fn trace(&self) -> ChatboxLayoutTrace {
+    fn predict(&self) -> ChatboxLayoutPrediction {
         if self.graphemes.is_empty() {
-            return ChatboxLayoutTrace {
+            return ChatboxLayoutPrediction {
                 logical_line_count: 0,
                 visible_line_count: 0,
                 soft_break_utf16_offsets: Vec::new(),
@@ -457,7 +457,7 @@ impl<'text> LayoutText<'text> {
         let logical_line_count =
             1 + soft_break_utf16_offsets.len() + explicit_break_utf16_offsets.len();
         let visible_line_count = logical_line_count.min(CHATBOX_MAX_VISIBLE_LINES);
-        ChatboxLayoutTrace {
+        ChatboxLayoutPrediction {
             logical_line_count,
             visible_line_count,
             soft_break_utf16_offsets,
@@ -553,7 +553,7 @@ impl<'text> LayoutText<'text> {
 /// Applies the product-side control policy before any indexing, measurement,
 /// pagination, or transmission. CRLF is one verified line break and stays
 /// intact; ambiguous standalone controls become one ordinary space each.
-fn prepare_source_text(text: &str) -> Cow<'_, str> {
+fn apply_control_character_policy(text: &str) -> Cow<'_, str> {
     if !text
         .chars()
         .any(|character| matches!(character, '\r' | '\u{000C}' | '\u{0085}'))
@@ -642,7 +642,7 @@ fn tmp_blocking_characters_at_boundaries(
 fn tmp_edge_blocks(grapheme: &str, prohibited: &str) -> Option<bool> {
     let has_visible_content = grapheme
         .chars()
-        .any(|character| !character.is_whitespace() && !is_zero_advance_modifier(character));
+        .any(|character| !character.is_whitespace() && !has_modeled_zero_advance(character));
     has_visible_content.then(|| {
         grapheme
             .chars()
@@ -657,7 +657,7 @@ fn is_break_space_grapheme(grapheme: &str) -> bool {
             contains_space = true;
             true
         } else {
-            is_zero_advance_modifier(character)
+            has_modeled_zero_advance(character)
         }
     });
 

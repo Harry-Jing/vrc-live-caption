@@ -1,5 +1,5 @@
 use super::super::layout::{
-    ChatboxLayoutError, PreparedChatboxText, paginate_completed, render_live_viewport,
+    ChatboxLayoutError, PreparedChatboxText, prepare_completed_pages, prepare_live_viewport,
 };
 use super::super::pacer::{ChatboxPacer, Clock};
 use super::super::transport::{ChatboxSendReceipt, ChatboxTransport};
@@ -41,7 +41,7 @@ fn completed_facade_replays_layered_corpus_cases_without_rewriting_pages() -> Ap
         let case = corpus_case(&fixture, case_id)?;
         assert!(has_test_target(case, "completed-pagination").map_err(AppError::state)?);
         let payload = required_string(case, "payload").map_err(AppError::state)?;
-        let expected = paginate_completed(payload).map_err(|error| {
+        let expected = prepare_completed_pages(payload).map_err(|error| {
             AppError::state(format!(
                 "Replay case {case_id} unexpectedly failed: {error:?}"
             ))
@@ -85,7 +85,7 @@ fn live_facade_replays_layered_corpus_cases_without_rewriting_viewports() -> App
         let case = corpus_case(&fixture, case_id)?;
         assert!(has_test_target(case, "live-window").map_err(AppError::state)?);
         let payload = required_string(case, "payload").map_err(AppError::state)?;
-        let expected = render_live_viewport(payload)
+        let expected = prepare_live_viewport(payload)
             .map_err(|error| {
                 AppError::state(format!(
                     "Replay case {case_id} unexpectedly failed: {error:?}"
@@ -121,11 +121,11 @@ fn oversized_newest_egc_is_reported_and_never_reaches_either_facade_transport() 
         AppError::state("Oversized replay case no longer contains an oversized EGC.")
     })?;
     assert_eq!(
-        paginate_completed(payload),
+        prepare_completed_pages(payload),
         Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units })
     );
     assert_eq!(
-        render_live_viewport(payload),
+        prepare_live_viewport(payload),
         Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units })
     );
 

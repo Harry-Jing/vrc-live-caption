@@ -4,7 +4,7 @@ use super::model::{
 };
 use super::{
     CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, PreparedChatboxText, is_break_space_grapheme,
-    paginate_completed, prepare_single_message, render_live_viewport, trace_layout,
+    predict_layout, prepare_completed_pages, prepare_live_viewport, prepare_single_message,
 };
 use proptest::prelude::*;
 use std::collections::HashSet;
@@ -112,7 +112,7 @@ fn concat_prepared(pages: &[PreparedChatboxText]) -> String {
 }
 
 fn require_live_view(input: &str) -> Result<PreparedChatboxText, String> {
-    render_live_viewport(input)
+    prepare_live_viewport(input)
         .map_err(|error| format!("{error:?}"))?
         .ok_or_else(|| "nonempty Live input produced no viewport".to_owned())
 }
@@ -186,21 +186,21 @@ fn prepared_control_policy_text() -> impl Strategy<Value = (String, String)> {
 }
 
 #[test]
-fn layout_trace_reports_the_verified_ascii_soft_wrap_boundary() -> Result<(), String> {
-    let one_line = trace_layout(&"x".repeat(29)).map_err(|error| format!("{error:?}"))?;
-    let two_lines = trace_layout(&"x".repeat(30)).map_err(|error| format!("{error:?}"))?;
+fn layout_prediction_reports_the_verified_ascii_soft_wrap_boundary() -> Result<(), String> {
+    let one_line = predict_layout(&"x".repeat(29)).map_err(|error| format!("{error:?}"))?;
+    let two_lines = predict_layout(&"x".repeat(30)).map_err(|error| format!("{error:?}"))?;
 
     assert_eq!(one_line.logical_line_count(), 1);
     assert_eq!(one_line.visible_line_count(), 1);
     assert!(one_line.soft_break_utf16_offsets().is_empty());
     assert!(one_line.explicit_break_utf16_offsets().is_empty());
-    assert!(!one_line.clipped());
+    assert!(!one_line.is_clipped());
 
     assert_eq!(two_lines.logical_line_count(), 2);
     assert_eq!(two_lines.visible_line_count(), 2);
     assert_eq!(two_lines.soft_break_utf16_offsets(), &[29]);
     assert!(two_lines.explicit_break_utf16_offsets().is_empty());
-    assert!(!two_lines.clipped());
+    assert!(!two_lines.is_clipped());
     Ok(())
 }
 
@@ -212,9 +212,9 @@ fn positive_kerning_can_push_an_otherwise_fitting_line_past_the_width_limit() ->
     // (+100); reversing only that pair leaves the same base advances.
     let prefix = format!("{}{}", "x".repeat(21), " ".repeat(14));
     let without_positive_pair =
-        trace_layout(&format!("{prefix}J¿")).map_err(|error| format!("{error:?}"))?;
+        predict_layout(&format!("{prefix}J¿")).map_err(|error| format!("{error:?}"))?;
     let with_positive_pair =
-        trace_layout(&format!("{prefix}¿J")).map_err(|error| format!("{error:?}"))?;
+        predict_layout(&format!("{prefix}¿J")).map_err(|error| format!("{error:?}"))?;
 
     assert_eq!(without_positive_pair.logical_line_count(), 1);
     assert_eq!(with_positive_pair.logical_line_count(), 2);
@@ -253,14 +253,14 @@ fn positive_kerning_context_resets_at_line_boundaries() -> Result<(), String> {
     // second line has 15,458 base units: it fits only when the pair from the
     // preceding line is not carried across the boundary.
     let second_line = format!("J{}{}", "x".repeat(17), "i".repeat(24));
-    let soft = trace_layout(&format!(
+    let soft = predict_layout(&format!(
         "{}{}¿{second_line}",
         "x".repeat(11),
         "z".repeat(19)
     ))
     .map_err(|error| format!("{error:?}"))?;
     let explicit =
-        trace_layout(&format!("¿\n{second_line}")).map_err(|error| format!("{error:?}"))?;
+        predict_layout(&format!("¿\n{second_line}")).map_err(|error| format!("{error:?}"))?;
 
     assert_eq!(soft.logical_line_count(), 2);
     assert_eq!(soft.soft_break_utf16_offsets(), &[31]);
@@ -276,45 +276,49 @@ fn completed_pages_remain_safe_when_positive_kerning_creates_a_tenth_line() -> R
     // line nine. Its base advances fit, but the +100 `¿J` pair creates a real
     // tenth line while the whole source remains well below 144 UTF-16 units.
     let prefix = format!("{}{}{}", "😀".repeat(8), "x".repeat(11), "z".repeat(19));
-    let fitting = trace_layout(&format!("{prefix}J¿")).map_err(|error| format!("{error:?}"))?;
+    let fitting = predict_layout(&format!("{prefix}J¿")).map_err(|error| format!("{error:?}"))?;
     let input = format!("{prefix}¿J");
-    let widened = trace_layout(&input).map_err(|error| format!("{error:?}"))?;
+    let widened = predict_layout(&input).map_err(|error| format!("{error:?}"))?;
 
     assert_eq!(fitting.logical_line_count(), 9);
     assert_eq!(widened.logical_line_count(), 10);
-    assert!(widened.clipped());
+    assert!(widened.is_clipped());
 
-    let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(&input).map_err(|error| format!("{error:?}"))?;
 
     assert_eq!(pages.len(), 2);
     assert_eq!(concat_prepared(&pages), input);
     for page in pages {
-        let trace = trace_layout(page.as_str()).map_err(|error| format!("{error:?}"))?;
-        assert!(trace.logical_line_count() <= 9);
-        assert!(!trace.clipped());
+        let prediction = predict_layout(page.as_str()).map_err(|error| format!("{error:?}"))?;
+        assert!(prediction.logical_line_count() <= 9);
+        assert!(!prediction.is_clipped());
     }
     Ok(())
 }
 
 #[test]
-fn layout_trace_uses_prepared_utf16_offsets_for_verified_separators() -> Result<(), String> {
+fn layout_prediction_uses_prepared_utf16_offsets_for_verified_separators() -> Result<(), String> {
     let source = "😀\na\r\nb\u{000B}c\u{2028}d\u{2029}e\rf\u{0085}g\u{000C}h";
-    let trace = trace_layout(source).map_err(|error| format!("{error:?}"))?;
+    let prediction = predict_layout(source).map_err(|error| format!("{error:?}"))?;
 
-    assert_eq!(trace.logical_line_count(), 6);
-    assert_eq!(trace.visible_line_count(), 6);
-    assert!(trace.soft_break_utf16_offsets().is_empty());
-    assert_eq!(trace.explicit_break_utf16_offsets(), &[3, 6, 8, 10, 12]);
-    assert!(!trace.clipped());
+    assert_eq!(prediction.logical_line_count(), 6);
+    assert_eq!(prediction.visible_line_count(), 6);
+    assert!(prediction.soft_break_utf16_offsets().is_empty());
+    assert_eq!(
+        prediction.explicit_break_utf16_offsets(),
+        &[3, 6, 8, 10, 12]
+    );
+    assert!(!prediction.is_clipped());
     Ok(())
 }
 
 #[test]
-fn layout_trace_distinguishes_logical_lines_from_the_nine_visible_lines() -> Result<(), String> {
+fn layout_prediction_distinguishes_logical_lines_from_the_nine_visible_lines() -> Result<(), String>
+{
     let nine_lines =
-        trace_layout("1\n2\n3\n4\n5\n6\n7\n8\n9").map_err(|error| format!("{error:?}"))?;
+        predict_layout("1\n2\n3\n4\n5\n6\n7\n8\n9").map_err(|error| format!("{error:?}"))?;
     let ten_lines =
-        trace_layout("1\n2\n3\n4\n5\n6\n7\n8\n9\n0").map_err(|error| format!("{error:?}"))?;
+        predict_layout("1\n2\n3\n4\n5\n6\n7\n8\n9\n0").map_err(|error| format!("{error:?}"))?;
 
     assert_eq!(nine_lines.logical_line_count(), 9);
     assert_eq!(nine_lines.visible_line_count(), 9);
@@ -322,7 +326,7 @@ fn layout_trace_distinguishes_logical_lines_from_the_nine_visible_lines() -> Res
         nine_lines.explicit_break_utf16_offsets(),
         &[2, 4, 6, 8, 10, 12, 14, 16]
     );
-    assert!(!nine_lines.clipped());
+    assert!(!nine_lines.is_clipped());
 
     assert_eq!(ten_lines.logical_line_count(), 10);
     assert_eq!(ten_lines.visible_line_count(), 9);
@@ -330,9 +334,9 @@ fn layout_trace_distinguishes_logical_lines_from_the_nine_visible_lines() -> Res
         ten_lines.explicit_break_utf16_offsets(),
         &[2, 4, 6, 8, 10, 12, 14, 16, 18]
     );
-    assert!(ten_lines.clipped());
+    assert!(ten_lines.is_clipped());
 
-    let trailing_separator = trace_layout("alpha\n").map_err(|error| format!("{error:?}"))?;
+    let trailing_separator = predict_layout("alpha\n").map_err(|error| format!("{error:?}"))?;
     assert_eq!(trailing_separator.logical_line_count(), 1);
     assert!(trailing_separator.explicit_break_utf16_offsets().is_empty());
     Ok(())
@@ -343,21 +347,22 @@ fn terminal_separator_stays_with_nine_lines_but_a_real_tenth_line_does_not() -> 
     let nine_lines = "1\n2\n3\n4\n5\n6\n7\n8\n9";
     let terminal_separator = format!("{nine_lines}\n");
     let terminal_pages =
-        paginate_completed(&terminal_separator).map_err(|error| format!("{error:?}"))?;
+        prepare_completed_pages(&terminal_separator).map_err(|error| format!("{error:?}"))?;
     assert_eq!(prepared_texts(&terminal_pages), vec![terminal_separator]);
 
     let tenth_line = format!("{nine_lines}\n0");
-    let tenth_line_pages = paginate_completed(&tenth_line).map_err(|error| format!("{error:?}"))?;
+    let tenth_line_pages =
+        prepare_completed_pages(&tenth_line).map_err(|error| format!("{error:?}"))?;
     assert_eq!(prepared_texts(&tenth_line_pages), vec![nine_lines, "\n0"]);
     Ok(())
 }
 
 #[test]
-fn layout_trace_applies_tmp_kinsoku_to_soft_break_offsets() -> Result<(), String> {
-    let opening =
-        trace_layout(&format!("{}「中", "中".repeat(14))).map_err(|error| format!("{error:?}"))?;
+fn layout_prediction_applies_tmp_kinsoku_to_soft_break_offsets() -> Result<(), String> {
+    let opening = predict_layout(&format!("{}「中", "中".repeat(14)))
+        .map_err(|error| format!("{error:?}"))?;
     let closing =
-        trace_layout(&format!("{}。", "中".repeat(15))).map_err(|error| format!("{error:?}"))?;
+        predict_layout(&format!("{}。", "中".repeat(15))).map_err(|error| format!("{error:?}"))?;
 
     assert_eq!(opening.logical_line_count(), 2);
     assert_eq!(opening.soft_break_utf16_offsets(), &[14]);
@@ -435,7 +440,7 @@ fn preparation_precedes_the_utf16_pagination_boundary() -> Result<(), String> {
     let within = prepare_single_message(&within_source)
         .map_err(|error| format!("{error:?}"))?
         .ok_or("144-unit prepared message was omitted")?;
-    let pages = paginate_completed(&source).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(&source).map_err(|error| format!("{error:?}"))?;
 
     assert_eq!(within.as_str(), within_expected);
     assert_eq!(within.as_str().encode_utf16().count(), 144);
@@ -449,7 +454,7 @@ fn preparation_precedes_the_utf16_pagination_boundary() -> Result<(), String> {
 
     let changed_grapheme_source = format!("{X_143}\u{0085}\u{0301}");
     let changed_grapheme_pages =
-        paginate_completed(&changed_grapheme_source).map_err(|error| format!("{error:?}"))?;
+        prepare_completed_pages(&changed_grapheme_source).map_err(|error| format!("{error:?}"))?;
     assert_eq!(
         prepared_texts(&changed_grapheme_pages),
         vec![X_143, " \u{0301}"]
@@ -480,7 +485,7 @@ fn completed_preparation_preserves_verified_breaks_and_replaces_ambiguous_contro
     ];
 
     for (name, input, expected) in cases {
-        let pages = paginate_completed(input).map_err(|error| format!("{error:?}"))?;
+        let pages = prepare_completed_pages(input).map_err(|error| format!("{error:?}"))?;
         assert_eq!(prepared_texts(&pages), vec![expected], "{name}");
     }
 
@@ -505,7 +510,7 @@ fn break_space_classification_keeps_visible_marks_in_layout() {
 #[test]
 fn completed_layout_paginates_continuous_chinese_after_nine_lines() -> Result<(), String> {
     let input = format!("{CJK_135}中");
-    let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(&input).map_err(|error| format!("{error:?}"))?;
 
     assert_eq!(prepared_texts(&pages), vec![CJK_135, "中"]);
 
@@ -573,16 +578,16 @@ fn whitespace_cannot_hide_an_ideographic_variation_selector_from_layout() -> Res
     let input = format!("{}{}x", "😀".repeat(7), " \u{E0100}".repeat(43));
     assert_eq!(input.encode_utf16().count(), CHATBOX_MAX_UTF16_UNITS);
 
-    let source_trace = trace_layout(&input).map_err(|error| format!("{error:?}"))?;
-    assert!(source_trace.clipped());
+    let source_prediction = predict_layout(&input).map_err(|error| format!("{error:?}"))?;
+    assert!(source_prediction.is_clipped());
 
-    let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(&input).map_err(|error| format!("{error:?}"))?;
     assert!(pages.len() > 1);
     assert_eq!(concat_prepared(&pages), input);
     for page in pages {
-        let trace = trace_layout(page.as_str()).map_err(|error| format!("{error:?}"))?;
-        assert!(trace.logical_line_count() <= 9);
-        assert!(!trace.clipped());
+        let prediction = predict_layout(page.as_str()).map_err(|error| format!("{error:?}"))?;
+        assert!(prediction.logical_line_count() <= 9);
+        assert!(!prediction.is_clipped());
     }
     Ok(())
 }
@@ -591,17 +596,17 @@ fn whitespace_cannot_hide_an_ideographic_variation_selector_from_layout() -> Res
 fn selector_bearing_space_cannot_be_discarded_at_the_nine_line_boundary() -> Result<(), String> {
     let input = format!("{}{}", "😀".repeat(8), " \u{E0100}".repeat(2));
 
-    let source_trace = trace_layout(&input).map_err(|error| format!("{error:?}"))?;
-    assert_eq!(source_trace.logical_line_count(), 10);
-    assert!(source_trace.clipped());
+    let source_prediction = predict_layout(&input).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(source_prediction.logical_line_count(), 10);
+    assert!(source_prediction.is_clipped());
 
-    let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(&input).map_err(|error| format!("{error:?}"))?;
     assert_eq!(pages.len(), 2);
     assert_eq!(concat_prepared(&pages), input);
     for page in pages {
-        let trace = trace_layout(page.as_str()).map_err(|error| format!("{error:?}"))?;
-        assert!(trace.logical_line_count() <= 9);
-        assert!(!trace.clipped());
+        let prediction = predict_layout(page.as_str()).map_err(|error| format!("{error:?}"))?;
+        assert!(prediction.logical_line_count() <= 9);
+        assert!(!prediction.is_clipped());
     }
     Ok(())
 }
@@ -670,7 +675,7 @@ fn completed_layout_matches_language_and_length_fixtures() -> Result<(), String>
     ];
 
     for case in cases {
-        let pages = paginate_completed(&case.input).map_err(|error| format!("{error:?}"))?;
+        let pages = prepare_completed_pages(&case.input).map_err(|error| format!("{error:?}"))?;
         let expected = case.expected.iter().map(String::as_str).collect::<Vec<_>>();
         assert_eq!(prepared_texts(&pages), expected, "{}", case.name);
         assert_eq!(
@@ -688,7 +693,7 @@ fn completed_layout_matches_language_and_length_fixtures() -> Result<(), String>
         );
         for page in &pages {
             let standalone_pages =
-                paginate_completed(page.as_str()).map_err(|error| format!("{error:?}"))?;
+                prepare_completed_pages(page.as_str()).map_err(|error| format!("{error:?}"))?;
             assert_eq!(
                 prepared_texts(&standalone_pages),
                 vec![page.as_str()],
@@ -752,7 +757,7 @@ fn completed_layout_keeps_tmp_punctuation_off_page_seams() -> Result<(), String>
     ];
 
     for (name, input, expected) in cases {
-        let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
+        let pages = prepare_completed_pages(&input).map_err(|error| format!("{error:?}"))?;
         let expected = expected.iter().map(String::as_str).collect::<Vec<_>>();
         assert_eq!(prepared_texts(&pages), expected, "{name}");
         assert_eq!(concat_prepared(&pages), input, "{name} lost content");
@@ -790,7 +795,7 @@ fn completed_layout_never_splits_unicode_graphemes() -> Result<(), String> {
     ];
 
     for (name, input, expected) in cases {
-        let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
+        let pages = prepare_completed_pages(&input).map_err(|error| format!("{error:?}"))?;
         let expected = expected.iter().map(String::as_str).collect::<Vec<_>>();
         assert_eq!(prepared_texts(&pages), expected, "{name}");
         assert_eq!(concat_prepared(&pages), input, "{name} lost content");
@@ -802,20 +807,21 @@ fn completed_layout_never_splits_unicode_graphemes() -> Result<(), String> {
 #[test]
 fn completed_layout_round_trips_other_unicode_best_effort() -> Result<(), String> {
     let arabic_input = format!("{ARABIC_9}م");
-    let arabic_pages = paginate_completed(&arabic_input).map_err(|error| format!("{error:?}"))?;
+    let arabic_pages =
+        prepare_completed_pages(&arabic_input).map_err(|error| format!("{error:?}"))?;
     assert_eq!(prepared_texts(&arabic_pages), vec![ARABIC_9, "م"]);
 
     let wide_punctuation_input = format!("{WIDE_PUNCTUATION_9}⸻");
     let wide_punctuation_pages =
-        paginate_completed(&wide_punctuation_input).map_err(|error| format!("{error:?}"))?;
+        prepare_completed_pages(&wide_punctuation_input).map_err(|error| format!("{error:?}"))?;
     assert_eq!(
         prepared_texts(&wide_punctuation_pages),
         vec![WIDE_PUNCTUATION_9, "⸻"]
     );
 
     let standalone_skin_tone_input = format!("{STANDALONE_SKIN_TONE_9} 🏽 ");
-    let standalone_skin_tone_pages =
-        paginate_completed(&standalone_skin_tone_input).map_err(|error| format!("{error:?}"))?;
+    let standalone_skin_tone_pages = prepare_completed_pages(&standalone_skin_tone_input)
+        .map_err(|error| format!("{error:?}"))?;
     assert_eq!(
         prepared_texts(&standalone_skin_tone_pages),
         vec![STANDALONE_SKIN_TONE_9, " 🏽 "]
@@ -828,7 +834,7 @@ fn completed_layout_round_trips_other_unicode_best_effort() -> Result<(), String
     ];
 
     for input in inputs {
-        let pages = paginate_completed(&input).map_err(|error| format!("{error:?}"))?;
+        let pages = prepare_completed_pages(&input).map_err(|error| format!("{error:?}"))?;
         let boundaries = input
             .grapheme_indices(true)
             .map(|(index, _)| index)
@@ -841,7 +847,7 @@ fn completed_layout_round_trips_other_unicode_best_effort() -> Result<(), String
             assert!(!page.as_str().is_empty());
             assert!(page.as_str().encode_utf16().count() <= CHATBOX_MAX_UTF16_UNITS);
             let standalone_pages =
-                paginate_completed(page.as_str()).map_err(|error| format!("{error:?}"))?;
+                prepare_completed_pages(page.as_str()).map_err(|error| format!("{error:?}"))?;
             assert_eq!(prepared_texts(&standalone_pages), vec![page.as_str()]);
             byte_offset += page.as_str().len();
             assert!(boundaries.contains(&byte_offset));
@@ -858,7 +864,7 @@ fn completed_layout_rejects_one_grapheme_larger_than_vrchat_input() {
 
     assert_eq!(oversized.graphemes(true).count(), 1);
     assert_eq!(
-        paginate_completed(&oversized),
+        prepare_completed_pages(&oversized),
         Err(ChatboxLayoutError::GraphemeExceedsInputBudget {
             utf16_units: CHATBOX_MAX_UTF16_UNITS + 1,
         })
@@ -874,7 +880,7 @@ fn live_viewport_keeps_a_full_recent_ascii_suffix_instead_of_the_last_completed_
     assert_eq!(viewport.as_str(), X_144);
     assert_ne!(
         viewport.as_str(),
-        paginate_completed(&input).map_err(|error| format!("{error:?}"))?[1].as_str()
+        prepare_completed_pages(&input).map_err(|error| format!("{error:?}"))?[1].as_str()
     );
 
     Ok(())
@@ -886,7 +892,7 @@ fn live_viewport_prefers_a_recent_word_and_punctuation_boundary() -> Result<(), 
     let viewport = require_live_view(&input)?;
 
     assert_eq!(viewport.as_str(), "previous context. latest, newest.");
-    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
     assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
 
     Ok(())
@@ -906,7 +912,7 @@ fn live_viewport_keeps_the_newest_nine_lines_without_a_leading_blank_line() -> R
     let viewport = require_live_view(&input)?;
 
     assert_eq!(viewport.as_str(), expected);
-    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
     assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
 
     Ok(())
@@ -920,7 +926,7 @@ fn live_viewport_keeps_the_newest_chinese_content_within_nine_lines() -> Result<
 
     assert_eq!(viewport.as_str(), expected);
     assert!(viewport.as_str().ends_with('新'));
-    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
     assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
 
     Ok(())
@@ -933,7 +939,7 @@ fn live_viewport_never_splits_an_emoji_grapheme() -> Result<(), String> {
 
     assert_eq!(viewport.as_str(), TONED_EMOJI_9);
     assert_eq!(viewport.as_str().graphemes(true).count(), 9);
-    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
     assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
 
     Ok(())
@@ -961,7 +967,7 @@ fn live_viewport_preserves_tmp_punctuation_seams_at_its_start() -> Result<(), St
 
     assert!(viewport.as_str().ends_with("中。"));
     assert!(!viewport.as_str().starts_with('。'));
-    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
     assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
 
     Ok(())
@@ -976,7 +982,7 @@ fn live_viewport_discards_an_unrepresentable_old_grapheme_and_keeps_new_content(
     let viewport = require_live_view(&input)?;
 
     assert_eq!(viewport.as_str(), " newest");
-    let pages = paginate_completed(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
+    let pages = prepare_completed_pages(viewport.as_str()).map_err(|error| format!("{error:?}"))?;
     assert_eq!(prepared_texts(&pages), vec![viewport.as_str()]);
     Ok(())
 }
@@ -997,7 +1003,7 @@ fn live_viewport_rejects_an_unrepresentable_newest_grapheme() {
     let oversized = format!("e{}", "\u{301}".repeat(CHATBOX_MAX_UTF16_UNITS));
 
     assert_eq!(
-        render_live_viewport(&format!("older {oversized}")),
+        prepare_live_viewport(&format!("older {oversized}")),
         Err(ChatboxLayoutError::GraphemeExceedsInputBudget {
             utf16_units: CHATBOX_MAX_UTF16_UNITS + 1,
         })
@@ -1015,8 +1021,8 @@ proptest! {
     fn completed_pagination_is_lossless_bounded_nonempty_and_deterministic(
         input in representative_grapheme_text(),
     ) {
-        let first = paginate_completed(&input);
-        let second = paginate_completed(&input);
+        let first = prepare_completed_pages(&input);
+        let second = prepare_completed_pages(&input);
 
         prop_assert_eq!(&first, &second);
         match first {
@@ -1046,7 +1052,7 @@ proptest! {
     fn control_preparation_is_bounded_and_matches_the_authored_oracle(
         (raw, expected) in prepared_control_policy_text(),
     ) {
-        let result = paginate_completed(&raw);
+        let result = prepare_completed_pages(&raw);
         prop_assert!(
             result.is_ok(),
             "authored control-policy atoms must be representable: {result:?}"
@@ -1076,8 +1082,8 @@ proptest! {
     fn live_viewport_is_bounded_and_deterministic(
         input in representative_grapheme_text(),
     ) {
-        let first = render_live_viewport(&input);
-        let second = render_live_viewport(&input);
+        let first = prepare_live_viewport(&input);
+        let second = prepare_live_viewport(&input);
 
         prop_assert_eq!(&first, &second);
         if let Ok(Some(viewport)) = first {

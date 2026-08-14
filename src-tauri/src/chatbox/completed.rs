@@ -11,7 +11,7 @@ use super::common::{
     PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
     TYPING_REASSERT_INTERVAL, describe_layout_error,
 };
-use super::layout::paginate_completed;
+use super::layout::prepare_completed_pages;
 use super::pacer::{ChatboxAttemptPermit, ChatboxPacer};
 use super::transport::ChatboxTransport;
 use crate::caption::{CaptionAggregateChange, CaptionAggregateUpdate, CaptionLane, CaptionState};
@@ -427,7 +427,7 @@ impl CompletedChatboxPublisher {
         unit_id: String,
         text: String,
     ) -> AppResult<PublisherSubmitOutcome> {
-        let pages = match paginate_completed(&text) {
+        let pages = match prepare_completed_pages(&text) {
             Ok(pages) => pages,
             Err(error) => {
                 let mut state = self.lock_state()?;

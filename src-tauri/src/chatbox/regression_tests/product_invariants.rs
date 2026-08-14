@@ -1,6 +1,6 @@
 use super::super::layout::{
-    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, paginate_completed, prepare_single_message,
-    render_live_viewport, trace_layout,
+    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, predict_layout, prepare_completed_pages,
+    prepare_live_viewport, prepare_single_message,
 };
 use super::support::{
     FIXTURE, PREPARED_PAYLOAD_OVERRIDES, egc_end_utf16_offsets,
@@ -38,7 +38,7 @@ fn completed_targets_form_lossless_standalone_prepared_pages() -> Result<(), Str
         let fixture_egc_ends = required_usize_array(case, "egc_end_utf16_offsets")?;
         assert_preparation_preserves_fixture_boundaries(case_id, case, prepared_source)?;
 
-        let result = paginate_completed(payload);
+        let result = prepare_completed_pages(payload);
         if let Some(utf16_units) = first_oversized_grapheme_utf16_units(prepared_source) {
             oversized_count += 1;
             assert_eq!(
@@ -133,7 +133,7 @@ fn live_targets_form_bounded_newest_standalone_suffixes() -> Result<(), String> 
 
         let newest_oversized = newest_oversized_grapheme(prepared_source);
         oversized_count += usize::from(newest_oversized.is_some());
-        let result = render_live_viewport(payload);
+        let result = prepare_live_viewport(payload);
         if let Some((end, utf16_units)) = newest_oversized
             && end == prepared_source.len()
         {
@@ -221,7 +221,8 @@ fn live_targets_form_bounded_newest_standalone_suffixes() -> Result<(), String> 
 }
 
 #[test]
-fn layout_targets_are_traceable_without_runtime_observation_expectations() -> Result<(), String> {
+fn layout_targets_have_predictions_without_runtime_observation_expectations() -> Result<(), String>
+{
     let fixture = serde_json::from_str::<Value>(FIXTURE).map_err(|error| error.to_string())?;
     let cases = fixture["cases"]
         .as_array()
@@ -238,37 +239,37 @@ fn layout_targets_are_traceable_without_runtime_observation_expectations() -> Re
         let payload = required_string(case, "payload")?;
         let prepared_source = expected_prepared_payload(case_id, payload)?;
         let oversized = first_oversized_grapheme_utf16_units(prepared_source.as_ref());
-        let first = trace_layout(payload);
-        let second = trace_layout(payload);
+        let first = predict_layout(payload);
+        let second = predict_layout(payload);
         assert_eq!(
             first, second,
-            "layout trace was not deterministic: {case_id}"
+            "layout prediction was not deterministic: {case_id}"
         );
 
         if let Some(utf16_units) = oversized {
             assert_eq!(
                 first,
                 Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units }),
-                "layout trace returned the wrong oversized-EGC error: {case_id}"
+                "layout prediction returned the wrong oversized-EGC error: {case_id}"
             );
             continue;
         }
 
-        let trace = first.map_err(|error| {
-            format!("layout trace rejected representable case {case_id}: {error:?}")
+        let prediction = first.map_err(|error| {
+            format!("layout prediction rejected representable case {case_id}: {error:?}")
         })?;
         assert!(
-            trace.visible_line_count() <= 9,
-            "layout trace exceeded the visible-line cap: {case_id}"
+            prediction.visible_line_count() <= 9,
+            "layout prediction exceeded the visible-line cap: {case_id}"
         );
         assert!(
-            trace.logical_line_count() >= trace.visible_line_count(),
-            "layout trace reported more visible than logical lines: {case_id}"
+            prediction.logical_line_count() >= prediction.visible_line_count(),
+            "layout prediction reported more visible than logical lines: {case_id}"
         );
         assert_eq!(
-            trace.clipped(),
-            trace.logical_line_count() > trace.visible_line_count(),
-            "layout trace clipping flag was internally inconsistent: {case_id}"
+            prediction.is_clipped(),
+            prediction.logical_line_count() > prediction.visible_line_count(),
+            "layout prediction clipping flag was internally inconsistent: {case_id}"
         );
 
         let egc_ends = prepared_source
@@ -278,14 +279,22 @@ fn layout_targets_are_traceable_without_runtime_observation_expectations() -> Re
                 Some(*offset)
             })
             .collect::<HashSet<_>>();
-        assert_trace_breaks_are_safe(case_id, trace.soft_break_utf16_offsets(), &egc_ends)?;
-        assert_trace_breaks_are_safe(case_id, trace.explicit_break_utf16_offsets(), &egc_ends)?;
+        assert_prediction_breaks_are_safe(
+            case_id,
+            prediction.soft_break_utf16_offsets(),
+            &egc_ends,
+        )?;
+        assert_prediction_breaks_are_safe(
+            case_id,
+            prediction.explicit_break_utf16_offsets(),
+            &egc_ends,
+        )?;
         assert!(
-            trace
+            prediction
                 .soft_break_utf16_offsets()
                 .iter()
-                .all(|offset| !trace.explicit_break_utf16_offsets().contains(offset)),
-            "layout trace classified one break as both soft and explicit: {case_id}"
+                .all(|offset| !prediction.explicit_break_utf16_offsets().contains(offset)),
+            "layout prediction classified one break as both soft and explicit: {case_id}"
         );
     }
 
@@ -293,19 +302,19 @@ fn layout_targets_are_traceable_without_runtime_observation_expectations() -> Re
     Ok(())
 }
 
-fn assert_trace_breaks_are_safe(
+fn assert_prediction_breaks_are_safe(
     case_id: &str,
     offsets: &[usize],
     egc_ends: &HashSet<usize>,
 ) -> Result<(), String> {
     if !offsets.windows(2).all(|pair| pair[0] < pair[1]) {
         return Err(format!(
-            "layout trace break offsets were not strictly increasing: {case_id}"
+            "layout prediction break offsets were not strictly increasing: {case_id}"
         ));
     }
     if !offsets.iter().all(|offset| egc_ends.contains(offset)) {
         return Err(format!(
-            "layout trace break offset split an EGC or exceeded the payload: {case_id}"
+            "layout prediction break offset split an EGC or exceeded the payload: {case_id}"
         ));
     }
     Ok(())

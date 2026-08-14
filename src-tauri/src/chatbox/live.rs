@@ -11,7 +11,7 @@ use super::common::{
     PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
     TYPING_REASSERT_INTERVAL, describe_layout_error,
 };
-use super::layout::render_live_viewport;
+use super::layout::prepare_live_viewport;
 use super::pacer::ChatboxPacer;
 use super::transport::ChatboxTransport;
 use crate::caption::{CaptionAggregateSnapshot, CaptionLane, CaptionSnapshot, CaptionState};
@@ -453,7 +453,7 @@ impl LiveChatboxPublisher {
         };
         let ready_at = self.candidate_ready_at(state, source_captions, now)?;
 
-        match render_live_viewport(recent_source_text) {
+        match prepare_live_viewport(recent_source_text) {
             Ok(Some(view)) => Some(LiveCandidate {
                 identity,
                 view,

@@ -115,10 +115,10 @@ pub(super) fn measurable_kerning_character(grapheme: &str) -> Option<char> {
 
     let mut base = None;
     for character in grapheme.chars() {
-        if is_zero_advance_modifier(character) {
+        if has_modeled_zero_advance(character) {
             continue;
         }
-        if base.is_some() || !has_primary_font_advance(character) {
+        if base.is_some() || !has_modeled_primary_font_advance(character) {
             return None;
         }
         base = Some(character);
@@ -126,10 +126,10 @@ pub(super) fn measurable_kerning_character(grapheme: &str) -> Option<char> {
     base
 }
 
-fn has_primary_font_advance(character: char) -> bool {
+fn has_modeled_primary_font_advance(character: char) -> bool {
     (' '..='~').contains(&character)
         || ('\u{00A0}'..='\u{00FF}').contains(&character)
-        || common_noto_punctuation_advance(character).is_some()
+        || modeled_noto_punctuation_advance(character).is_some()
 }
 
 pub(super) fn grapheme_advance_units(grapheme: &str) -> u32 {
@@ -169,7 +169,7 @@ fn character_advance_units(character: char) -> u32 {
         return u32::from(LATIN_1_ADVANCES[character as usize - 0x00A0]);
     }
 
-    if let Some(advance) = common_noto_punctuation_advance(character) {
+    if let Some(advance) = modeled_noto_punctuation_advance(character) {
         return advance;
     }
 
@@ -177,11 +177,11 @@ fn character_advance_units(character: char) -> u32 {
         return u32::from(BASIC_LATIN_ADVANCES[0]) * 4;
     }
 
-    if character.is_control() || is_zero_advance_modifier(character) {
+    if character.is_control() || has_modeled_zero_advance(character) {
         return 0;
     }
 
-    if has_verified_chinese_fullwidth_advance(character) {
+    if uses_modeled_cjk_fullwidth_advance(character) {
         // NotoSansCJK-JP-Regular uses a 1000-unit advance for the covered
         // Chinese ideographs and full-width punctuation.
         return FONT_UNITS_PER_EM;
@@ -193,7 +193,7 @@ fn character_advance_units(character: char) -> u32 {
     MAX_GRAPHEME_ADVANCE_UNITS
 }
 
-fn common_noto_punctuation_advance(character: char) -> Option<u32> {
+fn modeled_noto_punctuation_advance(character: char) -> Option<u32> {
     Some(match character {
         '\u{2010}' | '\u{2011}' => 322,
         '\u{2012}' => 572,
@@ -212,7 +212,7 @@ fn common_noto_punctuation_advance(character: char) -> Option<u32> {
     })
 }
 
-pub(super) fn is_zero_advance_modifier(character: char) -> bool {
+pub(super) fn has_modeled_zero_advance(character: char) -> bool {
     matches!(
         character as u32,
         0x0300..=0x036F
@@ -240,7 +240,7 @@ pub(super) fn is_zero_advance_modifier(character: char) -> bool {
     )
 }
 
-fn has_verified_chinese_fullwidth_advance(character: char) -> bool {
+fn uses_modeled_cjk_fullwidth_advance(character: char) -> bool {
     matches!(
         character as u32,
         0x3000..=0x303F

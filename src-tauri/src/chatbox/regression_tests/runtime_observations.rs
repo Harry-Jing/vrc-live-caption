@@ -1,4 +1,4 @@
-use super::super::layout::trace_layout;
+use super::super::layout::predict_layout;
 use super::support::{
     EXPECTED_MANIFEST_SHA256, EXPECTED_SOURCE_SHA256, FIXTURE, PREPARED_PAYLOAD_OVERRIDES,
     RUNTIME_OBSERVATIONS, assert_no_forbidden_expectation_fields, required_string, required_usize,
@@ -98,18 +98,18 @@ fn build_scoped_runtime_observations_match_the_layout_trace() -> Result<(), Stri
             }
             compared_count += 1;
 
-            let trace = trace_layout(required_string(case, "payload")?)
-                .map_err(|error| format!("layout trace rejected {case_id}: {error:?}"))?;
+            let prediction = predict_layout(required_string(case, "payload")?)
+                .map_err(|error| format!("layout prediction rejected {case_id}: {error:?}"))?;
             assert_eq!(
-                trace.visible_line_count(),
+                prediction.visible_line_count(),
                 required_usize(observation, "visual_line_count")?,
-                "layout trace line count differs from runtime observation: {case_id}"
+                "layout prediction line count differs from runtime observation: {case_id}"
             );
             if observation.get("soft_wrap_utf16_offsets").is_some() {
                 assert_eq!(
-                    trace.soft_break_utf16_offsets(),
+                    prediction.soft_break_utf16_offsets(),
                     required_usize_array(observation, "soft_wrap_utf16_offsets")?,
-                    "layout trace soft breaks differ from runtime observation: {case_id}"
+                    "layout prediction soft breaks differ from runtime observation: {case_id}"
                 );
             }
             if let Some(observed_clipping) = observation
@@ -117,9 +117,9 @@ fn build_scoped_runtime_observations_match_the_layout_trace() -> Result<(), Stri
                 .and_then(Value::as_bool)
             {
                 assert_eq!(
-                    trace.clipped(),
+                    prediction.is_clipped(),
                     observed_clipping,
-                    "layout trace clipping differs from runtime observation: {case_id}"
+                    "layout prediction clipping differs from runtime observation: {case_id}"
                 );
             }
         }
