@@ -26,8 +26,8 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
     });
     let diagnostics = vec![
         (
-            CompletedPublisherDiagnostic::UnitPublished {
-                unit_id: "published".to_string(),
+            CompletedPublisherDiagnostic::UnitSendSucceeded {
+                unit_id: "sent".to_string(),
                 page_count: 2,
                 byte_count: 42,
                 target: "127.0.0.1:9000".to_string(),
@@ -83,7 +83,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
                 reason: PublisherCloseReason::Stop,
                 unit_count: 2,
                 page_count: 3,
-                started_unit_count: 1,
+                send_started_unit_count: 1,
             },
             "osc.completed_pages_discarded_on_stop",
             "info",
@@ -93,7 +93,7 @@ fn publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
                 reason: PublisherCloseReason::RuntimeError,
                 unit_count: 2,
                 page_count: 3,
-                started_unit_count: 1,
+                send_started_unit_count: 1,
             },
             "osc.completed_pages_discarded_on_error",
             "info",

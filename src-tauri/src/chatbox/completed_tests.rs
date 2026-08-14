@@ -499,12 +499,9 @@ fn recording_reporter() -> (CompletedPublisherReporter, Arc<RecordedDiagnostics>
     (reporter, diagnostics)
 }
 
-fn submit_handled(
-    publisher: &CompletedChatboxPublisher,
-    event: CompletedPublisherInput,
-) -> AppResult<()> {
+fn submit_handled(publisher: &CompletedChatboxPublisher, event: SourceUnitEvent) -> AppResult<()> {
     assert_eq!(
-        publisher.try_submit(event)?,
+        publisher.try_handle_input(event)?,
         PublicationObservationOutcome::Handled
     );
     Ok(())
@@ -568,7 +565,7 @@ fn advance_to_next_typing_reassert(
 }
 
 #[test]
-fn publishes_every_exact_page_in_order() -> AppResult<()> {
+fn sends_every_exact_page_in_order() -> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(AdvancingClock::new());
     let pacer = ChatboxTextPacer::with_clock(clock);
@@ -587,7 +584,7 @@ fn publishes_every_exact_page_in_order() -> AppResult<()> {
         reporter,
         PublisherLimits {
             max_resident_pages: 8,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
     let text = "中".repeat(136);
@@ -595,13 +592,13 @@ fn publishes_every_exact_page_in_order() -> AppResult<()> {
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "unit-a".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "unit-a".to_string(),
             text,
         },
@@ -641,19 +638,19 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 8,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "unit-a".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "unit-a".to_string(),
             text: "first".to_string(),
         },
@@ -667,13 +664,13 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
     let submitter = thread::spawn(move || -> AppResult<()> {
         submit_handled(
             &submitted_publisher,
-            CompletedPublisherInput::Started {
+            SourceUnitEvent::Opened {
                 unit_id: "unit-b".to_string(),
             },
         )?;
         submit_handled(
             &submitted_publisher,
-            CompletedPublisherInput::Completed {
+            SourceUnitEvent::Completed {
                 unit_id: "unit-b".to_string(),
                 text: "second".to_string(),
             },
@@ -710,7 +707,7 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
 }
 
 #[test]
-fn overload_drops_only_the_oldest_whole_unstarted_unit() -> AppResult<()> {
+fn overload_drops_only_the_oldest_whole_unit_waiting_for_its_first_send_attempt() -> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(ControlledClock::new());
     let pacer = ChatboxTextPacer::with_clock(clock.clone());
@@ -726,7 +723,7 @@ fn overload_drops_only_the_oldest_whole_unstarted_unit() -> AppResult<()> {
         reporter,
         PublisherLimits {
             max_resident_pages: 3,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
@@ -737,13 +734,13 @@ fn overload_drops_only_the_oldest_whole_unstarted_unit() -> AppResult<()> {
     ] {
         submit_handled(
             &publisher,
-            CompletedPublisherInput::Started {
+            SourceUnitEvent::Opened {
                 unit_id: unit_id.to_string(),
             },
         )?;
         submit_handled(
             &publisher,
-            CompletedPublisherInput::Completed {
+            SourceUnitEvent::Completed {
                 unit_id: unit_id.to_string(),
                 text,
             },
@@ -797,7 +794,7 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
         reporter,
         PublisherLimits {
             max_resident_pages: 8,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
     let first_text = "中".repeat(271);
@@ -807,13 +804,13 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
     for (unit_id, text) in [("unit-a", first_text), ("unit-b", "B".to_string())] {
         submit_handled(
             &publisher,
-            CompletedPublisherInput::Started {
+            SourceUnitEvent::Opened {
                 unit_id: unit_id.to_string(),
             },
         )?;
         submit_handled(
             &publisher,
-            CompletedPublisherInput::Completed {
+            SourceUnitEvent::Completed {
                 unit_id: unit_id.to_string(),
                 text,
             },
@@ -872,7 +869,7 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
 }
 
 #[test]
-fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() -> AppResult<()> {
+fn send_started_unit_is_protected_and_new_unit_is_rejected_without_eviction() -> AppResult<()> {
     let (entered_sender, entered_receiver) = mpsc::channel();
     let (release_sender, release_receiver) = mpsc::channel();
     let transport = Arc::new(BlockFirstTextTransport::new(
@@ -887,7 +884,7 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
         reporter,
         PublisherLimits {
             max_resident_pages: 3,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
     let first_text = "中".repeat(136);
@@ -897,13 +894,13 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
     for (unit_id, text) in [("unit-a", first_text), ("unit-b", "B".to_string())] {
         submit_handled(
             &publisher,
-            CompletedPublisherInput::Started {
+            SourceUnitEvent::Opened {
                 unit_id: unit_id.to_string(),
             },
         )?;
         submit_handled(
             &publisher,
-            CompletedPublisherInput::Completed {
+            SourceUnitEvent::Completed {
                 unit_id: unit_id.to_string(),
                 text,
             },
@@ -911,24 +908,24 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
     }
     entered_receiver
         .recv_timeout(Duration::from_secs(1))
-        .map_err(|_| AppError::runtime("Started unit did not enter transport."))?;
+        .map_err(|_| AppError::runtime("The first unit did not begin its send attempt."))?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "unit-c".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "unit-c".to_string(),
             text: "中".repeat(136),
         },
     )?;
     release_sender
         .send(())
-        .map_err(|_| AppError::runtime("Could not release the started unit."))?;
+        .map_err(|_| AppError::runtime("Could not release the first in-flight send attempt."))?;
 
     let events = transport.wait_for_events(5)?;
     let sent_pages = events
@@ -972,20 +969,20 @@ fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> A
         reporter,
         PublisherLimits {
             max_resident_pages: 2,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     for (unit_id, text) in [("kept", "A".to_string()), ("oversized", "中".repeat(271))] {
         submit_handled(
             &publisher,
-            CompletedPublisherInput::Started {
+            SourceUnitEvent::Opened {
                 unit_id: unit_id.to_string(),
             },
         )?;
         submit_handled(
             &publisher,
-            CompletedPublisherInput::Completed {
+            SourceUnitEvent::Completed {
                 unit_id: unit_id.to_string(),
                 text,
             },
@@ -1015,7 +1012,7 @@ fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> A
 }
 
 #[test]
-fn stale_unstarted_unit_expires_as_one_complete_publication() -> AppResult<()> {
+fn stale_unit_waiting_for_its_first_send_attempt_expires_whole() -> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(ControlledClock::new());
     let pacer = ChatboxTextPacer::with_clock(clock.clone());
@@ -1031,19 +1028,19 @@ fn stale_unstarted_unit_expires_as_one_complete_publication() -> AppResult<()> {
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "expired".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "expired".to_string(),
             text: "中".repeat(136),
         },
@@ -1053,13 +1050,13 @@ fn stale_unstarted_unit_expires_as_one_complete_publication() -> AppResult<()> {
     clock.advance(Duration::from_secs(30));
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "fresh".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "fresh".to_string(),
             text: "fresh".to_string(),
         },
@@ -1100,32 +1097,32 @@ fn overlapping_activity_keeps_typing_on_until_the_last_unit_resolves() -> AppRes
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "unit-a".to_string(),
         },
     )?;
     transport.wait_for_events(1)?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "unit-b".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Aborted {
+        SourceUnitEvent::Aborted {
             unit_id: "unit-a".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "unit-b".to_string(),
             text: "B".to_string(),
         },
@@ -1156,13 +1153,13 @@ fn active_typing_is_reasserted_on_the_best_effort_interval() -> AppResult<()> {
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "long-speech".to_string(),
         },
     )?;
@@ -1175,7 +1172,7 @@ fn active_typing_is_reasserted_on_the_best_effort_interval() -> AppResult<()> {
     let events = transport.wait_for_events(4)?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Aborted {
+        SourceUnitEvent::Aborted {
             unit_id: "long-speech".to_string(),
         },
     )?;
@@ -1229,13 +1226,13 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "typing-refresh-failure".to_string(),
         },
     )?;
@@ -1257,7 +1254,7 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
     );
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Aborted {
+        SourceUnitEvent::Aborted {
             unit_id: "typing-refresh-failure".to_string(),
         },
     )?;
@@ -1300,13 +1297,13 @@ fn stop_cancels_a_pending_typing_reassertion() -> AppResult<()> {
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "stopped-before-refresh".to_string(),
         },
     )?;
@@ -1344,13 +1341,13 @@ fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "typing-stop-race".to_string(),
         },
     )?;
@@ -1413,19 +1410,19 @@ fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<(
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: page_count,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "paced-around-typing".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "paced-around-typing".to_string(),
             text,
         },
@@ -1469,13 +1466,13 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "layout-failure".to_string(),
         },
     )?;
@@ -1483,7 +1480,7 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
     let oversized_grapheme = format!("a{}", "\u{301}".repeat(144));
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "layout-failure".to_string(),
             text: oversized_grapheme,
         },
@@ -1522,19 +1519,19 @@ fn failed_typing_on_is_diagnosed_and_still_followed_by_typing_off() -> AppResult
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "typing-failure".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "typing-failure".to_string(),
             text: "caption".to_string(),
         },
@@ -1584,19 +1581,19 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "stopped".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "stopped".to_string(),
             text: "must not send".to_string(),
         },
@@ -1606,7 +1603,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
 
     close_at_fence(&fence, &publisher)?;
     assert_eq!(
-        publisher.try_submit(CompletedPublisherInput::Completed {
+        publisher.try_handle_input(SourceUnitEvent::Completed {
             unit_id: "late".to_string(),
             text: "late".to_string(),
         })?,
@@ -1628,7 +1625,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
             reason: PublisherCloseReason::Stop,
             unit_count: 1,
             page_count: 1,
-            started_unit_count: 0,
+            send_started_unit_count: 0,
         }
     ))?);
 
@@ -1653,20 +1650,20 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
     let pages = prepared_strings(&"中".repeat(136))?;
 
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Started {
+        SourceUnitEvent::Opened {
             unit_id: "in-flight".to_string(),
         },
     )?;
     submit_handled(
         &publisher,
-        CompletedPublisherInput::Completed {
+        SourceUnitEvent::Completed {
             unit_id: "in-flight".to_string(),
             text: "中".repeat(136),
         },
@@ -1690,7 +1687,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
     assert_eq!(
-        publisher.try_submit(CompletedPublisherInput::Completed {
+        publisher.try_handle_input(SourceUnitEvent::Completed {
             unit_id: "late".to_string(),
             text: "late".to_string(),
         })?,
@@ -1721,7 +1718,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         CompletedPublisherDiagnostic::PagesDiscardedOnClose {
             reason: PublisherCloseReason::Stop,
             page_count: 1,
-            started_unit_count: 1,
+            send_started_unit_count: 1,
             ..
         }
     ))?);
@@ -1739,7 +1736,7 @@ fn concurrent_close_and_join_perform_one_cleanup() -> AppResult<()> {
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
     let barrier = Arc::new(std::sync::Barrier::new(3));
@@ -1776,7 +1773,7 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
-            max_unstarted_age: Duration::from_secs(30),
+            max_wait_before_first_send_attempt: Duration::from_secs(30),
         },
     )?;
     let shared = Arc::clone(&publisher.shared);

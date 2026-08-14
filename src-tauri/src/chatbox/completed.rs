@@ -24,14 +24,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const PROVISIONAL_MAX_RESIDENT_PAGES: usize = 32;
-const PROVISIONAL_MAX_UNSTARTED_AGE: Duration = Duration::from_secs(30);
+const PROVISIONAL_MAX_WAIT_BEFORE_FIRST_SEND_ATTEMPT: Duration = Duration::from_secs(30);
 
 pub(crate) type CompletedPublisherReporter =
     Arc<dyn Fn(CompletedPublisherDiagnostic) + Send + Sync>;
 
 #[derive(Debug)]
 pub(crate) enum CompletedPublisherDiagnostic {
-    UnitPublished {
+    UnitSendSucceeded {
         unit_id: String,
         page_count: usize,
         byte_count: usize,
@@ -64,7 +64,7 @@ pub(crate) enum CompletedPublisherDiagnostic {
         reason: PublisherCloseReason,
         unit_count: usize,
         page_count: usize,
-        started_unit_count: usize,
+        send_started_unit_count: usize,
     },
     TypingFailed {
         is_typing: bool,
@@ -75,8 +75,8 @@ pub(crate) enum CompletedPublisherDiagnostic {
     },
 }
 
-enum CompletedPublisherInput {
-    Started { unit_id: String },
+enum SourceUnitEvent {
+    Opened { unit_id: String },
     Completed { unit_id: String, text: String },
     Aborted { unit_id: String },
 }
@@ -90,7 +90,7 @@ pub(crate) struct CompletedChatboxPublisher {
 #[derive(Clone, Copy)]
 struct PublisherLimits {
     max_resident_pages: usize,
-    max_unstarted_age: Duration,
+    max_wait_before_first_send_attempt: Duration,
 }
 
 struct PublisherShared {
@@ -106,7 +106,7 @@ struct PublisherShared {
 
 struct PublisherState {
     lifecycle: PublisherLifecycle,
-    units: VecDeque<CompletedUnit>,
+    units: VecDeque<QueuedUnitPublication>,
     resident_pages: usize,
     next_sequence: u64,
     open_source_units: HashSet<String>,
@@ -117,19 +117,19 @@ struct PublisherState {
     diagnostics: VecDeque<CompletedPublisherDiagnostic>,
 }
 
-struct CompletedUnit {
+struct QueuedUnitPublication {
     sequence: u64,
     unit_id: String,
     pages: Vec<PreparedChatboxText>,
     next_page: usize,
-    started: bool,
-    accepted_at: Instant,
+    first_send_attempt_started: bool,
+    enqueued_at: Instant,
     sent_pages: usize,
     sent_bytes: usize,
     target: Option<String>,
 }
 
-impl CompletedUnit {
+impl QueuedUnitPublication {
     fn remaining_pages(&self) -> usize {
         self.pages.len().saturating_sub(self.next_page)
     }
@@ -164,7 +164,7 @@ impl CompletedChatboxPublisher {
             reporter,
             PublisherLimits {
                 max_resident_pages: PROVISIONAL_MAX_RESIDENT_PAGES,
-                max_unstarted_age: PROVISIONAL_MAX_UNSTARTED_AGE,
+                max_wait_before_first_send_attempt: PROVISIONAL_MAX_WAIT_BEFORE_FIRST_SEND_ATTEMPT,
             },
         )
     }
@@ -176,7 +176,7 @@ impl CompletedChatboxPublisher {
         reporter: CompletedPublisherReporter,
         limits: PublisherLimits,
     ) -> AppResult<Self> {
-        if limits.max_resident_pages == 0 || limits.max_unstarted_age.is_zero() {
+        if limits.max_resident_pages == 0 || limits.max_wait_before_first_send_attempt.is_zero() {
             return Err(AppError::state(
                 "Completed publisher limits must both be greater than zero.",
             ));
@@ -249,13 +249,11 @@ impl CompletedChatboxPublisher {
         update: &CaptionAggregateUpdate,
     ) -> AppResult<PublicationObservationOutcome> {
         let input = match &update.change {
-            CaptionAggregateChange::SourceUnitOpened(unit) => {
-                Some(CompletedPublisherInput::Started {
-                    unit_id: unit.unit_id.clone(),
-                })
-            }
+            CaptionAggregateChange::SourceUnitOpened(unit) => Some(SourceUnitEvent::Opened {
+                unit_id: unit.unit_id.clone(),
+            }),
             CaptionAggregateChange::SourceUnitAborted { unit_id } => {
-                Some(CompletedPublisherInput::Aborted {
+                Some(SourceUnitEvent::Aborted {
                     unit_id: unit_id.clone(),
                 })
             }
@@ -274,7 +272,7 @@ impl CompletedChatboxPublisher {
                 caption
                     .unit_id
                     .as_ref()
-                    .map(|unit_id| CompletedPublisherInput::Completed {
+                    .map(|unit_id| SourceUnitEvent::Completed {
                         unit_id: unit_id.clone(),
                         text: caption.text.clone(),
                     })
@@ -284,7 +282,7 @@ impl CompletedChatboxPublisher {
         };
 
         match input {
-            Some(input) => self.try_submit(input),
+            Some(input) => self.try_handle_input(input),
             None => {
                 let state = self.lock_state()?;
                 Ok(
@@ -300,13 +298,10 @@ impl CompletedChatboxPublisher {
         }
     }
 
-    /// Submits one complete lifecycle event without waiting for pacing or OSC.
-    fn try_submit(
-        &self,
-        event: CompletedPublisherInput,
-    ) -> AppResult<PublicationObservationOutcome> {
+    /// Applies one complete lifecycle event without waiting for pacing or OSC.
+    fn try_handle_input(&self, event: SourceUnitEvent) -> AppResult<PublicationObservationOutcome> {
         match event {
-            CompletedPublisherInput::Started { unit_id } => {
+            SourceUnitEvent::Opened { unit_id } => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
                     || self.shared.committer.is_closed()
@@ -319,7 +314,7 @@ impl CompletedChatboxPublisher {
                     self.signal_worker_locked();
                 }
             }
-            CompletedPublisherInput::Aborted { unit_id } => {
+            SourceUnitEvent::Aborted { unit_id } => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
                     || self.shared.committer.is_closed()
@@ -327,11 +322,11 @@ impl CompletedChatboxPublisher {
                     return Ok(PublicationObservationOutcome::Closed);
                 }
 
-                resolve_activity(&mut state, &unit_id);
+                finish_source_unit_activity(&mut state, &unit_id);
                 self.signal_worker_locked();
             }
-            CompletedPublisherInput::Completed { unit_id, text } => {
-                return self.try_submit_completed(unit_id, text);
+            SourceUnitEvent::Completed { unit_id, text } => {
+                return self.try_enqueue_completed_source(unit_id, text);
             }
         }
 
@@ -425,7 +420,7 @@ impl CompletedChatboxPublisher {
         self.worker_join.join()
     }
 
-    fn try_submit_completed(
+    fn try_enqueue_completed_source(
         &self,
         unit_id: String,
         text: String,
@@ -439,7 +434,7 @@ impl CompletedChatboxPublisher {
                 {
                     return Ok(PublicationObservationOutcome::Closed);
                 }
-                resolve_activity(&mut state, &unit_id);
+                finish_source_unit_activity(&mut state, &unit_id);
                 state
                     .diagnostics
                     .push_back(CompletedPublisherDiagnostic::LayoutFailed {
@@ -457,25 +452,29 @@ impl CompletedChatboxPublisher {
         }
 
         if pages.is_empty() {
-            resolve_activity(&mut state, &unit_id);
+            finish_source_unit_activity(&mut state, &unit_id);
             self.signal_worker_locked();
             return Ok(PublicationObservationOutcome::Handled);
         }
 
         let now = self.shared.text_pacer.now();
-        expire_unstarted_units(&mut state, now, self.shared.limits.max_unstarted_age)?;
+        expire_units_waiting_for_first_send_attempt(
+            &mut state,
+            now,
+            self.shared.limits.max_wait_before_first_send_attempt,
+        )?;
         let page_count = pages.len();
         let protected_pages = state
             .units
             .front()
-            .filter(|unit| unit.started)
-            .map(CompletedUnit::remaining_pages)
+            .filter(|unit| unit.first_send_attempt_started)
+            .map(QueuedUnitPublication::remaining_pages)
             .unwrap_or(0);
 
         if page_count > self.shared.limits.max_resident_pages
             || protected_pages.saturating_add(page_count) > self.shared.limits.max_resident_pages
         {
-            resolve_activity(&mut state, &unit_id);
+            finish_source_unit_activity(&mut state, &unit_id);
             state
                 .diagnostics
                 .push_back(CompletedPublisherDiagnostic::UnitRejectedOverload {
@@ -489,8 +488,12 @@ impl CompletedChatboxPublisher {
         while state.resident_pages.saturating_add(page_count)
             > self.shared.limits.max_resident_pages
         {
-            let Some(position) = state.units.iter().position(|unit| !unit.started) else {
-                resolve_activity(&mut state, &unit_id);
+            let Some(position) = state
+                .units
+                .iter()
+                .position(|unit| !unit.first_send_attempt_started)
+            else {
+                finish_source_unit_activity(&mut state, &unit_id);
                 state
                     .diagnostics
                     .push_back(CompletedPublisherDiagnostic::UnitRejectedOverload {
@@ -510,7 +513,7 @@ impl CompletedChatboxPublisher {
                 .resident_pages
                 .checked_sub(dropped_pages)
                 .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
-            resolve_activity(&mut state, &dropped.unit_id);
+            finish_source_unit_activity(&mut state, &dropped.unit_id);
             state
                 .diagnostics
                 .push_back(CompletedPublisherDiagnostic::UnitDroppedOverload {
@@ -522,13 +525,13 @@ impl CompletedChatboxPublisher {
         let sequence = state.next_sequence;
         state.next_sequence = state.next_sequence.wrapping_add(1);
         state.resident_pages += page_count;
-        state.units.push_back(CompletedUnit {
+        state.units.push_back(QueuedUnitPublication {
             sequence,
             unit_id,
             pages,
             next_page: 0,
-            started: false,
-            accepted_at: now,
+            first_send_attempt_started: false,
+            enqueued_at: now,
             sent_pages: 0,
             sent_bytes: 0,
             target: None,
@@ -663,10 +666,10 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
             PublisherLifecycle::Running => {}
         }
 
-        expire_unstarted_units(
+        expire_units_waiting_for_first_send_attempt(
             &mut state,
             shared.text_pacer.now(),
-            shared.limits.max_unstarted_age,
+            shared.limits.max_wait_before_first_send_attempt,
         )?;
 
         if state.typing_attempted_epoch != Some(state.typing_epoch) {
@@ -790,7 +793,11 @@ fn process_cleanup_typing(shared: &PublisherShared) -> AppResult<()> {
 fn discard_resident_pages_on_close(state: &mut PublisherState, reason: PublisherCloseReason) {
     let unit_count = state.units.len();
     let page_count = state.resident_pages;
-    let started_unit_count = state.units.iter().filter(|unit| unit.started).count();
+    let send_started_unit_count = state
+        .units
+        .iter()
+        .filter(|unit| unit.first_send_attempt_started)
+        .count();
 
     state.units.clear();
     state.resident_pages = 0;
@@ -807,7 +814,7 @@ fn discard_resident_pages_on_close(state: &mut PublisherState, reason: Publisher
                 reason,
                 unit_count,
                 page_count,
-                started_unit_count,
+                send_started_unit_count,
             });
     }
 }
@@ -835,12 +842,12 @@ fn attempt_selected_page(
             return Ok(());
         }
 
-        if !unit.started
+        if !unit.first_send_attempt_started
             && shared
                 .text_pacer
                 .now()
-                .saturating_duration_since(unit.accepted_at)
-                >= shared.limits.max_unstarted_age
+                .saturating_duration_since(unit.enqueued_at)
+                >= shared.limits.max_wait_before_first_send_attempt
         {
             let Some(expired) = state.units.pop_front() else {
                 return Ok(());
@@ -850,7 +857,7 @@ fn attempt_selected_page(
                 .resident_pages
                 .checked_sub(expired_pages)
                 .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
-            resolve_activity(&mut state, &expired.unit_id);
+            finish_source_unit_activity(&mut state, &expired.unit_id);
             state
                 .diagnostics
                 .push_back(CompletedPublisherDiagnostic::UnitExpired {
@@ -861,7 +868,7 @@ fn attempt_selected_page(
             return Ok(());
         }
 
-        unit.started = true;
+        unit.first_send_attempt_started = true;
     }
 
     let send_result = permit.attempt(|| shared.transport.send_text(text));
@@ -895,10 +902,10 @@ fn attempt_selected_page(
                 let Some(completed) = state.units.pop_front() else {
                     return Ok(());
                 };
-                resolve_activity(&mut state, &completed.unit_id);
+                finish_source_unit_activity(&mut state, &completed.unit_id);
                 state
                     .diagnostics
-                    .push_back(CompletedPublisherDiagnostic::UnitPublished {
+                    .push_back(CompletedPublisherDiagnostic::UnitSendSucceeded {
                         unit_id: completed.unit_id,
                         page_count: completed.pages.len(),
                         byte_count: completed.sent_bytes,
@@ -915,7 +922,7 @@ fn attempt_selected_page(
                 .resident_pages
                 .checked_sub(remaining_pages)
                 .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
-            resolve_activity(&mut state, &failed.unit_id);
+            finish_source_unit_activity(&mut state, &failed.unit_id);
             state
                 .diagnostics
                 .push_back(CompletedPublisherDiagnostic::UnitSendFailed {
@@ -932,14 +939,16 @@ fn attempt_selected_page(
     Ok(())
 }
 
-fn expire_unstarted_units(
+fn expire_units_waiting_for_first_send_attempt(
     state: &mut PublisherState,
     now: Instant,
-    max_age: Duration,
+    max_wait_before_first_send_attempt: Duration,
 ) -> AppResult<()> {
     loop {
         let position = state.units.iter().position(|unit| {
-            !unit.started && now.saturating_duration_since(unit.accepted_at) >= max_age
+            !unit.first_send_attempt_started
+                && now.saturating_duration_since(unit.enqueued_at)
+                    >= max_wait_before_first_send_attempt
         });
         let Some(position) = position else {
             return Ok(());
@@ -954,7 +963,7 @@ fn expire_unstarted_units(
             .resident_pages
             .checked_sub(expired_pages)
             .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
-        resolve_activity(state, &expired.unit_id);
+        finish_source_unit_activity(state, &expired.unit_id);
         state
             .diagnostics
             .push_back(CompletedPublisherDiagnostic::UnitExpired {
@@ -964,7 +973,7 @@ fn expire_unstarted_units(
     }
 }
 
-fn resolve_activity(state: &mut PublisherState, unit_id: &str) {
+fn finish_source_unit_activity(state: &mut PublisherState, unit_id: &str) {
     if state.open_source_units.remove(unit_id) {
         refresh_typing_desired(state);
     }
