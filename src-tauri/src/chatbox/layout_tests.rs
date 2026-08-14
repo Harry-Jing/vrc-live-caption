@@ -1,8 +1,10 @@
+use super::model::{
+    MAX_GRAPHEME_ADVANCE_UNITS, POSITIVE_KERNING_PAIRS, fits_chatbox_width, grapheme_advance_units,
+    positive_kerning_adjustment,
+};
 use super::{
-    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, MAX_GRAPHEME_ADVANCE_UNITS,
-    POSITIVE_KERNING_PAIRS, PreparedChatboxText, fits_chatbox_width, grapheme_advance_units,
-    is_break_space_grapheme, paginate_completed, positive_kerning_adjustment,
-    prepare_single_message, render_live_viewport, trace_layout,
+    CHATBOX_MAX_UTF16_UNITS, ChatboxLayoutError, PreparedChatboxText, is_break_space_grapheme,
+    paginate_completed, prepare_single_message, render_live_viewport, trace_layout,
 };
 use proptest::prelude::*;
 use std::collections::HashSet;
