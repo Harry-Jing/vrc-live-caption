@@ -3,7 +3,7 @@ use super::super::layout::{
 };
 use super::super::text_pacing::{ChatboxTextPacer, Clock};
 use super::super::transport::{ChatboxSendReceipt, ChatboxTransport};
-use super::super::{ChatboxPublication, PublisherCloseReason, PublisherSubmitOutcome};
+use super::super::{ChatboxPublication, PublicationObservationOutcome, PublisherCloseReason};
 use super::support::{
     FIXTURE, first_oversized_grapheme_utf16_units, has_test_target, required_string,
 };
@@ -54,8 +54,8 @@ fn completed_facade_replays_layered_corpus_cases_without_rewriting_pages() -> Ap
         let revision = u64::try_from(index + 1)
             .map_err(|_| AppError::state("Corpus replay revision overflowed."))?;
         assert_eq!(
-            publication.try_submit(&corpus_update(revision, case_id, payload))?,
-            PublisherSubmitOutcome::Handled
+            publication.try_observe(&corpus_update(revision, case_id, payload))?,
+            PublicationObservationOutcome::Handled
         );
         for expected_page in expected {
             assert_eq!(
@@ -96,8 +96,8 @@ fn live_facade_replays_layered_corpus_cases_without_rewriting_viewports() -> App
         let revision = u64::try_from(index + 1)
             .map_err(|_| AppError::state("Corpus replay revision overflowed."))?;
         assert_eq!(
-            publication.try_submit(&corpus_update(revision, case_id, payload))?,
-            PublisherSubmitOutcome::Handled
+            publication.try_observe(&corpus_update(revision, case_id, payload))?,
+            PublicationObservationOutcome::Handled
         );
         assert_eq!(
             receive_corpus_text(&receiver)?,
@@ -138,8 +138,8 @@ fn oversized_newest_egc_is_reported_and_never_reaches_either_facade_transport() 
         let (publication, receiver, diagnostics) =
             start_corpus_publication_with_diagnostics(timing)?;
         assert_eq!(
-            publication.try_submit(&corpus_update(1, case_id, payload))?,
-            PublisherSubmitOutcome::Handled
+            publication.try_observe(&corpus_update(1, case_id, payload))?,
+            PublicationObservationOutcome::Handled
         );
         diagnostics
             .recv_timeout(Duration::from_secs(1))

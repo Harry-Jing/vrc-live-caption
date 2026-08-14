@@ -491,7 +491,7 @@ fn close(publisher: &LiveChatboxPublisher) -> AppResult<()> {
 fn observe(publisher: &LiveChatboxPublisher, snapshot: &CaptionAggregateSnapshot) -> AppResult<()> {
     assert_eq!(
         publisher.try_observe(snapshot)?,
-        PublisherSubmitOutcome::Handled
+        PublicationObservationOutcome::Handled
     );
     Ok(())
 }
@@ -983,7 +983,7 @@ fn close_waits_for_an_admitted_view_and_rejects_later_observations() -> AppResul
         .map_err(|_| AppError::runtime("Live publisher close thread panicked."))?;
     publisher.join()?;
 
-    assert_eq!(late_outcome, PublisherSubmitOutcome::Closed);
+    assert_eq!(late_outcome, PublicationObservationOutcome::Closed);
     assert!(
         !close_returned_early,
         "close returned before the admitted transport attempt completed"

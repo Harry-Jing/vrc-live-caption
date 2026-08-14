@@ -8,7 +8,7 @@
 
 use super::PreparedChatboxText;
 use super::common::{
-    PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
+    PublicationObservationOutcome, PublisherCloseReason, PublisherLifecycle, PublisherWorkerJoin,
     TYPING_REASSERT_INTERVAL, describe_layout_error,
 };
 use super::layout::prepare_completed_pages;
@@ -247,7 +247,7 @@ impl CompletedChatboxPublisher {
     pub(crate) fn try_observe(
         &self,
         update: &CaptionAggregateUpdate,
-    ) -> AppResult<PublisherSubmitOutcome> {
+    ) -> AppResult<PublicationObservationOutcome> {
         let input = match &update.change {
             CaptionAggregateChange::SourceUnitOpened(unit) => {
                 Some(CompletedPublisherInput::Started {
@@ -291,9 +291,9 @@ impl CompletedChatboxPublisher {
                     if state.lifecycle == PublisherLifecycle::Running
                         && !self.shared.committer.is_closed()
                     {
-                        PublisherSubmitOutcome::Handled
+                        PublicationObservationOutcome::Handled
                     } else {
-                        PublisherSubmitOutcome::Closed
+                        PublicationObservationOutcome::Closed
                     },
                 )
             }
@@ -301,14 +301,17 @@ impl CompletedChatboxPublisher {
     }
 
     /// Submits one complete lifecycle event without waiting for pacing or OSC.
-    fn try_submit(&self, event: CompletedPublisherInput) -> AppResult<PublisherSubmitOutcome> {
+    fn try_submit(
+        &self,
+        event: CompletedPublisherInput,
+    ) -> AppResult<PublicationObservationOutcome> {
         match event {
             CompletedPublisherInput::Started { unit_id } => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
                     || self.shared.committer.is_closed()
                 {
-                    return Ok(PublisherSubmitOutcome::Closed);
+                    return Ok(PublicationObservationOutcome::Closed);
                 }
 
                 if state.open_source_units.insert(unit_id) {
@@ -321,7 +324,7 @@ impl CompletedChatboxPublisher {
                 if state.lifecycle != PublisherLifecycle::Running
                     || self.shared.committer.is_closed()
                 {
-                    return Ok(PublisherSubmitOutcome::Closed);
+                    return Ok(PublicationObservationOutcome::Closed);
                 }
 
                 resolve_activity(&mut state, &unit_id);
@@ -332,7 +335,7 @@ impl CompletedChatboxPublisher {
             }
         }
 
-        Ok(PublisherSubmitOutcome::Handled)
+        Ok(PublicationObservationOutcome::Handled)
     }
 
     /// Closes admission and wakes the worker to discard every resident page.
@@ -426,7 +429,7 @@ impl CompletedChatboxPublisher {
         &self,
         unit_id: String,
         text: String,
-    ) -> AppResult<PublisherSubmitOutcome> {
+    ) -> AppResult<PublicationObservationOutcome> {
         let pages = match prepare_completed_pages(&text) {
             Ok(pages) => pages,
             Err(error) => {
@@ -434,7 +437,7 @@ impl CompletedChatboxPublisher {
                 if state.lifecycle != PublisherLifecycle::Running
                     || self.shared.committer.is_closed()
                 {
-                    return Ok(PublisherSubmitOutcome::Closed);
+                    return Ok(PublicationObservationOutcome::Closed);
                 }
                 resolve_activity(&mut state, &unit_id);
                 state
@@ -444,19 +447,19 @@ impl CompletedChatboxPublisher {
                         reason: describe_layout_error(error),
                     });
                 self.signal_worker_locked();
-                return Ok(PublisherSubmitOutcome::Handled);
+                return Ok(PublicationObservationOutcome::Handled);
             }
         };
 
         let mut state = self.lock_state()?;
         if state.lifecycle != PublisherLifecycle::Running || self.shared.committer.is_closed() {
-            return Ok(PublisherSubmitOutcome::Closed);
+            return Ok(PublicationObservationOutcome::Closed);
         }
 
         if pages.is_empty() {
             resolve_activity(&mut state, &unit_id);
             self.signal_worker_locked();
-            return Ok(PublisherSubmitOutcome::Handled);
+            return Ok(PublicationObservationOutcome::Handled);
         }
 
         let now = self.shared.text_pacer.now();
@@ -480,7 +483,7 @@ impl CompletedChatboxPublisher {
                     page_count,
                 });
             self.signal_worker_locked();
-            return Ok(PublisherSubmitOutcome::Handled);
+            return Ok(PublicationObservationOutcome::Handled);
         }
 
         while state.resident_pages.saturating_add(page_count)
@@ -495,7 +498,7 @@ impl CompletedChatboxPublisher {
                         page_count,
                     });
                 self.signal_worker_locked();
-                return Ok(PublisherSubmitOutcome::Handled);
+                return Ok(PublicationObservationOutcome::Handled);
             };
             let Some(dropped) = state.units.remove(position) else {
                 return Err(AppError::state(
@@ -532,7 +535,7 @@ impl CompletedChatboxPublisher {
         });
         self.signal_worker_locked();
 
-        Ok(PublisherSubmitOutcome::Handled)
+        Ok(PublicationObservationOutcome::Handled)
     }
 
     fn lock_state(&self) -> AppResult<std::sync::MutexGuard<'_, PublisherState>> {

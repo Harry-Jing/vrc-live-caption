@@ -397,8 +397,8 @@ fn facade_selects_completed_publication_without_exposing_its_worker() -> AppResu
     )?;
 
     assert_eq!(
-        publication.try_submit(&completed_update(1, "unit-1", "completed snapshot", true))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&completed_update(1, "unit-1", "completed snapshot", true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "completed snapshot");
     diagnostic_receiver
@@ -428,17 +428,17 @@ fn completed_publication_uses_exact_changes_across_revision_gaps_and_deduplicate
     let later = completed_update(25, "later", "second accepted", true);
 
     assert_eq!(
-        publication.try_submit(&old_trimmed)?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&old_trimmed)?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "first accepted");
     assert_eq!(
-        publication.try_submit(&old_trimmed)?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&old_trimmed)?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(
-        publication.try_submit(&later)?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&later)?,
+        PublicationObservationOutcome::Handled
     );
     clock.advance(Duration::from_secs(1));
     assert_eq!(wait_for_text(&receiver)?, "second accepted");
@@ -461,8 +461,8 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
     )?;
 
     assert_eq!(
-        publication.try_submit(&opened_update(1, "aborted-unit"))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&opened_update(1, "aborted-unit"))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(
         receiver
@@ -472,8 +472,8 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
     );
 
     assert_eq!(
-        publication.try_submit(&aborted_update(2, "aborted-unit"))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&aborted_update(2, "aborted-unit"))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(
         receiver
@@ -483,8 +483,8 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
     );
 
     assert_eq!(
-        publication.try_submit(&opened_update(3, "completed-unit"))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&opened_update(3, "completed-unit"))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(
         receiver
@@ -493,13 +493,13 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
         PublicationEvent::Typing(true)
     );
     assert_eq!(
-        publication.try_submit(&completed_update(
+        publication.try_observe(&completed_update(
             4,
             "completed-unit",
             "completed from aggregate",
             true,
         ))?,
-        PublisherSubmitOutcome::Handled
+        PublicationObservationOutcome::Handled
     );
     let terminal_events = [
         receiver
@@ -537,18 +537,18 @@ fn completed_publication_ignores_duplicate_out_of_order_and_prior_generation_his
         reporter,
     )?;
     assert_eq!(
-        publication.try_submit(&completed_update(2, "unit-1", "publish once", true))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&completed_update(2, "unit-1", "publish once", true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "publish once");
 
     assert_eq!(
-        publication.try_submit(&completed_update(2, "unit-1", "duplicate", true))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&completed_update(2, "unit-1", "duplicate", true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(
-        publication.try_submit(&completed_update(1, "unit-1", "out of order", true))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&completed_update(1, "unit-1", "out of order", true))?,
+        PublicationObservationOutcome::Handled
     );
     close(&publication)?;
     assert_no_text(&receiver);
@@ -580,8 +580,8 @@ fn completed_publication_ignores_duplicate_out_of_order_and_prior_generation_his
         snapshot: prior_snapshot,
     };
     assert_eq!(
-        current.try_submit(&with_prior_history)?,
-        PublisherSubmitOutcome::Handled
+        current.try_observe(&with_prior_history)?,
+        PublicationObservationOutcome::Handled
     );
     close(&current)?;
     assert_no_text(&prior_history_receiver);
@@ -658,7 +658,7 @@ fn generation_stop_cutoff_keeps_stop_diagnostics_before_publication_shutdown() -
     // Runtime establishes the generation cutoff before the potentially
     // blocking publication shutdown call records its own close reason.
     fence.request_stop();
-    let outcome = publication.try_submit(&completed_update(
+    let outcome = publication.try_observe(&completed_update(
         1,
         "after-stop-cutoff",
         "must not publish",
@@ -668,7 +668,7 @@ fn generation_stop_cutoff_keeps_stop_diagnostics_before_publication_shutdown() -
     publication.request_close(PublisherCloseReason::Stop)?;
     publication.join()?;
 
-    assert_eq!(outcome, PublisherSubmitOutcome::Closed);
+    assert_eq!(outcome, PublicationObservationOutcome::Closed);
     assert_eq!(diagnostic_code, "osc.send_skipped_on_stop");
     Ok(())
 }
@@ -690,8 +690,8 @@ fn closed_facade_restores_policy_specific_diagnostic_codes() -> AppResult<()> {
     completed_stop.request_close(PublisherCloseReason::Stop)?;
     completed_stop.join()?;
     assert_eq!(
-        completed_stop.try_submit(&completed_update(1, "stop", "too late", true))?,
-        PublisherSubmitOutcome::Closed
+        completed_stop.try_observe(&completed_update(1, "stop", "too late", true))?,
+        PublicationObservationOutcome::Closed
     );
     assert_eq!(
         receive_diagnostic_code(&diagnostic_receiver)?,
@@ -703,8 +703,8 @@ fn closed_facade_restores_policy_specific_diagnostic_codes() -> AppResult<()> {
     completed_error.request_close(PublisherCloseReason::RuntimeError)?;
     completed_error.join()?;
     assert_eq!(
-        completed_error.try_submit(&completed_update(1, "error", "too late", true))?,
-        PublisherSubmitOutcome::Closed
+        completed_error.try_observe(&completed_update(1, "error", "too late", true))?,
+        PublicationObservationOutcome::Closed
     );
     assert_eq!(
         receive_diagnostic_code(&diagnostic_receiver)?,
@@ -720,8 +720,8 @@ fn closed_facade_restores_policy_specific_diagnostic_codes() -> AppResult<()> {
     live_error.request_close(PublisherCloseReason::RuntimeError)?;
     live_error.join()?;
     assert_eq!(
-        live_error.try_submit(&completed_update(1, "live-error", "too late", true))?,
-        PublisherSubmitOutcome::Closed
+        live_error.try_observe(&completed_update(1, "live-error", "too late", true))?,
+        PublicationObservationOutcome::Closed
     );
     assert_eq!(
         receive_diagnostic_code(&diagnostic_receiver)?,
@@ -743,12 +743,12 @@ fn closed_completed_source_activity_updates_remain_silent() -> AppResult<()> {
     publication.join()?;
 
     assert_eq!(
-        publication.try_submit(&opened_update(1, "opened-after-close"))?,
-        PublisherSubmitOutcome::Closed
+        publication.try_observe(&opened_update(1, "opened-after-close"))?,
+        PublicationObservationOutcome::Closed
     );
     assert_eq!(
-        publication.try_submit(&aborted_update(2, "aborted-after-close"))?,
-        PublisherSubmitOutcome::Closed
+        publication.try_observe(&aborted_update(2, "aborted-after-close"))?,
+        PublicationObservationOutcome::Closed
     );
     assert_eq!(report_count.load(Ordering::SeqCst), 0);
     Ok(())
@@ -759,8 +759,8 @@ fn facade_selects_live_publication_without_exposing_its_worker() -> AppResult<()
     let (publisher, receiver) = start_live()?;
 
     assert_eq!(
-        publisher.try_submit(&completed_update(1, "unit-1", "live snapshot", true))?,
-        PublisherSubmitOutcome::Handled
+        publisher.try_observe(&completed_update(1, "unit-1", "live snapshot", true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "live snapshot");
 
@@ -772,13 +772,13 @@ fn completed_facade_sends_the_centrally_prepared_control_policy() -> AppResult<(
     let (publication, receiver) = start_completed()?;
 
     assert_eq!(
-        publication.try_submit(&completed_update(
+        publication.try_observe(&completed_update(
             1,
             "unit-1",
             "one\rtwo\r\nthree\u{0085}four\u{000C}five",
             true,
         ))?,
-        PublisherSubmitOutcome::Handled
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "one two\r\nthree four five");
 
@@ -792,8 +792,8 @@ fn live_facade_preserves_edge_separators_and_prepared_spaces() -> AppResult<()> 
     let expected = "\r\n\n\u{000B}\u{2028}\u{2029} newest  ";
 
     assert_eq!(
-        publication.try_submit(&completed_update(1, "unit-1", source, true))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&completed_update(1, "unit-1", source, true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, expected);
 
@@ -805,15 +805,15 @@ fn active_publication_reports_closed_after_facade_shutdown() -> AppResult<()> {
     let (completed, _receiver) = start_completed()?;
     close(&completed)?;
     assert_eq!(
-        completed.try_submit(&completed_update(1, "unit-1", "too late", true))?,
-        PublisherSubmitOutcome::Closed
+        completed.try_observe(&completed_update(1, "unit-1", "too late", true))?,
+        PublicationObservationOutcome::Closed
     );
 
     let (live, _receiver) = start_live()?;
     close(&live)?;
     assert_eq!(
-        live.try_submit(&completed_update(1, "unit-1", "too late", true))?,
-        PublisherSubmitOutcome::Closed
+        live.try_observe(&completed_update(1, "unit-1", "too late", true))?,
+        PublicationObservationOutcome::Closed
     );
 
     Ok(())
@@ -836,8 +836,8 @@ fn completed_and_live_publications_share_the_actual_attempt_pacing_boundary() ->
         reporter(),
     )?;
     assert_eq!(
-        completed.try_submit(&completed_update(1, "unit-1", "completed attempt", true))?,
-        PublisherSubmitOutcome::Handled
+        completed.try_observe(&completed_update(1, "unit-1", "completed attempt", true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "completed attempt");
     close(&completed)?;
@@ -854,8 +854,8 @@ fn completed_and_live_publications_share_the_actual_attempt_pacing_boundary() ->
         reporter(),
     )?;
     assert_eq!(
-        live.try_submit(&completed_update(1, "unit-1", "live attempt", true))?,
-        PublisherSubmitOutcome::Handled
+        live.try_observe(&completed_update(1, "unit-1", "live attempt", true))?,
+        PublicationObservationOutcome::Handled
     );
     clock.wait_for_sleep()?;
     assert_no_text(&receiver);

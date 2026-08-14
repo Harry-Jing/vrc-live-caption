@@ -505,7 +505,7 @@ fn submit_handled(
 ) -> AppResult<()> {
     assert_eq!(
         publisher.try_submit(event)?,
-        PublisherSubmitOutcome::Handled
+        PublicationObservationOutcome::Handled
     );
     Ok(())
 }
@@ -1610,7 +1610,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
             unit_id: "late".to_string(),
             text: "late".to_string(),
         })?,
-        PublisherSubmitOutcome::Closed
+        PublicationObservationOutcome::Closed
     );
     clock.release_automatic();
     publisher.join()?;
@@ -1694,7 +1694,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
             unit_id: "late".to_string(),
             text: "late".to_string(),
         })?,
-        PublisherSubmitOutcome::Closed
+        PublicationObservationOutcome::Closed
     );
 
     release_sender

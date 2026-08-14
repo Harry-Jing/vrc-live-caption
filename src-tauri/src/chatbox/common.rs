@@ -25,7 +25,7 @@ pub(crate) enum PublisherCloseReason {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
-pub(crate) enum PublisherSubmitOutcome {
+pub(crate) enum PublicationObservationOutcome {
     Handled,
     Closed,
 }

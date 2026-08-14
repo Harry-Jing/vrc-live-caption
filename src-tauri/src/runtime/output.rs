@@ -9,8 +9,8 @@ use crate::caption::{
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::chatbox::{
-    ChatboxPublication, ChatboxPublicationStart, ChatboxTextPacer, PublisherCloseReason,
-    PublisherSubmitOutcome,
+    ChatboxPublication, ChatboxPublicationStartRequest, ChatboxTextPacer,
+    PublicationObservationOutcome, PublisherCloseReason,
 };
 use crate::config::OscConfig;
 use crate::error::{AppError, AppResult};
@@ -30,7 +30,7 @@ use tauri::{AppHandle, Runtime};
 use super::PreparedTranslation;
 use super::translation::{GenerationTranslation, TranslationAdmission};
 
-pub(super) use crate::chatbox::ChatboxPublicationInit;
+pub(super) use crate::chatbox::ChatboxPublicationStartOutcome;
 
 type CaptionAggregateReporter = Arc<dyn Fn(CaptionAggregateSnapshot) + Send + Sync>;
 const TRANSLATION_DRAIN_LIMIT: usize = 8;
@@ -299,11 +299,12 @@ impl RuntimeGeneration {
     pub(super) fn submit_recognition_event<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&ChatboxPublication>,
+        chatbox_publication: Option<&ChatboxPublication>,
         event: RecognitionEvent,
     ) -> AppResult<RecognitionEventSubmitOutcome> {
-        let Some(submit_result) =
-            self.try_commit(|| self.submit_recognition_event_at_boundary(app, publisher, event))?
+        let Some(submit_result) = self.try_commit(|| {
+            self.submit_recognition_event_at_boundary(app, chatbox_publication, event)
+        })?
         else {
             return Ok(RecognitionEventSubmitOutcome::Stopped);
         };
@@ -313,7 +314,7 @@ impl RuntimeGeneration {
     fn submit_recognition_event_at_boundary<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&ChatboxPublication>,
+        chatbox_publication: Option<&ChatboxPublication>,
         event: RecognitionEvent,
     ) -> AppResult<RecognitionEventSubmitOutcome> {
         match event {
@@ -328,7 +329,7 @@ impl RuntimeGeneration {
                 else {
                     return Ok(RecognitionEventSubmitOutcome::Ignored);
                 };
-                self.report_accepted_update(app, publisher, update);
+                self.report_accepted_update(app, chatbox_publication, update);
             }
             RecognitionEvent::UnitAborted {
                 generation,
@@ -343,7 +344,7 @@ impl RuntimeGeneration {
                 let Some(update) = self.abort_source_unit(generation, &stream_id, &unit_id)? else {
                     return Ok(RecognitionEventSubmitOutcome::Ignored);
                 };
-                self.report_accepted_update(app, publisher, update);
+                self.report_accepted_update(app, chatbox_publication, update);
                 if let Some(detail) = failure_detail {
                     emit_diagnostic(
                         app,
@@ -357,7 +358,7 @@ impl RuntimeGeneration {
                 }
             }
             RecognitionEvent::Caption(caption) => {
-                return self.submit_caption(app, publisher, caption);
+                return self.submit_caption(app, chatbox_publication, caption);
             }
         }
 
@@ -367,7 +368,7 @@ impl RuntimeGeneration {
     fn submit_caption<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&ChatboxPublication>,
+        chatbox_publication: Option<&ChatboxPublication>,
         caption: CaptionSnapshot,
     ) -> AppResult<RecognitionEventSubmitOutcome> {
         let needs_translation = caption.lane == CaptionLane::Source
@@ -377,7 +378,7 @@ impl RuntimeGeneration {
             let Some(update) = self.accept_caption(caption)? else {
                 return Ok(RecognitionEventSubmitOutcome::Ignored);
             };
-            self.report_accepted_update(app, publisher, update);
+            self.report_accepted_update(app, chatbox_publication, update);
             return Ok(RecognitionEventSubmitOutcome::Accepted);
         }
 
@@ -397,13 +398,13 @@ impl RuntimeGeneration {
         else {
             return Ok(RecognitionEventSubmitOutcome::Ignored);
         };
-        self.report_accepted_update(app, publisher, source_update);
+        self.report_accepted_update(app, chatbox_publication, source_update);
 
         match translation.submit(reservation)? {
             TranslationAdmission::Submitted => Ok(RecognitionEventSubmitOutcome::Accepted),
             TranslationAdmission::Rejected { reason, update } => {
                 if let Some(update) = update {
-                    self.report_accepted_update(app, publisher, *update);
+                    self.report_accepted_update(app, chatbox_publication, *update);
                 }
                 Ok(RecognitionEventSubmitOutcome::AcceptedWithTranslationFailure(reason))
             }
@@ -414,7 +415,7 @@ impl RuntimeGeneration {
     pub(super) fn drain_translation_outcomes<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&ChatboxPublication>,
+        chatbox_publication: Option<&ChatboxPublication>,
     ) -> AppResult<TranslationDrainReport> {
         let Some(translation) = &self.translation else {
             return Ok(TranslationDrainReport::default());
@@ -443,7 +444,7 @@ impl RuntimeGeneration {
                     TranslationTerminalOutcome::Failed(failed) => failed.fail()?,
                 };
                 if let Some(update) = update {
-                    self.report_accepted_update(app, publisher, update);
+                    self.report_accepted_update(app, chatbox_publication, update);
                     Ok(true)
                 } else {
                     Ok(false)
@@ -489,11 +490,11 @@ impl RuntimeGeneration {
     pub(super) fn abort_open_source_units_for_reconnect<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&ChatboxPublication>,
+        chatbox_publication: Option<&ChatboxPublication>,
     ) -> AppResult<()> {
         self.fail_open_source_units(
             app,
-            publisher,
+            chatbox_publication,
             "Speech was discarded because the recognition connection was interrupted.",
         )
     }
@@ -501,11 +502,11 @@ impl RuntimeGeneration {
     pub(super) fn abort_open_source_units_for_terminal_failure<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&ChatboxPublication>,
+        chatbox_publication: Option<&ChatboxPublication>,
     ) -> AppResult<()> {
         self.fail_open_source_units(
             app,
-            publisher,
+            chatbox_publication,
             "Speech was discarded because recognition stopped with a terminal error.",
         )
     }
@@ -513,14 +514,14 @@ impl RuntimeGeneration {
     fn fail_open_source_units<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&ChatboxPublication>,
+        chatbox_publication: Option<&ChatboxPublication>,
         detail: &str,
     ) -> AppResult<()> {
         let snapshot = self.caption_snapshot()?;
         for open_source_unit in snapshot.open_source_units {
             let _submit_outcome = self.submit_recognition_event(
                 app,
-                publisher,
+                chatbox_publication,
                 RecognitionEvent::UnitAborted {
                     generation: self.generation_id(),
                     stream_id: self.stream_id().to_string(),
@@ -537,19 +538,19 @@ impl RuntimeGeneration {
     fn report_accepted_update<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        publisher: Option<&ChatboxPublication>,
+        chatbox_publication: Option<&ChatboxPublication>,
         update: CaptionAggregateUpdate,
     ) {
         // The App and Chatbox publication observe the exact same store-accepted
         // update. The facade owns all timing-specific interpretation.
         self.report_caption_snapshot(update.snapshot.clone());
-        let Some(publisher) = publisher else {
+        let Some(chatbox_publication) = chatbox_publication else {
             return;
         };
 
-        match publisher.try_submit(&update) {
-            Ok(PublisherSubmitOutcome::Handled) => {}
-            Ok(PublisherSubmitOutcome::Closed) => {}
+        match chatbox_publication.try_observe(&update) {
+            Ok(PublicationObservationOutcome::Handled) => {}
+            Ok(PublicationObservationOutcome::Closed) => {}
             Err(error) => emit_diagnostic(
                 app,
                 DiagnosticUpdate::from_error(&error, "Chatbox snapshot could not be observed"),
@@ -578,21 +579,21 @@ fn combine_output_close_results(
     }
 }
 
-pub(super) fn initialize_chatbox_publication<R: Runtime>(
+pub(super) fn start_chatbox_publication<R: Runtime>(
     app: &AppHandle<R>,
     config: &OscConfig,
-    timing: ResolvedPublicationTiming,
+    publication_timing: ResolvedPublicationTiming,
     chatbox_text_pacer: ChatboxTextPacer,
     generation: &RuntimeGeneration,
     host_resolver: &HostResolver,
     is_cancelled: &dyn Fn() -> bool,
-) -> ChatboxPublicationInit {
+) -> ChatboxPublicationStartOutcome {
     let reporter_app = app.clone();
     let reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync> =
         Arc::new(move |diagnostic| emit_diagnostic(&reporter_app, diagnostic));
-    ChatboxPublication::initialize(ChatboxPublicationStart {
+    ChatboxPublication::start(ChatboxPublicationStartRequest {
         config,
-        timing,
+        publication_timing,
         text_pacer: chatbox_text_pacer,
         generation_id: generation.generation_id(),
         committer: generation.committer(),

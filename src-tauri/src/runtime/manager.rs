@@ -1,6 +1,6 @@
 use super::PreparedTranslation;
 use super::coordinator::RuntimeExecution;
-use super::output::{ChatboxPublicationInit, RuntimeGeneration, initialize_chatbox_publication};
+use super::output::{ChatboxPublicationStartOutcome, RuntimeGeneration, start_chatbox_publication};
 use super::supervisor::run_runtime_thread;
 
 use crate::caption::CaptionAggregateStore;
@@ -93,7 +93,7 @@ pub(crate) enum RuntimeStartOutcome {
 
 struct RuntimeHandle {
     generation: RuntimeGeneration,
-    publisher: Option<ChatboxPublication>,
+    chatbox_publication: Option<ChatboxPublication>,
     join_handle: JoinHandle<()>,
 }
 
@@ -228,7 +228,7 @@ impl RuntimeManager {
             None => RuntimeGeneration::activate(&app, generation_id, caption_aggregate)?,
         };
         let start_cancelled = || !self.stop_epoch_unchanged(expected_stop_epoch);
-        let publisher_init = initialize_chatbox_publication(
+        let publication_start_outcome = start_chatbox_publication(
             &app,
             &config.osc,
             publication_timing,
@@ -238,12 +238,13 @@ impl RuntimeManager {
             &start_cancelled,
         );
         if start_cancelled() {
-            match &publisher_init {
-                ChatboxPublicationInit::Ready(publisher) => {
-                    let _ = generation.request_stop(Some(publisher));
-                    let _ = publisher.join();
+            match &publication_start_outcome {
+                ChatboxPublicationStartOutcome::Ready(publication) => {
+                    let _ = generation.request_stop(Some(publication));
+                    let _ = publication.join();
                 }
-                ChatboxPublicationInit::Disabled | ChatboxPublicationInit::Unavailable(_) => {
+                ChatboxPublicationStartOutcome::Disabled
+                | ChatboxPublicationStartOutcome::Unavailable(_) => {
                     let _ = generation.request_stop(None);
                 }
             }
@@ -251,22 +252,22 @@ impl RuntimeManager {
         }
         let requested_host = config.osc.host.clone();
         let requested_port = config.osc.port;
-        let (publisher, chatbox_publication) = match publisher_init {
-            ChatboxPublicationInit::Disabled => (
+        let (chatbox_publication, chatbox_publication_snapshot) = match publication_start_outcome {
+            ChatboxPublicationStartOutcome::Disabled => (
                 None,
                 ChatboxPublicationSnapshot::Disabled {
                     host: requested_host,
                     port: requested_port,
                 },
             ),
-            ChatboxPublicationInit::Ready(publisher) => (
-                Some(publisher),
+            ChatboxPublicationStartOutcome::Ready(publication) => (
+                Some(publication),
                 ChatboxPublicationSnapshot::Ready {
                     host: requested_host,
                     port: requested_port,
                 },
             ),
-            ChatboxPublicationInit::Unavailable(error) => {
+            ChatboxPublicationStartOutcome::Unavailable(error) => {
                 emit_diagnostic(
                     &app,
                     DiagnosticUpdate::from_error(&error, "Chatbox OSC output could not start"),
@@ -289,26 +290,26 @@ impl RuntimeManager {
             selection: generation_selection,
             caption_pipeline_plan,
             credentials,
-            chatbox_publication,
+            chatbox_publication: chatbox_publication_snapshot,
             translation_state,
             uploads_microphone_audio,
             uploads_source_text,
         };
         if let Err(error) = install_generation(generation_snapshot) {
-            let _ = generation.request_stop(publisher.as_ref());
-            if let Some(publisher) = &publisher {
-                let _ = publisher.join();
+            let _ = generation.request_stop(chatbox_publication.as_ref());
+            if let Some(publication) = &chatbox_publication {
+                let _ = publication.join();
             }
             return Err(error);
         }
 
         let thread_generation = generation.clone();
-        let thread_publisher = publisher.clone();
+        let thread_chatbox_publication = chatbox_publication.clone();
         let execution = RuntimeExecution::new(
             app,
             config.audio,
             recognition_module,
-            thread_publisher,
+            thread_chatbox_publication,
             thread_generation,
             status_recorder,
         );
@@ -319,9 +320,9 @@ impl RuntimeManager {
         let join_handle = match join_handle {
             Ok(join_handle) => join_handle,
             Err(error) => {
-                let _ = generation.request_stop(publisher.as_ref());
-                if let Some(publisher) = &publisher {
-                    let _ = publisher.join();
+                let _ = generation.request_stop(chatbox_publication.as_ref());
+                if let Some(publication) = &chatbox_publication {
+                    let _ = publication.join();
                 }
                 return Err(error);
             }
@@ -329,7 +330,7 @@ impl RuntimeManager {
 
         *guard = Some(RuntimeHandle {
             generation,
-            publisher,
+            chatbox_publication,
             join_handle,
         });
 
@@ -363,7 +364,10 @@ impl RuntimeManager {
             return Ok(());
         };
 
-        if let Err(error) = handle.generation.request_stop(handle.publisher.as_ref()) {
+        if let Err(error) = handle
+            .generation
+            .request_stop(handle.chatbox_publication.as_ref())
+        {
             handle.generation.cancel_work();
             emit_diagnostic(
                 app,
@@ -377,13 +381,13 @@ impl RuntimeManager {
             Some("Stopping runtime and discarding pending speech".to_string()),
         );
 
-        let publisher_result = match &handle.publisher {
-            Some(publisher) => publisher.join(),
+        let publication_result = match &handle.chatbox_publication {
+            Some(publication) => publication.join(),
             None => Ok(()),
         };
         let runtime_panicked = handle.join_handle.join().is_err();
 
-        if let Err(error) = publisher_result {
+        if let Err(error) = publication_result {
             emit_diagnostic(
                 app,
                 DiagnosticUpdate::from_error(&error, "Chatbox publication failed while stopping"),
@@ -509,15 +513,15 @@ fn clear_finished_runtime<R: Runtime>(
 
     if let Err(error) = handle
         .generation
-        .close_outputs_for_runtime_error(handle.publisher.as_ref())
+        .close_outputs_for_runtime_error(handle.chatbox_publication.as_ref())
     {
         emit_diagnostic(
             app,
             DiagnosticUpdate::from_error(&error, "Runtime outputs could not close"),
         );
     }
-    if let Some(publisher) = &handle.publisher
-        && let Err(error) = publisher.join()
+    if let Some(publication) = &handle.chatbox_publication
+        && let Err(error) = publication.join()
     {
         emit_diagnostic(
             app,

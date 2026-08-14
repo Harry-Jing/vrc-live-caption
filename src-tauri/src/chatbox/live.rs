@@ -8,7 +8,7 @@
 
 use super::PreparedChatboxText;
 use super::common::{
-    PublisherCloseReason, PublisherLifecycle, PublisherSubmitOutcome, PublisherWorkerJoin,
+    PublicationObservationOutcome, PublisherCloseReason, PublisherLifecycle, PublisherWorkerJoin,
     TYPING_REASSERT_INTERVAL, describe_layout_error,
 };
 use super::layout::prepare_live_viewport;
@@ -256,19 +256,19 @@ impl LiveChatboxPublisher {
     pub(crate) fn try_observe(
         &self,
         snapshot: &CaptionAggregateSnapshot,
-    ) -> AppResult<PublisherSubmitOutcome> {
+    ) -> AppResult<PublicationObservationOutcome> {
         let mut state = self.lock_state()?;
         if state.lifecycle != PublisherLifecycle::Running || self.shared.committer.is_closed() {
-            return Ok(PublisherSubmitOutcome::Closed);
+            return Ok(PublicationObservationOutcome::Closed);
         }
 
         let Some(active) = snapshot.active_stream.as_ref() else {
-            return Ok(PublisherSubmitOutcome::Handled);
+            return Ok(PublicationObservationOutcome::Handled);
         };
         if active.generation != self.shared.generation_id
             || snapshot.snapshot_revision <= state.highest_snapshot_revision
         {
-            return Ok(PublisherSubmitOutcome::Handled);
+            return Ok(PublicationObservationOutcome::Handled);
         }
 
         let now = self.shared.text_pacer.now();
@@ -325,7 +325,7 @@ impl LiveChatboxPublisher {
             .interrupt_text_wait
             .store(true, Ordering::SeqCst);
         self.shared.wake.notify_all();
-        Ok(PublisherSubmitOutcome::Handled)
+        Ok(PublicationObservationOutcome::Handled)
     }
 
     /// Closes admission and establishes a local no-later-text boundary.

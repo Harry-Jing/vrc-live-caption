@@ -560,7 +560,7 @@ fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResul
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
         *handle = Some(RuntimeHandle {
             generation: generation.clone(),
-            publisher: None,
+            chatbox_publication: None,
             join_handle,
         });
     }
@@ -623,7 +623,7 @@ fn stop_records_error_when_the_runtime_thread_panicked() -> AppResult<()> {
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
         *handle = Some(RuntimeHandle {
             generation: RuntimeGeneration::active(),
-            publisher: None,
+            chatbox_publication: None,
             join_handle,
         });
     }
@@ -668,7 +668,7 @@ fn finished_error_handle_is_reaped_before_a_restart_availability_check() -> AppR
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
         *handle = Some(RuntimeHandle {
             generation: RuntimeGeneration::active(),
-            publisher: None,
+            chatbox_publication: None,
             join_handle,
         });
     }
@@ -832,7 +832,7 @@ fn stop_cancels_an_installed_runtime_hostname_wait_before_joining() -> AppResult
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
         *handle = Some(RuntimeHandle {
             generation,
-            publisher: None,
+            chatbox_publication: None,
             join_handle,
         });
     }
