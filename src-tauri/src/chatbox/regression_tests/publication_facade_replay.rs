@@ -5,7 +5,7 @@ use super::super::text_pacing::{ChatboxTextPacer, Clock};
 use super::super::transport::{ChatboxSendReceipt, ChatboxTransport};
 use super::super::{ChatboxPublication, PublicationObservationOutcome, PublisherCloseReason};
 use super::support::{
-    FIXTURE, first_oversized_grapheme_utf16_units, has_test_target, required_string,
+    PORTABLE_CORPUS_JSON, first_oversized_grapheme_utf16_units, has_test_target, required_string,
 };
 use crate::caption::{
     ActiveCaptionStream, CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateChange,
@@ -34,11 +34,11 @@ const LIVE_ONLY_FACADE_REPLAY_CASE_IDS: [&str; 2] =
 
 #[test]
 fn completed_facade_replays_layered_corpus_cases_without_rewriting_pages() -> AppResult<()> {
-    let fixture = parse_fixture()?;
+    let corpus = parse_corpus()?;
     let (publication, receiver) = start_corpus_publication(ResolvedPublicationTiming::Completed)?;
 
     for (index, case_id) in SHARED_FACADE_REPLAY_CASE_IDS.iter().enumerate() {
-        let case = corpus_case(&fixture, case_id)?;
+        let case = corpus_case(&corpus, case_id)?;
         assert!(has_test_target(case, "completed-pagination").map_err(AppError::state)?);
         let payload = required_string(case, "payload").map_err(AppError::state)?;
         let expected = prepare_completed_pages(payload).map_err(|error| {
@@ -73,7 +73,7 @@ fn completed_facade_replays_layered_corpus_cases_without_rewriting_pages() -> Ap
 
 #[test]
 fn live_facade_replays_layered_corpus_cases_without_rewriting_viewports() -> AppResult<()> {
-    let fixture = parse_fixture()?;
+    let corpus = parse_corpus()?;
     let (publication, receiver) = start_corpus_publication(ResolvedPublicationTiming::LiveUnit {
         observation_window_ms: 1_000,
     })?;
@@ -82,7 +82,7 @@ fn live_facade_replays_layered_corpus_cases_without_rewriting_viewports() -> App
         .chain(LIVE_ONLY_FACADE_REPLAY_CASE_IDS.iter());
 
     for (index, case_id) in case_ids.enumerate() {
-        let case = corpus_case(&fixture, case_id)?;
+        let case = corpus_case(&corpus, case_id)?;
         assert!(has_test_target(case, "live-window").map_err(AppError::state)?);
         let payload = required_string(case, "payload").map_err(AppError::state)?;
         let expected = prepare_live_viewport(payload)
@@ -113,9 +113,9 @@ fn live_facade_replays_layered_corpus_cases_without_rewriting_viewports() -> App
 
 #[test]
 fn oversized_newest_egc_is_reported_and_never_reaches_either_facade_transport() -> AppResult<()> {
-    let fixture = parse_fixture()?;
+    let corpus = parse_corpus()?;
     let case_id = "LIVE-OVERSIZED-NEW-GRAPHEME";
-    let case = corpus_case(&fixture, case_id)?;
+    let case = corpus_case(&corpus, case_id)?;
     let payload = required_string(case, "payload").map_err(AppError::state)?;
     let utf16_units = first_oversized_grapheme_utf16_units(payload).ok_or_else(|| {
         AppError::state("Oversized replay case no longer contains an oversized EGC.")
@@ -202,13 +202,13 @@ impl ChatboxTransport for CorpusRecordingTransport {
     }
 }
 
-fn parse_fixture() -> AppResult<Value> {
-    serde_json::from_str(FIXTURE)
+fn parse_corpus() -> AppResult<Value> {
+    serde_json::from_str(PORTABLE_CORPUS_JSON)
         .map_err(|error| AppError::state(format!("Chatbox corpus was invalid JSON: {error}")))
 }
 
-fn corpus_case<'a>(fixture: &'a Value, case_id: &str) -> AppResult<&'a Value> {
-    fixture["cases"]
+fn corpus_case<'a>(corpus: &'a Value, case_id: &str) -> AppResult<&'a Value> {
+    corpus["cases"]
         .as_array()
         .and_then(|cases| {
             cases

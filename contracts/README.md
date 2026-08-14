@@ -12,7 +12,7 @@ scenarios, not complete JSON Schema.
   union discriminators shared across the boundary.
 
 Large implementation-specific regression inputs are not contracts. Rust-owned
-Chatbox corpus and runtime-observation data live under
+Chatbox corpus and VRChat client-observation data live under
 [`src-tauri/testdata/chatbox/`](../src-tauri/testdata/chatbox/).
 
 ## Compatibility baseline

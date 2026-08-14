@@ -1,5 +1,5 @@
 use super::support::{
-    EXPECTED_MANIFEST_SHA256, EXPECTED_SOURCE_SHA256, FIXTURE,
+    EXPECTED_MANIFEST_SHA256, EXPECTED_SOURCE_SHA256, PORTABLE_CORPUS_JSON,
     assert_no_forbidden_expectation_fields, egc_end_utf16_offsets, required_string, required_usize,
     required_usize_array, sha256_hex,
 };
@@ -18,22 +18,22 @@ const ALLOWED_TEST_TARGETS: [&str; 4] = [
 #[test]
 fn portable_chatbox_corpus_has_stable_identity_and_unicode_facts()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = serde_json::from_str::<Value>(FIXTURE)?;
-    let cases = fixture["cases"]
+    let corpus = serde_json::from_str::<Value>(PORTABLE_CORPUS_JSON)?;
+    let cases = corpus["cases"]
         .as_array()
-        .ok_or("Chatbox fixture cases must be an array.")?;
+        .ok_or("Chatbox corpus cases must be an array.")?;
 
-    assert_eq!(fixture["fixture_schema_version"], 1);
-    assert_eq!(fixture["case_count"], EXPECTED_CASE_COUNT);
+    assert_eq!(corpus["fixture_schema_version"], 1);
+    assert_eq!(corpus["case_count"], EXPECTED_CASE_COUNT);
     assert_eq!(cases.len(), EXPECTED_CASE_COUNT);
-    assert_eq!(fixture["source"]["corpus_id"], "vrchat-chatbox-canonical");
-    assert_eq!(fixture["source"]["source_sha256"], EXPECTED_SOURCE_SHA256);
+    assert_eq!(corpus["source"]["corpus_id"], "vrchat-chatbox-canonical");
+    assert_eq!(corpus["source"]["source_sha256"], EXPECTED_SOURCE_SHA256);
     assert_eq!(
-        fixture["source"]["manifest_sha256"],
+        corpus["source"]["manifest_sha256"],
         EXPECTED_MANIFEST_SHA256
     );
-    assert_eq!(fixture["source"]["unicode_profile"]["version"], "17.0.0");
-    assert_no_forbidden_expectation_fields(&fixture);
+    assert_eq!(corpus["source"]["unicode_profile"]["version"], "17.0.0");
+    assert_no_forbidden_expectation_fields(&corpus);
 
     let mut case_ids = HashSet::new();
     let mut payloads = HashSet::new();
@@ -118,9 +118,9 @@ fn portable_chatbox_corpus_has_stable_identity_and_unicode_facts()
         }));
     }
 
-    assert!(!FIXTURE.contains("C:\\\\Users\\\\Harry\\\\"));
-    assert!(!FIXTURE.contains("vrc-chatbox-layout-lab"));
-    assert!(!FIXTURE.contains("captures/"));
-    assert!(!FIXTURE.contains("captures\\\\"));
+    assert!(!PORTABLE_CORPUS_JSON.contains("C:\\\\Users\\\\Harry\\\\"));
+    assert!(!PORTABLE_CORPUS_JSON.contains("vrc-chatbox-layout-lab"));
+    assert!(!PORTABLE_CORPUS_JSON.contains("captures/"));
+    assert!(!PORTABLE_CORPUS_JSON.contains("captures\\\\"));
     Ok(())
 }

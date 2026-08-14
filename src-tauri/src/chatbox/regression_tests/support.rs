@@ -3,9 +3,11 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use unicode_segmentation::UnicodeSegmentation;
 
-pub(super) const FIXTURE: &str = include_str!("../../../testdata/chatbox/layout-cases-v1.json");
-pub(super) const RUNTIME_OBSERVATIONS: &str =
-    include_str!("../../../testdata/chatbox/runtime-observations-2026.3.1-1885-81193b80fa-v1.json");
+pub(super) const PORTABLE_CORPUS_JSON: &str =
+    include_str!("../../../testdata/chatbox/layout-cases-v1.json");
+pub(super) const VRCHAT_CLIENT_OBSERVATIONS_JSON: &str = include_str!(
+    "../../../testdata/chatbox/vrchat-client-observations-2026.3.1-1885-81193b80fa-v1.json"
+);
 pub(super) const EXPECTED_SOURCE_SHA256: &str =
     "f4899d95d0a2fac74a96423608cd4d9b88fa3afe28737c747356fcd3d4190731";
 pub(super) const EXPECTED_MANIFEST_SHA256: &str =
@@ -24,7 +26,7 @@ pub(super) const FORBIDDEN_GENERATED_EXPECTATION_FIELDS: [&str; 8] = [
 // These are product-policy expectations, not observations copied from a
 // VRChat build. Keeping the small set explicit makes a newly targeted control
 // character fail closed until its intended preparation is reviewed.
-pub(super) const PREPARED_PAYLOAD_OVERRIDES: [(&str, &str, &str); 3] = [
+pub(super) const PREPARATION_POLICY_EXPECTATIONS: [(&str, &str, &str); 3] = [
     ("LINES-CR-BASIC", "alpha\rbeta", "alpha beta"),
     ("LINES-NEL-BASIC", "alpha\u{0085}beta", "alpha beta"),
     (
@@ -103,7 +105,7 @@ pub(super) fn assert_no_forbidden_expectation_fields(value: &Value) {
             for (field, value) in object {
                 assert!(
                     !FORBIDDEN_GENERATED_EXPECTATION_FIELDS.contains(&field.as_str()),
-                    "portable fixture contains non-portable field: {field}"
+                    "portable corpus contains non-portable field: {field}"
                 );
                 assert_no_forbidden_expectation_fields(value);
             }

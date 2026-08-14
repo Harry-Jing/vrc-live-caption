@@ -3,7 +3,7 @@ use super::super::layout::{
     prepare_live_viewport, prepare_single_message,
 };
 use super::support::{
-    FIXTURE, PREPARED_PAYLOAD_OVERRIDES, egc_end_utf16_offsets,
+    PORTABLE_CORPUS_JSON, PREPARATION_POLICY_EXPECTATIONS, egc_end_utf16_offsets,
     first_oversized_grapheme_utf16_units, has_test_target, required_string, required_usize,
     required_usize_array,
 };
@@ -18,10 +18,11 @@ const EXPECTED_LAYOUT_TARGET_COUNT: usize = 169;
 
 #[test]
 fn completed_targets_form_lossless_standalone_prepared_pages() -> Result<(), String> {
-    let fixture = serde_json::from_str::<Value>(FIXTURE).map_err(|error| error.to_string())?;
-    let cases = fixture["cases"]
+    let corpus =
+        serde_json::from_str::<Value>(PORTABLE_CORPUS_JSON).map_err(|error| error.to_string())?;
+    let cases = corpus["cases"]
         .as_array()
-        .ok_or("Chatbox fixture cases must be an array.")?;
+        .ok_or("Chatbox corpus cases must be an array.")?;
     let mut target_count = 0;
     let mut oversized_count = 0;
 
@@ -50,7 +51,7 @@ fn completed_targets_form_lossless_standalone_prepared_pages() -> Result<(), Str
         }
 
         let pages = result.map_err(|error| {
-            format!("Completed rejected representable fixture case {case_id}: {error:?}")
+            format!("Completed rejected representable corpus case {case_id}: {error:?}")
         })?;
         if prepared_source.is_empty() {
             assert!(pages.is_empty(), "empty case emitted a page: {case_id}");
@@ -110,10 +111,11 @@ fn completed_targets_form_lossless_standalone_prepared_pages() -> Result<(), Str
 
 #[test]
 fn live_targets_form_bounded_newest_standalone_suffixes() -> Result<(), String> {
-    let fixture = serde_json::from_str::<Value>(FIXTURE).map_err(|error| error.to_string())?;
-    let cases = fixture["cases"]
+    let corpus =
+        serde_json::from_str::<Value>(PORTABLE_CORPUS_JSON).map_err(|error| error.to_string())?;
+    let cases = corpus["cases"]
         .as_array()
-        .ok_or("Chatbox fixture cases must be an array.")?;
+        .ok_or("Chatbox corpus cases must be an array.")?;
     let mut target_count = 0;
     let mut oversized_count = 0;
     let mut oversized_error_count = 0;
@@ -221,12 +223,13 @@ fn live_targets_form_bounded_newest_standalone_suffixes() -> Result<(), String> 
 }
 
 #[test]
-fn layout_targets_have_predictions_without_runtime_observation_expectations() -> Result<(), String>
-{
-    let fixture = serde_json::from_str::<Value>(FIXTURE).map_err(|error| error.to_string())?;
-    let cases = fixture["cases"]
+fn layout_targets_have_predictions_without_vrchat_client_observation_expectations()
+-> Result<(), String> {
+    let corpus =
+        serde_json::from_str::<Value>(PORTABLE_CORPUS_JSON).map_err(|error| error.to_string())?;
+    let cases = corpus["cases"]
         .as_array()
-        .ok_or("Chatbox fixture cases must be an array.")?;
+        .ok_or("Chatbox corpus cases must be an array.")?;
     let mut target_count = 0;
 
     for case in cases {
@@ -321,13 +324,13 @@ fn assert_prediction_breaks_are_safe(
 }
 
 fn expected_prepared_payload<'a>(case_id: &str, payload: &'a str) -> Result<Cow<'a, str>, String> {
-    if let Some((_, expected_raw, expected_prepared)) = PREPARED_PAYLOAD_OVERRIDES
+    if let Some((_, expected_raw, expected_prepared)) = PREPARATION_POLICY_EXPECTATIONS
         .iter()
         .find(|(override_case_id, _, _)| *override_case_id == case_id)
     {
         if payload != *expected_raw {
             return Err(format!(
-                "authored preparation oracle no longer matches fixture payload: {case_id}"
+                "authored preparation oracle no longer matches corpus payload: {case_id}"
             ));
         }
         return Ok(Cow::Borrowed(expected_prepared));
