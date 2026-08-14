@@ -165,24 +165,6 @@ fn prepared_controls_are_sent_as_the_exact_product_policy() -> AppResult<()> {
 }
 
 #[test]
-fn runtime_restart_and_osc_test_share_actual_attempt_history() -> AppResult<()> {
-    let clock = Arc::new(AdvancingClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
-
-    for text in ["runtime one", OSC_TEST_MESSAGE, "runtime two"] {
-        let sender = ChatboxOscSender::with_transport(Arc::new(ScriptedOscTransport::new([false])));
-        let text = prepared_text(text)?;
-        pacer
-            .wait_for_turn(None)?
-            .ok_or_else(|| AppError::runtime("OSC attempt was cancelled."))?
-            .attempt(|| sender.send_text(&text))?;
-    }
-
-    assert_eq!(clock.total_sleep(), Duration::from_secs(2));
-    Ok(())
-}
-
-#[test]
 fn failed_transport_attempt_still_reserves_the_next_opportunity() -> AppResult<()> {
     let clock = Arc::new(AdvancingClock::new());
     let pacer = ChatboxPacer::with_clock(clock.clone());

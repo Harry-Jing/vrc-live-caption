@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 
 pub(crate) const OSC_CHATBOX_INPUT_ADDRESS: &str = "/chatbox/input";
 pub(crate) const OSC_CHATBOX_TYPING_ADDRESS: &str = "/chatbox/typing";
-pub(crate) const OSC_TEST_MESSAGE: &str = "VRC Live Caption OSC test.";
 const OSC_RESOLUTION_BUDGET: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]

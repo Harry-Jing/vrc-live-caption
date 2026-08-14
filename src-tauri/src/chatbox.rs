@@ -15,9 +15,12 @@ mod osc;
 mod pacer;
 mod transport;
 
-pub(crate) use common::{PublisherCloseReason, PublisherSubmitOutcome, describe_layout_error};
-pub(crate) use layout::{PreparedChatboxText, prepare_single_message};
-pub(crate) use osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
+use common::describe_layout_error;
+pub(crate) use common::{PublisherCloseReason, PublisherSubmitOutcome};
+pub(crate) use layout::PreparedChatboxText;
+use layout::prepare_single_message;
+use osc::ChatboxOscSender;
+pub(crate) use osc::OSC_CHATBOX_INPUT_ADDRESS;
 pub(crate) use pacer::ChatboxPacer;
 pub(crate) use transport::{ChatboxSendReceipt, ChatboxTransport};
 
@@ -40,6 +43,7 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 const CLOSE_REASON_NONE: u8 = 0;
 const CLOSE_REASON_RUNTIME_ERROR: u8 = 1;
 const CLOSE_REASON_STOP: u8 = 2;
+const OSC_TEST_MESSAGE: &str = "VRC Live Caption OSC test.";
 
 #[derive(Clone)]
 pub(crate) struct ChatboxPublication {
@@ -72,6 +76,26 @@ pub(crate) struct ChatboxPublicationStart<'a> {
     pub(crate) host_resolver: &'a HostResolver,
     pub(crate) is_cancelled: &'a dyn Fn() -> bool,
     pub(crate) reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync>,
+}
+
+pub(crate) fn send_test_message(
+    config: &OscConfig,
+    pacer: &ChatboxPacer,
+    host_resolver: &HostResolver,
+) -> AppResult<ChatboxSendReceipt> {
+    let sender = ChatboxOscSender::new(config, host_resolver, &|| false)?;
+    let text = prepare_single_message(OSC_TEST_MESSAGE)
+        .map_err(|error| {
+            AppError::state(format!(
+                "OSC test message could not be prepared: {}",
+                describe_layout_error(error)
+            ))
+        })?
+        .ok_or_else(|| AppError::state("OSC test message must not be empty."))?;
+    pacer
+        .wait_for_turn(None)?
+        .ok_or_else(|| AppError::state("OSC Test pacing was cancelled."))?
+        .attempt(|| sender.send_text(&text))
 }
 
 impl ChatboxPublication {

@@ -7,9 +7,13 @@ use crate::caption::{
     OpenSourceUnit,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
+use crate::config::OscConfig;
 use crate::error::AppError;
 use crate::events::{DiagnosticUpdate, emit_diagnostic};
 use crate::generation_fence::GenerationFence;
+use crate::host_resolver::HostResolver;
+use rosc::{OscMessage, OscPacket, OscType, decoder};
+use std::net::UdpSocket;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
@@ -24,6 +28,45 @@ struct ManualClock {
 struct ManualClockState {
     now: Instant,
     sleep_calls: usize,
+}
+
+struct AdvancingClock {
+    now: Mutex<Instant>,
+    sleeps: Mutex<Vec<Duration>>,
+}
+
+impl AdvancingClock {
+    fn new() -> Self {
+        Self {
+            now: Mutex::new(Instant::now()),
+            sleeps: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn total_sleep(&self) -> Duration {
+        self.sleeps
+            .lock()
+            .map(|sleeps| sleeps.iter().copied().sum())
+            .unwrap_or_default()
+    }
+}
+
+impl Clock for AdvancingClock {
+    fn now(&self) -> Instant {
+        self.now
+            .lock()
+            .map(|now| *now)
+            .unwrap_or_else(|poisoned| *poisoned.into_inner())
+    }
+
+    fn sleep(&self, duration: Duration) {
+        if let Ok(mut sleeps) = self.sleeps.lock() {
+            sleeps.push(duration);
+        }
+        if let Ok(mut now) = self.now.lock() {
+            *now += duration;
+        }
+    }
 }
 
 impl ManualClock {
@@ -145,6 +188,104 @@ fn text_transport_accepts_only_prepared_chatbox_text() {
     }
 
     assert_signature::<RecordingTransport>();
+}
+
+#[test]
+fn osc_test_message_uses_the_shared_pacer_and_prepared_transport() -> AppResult<()> {
+    let clock = Arc::new(AdvancingClock::new());
+    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let (texts, receiver) = mpsc::channel();
+    let transport: Arc<dyn ChatboxTransport> = Arc::new(RecordingTransport { texts });
+    let udp_receiver =
+        UdpSocket::bind("127.0.0.1:0").map_err(|error| AppError::osc_bind(error.to_string()))?;
+    udp_receiver
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|error| AppError::osc_bind(error.to_string()))?;
+    let port = udp_receiver
+        .local_addr()
+        .map_err(|error| AppError::osc_bind(error.to_string()))?
+        .port();
+    let runtime_text = prepare_single_message("runtime attempt")
+        .map_err(|error| AppError::runtime(describe_layout_error(error)))?
+        .ok_or_else(|| AppError::state("Runtime test text must not be empty."))?;
+
+    pacer
+        .wait_for_turn(None)?
+        .ok_or_else(|| AppError::state("Runtime test pacing was cancelled."))?
+        .attempt(|| transport.send_text(&runtime_text))?;
+    let receipt = send_test_message(
+        &OscConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            enabled: true,
+        },
+        &pacer,
+        &HostResolver::default(),
+    )?;
+
+    let mut datagram = [0_u8; 1024];
+    let (size, _) = udp_receiver
+        .recv_from(&mut datagram)
+        .map_err(|error| AppError::osc_send("test receiver", error.to_string()))?;
+    let (_, packet) = decoder::decode_udp(&datagram[..size])
+        .map_err(|error| AppError::osc_encode(error.to_string()))?;
+
+    assert_eq!(wait_for_text(&receiver)?, "runtime attempt");
+    assert_eq!(clock.total_sleep(), Duration::from_secs(1));
+    assert_eq!(receipt.target, format!("127.0.0.1:{port}"));
+    assert_eq!(
+        packet,
+        OscPacket::Message(OscMessage {
+            addr: "/chatbox/input".to_string(),
+            args: vec![
+                OscType::String(OSC_TEST_MESSAGE.to_string()),
+                OscType::Bool(true),
+                OscType::Bool(false),
+            ],
+        })
+    );
+    assert!(receipt.byte_count > OSC_TEST_MESSAGE.len());
+    Ok(())
+}
+
+#[test]
+fn osc_test_resolution_failure_does_not_consume_a_text_attempt() -> AppResult<()> {
+    let clock = Arc::new(AdvancingClock::new());
+    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let resolver = HostResolver::with_lookup(|_, _| {
+        Err(std::io::Error::other("Scripted OSC resolution failure."))
+    });
+
+    let error = match send_test_message(
+        &OscConfig {
+            host: "unresolved.test".to_string(),
+            port: 9000,
+            enabled: true,
+        },
+        &pacer,
+        &resolver,
+    ) {
+        Ok(_) => {
+            return Err(AppError::state(
+                "A failed hostname lookup unexpectedly sent the OSC test message.",
+            ));
+        }
+        Err(error) => error,
+    };
+
+    let (texts, _receiver) = mpsc::channel();
+    let transport = RecordingTransport { texts };
+    let next_text = prepare_single_message("next attempt")
+        .map_err(|layout_error| AppError::runtime(describe_layout_error(layout_error)))?
+        .ok_or_else(|| AppError::state("Next test text must not be empty."))?;
+    pacer
+        .wait_for_turn(None)?
+        .ok_or_else(|| AppError::state("Next test pacing was cancelled."))?
+        .attempt(|| transport.send_text(&next_text))?;
+
+    assert_eq!(error.code(), "osc.send_failed");
+    assert_eq!(clock.total_sleep(), Duration::ZERO);
+    Ok(())
 }
 
 fn reporter() -> Arc<dyn Fn(DiagnosticUpdate) + Send + Sync> {
