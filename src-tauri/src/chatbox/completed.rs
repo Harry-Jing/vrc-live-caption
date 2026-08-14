@@ -109,7 +109,9 @@ struct PublisherState {
     units: VecDeque<QueuedUnitPublication>,
     resident_pages: usize,
     next_sequence: u64,
-    open_source_units: HashSet<String>,
+    // Unit IDs that keep the typing indicator active until the unit aborts or
+    // its Completed publication resolves.
+    typing_active_units: HashSet<String>,
     typing_desired: bool,
     typing_epoch: u64,
     typing_attempted_epoch: Option<u64>,
@@ -188,7 +190,7 @@ impl CompletedChatboxPublisher {
                 units: VecDeque::new(),
                 resident_pages: 0,
                 next_sequence: 1,
-                open_source_units: HashSet::new(),
+                typing_active_units: HashSet::new(),
                 typing_desired: false,
                 typing_epoch: 0,
                 // Epoch zero represents the initial typing-off state; it does
@@ -309,7 +311,7 @@ impl CompletedChatboxPublisher {
                     return Ok(PublicationObservationOutcome::Closed);
                 }
 
-                if state.open_source_units.insert(unit_id) {
+                if state.typing_active_units.insert(unit_id) {
                     refresh_typing_desired(&mut state);
                     self.signal_worker_locked();
                 }
@@ -322,7 +324,7 @@ impl CompletedChatboxPublisher {
                     return Ok(PublicationObservationOutcome::Closed);
                 }
 
-                finish_source_unit_activity(&mut state, &unit_id);
+                release_unit_typing_activity(&mut state, &unit_id);
                 self.signal_worker_locked();
             }
             SourceUnitEvent::Completed { unit_id, text } => {
@@ -434,7 +436,7 @@ impl CompletedChatboxPublisher {
                 {
                     return Ok(PublicationObservationOutcome::Closed);
                 }
-                finish_source_unit_activity(&mut state, &unit_id);
+                release_unit_typing_activity(&mut state, &unit_id);
                 state
                     .diagnostics
                     .push_back(CompletedPublisherDiagnostic::LayoutFailed {
@@ -452,7 +454,7 @@ impl CompletedChatboxPublisher {
         }
 
         if pages.is_empty() {
-            finish_source_unit_activity(&mut state, &unit_id);
+            release_unit_typing_activity(&mut state, &unit_id);
             self.signal_worker_locked();
             return Ok(PublicationObservationOutcome::Handled);
         }
@@ -474,7 +476,7 @@ impl CompletedChatboxPublisher {
         if page_count > self.shared.limits.max_resident_pages
             || protected_pages.saturating_add(page_count) > self.shared.limits.max_resident_pages
         {
-            finish_source_unit_activity(&mut state, &unit_id);
+            release_unit_typing_activity(&mut state, &unit_id);
             state
                 .diagnostics
                 .push_back(CompletedPublisherDiagnostic::UnitRejectedOverload {
@@ -493,7 +495,7 @@ impl CompletedChatboxPublisher {
                 .iter()
                 .position(|unit| !unit.first_send_attempt_started)
             else {
-                finish_source_unit_activity(&mut state, &unit_id);
+                release_unit_typing_activity(&mut state, &unit_id);
                 state
                     .diagnostics
                     .push_back(CompletedPublisherDiagnostic::UnitRejectedOverload {
@@ -513,7 +515,7 @@ impl CompletedChatboxPublisher {
                 .resident_pages
                 .checked_sub(dropped_pages)
                 .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
-            finish_source_unit_activity(&mut state, &dropped.unit_id);
+            release_unit_typing_activity(&mut state, &dropped.unit_id);
             state
                 .diagnostics
                 .push_back(CompletedPublisherDiagnostic::UnitDroppedOverload {
@@ -801,7 +803,7 @@ fn discard_resident_pages_on_close(state: &mut PublisherState, reason: Publisher
 
     state.units.clear();
     state.resident_pages = 0;
-    state.open_source_units.clear();
+    state.typing_active_units.clear();
     state.typing_desired = false;
     state.typing_epoch = state.typing_epoch.wrapping_add(1);
     state.typing_attempted_epoch = None;
@@ -857,7 +859,7 @@ fn attempt_selected_page(
                 .resident_pages
                 .checked_sub(expired_pages)
                 .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
-            finish_source_unit_activity(&mut state, &expired.unit_id);
+            release_unit_typing_activity(&mut state, &expired.unit_id);
             state
                 .diagnostics
                 .push_back(CompletedPublisherDiagnostic::UnitExpired {
@@ -902,7 +904,7 @@ fn attempt_selected_page(
                 let Some(completed) = state.units.pop_front() else {
                     return Ok(());
                 };
-                finish_source_unit_activity(&mut state, &completed.unit_id);
+                release_unit_typing_activity(&mut state, &completed.unit_id);
                 state
                     .diagnostics
                     .push_back(CompletedPublisherDiagnostic::UnitSendSucceeded {
@@ -922,7 +924,7 @@ fn attempt_selected_page(
                 .resident_pages
                 .checked_sub(remaining_pages)
                 .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
-            finish_source_unit_activity(&mut state, &failed.unit_id);
+            release_unit_typing_activity(&mut state, &failed.unit_id);
             state
                 .diagnostics
                 .push_back(CompletedPublisherDiagnostic::UnitSendFailed {
@@ -963,7 +965,7 @@ fn expire_units_waiting_for_first_send_attempt(
             .resident_pages
             .checked_sub(expired_pages)
             .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
-        finish_source_unit_activity(state, &expired.unit_id);
+        release_unit_typing_activity(state, &expired.unit_id);
         state
             .diagnostics
             .push_back(CompletedPublisherDiagnostic::UnitExpired {
@@ -973,14 +975,14 @@ fn expire_units_waiting_for_first_send_attempt(
     }
 }
 
-fn finish_source_unit_activity(state: &mut PublisherState, unit_id: &str) {
-    if state.open_source_units.remove(unit_id) {
+fn release_unit_typing_activity(state: &mut PublisherState, unit_id: &str) {
+    if state.typing_active_units.remove(unit_id) {
         refresh_typing_desired(state);
     }
 }
 
 fn refresh_typing_desired(state: &mut PublisherState) {
-    let desired = !state.open_source_units.is_empty();
+    let desired = !state.typing_active_units.is_empty();
     if desired != state.typing_desired {
         state.typing_desired = desired;
         state.typing_epoch = state.typing_epoch.wrapping_add(1);

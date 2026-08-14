@@ -447,7 +447,7 @@ fn completed_publication_uses_exact_changes_across_revision_gaps_and_deduplicate
 }
 
 #[test]
-fn completed_publication_derives_started_completed_and_aborted_from_aggregates() -> AppResult<()> {
+fn completed_publication_derives_opened_completed_and_aborted_from_aggregates() -> AppResult<()> {
     let (events, receiver) = mpsc::channel();
     let transport: Arc<dyn ChatboxTransport> = Arc::new(TracingTransport { events });
     let fence = GenerationFence::new();
@@ -467,7 +467,7 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
     assert_eq!(
         receiver
             .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| AppError::runtime("Completed publication did not derive Started."))?,
+            .map_err(|_| AppError::runtime("Completed publication did not derive Opened."))?,
         PublicationEvent::Typing(true)
     );
 
@@ -507,7 +507,7 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
             .map_err(|_| AppError::runtime("Completed publication did not resolve typing."))?,
         receiver
             .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| AppError::runtime("Completed publication did not publish text."))?,
+            .map_err(|_| AppError::runtime("Completed publication did not send text."))?,
     ];
     assert!(terminal_events.contains(&PublicationEvent::Typing(false)));
     assert!(terminal_events.contains(&PublicationEvent::Text(
