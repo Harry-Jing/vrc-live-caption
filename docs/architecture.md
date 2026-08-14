@@ -185,9 +185,9 @@ Both workers pass text through one pure preparation and layout boundary before
 storing a sendable page or viewport. That boundary applies the product control
 policy and returns opaque prepared text. The OSC test uses the same boundary,
 and the transport accepts only prepared text without constructing or rewriting
-it. The layout model includes only positive kerning adjustments from the
-hash-pinned primary raw font and reserves a full line for graphemes it cannot
-measure confidently, so uncertain shaping cannot make a page less conservative.
+it. The build-scoped layout model must not let uncertain shaping produce a less
+conservative sendable result; exact metrics and fallback mechanics remain owned
+by the implementation and the linked research reference.
 
 Publisher instances are generation-scoped. Stop discards their queued caption
 text rather than draining it. Typing indication is lifecycle control outside the
