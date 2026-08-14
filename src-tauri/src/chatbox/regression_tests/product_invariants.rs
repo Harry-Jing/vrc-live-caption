@@ -3,7 +3,7 @@ use super::super::layout::{
     prepare_live_viewport, prepare_single_message,
 };
 use super::support::{
-    PORTABLE_CORPUS_JSON, PREPARATION_POLICY_EXPECTATIONS, egc_end_utf16_offsets,
+    CHATBOX_REGRESSION_CORPUS_JSON, PREPARATION_POLICY_EXPECTATIONS, egc_end_utf16_offsets,
     first_oversized_grapheme_utf16_units, has_test_target, required_string, required_usize,
     required_usize_array,
 };
@@ -18,8 +18,8 @@ const EXPECTED_LAYOUT_TARGET_COUNT: usize = 169;
 
 #[test]
 fn completed_targets_form_lossless_standalone_prepared_pages() -> Result<(), String> {
-    let corpus =
-        serde_json::from_str::<Value>(PORTABLE_CORPUS_JSON).map_err(|error| error.to_string())?;
+    let corpus = serde_json::from_str::<Value>(CHATBOX_REGRESSION_CORPUS_JSON)
+        .map_err(|error| error.to_string())?;
     let cases = corpus["cases"]
         .as_array()
         .ok_or("Chatbox corpus cases must be an array.")?;
@@ -104,15 +104,15 @@ fn completed_targets_form_lossless_standalone_prepared_pages() -> Result<(), Str
     assert_eq!(target_count, EXPECTED_COMPLETED_TARGET_COUNT);
     assert_eq!(
         oversized_count, 2,
-        "portable corpus lost oversized EGC coverage"
+        "Chatbox regression corpus lost oversized EGC coverage"
     );
     Ok(())
 }
 
 #[test]
 fn live_targets_form_bounded_newest_standalone_suffixes() -> Result<(), String> {
-    let corpus =
-        serde_json::from_str::<Value>(PORTABLE_CORPUS_JSON).map_err(|error| error.to_string())?;
+    let corpus = serde_json::from_str::<Value>(CHATBOX_REGRESSION_CORPUS_JSON)
+        .map_err(|error| error.to_string())?;
     let cases = corpus["cases"]
         .as_array()
         .ok_or("Chatbox corpus cases must be an array.")?;
@@ -213,11 +213,11 @@ fn live_targets_form_bounded_newest_standalone_suffixes() -> Result<(), String> 
     assert_eq!(target_count, EXPECTED_LIVE_TARGET_COUNT);
     assert_eq!(
         oversized_count, 2,
-        "portable corpus lost oversized EGC coverage"
+        "Chatbox regression corpus lost oversized EGC coverage"
     );
     assert_eq!(
         oversized_error_count, 1,
-        "portable corpus must distinguish old from newest oversized EGCs"
+        "Chatbox regression corpus must distinguish old from newest oversized EGCs"
     );
     Ok(())
 }
@@ -225,8 +225,8 @@ fn live_targets_form_bounded_newest_standalone_suffixes() -> Result<(), String> 
 #[test]
 fn layout_targets_have_predictions_without_vrchat_client_observation_expectations()
 -> Result<(), String> {
-    let corpus =
-        serde_json::from_str::<Value>(PORTABLE_CORPUS_JSON).map_err(|error| error.to_string())?;
+    let corpus = serde_json::from_str::<Value>(CHATBOX_REGRESSION_CORPUS_JSON)
+        .map_err(|error| error.to_string())?;
     let cases = corpus["cases"]
         .as_array()
         .ok_or("Chatbox corpus cases must be an array.")?;
@@ -355,7 +355,7 @@ fn assert_preparation_preserves_fixture_boundaries(
     case: &Value,
     prepared_source: &str,
 ) -> Result<(), String> {
-    let facts = &case["portable_unicode_facts"];
+    let facts = &case["unicode_facts"];
     assert_eq!(
         prepared_source.encode_utf16().count(),
         required_usize(facts, "utf16_units")?,

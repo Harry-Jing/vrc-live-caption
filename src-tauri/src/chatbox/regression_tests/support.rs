@@ -3,25 +3,11 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use unicode_segmentation::UnicodeSegmentation;
 
-pub(super) const PORTABLE_CORPUS_JSON: &str =
+pub(super) const CHATBOX_REGRESSION_CORPUS_JSON: &str =
     include_str!("../../../testdata/chatbox/layout-cases-v1.json");
 pub(super) const VRCHAT_CLIENT_OBSERVATIONS_JSON: &str = include_str!(
     "../../../testdata/chatbox/vrchat-client-observations-2026.3.1-1885-81193b80fa-v1.json"
 );
-pub(super) const EXPECTED_SOURCE_SHA256: &str =
-    "f4899d95d0a2fac74a96423608cd4d9b88fa3afe28737c747356fcd3d4190731";
-pub(super) const EXPECTED_MANIFEST_SHA256: &str =
-    "fcbad159f2fb9ea6f0b9bd9fab33373c913d48e7b3213913bb73c8a3ac68e7d8";
-pub(super) const FORBIDDEN_GENERATED_EXPECTATION_FIELDS: [&str; 8] = [
-    "expected_pages",
-    "model_prediction",
-    "observed_break_utf16_offsets",
-    "observed_line_count",
-    "runtime_observation",
-    "screenshot",
-    "screenshot_sha256",
-    "vrchat_version",
-];
 
 // These are product-policy expectations, not observations copied from a
 // VRChat build. Keeping the small set explicit makes a newly targeted control
@@ -63,6 +49,30 @@ pub(super) fn required_usize_array(value: &Value, field: &str) -> Result<Vec<usi
         .collect()
 }
 
+pub(super) fn require_object_fields(
+    value: &Value,
+    context: &str,
+    required: &[&str],
+    optional: &[&str],
+) -> Result<(), String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{context} must be an object."))?;
+
+    for field in required {
+        if !object.contains_key(*field) {
+            return Err(format!("{context} is missing required field {field}."));
+        }
+    }
+    for field in object.keys() {
+        if !required.contains(&field.as_str()) && !optional.contains(&field.as_str()) {
+            return Err(format!("{context} contains unexpected field {field}."));
+        }
+    }
+
+    Ok(())
+}
+
 pub(super) fn has_test_target(case: &Value, expected: &str) -> Result<bool, String> {
     let case_id = required_string(case, "case_id")?;
     let targets = case["test_targets"]
@@ -92,24 +102,4 @@ pub(super) fn egc_end_utf16_offsets(graphemes: &[&str]) -> Vec<usize> {
 
 pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
-}
-
-pub(super) fn assert_no_forbidden_expectation_fields(value: &Value) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                assert_no_forbidden_expectation_fields(value);
-            }
-        }
-        Value::Object(object) => {
-            for (field, value) in object {
-                assert!(
-                    !FORBIDDEN_GENERATED_EXPECTATION_FIELDS.contains(&field.as_str()),
-                    "portable corpus contains non-portable field: {field}"
-                );
-                assert_no_forbidden_expectation_fields(value);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
 }

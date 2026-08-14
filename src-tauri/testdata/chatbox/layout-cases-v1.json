@@ -45,16 +45,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "payload_sha256": "1702245ac78581c3218750b9aa8c45403e5ac485bd41b428f79a60f7b11c379b",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 29,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 29,
-          "sha256": "1702245ac78581c3218750b9aa8c45403e5ac485bd41b428f79a60f7b11c379b",
           "utf16_units": 29
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 29,
         "line_breaks": {
           "cr": 0,
@@ -66,9 +64,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "1702245ac78581c3218750b9aa8c45403e5ac485bd41b428f79a60f7b11c379b",
-          "nfd_sha256": "1702245ac78581c3218750b9aa8c45403e5ac485bd41b428f79a60f7b11c379b"
+          "is_nfd": true
         },
         "utf16_units": 29,
         "utf8_bytes": 29
@@ -129,16 +125,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "payload_sha256": "666a596df2cf2181e69835c4f812f7c6117ecbe5136a3a6be2a07ef4aaccd343",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 30,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "666a596df2cf2181e69835c4f812f7c6117ecbe5136a3a6be2a07ef4aaccd343",
           "utf16_units": 30
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -150,9 +144,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "666a596df2cf2181e69835c4f812f7c6117ecbe5136a3a6be2a07ef4aaccd343",
-          "nfd_sha256": "666a596df2cf2181e69835c4f812f7c6117ecbe5136a3a6be2a07ef4aaccd343"
+          "is_nfd": true
         },
         "utf16_units": 30,
         "utf8_bytes": 30
@@ -199,16 +191,14 @@
       ],
       "payload": "WWWWWWWWWWWWWWWW",
       "payload_sha256": "0beef244fbfd0c37cf6c6bb822e305a230b7e7baccad8caf3a0b6cde8642c2e9",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "0beef244fbfd0c37cf6c6bb822e305a230b7e7baccad8caf3a0b6cde8642c2e9",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -220,9 +210,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "0beef244fbfd0c37cf6c6bb822e305a230b7e7baccad8caf3a0b6cde8642c2e9",
-          "nfd_sha256": "0beef244fbfd0c37cf6c6bb822e305a230b7e7baccad8caf3a0b6cde8642c2e9"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 16
@@ -270,16 +258,14 @@
       ],
       "payload": "WWWWWWWWWWWWWWWWW",
       "payload_sha256": "97c0a62531f1dc9b133e2cd5a104081da8013626d926e6fa914aab292049f8cd",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 17,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 17,
-          "sha256": "97c0a62531f1dc9b133e2cd5a104081da8013626d926e6fa914aab292049f8cd",
           "utf16_units": 17
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 17,
         "line_breaks": {
           "cr": 0,
@@ -291,9 +277,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "97c0a62531f1dc9b133e2cd5a104081da8013626d926e6fa914aab292049f8cd",
-          "nfd_sha256": "97c0a62531f1dc9b133e2cd5a104081da8013626d926e6fa914aab292049f8cd"
+          "is_nfd": true
         },
         "utf16_units": 17,
         "utf8_bytes": 17
@@ -382,16 +366,14 @@
       ],
       "payload": "..........................................................",
       "payload_sha256": "5a7668a9235f6693a798c1819a736f81815a0b5646c302a6ab65c691f40a5166",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 58,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 58,
-          "sha256": "5a7668a9235f6693a798c1819a736f81815a0b5646c302a6ab65c691f40a5166",
           "utf16_units": 58
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 58,
         "line_breaks": {
           "cr": 0,
@@ -403,9 +385,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "5a7668a9235f6693a798c1819a736f81815a0b5646c302a6ab65c691f40a5166",
-          "nfd_sha256": "5a7668a9235f6693a798c1819a736f81815a0b5646c302a6ab65c691f40a5166"
+          "is_nfd": true
         },
         "utf16_units": 58,
         "utf8_bytes": 58
@@ -495,16 +475,14 @@
       ],
       "payload": "...........................................................",
       "payload_sha256": "6927bca74ec6376982d83ac9423e1ab13de52c7ae1a9e83fd0f9541818be75c5",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 59,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 59,
-          "sha256": "6927bca74ec6376982d83ac9423e1ab13de52c7ae1a9e83fd0f9541818be75c5",
           "utf16_units": 59
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 59,
         "line_breaks": {
           "cr": 0,
@@ -516,9 +494,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6927bca74ec6376982d83ac9423e1ab13de52c7ae1a9e83fd0f9541818be75c5",
-          "nfd_sha256": "6927bca74ec6376982d83ac9423e1ab13de52c7ae1a9e83fd0f9541818be75c5"
+          "is_nfd": true
         },
         "utf16_units": 59,
         "utf8_bytes": 59
@@ -564,16 +540,14 @@
       ],
       "payload": "中中中中中中中中中中中中中中中",
       "payload_sha256": "e0daeb921ce2466d3cdcba358aaf260b01aba46bd85646e8907fe27d9d6ba18a",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 15,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 15,
-          "sha256": "e0daeb921ce2466d3cdcba358aaf260b01aba46bd85646e8907fe27d9d6ba18a",
           "utf16_units": 15
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 15,
         "line_breaks": {
           "cr": 0,
@@ -585,9 +559,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "e0daeb921ce2466d3cdcba358aaf260b01aba46bd85646e8907fe27d9d6ba18a",
-          "nfd_sha256": "e0daeb921ce2466d3cdcba358aaf260b01aba46bd85646e8907fe27d9d6ba18a"
+          "is_nfd": true
         },
         "utf16_units": 15,
         "utf8_bytes": 45
@@ -634,16 +606,14 @@
       ],
       "payload": "中中中中中中中中中中中中中中中中",
       "payload_sha256": "442efe767e0ccaa7b0ae38a20681dbf664042d3fdce93f2884abedf8a7c89b1e",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "442efe767e0ccaa7b0ae38a20681dbf664042d3fdce93f2884abedf8a7c89b1e",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -655,9 +625,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "442efe767e0ccaa7b0ae38a20681dbf664042d3fdce93f2884abedf8a7c89b1e",
-          "nfd_sha256": "442efe767e0ccaa7b0ae38a20681dbf664042d3fdce93f2884abedf8a7c89b1e"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 48
@@ -714,16 +682,14 @@
       ],
       "payload": "XXXXXXXXXXXXXXXXXXXXXXXXXX",
       "payload_sha256": "b2cf0dec6e01b56e27a398cc0af83816405e66d604f990318f1ec362d0c25750",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 26,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 26,
-          "sha256": "b2cf0dec6e01b56e27a398cc0af83816405e66d604f990318f1ec362d0c25750",
           "utf16_units": 26
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 26,
         "line_breaks": {
           "cr": 0,
@@ -735,9 +701,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "b2cf0dec6e01b56e27a398cc0af83816405e66d604f990318f1ec362d0c25750",
-          "nfd_sha256": "b2cf0dec6e01b56e27a398cc0af83816405e66d604f990318f1ec362d0c25750"
+          "is_nfd": true
         },
         "utf16_units": 26,
         "utf8_bytes": 26
@@ -795,16 +759,14 @@
       ],
       "payload": "XXXXXXXXXXXXXXXXXXXXXXXXXXX",
       "payload_sha256": "65700c0b349cebbbe96fea79ba20f41adb9089edf87abca0009d7b6f6ab03f52",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 27,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 27,
-          "sha256": "65700c0b349cebbbe96fea79ba20f41adb9089edf87abca0009d7b6f6ab03f52",
           "utf16_units": 27
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 27,
         "line_breaks": {
           "cr": 0,
@@ -816,9 +778,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "65700c0b349cebbbe96fea79ba20f41adb9089edf87abca0009d7b6f6ab03f52",
-          "nfd_sha256": "65700c0b349cebbbe96fea79ba20f41adb9089edf87abca0009d7b6f6ab03f52"
+          "is_nfd": true
         },
         "utf16_units": 27,
         "utf8_bytes": 27
@@ -876,16 +836,14 @@
       ],
       "payload": "111111111111111111111111111",
       "payload_sha256": "9b0f3cba1b9ff6102c728d835e7eca4e3a83af46cd943e0e50b5c190b6a88778",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 27,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 27,
-          "sha256": "9b0f3cba1b9ff6102c728d835e7eca4e3a83af46cd943e0e50b5c190b6a88778",
           "utf16_units": 27
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 27,
         "line_breaks": {
           "cr": 0,
@@ -897,9 +855,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "9b0f3cba1b9ff6102c728d835e7eca4e3a83af46cd943e0e50b5c190b6a88778",
-          "nfd_sha256": "9b0f3cba1b9ff6102c728d835e7eca4e3a83af46cd943e0e50b5c190b6a88778"
+          "is_nfd": true
         },
         "utf16_units": 27,
         "utf8_bytes": 27
@@ -958,16 +914,14 @@
       ],
       "payload": "1111111111111111111111111111",
       "payload_sha256": "9a66a1336ffa9ac12b816d7247d7c9feccb6be46bc4019d77bc746c74b298fcb",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 28,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 28,
-          "sha256": "9a66a1336ffa9ac12b816d7247d7c9feccb6be46bc4019d77bc746c74b298fcb",
           "utf16_units": 28
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 28,
         "line_breaks": {
           "cr": 0,
@@ -979,9 +933,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "9a66a1336ffa9ac12b816d7247d7c9feccb6be46bc4019d77bc746c74b298fcb",
-          "nfd_sha256": "9a66a1336ffa9ac12b816d7247d7c9feccb6be46bc4019d77bc746c74b298fcb"
+          "is_nfd": true
         },
         "utf16_units": 28,
         "utf8_bytes": 28
@@ -1028,16 +980,14 @@
       ],
       "payload": "mmmmmmmmmmmmmmmm",
       "payload_sha256": "c48ea7417f54c2573feec02d58538fe442bcfa5f09e43720ff7fe97297c5abfe",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "c48ea7417f54c2573feec02d58538fe442bcfa5f09e43720ff7fe97297c5abfe",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -1049,9 +999,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "c48ea7417f54c2573feec02d58538fe442bcfa5f09e43720ff7fe97297c5abfe",
-          "nfd_sha256": "c48ea7417f54c2573feec02d58538fe442bcfa5f09e43720ff7fe97297c5abfe"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 16
@@ -1099,16 +1047,14 @@
       ],
       "payload": "mmmmmmmmmmmmmmmmm",
       "payload_sha256": "98c6baca9bed438347f24aaac870be42c57ec34d59c08fbfc97161ac290f1d8d",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 17,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 17,
-          "sha256": "98c6baca9bed438347f24aaac870be42c57ec34d59c08fbfc97161ac290f1d8d",
           "utf16_units": 17
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 17,
         "line_breaks": {
           "cr": 0,
@@ -1120,9 +1066,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "98c6baca9bed438347f24aaac870be42c57ec34d59c08fbfc97161ac290f1d8d",
-          "nfd_sha256": "98c6baca9bed438347f24aaac870be42c57ec34d59c08fbfc97161ac290f1d8d"
+          "is_nfd": true
         },
         "utf16_units": 17,
         "utf8_bytes": 17
@@ -1172,16 +1116,14 @@
       ],
       "payload": "wwwwwwwwwwwwwwwwwww",
       "payload_sha256": "ff2d36422359e32e38df98f52015088248e3d0ca443381ae94cab4106f2dd7fb",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 19,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 19,
-          "sha256": "ff2d36422359e32e38df98f52015088248e3d0ca443381ae94cab4106f2dd7fb",
           "utf16_units": 19
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 19,
         "line_breaks": {
           "cr": 0,
@@ -1193,9 +1135,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "ff2d36422359e32e38df98f52015088248e3d0ca443381ae94cab4106f2dd7fb",
-          "nfd_sha256": "ff2d36422359e32e38df98f52015088248e3d0ca443381ae94cab4106f2dd7fb"
+          "is_nfd": true
         },
         "utf16_units": 19,
         "utf8_bytes": 19
@@ -1246,16 +1186,14 @@
       ],
       "payload": "wwwwwwwwwwwwwwwwwwww",
       "payload_sha256": "69658616f47113f4de5c6389ae0b1717dbdc641a7023480f0d8e9baebbdd579e",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 20,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 20,
-          "sha256": "69658616f47113f4de5c6389ae0b1717dbdc641a7023480f0d8e9baebbdd579e",
           "utf16_units": 20
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 20,
         "line_breaks": {
           "cr": 0,
@@ -1267,9 +1205,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "69658616f47113f4de5c6389ae0b1717dbdc641a7023480f0d8e9baebbdd579e",
-          "nfd_sha256": "69658616f47113f4de5c6389ae0b1717dbdc641a7023480f0d8e9baebbdd579e"
+          "is_nfd": true
         },
         "utf16_units": 20,
         "utf8_bytes": 20
@@ -1327,16 +1263,14 @@
       ],
       "payload": "000000000000000000000000000",
       "payload_sha256": "d18b431dbcc848237ea9d97c8ae5ad2f844148d2bd3a0da20bac52cf931582c3",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 27,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 27,
-          "sha256": "d18b431dbcc848237ea9d97c8ae5ad2f844148d2bd3a0da20bac52cf931582c3",
           "utf16_units": 27
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 27,
         "line_breaks": {
           "cr": 0,
@@ -1348,9 +1282,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "d18b431dbcc848237ea9d97c8ae5ad2f844148d2bd3a0da20bac52cf931582c3",
-          "nfd_sha256": "d18b431dbcc848237ea9d97c8ae5ad2f844148d2bd3a0da20bac52cf931582c3"
+          "is_nfd": true
         },
         "utf16_units": 27,
         "utf8_bytes": 27
@@ -1409,16 +1341,14 @@
       ],
       "payload": "0000000000000000000000000000",
       "payload_sha256": "d77bd86a0e004d9c21a03cdbfeac637b484d184bdda05d72ad726e029c9003a1",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 28,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 28,
-          "sha256": "d77bd86a0e004d9c21a03cdbfeac637b484d184bdda05d72ad726e029c9003a1",
           "utf16_units": 28
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 28,
         "line_breaks": {
           "cr": 0,
@@ -1430,9 +1360,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "d77bd86a0e004d9c21a03cdbfeac637b484d184bdda05d72ad726e029c9003a1",
-          "nfd_sha256": "d77bd86a0e004d9c21a03cdbfeac637b484d184bdda05d72ad726e029c9003a1"
+          "is_nfd": true
         },
         "utf16_units": 28,
         "utf8_bytes": 28
@@ -1521,16 +1449,14 @@
       ],
       "payload": "::::::::::::::::::::::::::::::::::::::::::::::::::::::::::",
       "payload_sha256": "e80d641faf18e66113dee61804db0d96de3c076860efd077c6195a609cba5060",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 58,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 58,
-          "sha256": "e80d641faf18e66113dee61804db0d96de3c076860efd077c6195a609cba5060",
           "utf16_units": 58
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 58,
         "line_breaks": {
           "cr": 0,
@@ -1542,9 +1468,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "e80d641faf18e66113dee61804db0d96de3c076860efd077c6195a609cba5060",
-          "nfd_sha256": "e80d641faf18e66113dee61804db0d96de3c076860efd077c6195a609cba5060"
+          "is_nfd": true
         },
         "utf16_units": 58,
         "utf8_bytes": 58
@@ -1634,16 +1558,14 @@
       ],
       "payload": ":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::",
       "payload_sha256": "8bdaa7e19b0305aea922dcfbc9a658b77894b0c20c4a3de12830581676312b4e",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 59,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 59,
-          "sha256": "8bdaa7e19b0305aea922dcfbc9a658b77894b0c20c4a3de12830581676312b4e",
           "utf16_units": 59
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 59,
         "line_breaks": {
           "cr": 0,
@@ -1655,9 +1577,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "8bdaa7e19b0305aea922dcfbc9a658b77894b0c20c4a3de12830581676312b4e",
-          "nfd_sha256": "8bdaa7e19b0305aea922dcfbc9a658b77894b0c20c4a3de12830581676312b4e"
+          "is_nfd": true
         },
         "utf16_units": 59,
         "utf8_bytes": 59
@@ -1715,16 +1635,14 @@
       ],
       "payload": "ééééééééééééééééééééééééééé",
       "payload_sha256": "2276e051a6111964a16d9b9a7d073ae9a52d2ed9aebf654820a8c59a552f95cc",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 27,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 27,
-          "sha256": "2276e051a6111964a16d9b9a7d073ae9a52d2ed9aebf654820a8c59a552f95cc",
           "utf16_units": 27
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 27,
         "line_breaks": {
           "cr": 0,
@@ -1736,9 +1654,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "2276e051a6111964a16d9b9a7d073ae9a52d2ed9aebf654820a8c59a552f95cc",
-          "nfd_sha256": "61c0162a96e6d645f3c1b7d006a4ebd7bbc2f662df255b17c61fc0b606f176c2"
+          "is_nfd": false
         },
         "utf16_units": 27,
         "utf8_bytes": 54
@@ -1797,16 +1713,14 @@
       ],
       "payload": "éééééééééééééééééééééééééééé",
       "payload_sha256": "a2e7c1f809d17958e21b7cd370a1d7d030e07f3af72588be133d4f73fadee71d",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 28,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 28,
-          "sha256": "a2e7c1f809d17958e21b7cd370a1d7d030e07f3af72588be133d4f73fadee71d",
           "utf16_units": 28
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 28,
         "line_breaks": {
           "cr": 0,
@@ -1818,9 +1732,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "a2e7c1f809d17958e21b7cd370a1d7d030e07f3af72588be133d4f73fadee71d",
-          "nfd_sha256": "2e963b7c04bedb27e91f730faa825db986b52bf8bb1333633f4919b724cd6317"
+          "is_nfd": false
         },
         "utf16_units": 28,
         "utf8_bytes": 56
@@ -1940,16 +1852,14 @@
       ],
       "payload": "’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’",
       "payload_sha256": "3eff567ecaa3da3bd3b01de418b264f9fbe8bb1b96a110a6c032ceee15b58288",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 88,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 88,
-          "sha256": "3eff567ecaa3da3bd3b01de418b264f9fbe8bb1b96a110a6c032ceee15b58288",
           "utf16_units": 88
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 88,
         "line_breaks": {
           "cr": 0,
@@ -1961,9 +1871,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "3eff567ecaa3da3bd3b01de418b264f9fbe8bb1b96a110a6c032ceee15b58288",
-          "nfd_sha256": "3eff567ecaa3da3bd3b01de418b264f9fbe8bb1b96a110a6c032ceee15b58288"
+          "is_nfd": true
         },
         "utf16_units": 88,
         "utf8_bytes": 264
@@ -2084,16 +1992,14 @@
       ],
       "payload": "’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’’",
       "payload_sha256": "1c539a7d6316187810fcb8e685ae689080fa7154a7e9d96b21c60758cacc66af",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 89,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 89,
-          "sha256": "1c539a7d6316187810fcb8e685ae689080fa7154a7e9d96b21c60758cacc66af",
           "utf16_units": 89
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 89,
         "line_breaks": {
           "cr": 0,
@@ -2105,9 +2011,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "1c539a7d6316187810fcb8e685ae689080fa7154a7e9d96b21c60758cacc66af",
-          "nfd_sha256": "1c539a7d6316187810fcb8e685ae689080fa7154a7e9d96b21c60758cacc66af"
+          "is_nfd": true
         },
         "utf16_units": 89,
         "utf8_bytes": 267
@@ -2182,16 +2086,14 @@
       ],
       "payload": "“““““““““““““““““““““““““““““““““““““““““““",
       "payload_sha256": "57ec15502d694568febcfa366c36dfbec83442bf741e2f8c6a0a266b76168e53",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 43,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 43,
-          "sha256": "57ec15502d694568febcfa366c36dfbec83442bf741e2f8c6a0a266b76168e53",
           "utf16_units": 43
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 43,
         "line_breaks": {
           "cr": 0,
@@ -2203,9 +2105,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "57ec15502d694568febcfa366c36dfbec83442bf741e2f8c6a0a266b76168e53",
-          "nfd_sha256": "57ec15502d694568febcfa366c36dfbec83442bf741e2f8c6a0a266b76168e53"
+          "is_nfd": true
         },
         "utf16_units": 43,
         "utf8_bytes": 129
@@ -2281,16 +2181,14 @@
       ],
       "payload": "““““““““““““““““““““““““““““““““““““““““““““",
       "payload_sha256": "bc9d61072e88030b7a9f05c49744393a6e922eada9587def701033bdb316bf08",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 44,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 44,
-          "sha256": "bc9d61072e88030b7a9f05c49744393a6e922eada9587def701033bdb316bf08",
           "utf16_units": 44
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 44,
         "line_breaks": {
           "cr": 0,
@@ -2302,9 +2200,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "bc9d61072e88030b7a9f05c49744393a6e922eada9587def701033bdb316bf08",
-          "nfd_sha256": "bc9d61072e88030b7a9f05c49744393a6e922eada9587def701033bdb316bf08"
+          "is_nfd": true
         },
         "utf16_units": 44,
         "utf8_bytes": 132
@@ -2351,16 +2247,14 @@
       ],
       "payload": "———————————————",
       "payload_sha256": "75ee8c6bc0d2f39f59a4fa8dcab4f4e9309c5f303964ec83bc239d6d1f20c675",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 15,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 15,
-          "sha256": "75ee8c6bc0d2f39f59a4fa8dcab4f4e9309c5f303964ec83bc239d6d1f20c675",
           "utf16_units": 15
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 15,
         "line_breaks": {
           "cr": 0,
@@ -2372,9 +2266,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "75ee8c6bc0d2f39f59a4fa8dcab4f4e9309c5f303964ec83bc239d6d1f20c675",
-          "nfd_sha256": "75ee8c6bc0d2f39f59a4fa8dcab4f4e9309c5f303964ec83bc239d6d1f20c675"
+          "is_nfd": true
         },
         "utf16_units": 15,
         "utf8_bytes": 45
@@ -2422,16 +2314,14 @@
       ],
       "payload": "————————————————",
       "payload_sha256": "27695047f98a6d65e5f37eb86dd411fccc6cad975f6b650e7d8132d8afbfd378",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "27695047f98a6d65e5f37eb86dd411fccc6cad975f6b650e7d8132d8afbfd378",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -2443,9 +2333,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "27695047f98a6d65e5f37eb86dd411fccc6cad975f6b650e7d8132d8afbfd378",
-          "nfd_sha256": "27695047f98a6d65e5f37eb86dd411fccc6cad975f6b650e7d8132d8afbfd378"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 48
@@ -2492,16 +2380,14 @@
       ],
       "payload": "，，，，，，，，，，，，，，，",
       "payload_sha256": "49487178fca3a8fcd62b3a6006456fc715db4ea42f674b0dd2fcf7e27653793f",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 15,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 15,
-          "sha256": "49487178fca3a8fcd62b3a6006456fc715db4ea42f674b0dd2fcf7e27653793f",
           "utf16_units": 15
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 15,
         "line_breaks": {
           "cr": 0,
@@ -2513,9 +2399,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "49487178fca3a8fcd62b3a6006456fc715db4ea42f674b0dd2fcf7e27653793f",
-          "nfd_sha256": "49487178fca3a8fcd62b3a6006456fc715db4ea42f674b0dd2fcf7e27653793f"
+          "is_nfd": true
         },
         "utf16_units": 15,
         "utf8_bytes": 45
@@ -2563,16 +2447,14 @@
       ],
       "payload": "，，，，，，，，，，，，，，，，",
       "payload_sha256": "cd9d928e0f8f1a5758a8949d98be795d689e62ced0b7199a74bf154dc7a9e67a",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "cd9d928e0f8f1a5758a8949d98be795d689e62ced0b7199a74bf154dc7a9e67a",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -2584,9 +2466,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "cd9d928e0f8f1a5758a8949d98be795d689e62ced0b7199a74bf154dc7a9e67a",
-          "nfd_sha256": "cd9d928e0f8f1a5758a8949d98be795d689e62ced0b7199a74bf154dc7a9e67a"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 48
@@ -2761,16 +2641,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "payload_sha256": "2bd3f6efab5e871a28d37632e97cd83dfafe9822fedefa0bf54b53d486cfeb38",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "143",
         "code_points": 143,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 143,
-          "sha256": "2bd3f6efab5e871a28d37632e97cd83dfafe9822fedefa0bf54b53d486cfeb38",
           "utf16_units": 143
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 143,
         "line_breaks": {
           "cr": 0,
@@ -2782,9 +2660,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "2bd3f6efab5e871a28d37632e97cd83dfafe9822fedefa0bf54b53d486cfeb38",
-          "nfd_sha256": "2bd3f6efab5e871a28d37632e97cd83dfafe9822fedefa0bf54b53d486cfeb38"
+          "is_nfd": true
         },
         "utf16_units": 143,
         "utf8_bytes": 143
@@ -2963,16 +2839,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "payload_sha256": "b71df3b2ce77a2e2d78f7a7b91bf8868b61be0e8a12d300b1300b140d7fada13",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "144",
         "code_points": 144,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 144,
-          "sha256": "b71df3b2ce77a2e2d78f7a7b91bf8868b61be0e8a12d300b1300b140d7fada13",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 144,
         "line_breaks": {
           "cr": 0,
@@ -2984,9 +2858,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "b71df3b2ce77a2e2d78f7a7b91bf8868b61be0e8a12d300b1300b140d7fada13",
-          "nfd_sha256": "b71df3b2ce77a2e2d78f7a7b91bf8868b61be0e8a12d300b1300b140d7fada13"
+          "is_nfd": true
         },
         "utf16_units": 144,
         "utf8_bytes": 144
@@ -3166,16 +3038,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "payload_sha256": "a1b186afc61494910f0a90621baefc4a5c0f4daeab84a344b511aa26a43814ca",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "145",
         "code_points": 145,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 144,
-          "sha256": "b71df3b2ce77a2e2d78f7a7b91bf8868b61be0e8a12d300b1300b140d7fada13",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 145,
         "line_breaks": {
           "cr": 0,
@@ -3187,9 +3057,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "a1b186afc61494910f0a90621baefc4a5c0f4daeab84a344b511aa26a43814ca",
-          "nfd_sha256": "a1b186afc61494910f0a90621baefc4a5c0f4daeab84a344b511aa26a43814ca"
+          "is_nfd": true
         },
         "utf16_units": 145,
         "utf8_bytes": 145
@@ -3297,16 +3165,14 @@
       ],
       "payload": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a",
       "payload_sha256": "a23d85d4d3ec8550844ceb8b83da79355d928445b67e110fcedaee224751182c",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "143",
         "code_points": 72,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 72,
-          "sha256": "a23d85d4d3ec8550844ceb8b83da79355d928445b67e110fcedaee224751182c",
           "utf16_units": 143
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 72,
         "line_breaks": {
           "cr": 0,
@@ -3318,9 +3184,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "a23d85d4d3ec8550844ceb8b83da79355d928445b67e110fcedaee224751182c",
-          "nfd_sha256": "a23d85d4d3ec8550844ceb8b83da79355d928445b67e110fcedaee224751182c"
+          "is_nfd": true
         },
         "utf16_units": 143,
         "utf8_bytes": 285
@@ -3429,16 +3293,14 @@
       ],
       "payload": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
       "payload_sha256": "c8a36100890ba8eccc75e53bfff6e6fc63ba2f52ffbacb702de79d0e08a2d94c",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "144",
         "code_points": 72,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 72,
-          "sha256": "c8a36100890ba8eccc75e53bfff6e6fc63ba2f52ffbacb702de79d0e08a2d94c",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 72,
         "line_breaks": {
           "cr": 0,
@@ -3450,9 +3312,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "c8a36100890ba8eccc75e53bfff6e6fc63ba2f52ffbacb702de79d0e08a2d94c",
-          "nfd_sha256": "c8a36100890ba8eccc75e53bfff6e6fc63ba2f52ffbacb702de79d0e08a2d94c"
+          "is_nfd": true
         },
         "utf16_units": 144,
         "utf8_bytes": 288
@@ -3561,16 +3421,14 @@
       ],
       "payload": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a",
       "payload_sha256": "57057a61d4eb008892d068e9516d9080b74a21709e61f6f896105ab091953854",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "145",
         "code_points": 73,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 72,
-          "sha256": "c8a36100890ba8eccc75e53bfff6e6fc63ba2f52ffbacb702de79d0e08a2d94c",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 73,
         "line_breaks": {
           "cr": 0,
@@ -3582,9 +3440,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "57057a61d4eb008892d068e9516d9080b74a21709e61f6f896105ab091953854",
-          "nfd_sha256": "57057a61d4eb008892d068e9516d9080b74a21709e61f6f896105ab091953854"
+          "is_nfd": true
         },
         "utf16_units": 145,
         "utf8_bytes": 289
@@ -3764,16 +3620,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
       "payload_sha256": "c700ed81ab58de7786b60f0fce4af0c03417656d65ac894f9511de15d7057f4f",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "144",
         "code_points": 143,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 143,
-          "sha256": "c700ed81ab58de7786b60f0fce4af0c03417656d65ac894f9511de15d7057f4f",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 143,
         "line_breaks": {
           "cr": 0,
@@ -3785,9 +3639,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "c700ed81ab58de7786b60f0fce4af0c03417656d65ac894f9511de15d7057f4f",
-          "nfd_sha256": "c700ed81ab58de7786b60f0fce4af0c03417656d65ac894f9511de15d7057f4f"
+          "is_nfd": true
         },
         "utf16_units": 144,
         "utf8_bytes": 146
@@ -3968,16 +3820,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
       "payload_sha256": "beff10c20793b809d227f147f8db77d64fcb3f200066fbd54f96b5a3ce17d9e3",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "145",
         "code_points": 144,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 143,
-          "sha256": "2bd3f6efab5e871a28d37632e97cd83dfafe9822fedefa0bf54b53d486cfeb38",
           "utf16_units": 143
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 144,
         "line_breaks": {
           "cr": 0,
@@ -3989,9 +3839,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "beff10c20793b809d227f147f8db77d64fcb3f200066fbd54f96b5a3ce17d9e3",
-          "nfd_sha256": "beff10c20793b809d227f147f8db77d64fcb3f200066fbd54f96b5a3ce17d9e3"
+          "is_nfd": true
         },
         "utf16_units": 145,
         "utf8_bytes": 147
@@ -4172,16 +4020,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaé",
       "payload_sha256": "6474a8c44c6c687090f72d1e5784241525b62001ed041019d7253058e1653324",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "144",
         "code_points": 144,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 143,
-          "sha256": "6474a8c44c6c687090f72d1e5784241525b62001ed041019d7253058e1653324",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 143,
         "line_breaks": {
           "cr": 0,
@@ -4193,9 +4039,7 @@
         },
         "normalization": {
           "is_nfc": false,
-          "is_nfd": true,
-          "nfc_sha256": "bd6341905c0de2af27e85502d80c8d397272d343ef317ab65fea30f91d78371e",
-          "nfd_sha256": "6474a8c44c6c687090f72d1e5784241525b62001ed041019d7253058e1653324"
+          "is_nfd": true
         },
         "utf16_units": 144,
         "utf8_bytes": 145
@@ -4376,16 +4220,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaé",
       "payload_sha256": "bd11caf6d668641da798f9fdb6182c8f5acf715c05900dd67360f969c8735611",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "145",
         "code_points": 145,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 143,
-          "sha256": "2bd3f6efab5e871a28d37632e97cd83dfafe9822fedefa0bf54b53d486cfeb38",
           "utf16_units": 143
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 144,
         "line_breaks": {
           "cr": 0,
@@ -4397,9 +4239,7 @@
         },
         "normalization": {
           "is_nfc": false,
-          "is_nfd": true,
-          "nfc_sha256": "d310368f0408bbe0961e45e6da8e87ef70ab03964637334f8ad3bfaf29f06906",
-          "nfd_sha256": "bd11caf6d668641da798f9fdb6182c8f5acf715c05900dd67360f969c8735611"
+          "is_nfd": true
         },
         "utf16_units": 145,
         "utf8_bytes": 146
@@ -4577,16 +4417,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa👍🏽",
       "payload_sha256": "0c6b8c88f7076be5566cc2807ff9f84930c79b4b517de39b11ff3cb4f9524254",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "144",
         "code_points": 142,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 141,
-          "sha256": "0c6b8c88f7076be5566cc2807ff9f84930c79b4b517de39b11ff3cb4f9524254",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 141,
         "line_breaks": {
           "cr": 0,
@@ -4598,9 +4436,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "0c6b8c88f7076be5566cc2807ff9f84930c79b4b517de39b11ff3cb4f9524254",
-          "nfd_sha256": "0c6b8c88f7076be5566cc2807ff9f84930c79b4b517de39b11ff3cb4f9524254"
+          "is_nfd": true
         },
         "utf16_units": 144,
         "utf8_bytes": 148
@@ -4780,16 +4616,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa👍🏽",
       "payload_sha256": "2eed2c340bc9344d18c231253d0a0fb76cf2e8ecda7a7553b6b4e564f6ed499d",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "145",
         "code_points": 143,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 141,
-          "sha256": "6e816ec42ddb7baf8dc674b626a858bbffaf76b6f43c4b7ac94c82c9588c963b",
           "utf16_units": 141
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 142,
         "line_breaks": {
           "cr": 0,
@@ -4801,9 +4635,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "2eed2c340bc9344d18c231253d0a0fb76cf2e8ecda7a7553b6b4e564f6ed499d",
-          "nfd_sha256": "2eed2c340bc9344d18c231253d0a0fb76cf2e8ecda7a7553b6b4e564f6ed499d"
+          "is_nfd": true
         },
         "utf16_units": 145,
         "utf8_bytes": 149
@@ -4981,16 +4813,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa🧑‍💻",
       "payload_sha256": "70ec139c540d79da38532b3d5e6540dafd41cc56416a921b67bc52da4d91eff9",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "144",
         "code_points": 142,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 140,
-          "sha256": "70ec139c540d79da38532b3d5e6540dafd41cc56416a921b67bc52da4d91eff9",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 140,
         "line_breaks": {
           "cr": 0,
@@ -5002,9 +4832,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "70ec139c540d79da38532b3d5e6540dafd41cc56416a921b67bc52da4d91eff9",
-          "nfd_sha256": "70ec139c540d79da38532b3d5e6540dafd41cc56416a921b67bc52da4d91eff9"
+          "is_nfd": true
         },
         "utf16_units": 144,
         "utf8_bytes": 150
@@ -5183,16 +5011,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa🧑‍💻",
       "payload_sha256": "e86adcb5d03c6607281eb3136e5247cded31689207fb29c7461b1611d22199cf",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "145",
         "code_points": 143,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 140,
-          "sha256": "c094ed2f614ab7a02e7557f8eba6b03b457ce7beacf1d8031088f97a1770e5e6",
           "utf16_units": 140
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 141,
         "line_breaks": {
           "cr": 0,
@@ -5204,9 +5030,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "e86adcb5d03c6607281eb3136e5247cded31689207fb29c7461b1611d22199cf",
-          "nfd_sha256": "e86adcb5d03c6607281eb3136e5247cded31689207fb29c7461b1611d22199cf"
+          "is_nfd": true
         },
         "utf16_units": 145,
         "utf8_bytes": 151
@@ -5387,16 +5211,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
       "payload_sha256": "3b701b55a89d42989cbd5631ac1485dd87273e48b41543767bf40c6e540ddc4f",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "144",
         "code_points": 144,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 144,
-          "sha256": "3b701b55a89d42989cbd5631ac1485dd87273e48b41543767bf40c6e540ddc4f",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 144,
         "line_breaks": {
           "cr": 0,
@@ -5408,9 +5230,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "3b701b55a89d42989cbd5631ac1485dd87273e48b41543767bf40c6e540ddc4f",
-          "nfd_sha256": "3b701b55a89d42989cbd5631ac1485dd87273e48b41543767bf40c6e540ddc4f"
+          "is_nfd": true
         },
         "utf16_units": 144,
         "utf8_bytes": 144
@@ -5591,16 +5411,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nx",
       "payload_sha256": "6b26bef153a9d1bc45d63d9957ac9bd8bd6c7442982b0edd588b14e448432861",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "145",
         "code_points": 145,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 144,
-          "sha256": "3b701b55a89d42989cbd5631ac1485dd87273e48b41543767bf40c6e540ddc4f",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 145,
         "line_breaks": {
           "cr": 0,
@@ -5612,9 +5430,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6b26bef153a9d1bc45d63d9957ac9bd8bd6c7442982b0edd588b14e448432861",
-          "nfd_sha256": "6b26bef153a9d1bc45d63d9957ac9bd8bd6c7442982b0edd588b14e448432861"
+          "is_nfd": true
         },
         "utf16_units": 145,
         "utf8_bytes": 145
@@ -5794,16 +5610,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n",
       "payload_sha256": "bf6d56b16cef70a77efea6b6d08f8cf2e1562480623bf21eb4b2f2ca0c580ea5",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "144",
         "code_points": 144,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 143,
-          "sha256": "bf6d56b16cef70a77efea6b6d08f8cf2e1562480623bf21eb4b2f2ca0c580ea5",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 143,
         "line_breaks": {
           "cr": 0,
@@ -5815,9 +5629,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "bf6d56b16cef70a77efea6b6d08f8cf2e1562480623bf21eb4b2f2ca0c580ea5",
-          "nfd_sha256": "bf6d56b16cef70a77efea6b6d08f8cf2e1562480623bf21eb4b2f2ca0c580ea5"
+          "is_nfd": true
         },
         "utf16_units": 144,
         "utf8_bytes": 144
@@ -5998,16 +5810,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n",
       "payload_sha256": "9aeb431479184eeae19b3829bdba1fa1fec600cd7a2b14767d95d546b201a022",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "145",
         "code_points": 145,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 143,
-          "sha256": "2bd3f6efab5e871a28d37632e97cd83dfafe9822fedefa0bf54b53d486cfeb38",
           "utf16_units": 143
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 144,
         "line_breaks": {
           "cr": 0,
@@ -6019,9 +5829,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "9aeb431479184eeae19b3829bdba1fa1fec600cd7a2b14767d95d546b201a022",
-          "nfd_sha256": "9aeb431479184eeae19b3829bdba1fa1fec600cd7a2b14767d95d546b201a022"
+          "is_nfd": true
         },
         "utf16_units": 145,
         "utf8_bytes": 145
@@ -6345,16 +6153,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "payload_sha256": "28d89e20aefb969a6619e4c374386f91779db0ee3ebf4e625bca1469d6a03f46",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "above-145",
         "code_points": 288,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 144,
-          "sha256": "b71df3b2ce77a2e2d78f7a7b91bf8868b61be0e8a12d300b1300b140d7fada13",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 288,
         "line_breaks": {
           "cr": 0,
@@ -6366,9 +6172,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "28d89e20aefb969a6619e4c374386f91779db0ee3ebf4e625bca1469d6a03f46",
-          "nfd_sha256": "28d89e20aefb969a6619e4c374386f91779db0ee3ebf4e625bca1469d6a03f46"
+          "is_nfd": true
         },
         "utf16_units": 288,
         "utf8_bytes": 288
@@ -6691,16 +6495,14 @@
       ],
       "payload": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaZ",
       "payload_sha256": "82d268d9b7e1749ba84fca6f76ffb93b88b606cf3604d4b5bccb55a39a6c8321",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "above-145",
         "code_points": 289,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 144,
-          "sha256": "b71df3b2ce77a2e2d78f7a7b91bf8868b61be0e8a12d300b1300b140d7fada13",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 289,
         "line_breaks": {
           "cr": 0,
@@ -6712,9 +6514,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "82d268d9b7e1749ba84fca6f76ffb93b88b606cf3604d4b5bccb55a39a6c8321",
-          "nfd_sha256": "82d268d9b7e1749ba84fca6f76ffb93b88b606cf3604d4b5bccb55a39a6c8321"
+          "is_nfd": true
         },
         "utf16_units": 289,
         "utf8_bytes": 289
@@ -6757,16 +6557,14 @@
       ],
       "payload": "alpha\nbeta",
       "payload_sha256": "bbfb79e82216bd2db1ad2c507d44ddf80aeb12f64f9562056afe93aad43154d9",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 10,
-          "sha256": "bbfb79e82216bd2db1ad2c507d44ddf80aeb12f64f9562056afe93aad43154d9",
           "utf16_units": 10
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 10,
         "line_breaks": {
           "cr": 0,
@@ -6778,9 +6576,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "bbfb79e82216bd2db1ad2c507d44ddf80aeb12f64f9562056afe93aad43154d9",
-          "nfd_sha256": "bbfb79e82216bd2db1ad2c507d44ddf80aeb12f64f9562056afe93aad43154d9"
+          "is_nfd": true
         },
         "utf16_units": 10,
         "utf8_bytes": 10
@@ -6825,16 +6621,14 @@
       ],
       "payload": "alpha\r\nbeta",
       "payload_sha256": "4854aaef74503959fd26363306e2ef967a9d50bdda90d033a3a4acacbbd57547",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 11,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 10,
-          "sha256": "4854aaef74503959fd26363306e2ef967a9d50bdda90d033a3a4acacbbd57547",
           "utf16_units": 11
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 10,
         "line_breaks": {
           "cr": 0,
@@ -6846,9 +6640,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "4854aaef74503959fd26363306e2ef967a9d50bdda90d033a3a4acacbbd57547",
-          "nfd_sha256": "4854aaef74503959fd26363306e2ef967a9d50bdda90d033a3a4acacbbd57547"
+          "is_nfd": true
         },
         "utf16_units": 11,
         "utf8_bytes": 11
@@ -6893,16 +6685,14 @@
       ],
       "payload": "alpha\rbeta",
       "payload_sha256": "630777dbacbc99352e4be7dfc6a9e094737d160727dfb3b7e9ad8a61b11e68d0",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 10,
-          "sha256": "630777dbacbc99352e4be7dfc6a9e094737d160727dfb3b7e9ad8a61b11e68d0",
           "utf16_units": 10
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 10,
         "line_breaks": {
           "cr": 1,
@@ -6914,9 +6704,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "630777dbacbc99352e4be7dfc6a9e094737d160727dfb3b7e9ad8a61b11e68d0",
-          "nfd_sha256": "630777dbacbc99352e4be7dfc6a9e094737d160727dfb3b7e9ad8a61b11e68d0"
+          "is_nfd": true
         },
         "utf16_units": 10,
         "utf8_bytes": 10
@@ -6961,16 +6749,14 @@
       ],
       "payload": "alphabeta",
       "payload_sha256": "aa0ba198c62bb24a1ec70caff7f8a53d7e423117ac7cb452e1d5e77251bba9ec",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 10,
-          "sha256": "aa0ba198c62bb24a1ec70caff7f8a53d7e423117ac7cb452e1d5e77251bba9ec",
           "utf16_units": 10
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 10,
         "line_breaks": {
           "cr": 0,
@@ -6982,9 +6768,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "aa0ba198c62bb24a1ec70caff7f8a53d7e423117ac7cb452e1d5e77251bba9ec",
-          "nfd_sha256": "aa0ba198c62bb24a1ec70caff7f8a53d7e423117ac7cb452e1d5e77251bba9ec"
+          "is_nfd": true
         },
         "utf16_units": 10,
         "utf8_bytes": 11
@@ -7029,16 +6813,14 @@
       ],
       "payload": "alpha\\nbeta",
       "payload_sha256": "1c84407d553ee0a51ca87d505fe8c029f7a7ad3dc78e02f514227f0ad8164107",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 11,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 11,
-          "sha256": "1c84407d553ee0a51ca87d505fe8c029f7a7ad3dc78e02f514227f0ad8164107",
           "utf16_units": 11
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 11,
         "line_breaks": {
           "cr": 0,
@@ -7050,9 +6832,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "1c84407d553ee0a51ca87d505fe8c029f7a7ad3dc78e02f514227f0ad8164107",
-          "nfd_sha256": "1c84407d553ee0a51ca87d505fe8c029f7a7ad3dc78e02f514227f0ad8164107"
+          "is_nfd": true
         },
         "utf16_units": 11,
         "utf8_bytes": 11
@@ -7097,16 +6877,14 @@
       ],
       "payload": "alpha\u000bbeta",
       "payload_sha256": "3ba8594545b9b25f4ea614e62daa32cc504c4151333f68fce8cc1ad014c8b471",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 10,
-          "sha256": "3ba8594545b9b25f4ea614e62daa32cc504c4151333f68fce8cc1ad014c8b471",
           "utf16_units": 10
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 10,
         "line_breaks": {
           "cr": 0,
@@ -7118,9 +6896,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "3ba8594545b9b25f4ea614e62daa32cc504c4151333f68fce8cc1ad014c8b471",
-          "nfd_sha256": "3ba8594545b9b25f4ea614e62daa32cc504c4151333f68fce8cc1ad014c8b471"
+          "is_nfd": true
         },
         "utf16_units": 10,
         "utf8_bytes": 10
@@ -7161,16 +6937,14 @@
       ],
       "payload": "alpha beta",
       "payload_sha256": "2a3cbecbbc1fd52bbc55b909afb6cf3fab80ade69ce0d314498de263f6b875a1",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 10,
-          "sha256": "2a3cbecbbc1fd52bbc55b909afb6cf3fab80ade69ce0d314498de263f6b875a1",
           "utf16_units": 10
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 10,
         "line_breaks": {
           "cr": 0,
@@ -7182,9 +6956,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "2a3cbecbbc1fd52bbc55b909afb6cf3fab80ade69ce0d314498de263f6b875a1",
-          "nfd_sha256": "2a3cbecbbc1fd52bbc55b909afb6cf3fab80ade69ce0d314498de263f6b875a1"
+          "is_nfd": true
         },
         "utf16_units": 10,
         "utf8_bytes": 12
@@ -7225,16 +6997,14 @@
       ],
       "payload": "alpha beta",
       "payload_sha256": "33439e2362e959714da5710126d3336b38c91c2832de83ee89bc76f9480878c9",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 10,
-          "sha256": "33439e2362e959714da5710126d3336b38c91c2832de83ee89bc76f9480878c9",
           "utf16_units": 10
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 10,
         "line_breaks": {
           "cr": 0,
@@ -7246,9 +7016,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "33439e2362e959714da5710126d3336b38c91c2832de83ee89bc76f9480878c9",
-          "nfd_sha256": "33439e2362e959714da5710126d3336b38c91c2832de83ee89bc76f9480878c9"
+          "is_nfd": true
         },
         "utf16_units": 10,
         "utf8_bytes": 12
@@ -7285,16 +7053,14 @@
       ],
       "payload": "\nstart",
       "payload_sha256": "8ddab40783a9478db3532f1a4c9a4835a958bde6b5f4c9f72be3a240689c89b4",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 6,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 6,
-          "sha256": "8ddab40783a9478db3532f1a4c9a4835a958bde6b5f4c9f72be3a240689c89b4",
           "utf16_units": 6
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 6,
         "line_breaks": {
           "cr": 0,
@@ -7306,9 +7072,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "8ddab40783a9478db3532f1a4c9a4835a958bde6b5f4c9f72be3a240689c89b4",
-          "nfd_sha256": "8ddab40783a9478db3532f1a4c9a4835a958bde6b5f4c9f72be3a240689c89b4"
+          "is_nfd": true
         },
         "utf16_units": 6,
         "utf8_bytes": 6
@@ -7347,16 +7111,14 @@
       ],
       "payload": "end\n",
       "payload_sha256": "48332fe667bc51ac4a51ba0efe734441c90def55c60a26d7db275ecbbcf42f15",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 4,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 4,
-          "sha256": "48332fe667bc51ac4a51ba0efe734441c90def55c60a26d7db275ecbbcf42f15",
           "utf16_units": 4
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 4,
         "line_breaks": {
           "cr": 0,
@@ -7368,9 +7130,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "48332fe667bc51ac4a51ba0efe734441c90def55c60a26d7db275ecbbcf42f15",
-          "nfd_sha256": "48332fe667bc51ac4a51ba0efe734441c90def55c60a26d7db275ecbbcf42f15"
+          "is_nfd": true
         },
         "utf16_units": 4,
         "utf8_bytes": 4
@@ -7416,16 +7176,14 @@
       ],
       "payload": "top\n\nbottom",
       "payload_sha256": "5cdf13d634a3bb0d586654dab8dab2ac16df824bc508e05f3d4686bd0b299b09",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 11,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 11,
-          "sha256": "5cdf13d634a3bb0d586654dab8dab2ac16df824bc508e05f3d4686bd0b299b09",
           "utf16_units": 11
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 11,
         "line_breaks": {
           "cr": 0,
@@ -7437,9 +7195,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "5cdf13d634a3bb0d586654dab8dab2ac16df824bc508e05f3d4686bd0b299b09",
-          "nfd_sha256": "5cdf13d634a3bb0d586654dab8dab2ac16df824bc508e05f3d4686bd0b299b09"
+          "is_nfd": true
         },
         "utf16_units": 11,
         "utf8_bytes": 11
@@ -7483,16 +7239,14 @@
       ],
       "payload": "\n\n\n\n\n\n\n\n",
       "payload_sha256": "79488488398f5f5aed236dd6e9f914599370d04dfe70fda61b8c83bf739b1088",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 8,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 8,
-          "sha256": "79488488398f5f5aed236dd6e9f914599370d04dfe70fda61b8c83bf739b1088",
           "utf16_units": 8
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 8,
         "line_breaks": {
           "cr": 0,
@@ -7504,9 +7258,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "79488488398f5f5aed236dd6e9f914599370d04dfe70fda61b8c83bf739b1088",
-          "nfd_sha256": "79488488398f5f5aed236dd6e9f914599370d04dfe70fda61b8c83bf739b1088"
+          "is_nfd": true
         },
         "utf16_units": 8,
         "utf8_bytes": 8
@@ -7555,16 +7307,14 @@
       ],
       "payload": "1\n2\n3\n4\n5\n6\n7\n8\n9",
       "payload_sha256": "4590e824e464c79094eef03d1b8580a417fa4c1a1853f9daf98c9caa8b1e4499",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 17,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 17,
-          "sha256": "4590e824e464c79094eef03d1b8580a417fa4c1a1853f9daf98c9caa8b1e4499",
           "utf16_units": 17
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 17,
         "line_breaks": {
           "cr": 0,
@@ -7576,9 +7326,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "4590e824e464c79094eef03d1b8580a417fa4c1a1853f9daf98c9caa8b1e4499",
-          "nfd_sha256": "4590e824e464c79094eef03d1b8580a417fa4c1a1853f9daf98c9caa8b1e4499"
+          "is_nfd": true
         },
         "utf16_units": 17,
         "utf8_bytes": 17
@@ -7635,16 +7383,14 @@
       ],
       "payload": "1\n2\n3\n4\n5\n6\n7\n8\n9\nTEN",
       "payload_sha256": "7962d166136112ce61e6d734992e3b95fdc8220584cc413a97586657f2754d31",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 21,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 21,
-          "sha256": "7962d166136112ce61e6d734992e3b95fdc8220584cc413a97586657f2754d31",
           "utf16_units": 21
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 21,
         "line_breaks": {
           "cr": 0,
@@ -7656,9 +7402,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "7962d166136112ce61e6d734992e3b95fdc8220584cc413a97586657f2754d31",
-          "nfd_sha256": "7962d166136112ce61e6d734992e3b95fdc8220584cc413a97586657f2754d31"
+          "is_nfd": true
         },
         "utf16_units": 21,
         "utf8_bytes": 21
@@ -7738,16 +7482,14 @@
       ],
       "payload": "one\rtwo\rthree\rfour\rfive\rsix\rseven\reight\rnine",
       "payload_sha256": "aadb46895d5db3f4cf614f82e16abab3b4af68b1b6c84df5374af25198753bc9",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 44,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 44,
-          "sha256": "aadb46895d5db3f4cf614f82e16abab3b4af68b1b6c84df5374af25198753bc9",
           "utf16_units": 44
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 44,
         "line_breaks": {
           "cr": 8,
@@ -7759,9 +7501,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "aadb46895d5db3f4cf614f82e16abab3b4af68b1b6c84df5374af25198753bc9",
-          "nfd_sha256": "aadb46895d5db3f4cf614f82e16abab3b4af68b1b6c84df5374af25198753bc9"
+          "is_nfd": true
         },
         "utf16_units": 44,
         "utf8_bytes": 44
@@ -7841,16 +7581,14 @@
       ],
       "payload": "one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix\r\nseven\r\neight\r\nnine",
       "payload_sha256": "bf0273f6038249b2e5c09a1a9a2f74217e955ac274c924b18482428cceb8e882",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 52,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 44,
-          "sha256": "bf0273f6038249b2e5c09a1a9a2f74217e955ac274c924b18482428cceb8e882",
           "utf16_units": 52
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 44,
         "line_breaks": {
           "cr": 0,
@@ -7862,9 +7600,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "bf0273f6038249b2e5c09a1a9a2f74217e955ac274c924b18482428cceb8e882",
-          "nfd_sha256": "bf0273f6038249b2e5c09a1a9a2f74217e955ac274c924b18482428cceb8e882"
+          "is_nfd": true
         },
         "utf16_units": 52,
         "utf8_bytes": 52
@@ -7944,16 +7680,14 @@
       ],
       "payload": "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine",
       "payload_sha256": "af64597b2ec3e6657c4bee4c13ebbec89907e48e319d60e62bc7c89c4123de10",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 44,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 44,
-          "sha256": "af64597b2ec3e6657c4bee4c13ebbec89907e48e319d60e62bc7c89c4123de10",
           "utf16_units": 44
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 44,
         "line_breaks": {
           "cr": 0,
@@ -7965,9 +7699,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "af64597b2ec3e6657c4bee4c13ebbec89907e48e319d60e62bc7c89c4123de10",
-          "nfd_sha256": "af64597b2ec3e6657c4bee4c13ebbec89907e48e319d60e62bc7c89c4123de10"
+          "is_nfd": true
         },
         "utf16_units": 44,
         "utf8_bytes": 44
@@ -8132,16 +7864,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ntail",
       "payload_sha256": "b17fd0c9f895baf0d7e4da4580e079d75d7c4a54c9afd7ca413457a58cb4161e",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 128,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 128,
-          "sha256": "b17fd0c9f895baf0d7e4da4580e079d75d7c4a54c9afd7ca413457a58cb4161e",
           "utf16_units": 128
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 128,
         "line_breaks": {
           "cr": 0,
@@ -8153,9 +7883,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "b17fd0c9f895baf0d7e4da4580e079d75d7c4a54c9afd7ca413457a58cb4161e",
-          "nfd_sha256": "b17fd0c9f895baf0d7e4da4580e079d75d7c4a54c9afd7ca413457a58cb4161e"
+          "is_nfd": true
         },
         "utf16_units": 128,
         "utf8_bytes": 128
@@ -8324,16 +8052,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ntail\nTEN",
       "payload_sha256": "48e2499e44e07ccfe9a2943004fc07e68dc037029339d3258cb6801379de3d4c",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 132,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 132,
-          "sha256": "48e2499e44e07ccfe9a2943004fc07e68dc037029339d3258cb6801379de3d4c",
           "utf16_units": 132
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 132,
         "line_breaks": {
           "cr": 0,
@@ -8345,9 +8071,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "48e2499e44e07ccfe9a2943004fc07e68dc037029339d3258cb6801379de3d4c",
-          "nfd_sha256": "48e2499e44e07ccfe9a2943004fc07e68dc037029339d3258cb6801379de3d4c"
+          "is_nfd": true
         },
         "utf16_units": 132,
         "utf8_bytes": 132
@@ -8380,16 +8104,14 @@
       ],
       "payload": "",
       "payload_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 0,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 0,
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "utf16_units": 0
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 0,
         "line_breaks": {
           "cr": 0,
@@ -8401,9 +8123,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "nfd_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "is_nfd": true
         },
         "utf16_units": 0,
         "utf8_bytes": 0
@@ -8436,16 +8156,14 @@
       ],
       "payload": "   ",
       "payload_sha256": "0aad7da77d2ed59c396c99a74e49f3a4524dcdbcb5163251b1433d640247aeb4",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 3,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 3,
-          "sha256": "0aad7da77d2ed59c396c99a74e49f3a4524dcdbcb5163251b1433d640247aeb4",
           "utf16_units": 3
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 3,
         "line_breaks": {
           "cr": 0,
@@ -8457,9 +8175,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "0aad7da77d2ed59c396c99a74e49f3a4524dcdbcb5163251b1433d640247aeb4",
-          "nfd_sha256": "0aad7da77d2ed59c396c99a74e49f3a4524dcdbcb5163251b1433d640247aeb4"
+          "is_nfd": true
         },
         "utf16_units": 3,
         "utf8_bytes": 3
@@ -8519,16 +8235,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxx xx",
       "payload_sha256": "95f80f2bb6318958e7f4cfc8e54eebb6560c8fbf6d22f071086eafc48c82b8fa",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 30,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "95f80f2bb6318958e7f4cfc8e54eebb6560c8fbf6d22f071086eafc48c82b8fa",
           "utf16_units": 30
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -8540,9 +8254,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "95f80f2bb6318958e7f4cfc8e54eebb6560c8fbf6d22f071086eafc48c82b8fa",
-          "nfd_sha256": "95f80f2bb6318958e7f4cfc8e54eebb6560c8fbf6d22f071086eafc48c82b8fa"
+          "is_nfd": true
         },
         "utf16_units": 30,
         "utf8_bytes": 30
@@ -8606,16 +8318,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxx xx",
       "payload_sha256": "bc622eab95f7bfcb3e0e7246048afff021a6735bc26c909910919ad083935260",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 30,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "bc622eab95f7bfcb3e0e7246048afff021a6735bc26c909910919ad083935260",
           "utf16_units": 30
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -8627,9 +8337,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "bc622eab95f7bfcb3e0e7246048afff021a6735bc26c909910919ad083935260",
-          "nfd_sha256": "bc622eab95f7bfcb3e0e7246048afff021a6735bc26c909910919ad083935260"
+          "is_nfd": true
         },
         "utf16_units": 30,
         "utf8_bytes": 31
@@ -8693,16 +8401,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxx xx",
       "payload_sha256": "f3ebf317ac15fed1941433eb525e5e445e37fbaaf1f4d63e1561c5942308fd6c",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 30,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "f3ebf317ac15fed1941433eb525e5e445e37fbaaf1f4d63e1561c5942308fd6c",
           "utf16_units": 30
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -8714,9 +8420,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "f3ebf317ac15fed1941433eb525e5e445e37fbaaf1f4d63e1561c5942308fd6c",
-          "nfd_sha256": "f3ebf317ac15fed1941433eb525e5e445e37fbaaf1f4d63e1561c5942308fd6c"
+          "is_nfd": true
         },
         "utf16_units": 30,
         "utf8_bytes": 32
@@ -8781,16 +8485,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxx​xx",
       "payload_sha256": "b5283709c10860cdf7e14b41b237e76a71f6ae600c55fcc4dc3205f3d3b4e430",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 30,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "b5283709c10860cdf7e14b41b237e76a71f6ae600c55fcc4dc3205f3d3b4e430",
           "utf16_units": 30
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -8802,9 +8504,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "b5283709c10860cdf7e14b41b237e76a71f6ae600c55fcc4dc3205f3d3b4e430",
-          "nfd_sha256": "b5283709c10860cdf7e14b41b237e76a71f6ae600c55fcc4dc3205f3d3b4e430"
+          "is_nfd": true
         },
         "utf16_units": 30,
         "utf8_bytes": 32
@@ -8869,16 +8569,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxx⁠xx",
       "payload_sha256": "0c7896cc86f882f8a9482171230d18960a523cdf9e76ca59e75354f5ca836b89",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 30,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "0c7896cc86f882f8a9482171230d18960a523cdf9e76ca59e75354f5ca836b89",
           "utf16_units": 30
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -8890,9 +8588,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "0c7896cc86f882f8a9482171230d18960a523cdf9e76ca59e75354f5ca836b89",
-          "nfd_sha256": "0c7896cc86f882f8a9482171230d18960a523cdf9e76ca59e75354f5ca836b89"
+          "is_nfd": true
         },
         "utf16_units": 30,
         "utf8_bytes": 32
@@ -8956,16 +8652,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxx-xx",
       "payload_sha256": "23f6c4fb95a2dd337417a59a681a771b50d843b86d43b40334066f696104da13",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 30,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "23f6c4fb95a2dd337417a59a681a771b50d843b86d43b40334066f696104da13",
           "utf16_units": 30
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -8977,9 +8671,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "23f6c4fb95a2dd337417a59a681a771b50d843b86d43b40334066f696104da13",
-          "nfd_sha256": "23f6c4fb95a2dd337417a59a681a771b50d843b86d43b40334066f696104da13"
+          "is_nfd": true
         },
         "utf16_units": 30,
         "utf8_bytes": 30
@@ -9044,16 +8736,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxx‑xx",
       "payload_sha256": "351e982e6503e1f380462efb86c96d2550f7a2d8d80b82f7c515e793e2eff92f",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 30,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "351e982e6503e1f380462efb86c96d2550f7a2d8d80b82f7c515e793e2eff92f",
           "utf16_units": 30
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -9065,9 +8755,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "351e982e6503e1f380462efb86c96d2550f7a2d8d80b82f7c515e793e2eff92f",
-          "nfd_sha256": "351e982e6503e1f380462efb86c96d2550f7a2d8d80b82f7c515e793e2eff92f"
+          "is_nfd": true
         },
         "utf16_units": 30,
         "utf8_bytes": 32
@@ -9131,16 +8819,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxx­xx",
       "payload_sha256": "305fd48619f5350aa0b2da3dc3e5264081e1cf0ef81ea5a47fe2b71b465bcb9b",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 30,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "305fd48619f5350aa0b2da3dc3e5264081e1cf0ef81ea5a47fe2b71b465bcb9b",
           "utf16_units": 30
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -9152,9 +8838,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "305fd48619f5350aa0b2da3dc3e5264081e1cf0ef81ea5a47fe2b71b465bcb9b",
-          "nfd_sha256": "305fd48619f5350aa0b2da3dc3e5264081e1cf0ef81ea5a47fe2b71b465bcb9b"
+          "is_nfd": true
         },
         "utf16_units": 30,
         "utf8_bytes": 31
@@ -9198,16 +8882,14 @@
       ],
       "payload": "left\tright",
       "payload_sha256": "22ef17315f568eae8535a3a8e5a4bf41d2c24e09fb49987bdff4dbef3ebe17e0",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 10,
-          "sha256": "22ef17315f568eae8535a3a8e5a4bf41d2c24e09fb49987bdff4dbef3ebe17e0",
           "utf16_units": 10
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 10,
         "line_breaks": {
           "cr": 0,
@@ -9219,9 +8901,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "22ef17315f568eae8535a3a8e5a4bf41d2c24e09fb49987bdff4dbef3ebe17e0",
-          "nfd_sha256": "22ef17315f568eae8535a3a8e5a4bf41d2c24e09fb49987bdff4dbef3ebe17e0"
+          "is_nfd": true
         },
         "utf16_units": 10,
         "utf8_bytes": 10
@@ -9264,16 +8944,14 @@
       ],
       "payload": "Café déjà vu.",
       "payload_sha256": "23f36265f573d43ae9c1006ac221b713d98b3a82ae6f003bf30c2c4e07a965a9",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 13,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 13,
-          "sha256": "23f36265f573d43ae9c1006ac221b713d98b3a82ae6f003bf30c2c4e07a965a9",
           "utf16_units": 13
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 13,
         "line_breaks": {
           "cr": 0,
@@ -9285,9 +8963,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "23f36265f573d43ae9c1006ac221b713d98b3a82ae6f003bf30c2c4e07a965a9",
-          "nfd_sha256": "7165298cb45762c22f402463fdda3bf277159aeb7e6ba9df513563618eba825e"
+          "is_nfd": false
         },
         "utf16_units": 13,
         "utf8_bytes": 16
@@ -9335,16 +9011,14 @@
       ],
       "payload": "Café déjà vu.",
       "payload_sha256": "7165298cb45762c22f402463fdda3bf277159aeb7e6ba9df513563618eba825e",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 13,
-          "sha256": "7165298cb45762c22f402463fdda3bf277159aeb7e6ba9df513563618eba825e",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 13,
         "line_breaks": {
           "cr": 0,
@@ -9356,9 +9030,7 @@
         },
         "normalization": {
           "is_nfc": false,
-          "is_nfd": true,
-          "nfc_sha256": "23f36265f573d43ae9c1006ac221b713d98b3a82ae6f003bf30c2c4e07a965a9",
-          "nfd_sha256": "7165298cb45762c22f402463fdda3bf277159aeb7e6ba9df513563618eba825e"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 19
@@ -9398,16 +9070,14 @@
       ],
       "payload": "한글 자막",
       "payload_sha256": "6c05df26fde1441fb5280d8d9d04e12ef032a1f20202e7f19f1ccee6e07bbdee",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 5,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 5,
-          "sha256": "6c05df26fde1441fb5280d8d9d04e12ef032a1f20202e7f19f1ccee6e07bbdee",
           "utf16_units": 5
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 5,
         "line_breaks": {
           "cr": 0,
@@ -9419,9 +9089,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "6c05df26fde1441fb5280d8d9d04e12ef032a1f20202e7f19f1ccee6e07bbdee",
-          "nfd_sha256": "6ab1ff6945948f6516f609a2e5acc3f2bb701056b4cc62b4f78ed47bf9ab61cb"
+          "is_nfd": false
         },
         "utf16_units": 5,
         "utf8_bytes": 13
@@ -9460,16 +9128,14 @@
       ],
       "payload": "한글 자막",
       "payload_sha256": "6ab1ff6945948f6516f609a2e5acc3f2bb701056b4cc62b4f78ed47bf9ab61cb",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 12,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 5,
-          "sha256": "6ab1ff6945948f6516f609a2e5acc3f2bb701056b4cc62b4f78ed47bf9ab61cb",
           "utf16_units": 12
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 5,
         "line_breaks": {
           "cr": 0,
@@ -9481,9 +9147,7 @@
         },
         "normalization": {
           "is_nfc": false,
-          "is_nfd": true,
-          "nfc_sha256": "6c05df26fde1441fb5280d8d9d04e12ef032a1f20202e7f19f1ccee6e07bbdee",
-          "nfd_sha256": "6ab1ff6945948f6516f609a2e5acc3f2bb701056b4cc62b4f78ed47bf9ab61cb"
+          "is_nfd": true
         },
         "utf16_units": 12,
         "utf8_bytes": 34
@@ -9524,16 +9188,14 @@
       ],
       "payload": "́leading",
       "payload_sha256": "48248b97155afd2e277002b7ba1fbbaeb7b4394ca0bd23dd483a60c54e5b4324",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 8,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 8,
-          "sha256": "48248b97155afd2e277002b7ba1fbbaeb7b4394ca0bd23dd483a60c54e5b4324",
           "utf16_units": 8
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 8,
         "line_breaks": {
           "cr": 0,
@@ -9545,9 +9207,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "48248b97155afd2e277002b7ba1fbbaeb7b4394ca0bd23dd483a60c54e5b4324",
-          "nfd_sha256": "48248b97155afd2e277002b7ba1fbbaeb7b4394ca0bd23dd483a60c54e5b4324"
+          "is_nfd": true
         },
         "utf16_units": 8,
         "utf8_bytes": 9
@@ -9579,16 +9239,14 @@
       ],
       "payload": "क्ष",
       "payload_sha256": "41b768b5f80ca068450de6968fffe27002fd5c10851c78b8ea53e6b0f8f7a6d1",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 3,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 1,
-          "sha256": "41b768b5f80ca068450de6968fffe27002fd5c10851c78b8ea53e6b0f8f7a6d1",
           "utf16_units": 3
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 1,
         "line_breaks": {
           "cr": 0,
@@ -9600,9 +9258,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "41b768b5f80ca068450de6968fffe27002fd5c10851c78b8ea53e6b0f8f7a6d1",
-          "nfd_sha256": "41b768b5f80ca068450de6968fffe27002fd5c10851c78b8ea53e6b0f8f7a6d1"
+          "is_nfd": true
         },
         "utf16_units": 3,
         "utf8_bytes": 9
@@ -9637,16 +9293,14 @@
       ],
       "payload": "क्‍ष",
       "payload_sha256": "0b9e4e6e71371e261053a3c463fe82b0225b8472497ac2b5fbf53267c18281a3",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 4,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 1,
-          "sha256": "0b9e4e6e71371e261053a3c463fe82b0225b8472497ac2b5fbf53267c18281a3",
           "utf16_units": 4
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 1,
         "line_breaks": {
           "cr": 0,
@@ -9658,9 +9312,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "0b9e4e6e71371e261053a3c463fe82b0225b8472497ac2b5fbf53267c18281a3",
-          "nfd_sha256": "0b9e4e6e71371e261053a3c463fe82b0225b8472497ac2b5fbf53267c18281a3"
+          "is_nfd": true
         },
         "utf16_units": 4,
         "utf8_bytes": 12
@@ -9696,16 +9348,14 @@
       ],
       "payload": "क्‌ष",
       "payload_sha256": "6f26a5f017f94c42f064dfa41610557d7b9ec3ced0d84ada90d62462c2e14471",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 4,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 2,
-          "sha256": "6f26a5f017f94c42f064dfa41610557d7b9ec3ced0d84ada90d62462c2e14471",
           "utf16_units": 4
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 2,
         "line_breaks": {
           "cr": 0,
@@ -9717,9 +9367,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6f26a5f017f94c42f064dfa41610557d7b9ec3ced0d84ada90d62462c2e14471",
-          "nfd_sha256": "6f26a5f017f94c42f064dfa41610557d7b9ec3ced0d84ada90d62462c2e14471"
+          "is_nfd": true
         },
         "utf16_units": 4,
         "utf8_bytes": 12
@@ -9762,16 +9410,14 @@
       ],
       "payload": "Smiley: ☺︎",
       "payload_sha256": "786afd6f5feebbf34e9fec7ba57ee39db0dd3f082487a0cc90b86ccad49621f9",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 9,
-          "sha256": "786afd6f5feebbf34e9fec7ba57ee39db0dd3f082487a0cc90b86ccad49621f9",
           "utf16_units": 10
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 9,
         "line_breaks": {
           "cr": 0,
@@ -9783,9 +9429,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "786afd6f5feebbf34e9fec7ba57ee39db0dd3f082487a0cc90b86ccad49621f9",
-          "nfd_sha256": "786afd6f5feebbf34e9fec7ba57ee39db0dd3f082487a0cc90b86ccad49621f9"
+          "is_nfd": true
         },
         "utf16_units": 10,
         "utf8_bytes": 14
@@ -9829,16 +9473,14 @@
       ],
       "payload": "Smiley: ☺️",
       "payload_sha256": "51a1dc55cd4659385f1581a3f882d26727ceed49940c9a633b1b1777c42c62e1",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 9,
-          "sha256": "51a1dc55cd4659385f1581a3f882d26727ceed49940c9a633b1b1777c42c62e1",
           "utf16_units": 10
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 9,
         "line_breaks": {
           "cr": 0,
@@ -9850,9 +9492,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "51a1dc55cd4659385f1581a3f882d26727ceed49940c9a633b1b1777c42c62e1",
-          "nfd_sha256": "51a1dc55cd4659385f1581a3f882d26727ceed49940c9a633b1b1777c42c62e1"
+          "is_nfd": true
         },
         "utf16_units": 10,
         "utf8_bytes": 14
@@ -9891,16 +9531,14 @@
       ],
       "payload": "OK 👍🏽",
       "payload_sha256": "7af7198e2c452cce4d29c6c9696db281ffb727e66f58fa6be42612008c2bde79",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 5,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 4,
-          "sha256": "7af7198e2c452cce4d29c6c9696db281ffb727e66f58fa6be42612008c2bde79",
           "utf16_units": 7
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 4,
         "line_breaks": {
           "cr": 0,
@@ -9912,9 +9550,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "7af7198e2c452cce4d29c6c9696db281ffb727e66f58fa6be42612008c2bde79",
-          "nfd_sha256": "7af7198e2c452cce4d29c6c9696db281ffb727e66f58fa6be42612008c2bde79"
+          "is_nfd": true
         },
         "utf16_units": 7,
         "utf8_bytes": 11
@@ -9975,16 +9611,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxx🧑‍💻Z",
       "payload_sha256": "1c4e3feb081b1bb18eda536f0d367c709b1bc7c6fdd03cad1e568d6d35c83c15",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 31,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 29,
-          "sha256": "1c4e3feb081b1bb18eda536f0d367c709b1bc7c6fdd03cad1e568d6d35c83c15",
           "utf16_units": 33
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 29,
         "line_breaks": {
           "cr": 0,
@@ -9996,9 +9630,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "1c4e3feb081b1bb18eda536f0d367c709b1bc7c6fdd03cad1e568d6d35c83c15",
-          "nfd_sha256": "1c4e3feb081b1bb18eda536f0d367c709b1bc7c6fdd03cad1e568d6d35c83c15"
+          "is_nfd": true
         },
         "utf16_units": 33,
         "utf8_bytes": 39
@@ -10064,16 +9696,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxxx🧑‍💻Z",
       "payload_sha256": "51522d61b3fbddfc3152203161ac928c8d6cd0457d66f27983ed9b140d1ab47f",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 32,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "51522d61b3fbddfc3152203161ac928c8d6cd0457d66f27983ed9b140d1ab47f",
           "utf16_units": 34
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -10085,9 +9715,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "51522d61b3fbddfc3152203161ac928c8d6cd0457d66f27983ed9b140d1ab47f",
-          "nfd_sha256": "51522d61b3fbddfc3152203161ac928c8d6cd0457d66f27983ed9b140d1ab47f"
+          "is_nfd": true
         },
         "utf16_units": 34,
         "utf8_bytes": 40
@@ -10130,16 +9758,14 @@
       ],
       "payload": "Coder: 🧑‍💻",
       "payload_sha256": "e553958cae2d59b88127ddc417e085827d9830be2d69b3ec1ed0086869a1f6a7",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 8,
-          "sha256": "e553958cae2d59b88127ddc417e085827d9830be2d69b3ec1ed0086869a1f6a7",
           "utf16_units": 12
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 8,
         "line_breaks": {
           "cr": 0,
@@ -10151,9 +9777,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "e553958cae2d59b88127ddc417e085827d9830be2d69b3ec1ed0086869a1f6a7",
-          "nfd_sha256": "e553958cae2d59b88127ddc417e085827d9830be2d69b3ec1ed0086869a1f6a7"
+          "is_nfd": true
         },
         "utf16_units": 12,
         "utf8_bytes": 18
@@ -10193,16 +9817,14 @@
       ],
       "payload": "Family: 👨‍👩‍👧‍👦",
       "payload_sha256": "f848a0bdba66f55772e407c28041080bfee5c5f6342f138e9c8d502a53d3d9d5",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 15,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 9,
-          "sha256": "f848a0bdba66f55772e407c28041080bfee5c5f6342f138e9c8d502a53d3d9d5",
           "utf16_units": 19
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 9,
         "line_breaks": {
           "cr": 0,
@@ -10214,9 +9836,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "f848a0bdba66f55772e407c28041080bfee5c5f6342f138e9c8d502a53d3d9d5",
-          "nfd_sha256": "f848a0bdba66f55772e407c28041080bfee5c5f6342f138e9c8d502a53d3d9d5"
+          "is_nfd": true
         },
         "utf16_units": 19,
         "utf8_bytes": 33
@@ -10257,16 +9877,14 @@
       ],
       "payload": "Flags: 🇺🇸 🇯🇵",
       "payload_sha256": "b1b917430f80c8d7dc8647877885bc1da10b7423c795de7a1a729e8205e052fb",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 12,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 10,
-          "sha256": "b1b917430f80c8d7dc8647877885bc1da10b7423c795de7a1a729e8205e052fb",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 10,
         "line_breaks": {
           "cr": 0,
@@ -10278,9 +9896,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "b1b917430f80c8d7dc8647877885bc1da10b7423c795de7a1a729e8205e052fb",
-          "nfd_sha256": "b1b917430f80c8d7dc8647877885bc1da10b7423c795de7a1a729e8205e052fb"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 24
@@ -10320,16 +9936,14 @@
       ],
       "payload": "Keys: 1️⃣ #️⃣",
       "payload_sha256": "6de5888c5321b0b1200431f76129c9cc42c011c02d2fe5eb20a574878cf6f110",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 13,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 9,
-          "sha256": "6de5888c5321b0b1200431f76129c9cc42c011c02d2fe5eb20a574878cf6f110",
           "utf16_units": 13
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 9,
         "line_breaks": {
           "cr": 0,
@@ -10341,9 +9955,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6de5888c5321b0b1200431f76129c9cc42c011c02d2fe5eb20a574878cf6f110",
-          "nfd_sha256": "6de5888c5321b0b1200431f76129c9cc42c011c02d2fe5eb20a574878cf6f110"
+          "is_nfd": true
         },
         "utf16_units": 13,
         "utf8_bytes": 21
@@ -10384,16 +9996,14 @@
       ],
       "payload": "England: 🏴󠁧󠁢󠁥󠁮󠁧󠁬󠁿",
       "payload_sha256": "64387d1190f5f617942d3867631c30232b7c9e0fbb51a56fca7b58c45699b2da",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 17,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 10,
-          "sha256": "64387d1190f5f617942d3867631c30232b7c9e0fbb51a56fca7b58c45699b2da",
           "utf16_units": 25
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 10,
         "line_breaks": {
           "cr": 0,
@@ -10405,9 +10015,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "64387d1190f5f617942d3867631c30232b7c9e0fbb51a56fca7b58c45699b2da",
-          "nfd_sha256": "64387d1190f5f617942d3867631c30232b7c9e0fbb51a56fca7b58c45699b2da"
+          "is_nfd": true
         },
         "utf16_units": 25,
         "utf8_bytes": 41
@@ -10452,16 +10060,14 @@
       ],
       "payload": "中中中中中中中中中中中中中中甲乙",
       "payload_sha256": "fba8b2763c437594ec2dae2684d1a863bb97531813ed3a52e8a41520f4422978",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "fba8b2763c437594ec2dae2684d1a863bb97531813ed3a52e8a41520f4422978",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -10473,9 +10079,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "fba8b2763c437594ec2dae2684d1a863bb97531813ed3a52e8a41520f4422978",
-          "nfd_sha256": "fba8b2763c437594ec2dae2684d1a863bb97531813ed3a52e8a41520f4422978"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 48
@@ -10526,16 +10130,14 @@
       ],
       "payload": "中中中中中中中中中中中中中中「乙",
       "payload_sha256": "be76440457dcecee7d06e73fd68f7ae0f60265164519ff6599a4a2eaf98c736e",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "be76440457dcecee7d06e73fd68f7ae0f60265164519ff6599a4a2eaf98c736e",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -10547,9 +10149,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "be76440457dcecee7d06e73fd68f7ae0f60265164519ff6599a4a2eaf98c736e",
-          "nfd_sha256": "be76440457dcecee7d06e73fd68f7ae0f60265164519ff6599a4a2eaf98c736e"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 48
@@ -10599,16 +10199,14 @@
       ],
       "payload": "中中中中中中中中中中中中中中中甲",
       "payload_sha256": "68ac346075d9fd92c77ad8ac998484aa1bfcb51d1008ec6ceba17981b9a2f85b",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "68ac346075d9fd92c77ad8ac998484aa1bfcb51d1008ec6ceba17981b9a2f85b",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -10620,9 +10218,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "68ac346075d9fd92c77ad8ac998484aa1bfcb51d1008ec6ceba17981b9a2f85b",
-          "nfd_sha256": "68ac346075d9fd92c77ad8ac998484aa1bfcb51d1008ec6ceba17981b9a2f85b"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 48
@@ -10673,16 +10269,14 @@
       ],
       "payload": "中中中中中中中中中中中中中中中。",
       "payload_sha256": "1f45589914fda12391fb65d22c00b88c4f74443c0d171587917343cee75fb8c9",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "1f45589914fda12391fb65d22c00b88c4f74443c0d171587917343cee75fb8c9",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -10694,9 +10288,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "1f45589914fda12391fb65d22c00b88c4f74443c0d171587917343cee75fb8c9",
-          "nfd_sha256": "1f45589914fda12391fb65d22c00b88c4f74443c0d171587917343cee75fb8c9"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 48
@@ -10737,16 +10329,14 @@
       ],
       "payload": "葛󠄀 vs 葛",
       "payload_sha256": "dc4cf5ea8475f6216e9bf2cbb50320b25c9d3090fa8bfe9b85c08c5cdc54bdcb",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 7,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 6,
-          "sha256": "dc4cf5ea8475f6216e9bf2cbb50320b25c9d3090fa8bfe9b85c08c5cdc54bdcb",
           "utf16_units": 8
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 6,
         "line_breaks": {
           "cr": 0,
@@ -10758,9 +10348,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "dc4cf5ea8475f6216e9bf2cbb50320b25c9d3090fa8bfe9b85c08c5cdc54bdcb",
-          "nfd_sha256": "dc4cf5ea8475f6216e9bf2cbb50320b25c9d3090fa8bfe9b85c08c5cdc54bdcb"
+          "is_nfd": true
         },
         "utf16_units": 8,
         "utf8_bytes": 14
@@ -10809,16 +10397,14 @@
       ],
       "payload": "Ձայնը հստակ է լսվում։",
       "payload_sha256": "08656774b519f1a62ca7b1240ed837018607d5e3af79c836b560e9244b08180f",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 21,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 21,
-          "sha256": "08656774b519f1a62ca7b1240ed837018607d5e3af79c836b560e9244b08180f",
           "utf16_units": 21
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 21,
         "line_breaks": {
           "cr": 0,
@@ -10830,9 +10416,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "08656774b519f1a62ca7b1240ed837018607d5e3af79c836b560e9244b08180f",
-          "nfd_sha256": "08656774b519f1a62ca7b1240ed837018607d5e3af79c836b560e9244b08180f"
+          "is_nfd": true
         },
         "utf16_units": 21,
         "utf8_bytes": 39
@@ -10881,16 +10465,14 @@
       ],
       "payload": "ხმა მკაფიოდ ისმის.",
       "payload_sha256": "6bdc01583a6ac302141a86c5933b420688cb4c6faef7533a7f0a6fbd8a63c112",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 18,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 18,
-          "sha256": "6bdc01583a6ac302141a86c5933b420688cb4c6faef7533a7f0a6fbd8a63c112",
           "utf16_units": 18
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 18,
         "line_breaks": {
           "cr": 0,
@@ -10902,9 +10484,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6bdc01583a6ac302141a86c5933b420688cb4c6faef7533a7f0a6fbd8a63c112",
-          "nfd_sha256": "6bdc01583a6ac302141a86c5933b420688cb4c6faef7533a7f0a6fbd8a63c112"
+          "is_nfd": true
         },
         "utf16_units": 18,
         "utf8_bytes": 48
@@ -10950,16 +10530,14 @@
       ],
       "payload": "અવાજ સ્પષ્ટ સંભળાય છે.",
       "payload_sha256": "344db44fd7112a51df37b96855cca1001f2bfc2d89e5b20469793af1091dd547",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 22,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 14,
-          "sha256": "344db44fd7112a51df37b96855cca1001f2bfc2d89e5b20469793af1091dd547",
           "utf16_units": 22
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 14,
         "line_breaks": {
           "cr": 0,
@@ -10971,9 +10549,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "344db44fd7112a51df37b96855cca1001f2bfc2d89e5b20469793af1091dd547",
-          "nfd_sha256": "344db44fd7112a51df37b96855cca1001f2bfc2d89e5b20469793af1091dd547"
+          "is_nfd": true
         },
         "utf16_units": 22,
         "utf8_bytes": 58
@@ -11023,16 +10599,14 @@
       ],
       "payload": "ਆਵਾਜ਼ ਸਾਫ਼ ਸੁਣਾਈ ਦੇ ਰਹੀ ਹੈ।",
       "payload_sha256": "20acabd55efa7dfd83aafb95680b154c1b53d1fe27800d4277b0ddc81a257a2b",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 27,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 18,
-          "sha256": "20acabd55efa7dfd83aafb95680b154c1b53d1fe27800d4277b0ddc81a257a2b",
           "utf16_units": 27
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 18,
         "line_breaks": {
           "cr": 0,
@@ -11044,9 +10618,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "20acabd55efa7dfd83aafb95680b154c1b53d1fe27800d4277b0ddc81a257a2b",
-          "nfd_sha256": "20acabd55efa7dfd83aafb95680b154c1b53d1fe27800d4277b0ddc81a257a2b"
+          "is_nfd": true
         },
         "utf16_units": 27,
         "utf8_bytes": 71
@@ -11095,16 +10667,14 @@
       ],
       "payload": "ಧ್ವನಿ ಸ್ಪಷ್ಟವಾಗಿ ಕೇಳುತ್ತಿದೆ.",
       "payload_sha256": "3ae77263cd280993d07dba831a376a54a14d7af3882da4133f62ac5cc19c0853",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 28,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 17,
-          "sha256": "3ae77263cd280993d07dba831a376a54a14d7af3882da4133f62ac5cc19c0853",
           "utf16_units": 28
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 17,
         "line_breaks": {
           "cr": 0,
@@ -11116,9 +10686,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "3ae77263cd280993d07dba831a376a54a14d7af3882da4133f62ac5cc19c0853",
-          "nfd_sha256": "eb31435c255e002c6b90e3c3da0740d1456a5dd2b650a61c71c6313f149e1966"
+          "is_nfd": false
         },
         "utf16_units": 28,
         "utf8_bytes": 78
@@ -11167,16 +10735,14 @@
       ],
       "payload": "ຂ້ອຍໄດ້ຍິນທ່ານຢ່າງຊັດເຈນ",
       "payload_sha256": "6525df82b59e919cdaf1e5e19908dd8fb43eedad47b6ac1175660ef4b0e19289",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 24,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 18,
-          "sha256": "6525df82b59e919cdaf1e5e19908dd8fb43eedad47b6ac1175660ef4b0e19289",
           "utf16_units": 24
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 18,
         "line_breaks": {
           "cr": 0,
@@ -11188,9 +10754,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6525df82b59e919cdaf1e5e19908dd8fb43eedad47b6ac1175660ef4b0e19289",
-          "nfd_sha256": "6525df82b59e919cdaf1e5e19908dd8fb43eedad47b6ac1175660ef4b0e19289"
+          "is_nfd": true
         },
         "utf16_units": 24,
         "utf8_bytes": 72
@@ -11235,16 +10799,14 @@
       ],
       "payload": "ശബ്ദം വ്യക്തമായി കേൾക്കുന്നു.",
       "payload_sha256": "03fa5a226bbeb64275a3a9353994af84220d853bd0ca4fc261f1d90db561b6ad",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 29,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 13,
-          "sha256": "03fa5a226bbeb64275a3a9353994af84220d853bd0ca4fc261f1d90db561b6ad",
           "utf16_units": 29
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 13,
         "line_breaks": {
           "cr": 0,
@@ -11256,9 +10818,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "03fa5a226bbeb64275a3a9353994af84220d853bd0ca4fc261f1d90db561b6ad",
-          "nfd_sha256": "03fa5a226bbeb64275a3a9353994af84220d853bd0ca4fc261f1d90db561b6ad"
+          "is_nfd": true
         },
         "utf16_units": 29,
         "utf8_bytes": 81
@@ -11302,16 +10862,14 @@
       ],
       "payload": "ଶବ୍ଦ ସ୍ପଷ୍ଟ ଶୁଣାଯାଉଛି।",
       "payload_sha256": "b624931772b4aa428ce7903d5a679006192ec38e0811896ac6f1e3fd49872a83",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 22,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 12,
-          "sha256": "b624931772b4aa428ce7903d5a679006192ec38e0811896ac6f1e3fd49872a83",
           "utf16_units": 22
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 12,
         "line_breaks": {
           "cr": 0,
@@ -11323,9 +10881,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "b624931772b4aa428ce7903d5a679006192ec38e0811896ac6f1e3fd49872a83",
-          "nfd_sha256": "b624931772b4aa428ce7903d5a679006192ec38e0811896ac6f1e3fd49872a83"
+          "is_nfd": true
         },
         "utf16_units": 22,
         "utf8_bytes": 62
@@ -11373,16 +10929,14 @@
       ],
       "payload": "குரல் தெளிவாகக் கேட்கிறது.",
       "payload_sha256": "e413cf5ba4d9619e9dad4394e6558dc6e8c085e0b840cca3db865f948c89dcc7",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 26,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "e413cf5ba4d9619e9dad4394e6558dc6e8c085e0b840cca3db865f948c89dcc7",
           "utf16_units": 26
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -11394,9 +10948,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "e413cf5ba4d9619e9dad4394e6558dc6e8c085e0b840cca3db865f948c89dcc7",
-          "nfd_sha256": "e413cf5ba4d9619e9dad4394e6558dc6e8c085e0b840cca3db865f948c89dcc7"
+          "is_nfd": true
         },
         "utf16_units": 26,
         "utf8_bytes": 72
@@ -11441,16 +10993,14 @@
       ],
       "payload": "శబ్దం స్పష్టంగా వినిపిస్తోంది.",
       "payload_sha256": "6f943e01c82bc1cf917d51f5dbcf569f18d27aabbdcb47374414db976ee03cfd",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 30,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 13,
-          "sha256": "6f943e01c82bc1cf917d51f5dbcf569f18d27aabbdcb47374414db976ee03cfd",
           "utf16_units": 30
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 13,
         "line_breaks": {
           "cr": 0,
@@ -11462,9 +11012,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6f943e01c82bc1cf917d51f5dbcf569f18d27aabbdcb47374414db976ee03cfd",
-          "nfd_sha256": "6f943e01c82bc1cf917d51f5dbcf569f18d27aabbdcb47374414db976ee03cfd"
+          "is_nfd": true
         },
         "utf16_units": 30,
         "utf8_bytes": 84
@@ -11512,16 +11060,14 @@
       ],
       "payload": "སྒྲ་གསལ་པོ་ཐོས་ཀྱི་འདུག།",
       "payload_sha256": "f35630f90bebf1e32db3fe93e202fb45c4140c9c48140cd81a03b51d2a0a132a",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 24,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 17,
-          "sha256": "f35630f90bebf1e32db3fe93e202fb45c4140c9c48140cd81a03b51d2a0a132a",
           "utf16_units": 24
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 17,
         "line_breaks": {
           "cr": 0,
@@ -11533,9 +11079,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "f35630f90bebf1e32db3fe93e202fb45c4140c9c48140cd81a03b51d2a0a132a",
-          "nfd_sha256": "f35630f90bebf1e32db3fe93e202fb45c4140c9c48140cd81a03b51d2a0a132a"
+          "is_nfd": true
         },
         "utf16_units": 24,
         "utf8_bytes": 72
@@ -11570,16 +11114,14 @@
       ],
       "payload": "ᎣᏏᏲ",
       "payload_sha256": "0cb0825494a8aaf3626f8eb9fcb9a3e797e499ab45110c68c6754facfa0e0000",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 3,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 3,
-          "sha256": "0cb0825494a8aaf3626f8eb9fcb9a3e797e499ab45110c68c6754facfa0e0000",
           "utf16_units": 3
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 3,
         "line_breaks": {
           "cr": 0,
@@ -11591,9 +11133,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "0cb0825494a8aaf3626f8eb9fcb9a3e797e499ab45110c68c6754facfa0e0000",
-          "nfd_sha256": "0cb0825494a8aaf3626f8eb9fcb9a3e797e499ab45110c68c6754facfa0e0000"
+          "is_nfd": true
         },
         "utf16_units": 3,
         "utf8_bytes": 9
@@ -11628,16 +11168,14 @@
       ],
       "payload": "ሰላም",
       "payload_sha256": "87fab216a3e0240c4dba27b41e6dd06d831d3d41bd468f5304a92abb5455c787",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 3,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 3,
-          "sha256": "87fab216a3e0240c4dba27b41e6dd06d831d3d41bd468f5304a92abb5455c787",
           "utf16_units": 3
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 3,
         "line_breaks": {
           "cr": 0,
@@ -11649,9 +11187,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "87fab216a3e0240c4dba27b41e6dd06d831d3d41bd468f5304a92abb5455c787",
-          "nfd_sha256": "87fab216a3e0240c4dba27b41e6dd06d831d3d41bd468f5304a92abb5455c787"
+          "is_nfd": true
         },
         "utf16_units": 3,
         "utf8_bytes": 9
@@ -11685,16 +11221,14 @@
       ],
       "payload": "សួស្តី",
       "payload_sha256": "6dbb76365f9439e75a1081f89cead8027bd4fde6b6e16ee5ff5ef9b3ee46aaf3",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 6,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 2,
-          "sha256": "6dbb76365f9439e75a1081f89cead8027bd4fde6b6e16ee5ff5ef9b3ee46aaf3",
           "utf16_units": 6
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 2,
         "line_breaks": {
           "cr": 0,
@@ -11706,9 +11240,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6dbb76365f9439e75a1081f89cead8027bd4fde6b6e16ee5ff5ef9b3ee46aaf3",
-          "nfd_sha256": "6dbb76365f9439e75a1081f89cead8027bd4fde6b6e16ee5ff5ef9b3ee46aaf3"
+          "is_nfd": true
         },
         "utf16_units": 6,
         "utf8_bytes": 18
@@ -11746,16 +11278,14 @@
       ],
       "payload": "မင်္ဂလာပါ",
       "payload_sha256": "6901f606d6d28548c7bf2c0bbc2b0b0bd67f8be42653d3cff32da2ac8cba3c0b",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 9,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 6,
-          "sha256": "6901f606d6d28548c7bf2c0bbc2b0b0bd67f8be42653d3cff32da2ac8cba3c0b",
           "utf16_units": 9
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 6,
         "line_breaks": {
           "cr": 0,
@@ -11767,9 +11297,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6901f606d6d28548c7bf2c0bbc2b0b0bd67f8be42653d3cff32da2ac8cba3c0b",
-          "nfd_sha256": "6901f606d6d28548c7bf2c0bbc2b0b0bd67f8be42653d3cff32da2ac8cba3c0b"
+          "is_nfd": true
         },
         "utf16_units": 9,
         "utf8_bytes": 27
@@ -11806,16 +11334,14 @@
       ],
       "payload": "ආයුබෝවන්",
       "payload_sha256": "f96909e7d91f6039d01bf83d9f709dd0a6bc18e5fd4af000b4abc2100cc34dd6",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 8,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 5,
-          "sha256": "f96909e7d91f6039d01bf83d9f709dd0a6bc18e5fd4af000b4abc2100cc34dd6",
           "utf16_units": 8
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 5,
         "line_breaks": {
           "cr": 0,
@@ -11827,9 +11353,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "f96909e7d91f6039d01bf83d9f709dd0a6bc18e5fd4af000b4abc2100cc34dd6",
-          "nfd_sha256": "62bcefaeff7b43997243ef41fb889dc36fd3f632d0b528528bd066b297791b22"
+          "is_nfd": false
         },
         "utf16_units": 8,
         "utf8_bytes": 24
@@ -11865,16 +11389,14 @@
       ],
       "payload": "𐌰𐌱𐌲𐌳",
       "payload_sha256": "cad1e7bf9fcb3b9d86746ee055146e00b458ef9f4ee4e70f335f0395799aa20b",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 4,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 4,
-          "sha256": "cad1e7bf9fcb3b9d86746ee055146e00b458ef9f4ee4e70f335f0395799aa20b",
           "utf16_units": 8
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 4,
         "line_breaks": {
           "cr": 0,
@@ -11886,9 +11408,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "cad1e7bf9fcb3b9d86746ee055146e00b458ef9f4ee4e70f335f0395799aa20b",
-          "nfd_sha256": "cad1e7bf9fcb3b9d86746ee055146e00b458ef9f4ee4e70f335f0395799aa20b"
+          "is_nfd": true
         },
         "utf16_units": 8,
         "utf8_bytes": 16
@@ -11920,16 +11440,14 @@
       ],
       "payload": "",
       "payload_sha256": "994cd444ab4e4fb9fbddbc30a581888467fdfba842d6cae5ed54f6eab1bbd453",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 1,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 1,
-          "sha256": "994cd444ab4e4fb9fbddbc30a581888467fdfba842d6cae5ed54f6eab1bbd453",
           "utf16_units": 1
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 1,
         "line_breaks": {
           "cr": 0,
@@ -11941,9 +11459,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "994cd444ab4e4fb9fbddbc30a581888467fdfba842d6cae5ed54f6eab1bbd453",
-          "nfd_sha256": "994cd444ab4e4fb9fbddbc30a581888467fdfba842d6cae5ed54f6eab1bbd453"
+          "is_nfd": true
         },
         "utf16_units": 1,
         "utf8_bytes": 3
@@ -11978,16 +11494,14 @@
       ],
       "payload": "",
       "payload_sha256": "fd203f3c530704d012e3af8827a2459ebef43e86d79502cded04f49d1b981c55",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 3,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 3,
-          "sha256": "fd203f3c530704d012e3af8827a2459ebef43e86d79502cded04f49d1b981c55",
           "utf16_units": 3
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 3,
         "line_breaks": {
           "cr": 0,
@@ -11999,9 +11513,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "fd203f3c530704d012e3af8827a2459ebef43e86d79502cded04f49d1b981c55",
-          "nfd_sha256": "fd203f3c530704d012e3af8827a2459ebef43e86d79502cded04f49d1b981c55"
+          "is_nfd": true
         },
         "utf16_units": 3,
         "utf8_bytes": 9
@@ -12053,16 +11565,14 @@
       ],
       "payload": "مَرْحَبًا، هَلْ تَسْمَعُنِي؟",
       "payload_sha256": "ec725507e4ee41ee22ff160117ce59632b3bff21fb1b73779fd4df14ddf0a990",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 28,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 17,
-          "sha256": "ec725507e4ee41ee22ff160117ce59632b3bff21fb1b73779fd4df14ddf0a990",
           "utf16_units": 28
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 17,
         "line_breaks": {
           "cr": 0,
@@ -12074,9 +11584,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "ec725507e4ee41ee22ff160117ce59632b3bff21fb1b73779fd4df14ddf0a990",
-          "nfd_sha256": "ec725507e4ee41ee22ff160117ce59632b3bff21fb1b73779fd4df14ddf0a990"
+          "is_nfd": true
         },
         "utf16_units": 28,
         "utf8_bytes": 54
@@ -12123,16 +11631,14 @@
       ],
       "payload": "שָׁלוֹם, אַתֶּם שׁוֹמְעִים?",
       "payload_sha256": "8be084ca16e4d2fb706ebe50c65c2d9cbb7af5672085465908b9580bf7d78919",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 27,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 17,
-          "sha256": "8be084ca16e4d2fb706ebe50c65c2d9cbb7af5672085465908b9580bf7d78919",
           "utf16_units": 27
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 17,
         "line_breaks": {
           "cr": 0,
@@ -12144,9 +11650,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "8be084ca16e4d2fb706ebe50c65c2d9cbb7af5672085465908b9580bf7d78919",
-          "nfd_sha256": "8be084ca16e4d2fb706ebe50c65c2d9cbb7af5672085465908b9580bf7d78919"
+          "is_nfd": true
         },
         "utf16_units": 27,
         "utf8_bytes": 50
@@ -12185,16 +11689,14 @@
       ],
       "payload": "من می‌روم.",
       "payload_sha256": "9ec52b93634e0d638472aa131522e2a96896f5122315b329e2b3dea03432bb65",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 10,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 9,
-          "sha256": "9ec52b93634e0d638472aa131522e2a96896f5122315b329e2b3dea03432bb65",
           "utf16_units": 10
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 9,
         "line_breaks": {
           "cr": 0,
@@ -12206,9 +11708,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "9ec52b93634e0d638472aa131522e2a96896f5122315b329e2b3dea03432bb65",
-          "nfd_sha256": "9ec52b93634e0d638472aa131522e2a96896f5122315b329e2b3dea03432bb65"
+          "is_nfd": true
         },
         "utf16_units": 10,
         "utf8_bytes": 19
@@ -12250,16 +11750,14 @@
       ],
       "payload": "من میروم.",
       "payload_sha256": "ff52e96d79d74434bf90bee3fa0d203111da4d8eab55ea99277cfae2e0568f2d",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 9,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 9,
-          "sha256": "ff52e96d79d74434bf90bee3fa0d203111da4d8eab55ea99277cfae2e0568f2d",
           "utf16_units": 9
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 9,
         "line_breaks": {
           "cr": 0,
@@ -12271,9 +11769,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "ff52e96d79d74434bf90bee3fa0d203111da4d8eab55ea99277cfae2e0568f2d",
-          "nfd_sha256": "ff52e96d79d74434bf90bee3fa0d203111da4d8eab55ea99277cfae2e0568f2d"
+          "is_nfd": true
         },
         "utf16_units": 9,
         "utf8_bytes": 16
@@ -12331,16 +11827,14 @@
       ],
       "payload": "کیا آپ مجھے سن سکتے ہیں؟",
       "payload_sha256": "58928b8a18021eca7a7a22e6b7021a16d1928536166724b705c1aa4d4723c2e2",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 24,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 24,
-          "sha256": "58928b8a18021eca7a7a22e6b7021a16d1928536166724b705c1aa4d4723c2e2",
           "utf16_units": 24
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 24,
         "line_breaks": {
           "cr": 0,
@@ -12352,9 +11846,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "58928b8a18021eca7a7a22e6b7021a16d1928536166724b705c1aa4d4723c2e2",
-          "nfd_sha256": "db8a23e3d1db33d2676a52678bd79094a7183e2ef14f3ded11a813d525e5e63c"
+          "is_nfd": false
         },
         "utf16_units": 24,
         "utf8_bytes": 43
@@ -12406,16 +11898,14 @@
       ],
       "payload": "कक्षा में आवाज़ स्पष्ट सुनाई दे रही है।",
       "payload_sha256": "78299d36c1a307aa0e9c830fbdc9ddb7a9d96d0f08f2572413bd2fd8cee8719a",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 39,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 23,
-          "sha256": "78299d36c1a307aa0e9c830fbdc9ddb7a9d96d0f08f2572413bd2fd8cee8719a",
           "utf16_units": 39
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 23,
         "line_breaks": {
           "cr": 0,
@@ -12427,9 +11917,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "78299d36c1a307aa0e9c830fbdc9ddb7a9d96d0f08f2572413bd2fd8cee8719a",
-          "nfd_sha256": "78299d36c1a307aa0e9c830fbdc9ddb7a9d96d0f08f2572413bd2fd8cee8719a"
+          "is_nfd": true
         },
         "utf16_units": 39,
         "utf8_bytes": 103
@@ -12503,16 +11991,14 @@
       ],
       "payload": "ระบบคำบรรยายกำลังทำงานและจะแสดงข้อความใหม่โดยอัตโนมัติ",
       "payload_sha256": "ca06ca5ddd6e41704b488427479699ec519d96c43996912c15943e139cb57bba",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 54,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 45,
-          "sha256": "ca06ca5ddd6e41704b488427479699ec519d96c43996912c15943e139cb57bba",
           "utf16_units": 54
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 45,
         "line_breaks": {
           "cr": 0,
@@ -12524,9 +12010,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "ca06ca5ddd6e41704b488427479699ec519d96c43996912c15943e139cb57bba",
-          "nfd_sha256": "ca06ca5ddd6e41704b488427479699ec519d96c43996912c15943e139cb57bba"
+          "is_nfd": true
         },
         "utf16_units": 54,
         "utf8_bytes": 162
@@ -12614,16 +12098,14 @@
       ],
       "payload": "Live captions are updating. Please speak at a natural pace.",
       "payload_sha256": "18906ae73c6334f70aeaca77fffab70a3c0f9561a5dfedfd437624cc4fb44670",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 59,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 59,
-          "sha256": "18906ae73c6334f70aeaca77fffab70a3c0f9561a5dfedfd437624cc4fb44670",
           "utf16_units": 59
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 59,
         "line_breaks": {
           "cr": 0,
@@ -12635,9 +12117,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "18906ae73c6334f70aeaca77fffab70a3c0f9561a5dfedfd437624cc4fb44670",
-          "nfd_sha256": "18906ae73c6334f70aeaca77fffab70a3c0f9561a5dfedfd437624cc4fb44670"
+          "is_nfd": true
         },
         "utf16_units": 59,
         "utf8_bytes": 59
@@ -12735,16 +12215,14 @@
       ],
       "payload": "Los subtítulos se están actualizando. Hable a un ritmo natural.",
       "payload_sha256": "d3e514abb6e2e900456976bb43d19ba6e560bad4f3e2a79a6d0cafc8ea0e5581",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 63,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 63,
-          "sha256": "d3e514abb6e2e900456976bb43d19ba6e560bad4f3e2a79a6d0cafc8ea0e5581",
           "utf16_units": 63
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 63,
         "line_breaks": {
           "cr": 0,
@@ -12756,9 +12234,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "d3e514abb6e2e900456976bb43d19ba6e560bad4f3e2a79a6d0cafc8ea0e5581",
-          "nfd_sha256": "3b0cc39e9aebd6f11c8e3708e8da3c5cd8bde7b8e209a0232f1351faf15c232b"
+          "is_nfd": false
         },
         "utf16_units": 63,
         "utf8_bytes": 65
@@ -12855,16 +12331,14 @@
       ],
       "payload": "Les sous-titres se mettent à jour. Parlez à un rythme naturel.",
       "payload_sha256": "99f71eb54c02a29dcfb2bef17b7156b2d08c414a47423665f522b89ee39f1b09",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 62,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 62,
-          "sha256": "99f71eb54c02a29dcfb2bef17b7156b2d08c414a47423665f522b89ee39f1b09",
           "utf16_units": 62
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 62,
         "line_breaks": {
           "cr": 0,
@@ -12876,9 +12350,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "99f71eb54c02a29dcfb2bef17b7156b2d08c414a47423665f522b89ee39f1b09",
-          "nfd_sha256": "8cf6701c5a19e75b01f88a28384a1b6cce8d2990778e94856c2eac09e86dde02"
+          "is_nfd": false
         },
         "utf16_units": 62,
         "utf8_bytes": 64
@@ -12980,16 +12452,14 @@
       ],
       "payload": "Die Untertitel werden aktualisiert. Sprechen Sie in normalem Tempo.",
       "payload_sha256": "da42f2a2d1507d24c1acb76cfdca6ea9f60f858b5cfab8f8653cab11ba2d01ab",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 67,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 67,
-          "sha256": "da42f2a2d1507d24c1acb76cfdca6ea9f60f858b5cfab8f8653cab11ba2d01ab",
           "utf16_units": 67
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 67,
         "line_breaks": {
           "cr": 0,
@@ -13001,9 +12471,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "da42f2a2d1507d24c1acb76cfdca6ea9f60f858b5cfab8f8653cab11ba2d01ab",
-          "nfd_sha256": "da42f2a2d1507d24c1acb76cfdca6ea9f60f858b5cfab8f8653cab11ba2d01ab"
+          "is_nfd": true
         },
         "utf16_units": 67,
         "utf8_bytes": 67
@@ -13100,16 +12568,14 @@
       ],
       "payload": "As legendas estão sendo atualizadas. Fale em um ritmo natural.",
       "payload_sha256": "271c9400e500d4f50df3e3ebbc005eea15833b80520332ce1bac5da352300db4",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 62,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 62,
-          "sha256": "271c9400e500d4f50df3e3ebbc005eea15833b80520332ce1bac5da352300db4",
           "utf16_units": 62
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 62,
         "line_breaks": {
           "cr": 0,
@@ -13121,9 +12587,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "271c9400e500d4f50df3e3ebbc005eea15833b80520332ce1bac5da352300db4",
-          "nfd_sha256": "0e2c2bf759bd97517e4488aab4b293bec3285a8e600753482e766ae2efa114e3"
+          "is_nfd": false
         },
         "utf16_units": 62,
         "utf8_bytes": 63
@@ -13221,16 +12685,14 @@
       ],
       "payload": "I sottotitoli si stanno aggiornando. Parli a un ritmo naturale.",
       "payload_sha256": "1bd1d0ee43f78d23ce30a16176b95f369462abdc56419235e94a47d3ecd03f3c",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 63,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 63,
-          "sha256": "1bd1d0ee43f78d23ce30a16176b95f369462abdc56419235e94a47d3ecd03f3c",
           "utf16_units": 63
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 63,
         "line_breaks": {
           "cr": 0,
@@ -13242,9 +12704,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "1bd1d0ee43f78d23ce30a16176b95f369462abdc56419235e94a47d3ecd03f3c",
-          "nfd_sha256": "1bd1d0ee43f78d23ce30a16176b95f369462abdc56419235e94a47d3ecd03f3c"
+          "is_nfd": true
         },
         "utf16_units": 63,
         "utf8_bytes": 63
@@ -13338,16 +12798,14 @@
       ],
       "payload": "Altyazılar güncelleniyor. Lütfen doğal bir tempoda konuşun.",
       "payload_sha256": "d70c5daa00c823829f9b60803cca1929fc0eabe682036c80bc6317d93e64d921",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 59,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 59,
-          "sha256": "d70c5daa00c823829f9b60803cca1929fc0eabe682036c80bc6317d93e64d921",
           "utf16_units": 59
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 59,
         "line_breaks": {
           "cr": 0,
@@ -13359,9 +12817,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "d70c5daa00c823829f9b60803cca1929fc0eabe682036c80bc6317d93e64d921",
-          "nfd_sha256": "65c36d1c690d1357996287dc03ae373487f8540be54f518440c1b0b25f037dd0"
+          "is_nfd": false
         },
         "utf16_units": 59,
         "utf8_bytes": 64
@@ -13451,16 +12907,14 @@
       ],
       "payload": "Phụ đề đang được cập nhật. Hãy nói với tốc độ tự nhiên.",
       "payload_sha256": "95cc7cfb37fcdd98130ba6c42e0cfafce29cc13bf296969edd7be9eb776ddb2d",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 55,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 55,
-          "sha256": "95cc7cfb37fcdd98130ba6c42e0cfafce29cc13bf296969edd7be9eb776ddb2d",
           "utf16_units": 55
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 55,
         "line_breaks": {
           "cr": 0,
@@ -13472,9 +12926,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "95cc7cfb37fcdd98130ba6c42e0cfafce29cc13bf296969edd7be9eb776ddb2d",
-          "nfd_sha256": "d09c035524c9e913849c989db89bcd968dd24fa6a7adaeefabe700a44ff791d3"
+          "is_nfd": false
         },
         "utf16_units": 55,
         "utf8_bytes": 81
@@ -13572,16 +13024,14 @@
       ],
       "payload": "Teks sedang diperbarui. Silakan bicara dengan kecepatan normal.",
       "payload_sha256": "fc1f3eb5b822527cc48fa9c0aeb45a605398ce9b96082afbf6d14209b22bf798",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 63,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 63,
-          "sha256": "fc1f3eb5b822527cc48fa9c0aeb45a605398ce9b96082afbf6d14209b22bf798",
           "utf16_units": 63
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 63,
         "line_breaks": {
           "cr": 0,
@@ -13593,9 +13043,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "fc1f3eb5b822527cc48fa9c0aeb45a605398ce9b96082afbf6d14209b22bf798",
-          "nfd_sha256": "fc1f3eb5b822527cc48fa9c0aeb45a605398ce9b96082afbf6d14209b22bf798"
+          "is_nfd": true
         },
         "utf16_units": 63,
         "utf8_bytes": 63
@@ -13688,16 +13136,14 @@
       ],
       "payload": "Napisy są aktualizowane. Proszę mówić w naturalnym tempie.",
       "payload_sha256": "3950ed5ebf6f1a87465d6061a14a04fffba859f1d7bca44bf0f03007f5b8addf",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 58,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 58,
-          "sha256": "3950ed5ebf6f1a87465d6061a14a04fffba859f1d7bca44bf0f03007f5b8addf",
           "utf16_units": 58
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 58,
         "line_breaks": {
           "cr": 0,
@@ -13709,9 +13155,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "3950ed5ebf6f1a87465d6061a14a04fffba859f1d7bca44bf0f03007f5b8addf",
-          "nfd_sha256": "ac1b16080447d5ebac4b8e35da7aa7ae9a4e236b29e08dfab51bc6741d99295a"
+          "is_nfd": false
         },
         "utf16_units": 58,
         "utf8_bytes": 62
@@ -13793,16 +13237,14 @@
       ],
       "payload": "Субтитры обновляются. Говорите в обычном темпе.",
       "payload_sha256": "7553798ccd3e739db8e128473df70e930116c553f204241ca95dea984da08be7",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 47,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 47,
-          "sha256": "7553798ccd3e739db8e128473df70e930116c553f204241ca95dea984da08be7",
           "utf16_units": 47
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 47,
         "line_breaks": {
           "cr": 0,
@@ -13814,9 +13256,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "7553798ccd3e739db8e128473df70e930116c553f204241ca95dea984da08be7",
-          "nfd_sha256": "7553798ccd3e739db8e128473df70e930116c553f204241ca95dea984da08be7"
+          "is_nfd": true
         },
         "utf16_units": 47,
         "utf8_bytes": 87
@@ -13901,16 +13341,14 @@
       ],
       "payload": "Субтитри оновлюються. Говоріть у звичайному темпі.",
       "payload_sha256": "89a383c9d53594c1c9259287123868db13d34a7ca3a54b271d592fae04c0748e",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 50,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 50,
-          "sha256": "89a383c9d53594c1c9259287123868db13d34a7ca3a54b271d592fae04c0748e",
           "utf16_units": 50
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 50,
         "line_breaks": {
           "cr": 0,
@@ -13922,9 +13360,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "89a383c9d53594c1c9259287123868db13d34a7ca3a54b271d592fae04c0748e",
-          "nfd_sha256": "88c8f9d72d91c113abead95548b1066fdc7db56083f2e2e234908be406106583"
+          "is_nfd": false
         },
         "utf16_units": 50,
         "utf8_bytes": 93
@@ -14011,16 +13447,14 @@
       ],
       "payload": "Οι υπότιτλοι ενημερώνονται. Μιλήστε με φυσικό ρυθμό.",
       "payload_sha256": "140e73f3859a8412e8a3dafc0eee8718eb2a0212848ca877ae885283a55e7dd4",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 52,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 52,
-          "sha256": "140e73f3859a8412e8a3dafc0eee8718eb2a0212848ca877ae885283a55e7dd4",
           "utf16_units": 52
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 52,
         "line_breaks": {
           "cr": 0,
@@ -14032,9 +13466,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "140e73f3859a8412e8a3dafc0eee8718eb2a0212848ca877ae885283a55e7dd4",
-          "nfd_sha256": "46eaedf437c788938c9657b1050f2633f254d536040528c8a1b7eb2aea0cc496"
+          "is_nfd": false
         },
         "utf16_units": 52,
         "utf8_bytes": 96
@@ -14087,16 +13519,14 @@
       ],
       "payload": "字幕正在更新，请按平常的语速说话。",
       "payload_sha256": "84272bdc95d76e2227e957438816eee98d69b0a481ceb576990f8b48dce0d2c0",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 17,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 17,
-          "sha256": "84272bdc95d76e2227e957438816eee98d69b0a481ceb576990f8b48dce0d2c0",
           "utf16_units": 17
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 17,
         "line_breaks": {
           "cr": 0,
@@ -14108,9 +13538,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "84272bdc95d76e2227e957438816eee98d69b0a481ceb576990f8b48dce0d2c0",
-          "nfd_sha256": "84272bdc95d76e2227e957438816eee98d69b0a481ceb576990f8b48dce0d2c0"
+          "is_nfd": true
         },
         "utf16_units": 17,
         "utf8_bytes": 51
@@ -14163,16 +13591,14 @@
       ],
       "payload": "字幕正在更新，請用平常的語速說話。",
       "payload_sha256": "eaca33045d90c262e8c65c32eb1e838224994657c0b91a39dbf72e17a38191c7",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 17,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 17,
-          "sha256": "eaca33045d90c262e8c65c32eb1e838224994657c0b91a39dbf72e17a38191c7",
           "utf16_units": 17
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 17,
         "line_breaks": {
           "cr": 0,
@@ -14184,9 +13610,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "eaca33045d90c262e8c65c32eb1e838224994657c0b91a39dbf72e17a38191c7",
-          "nfd_sha256": "eaca33045d90c262e8c65c32eb1e838224994657c0b91a39dbf72e17a38191c7"
+          "is_nfd": true
         },
         "utf16_units": 17,
         "utf8_bytes": 51
@@ -14250,16 +13674,14 @@
       ],
       "payload": "字幕を更新しています。普段どおりの速さで話してください。",
       "payload_sha256": "f10f19f84f1cec394e1f4e629ea08266f24dceea55b8c745a3e1ec99777d606a",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 28,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 28,
-          "sha256": "f10f19f84f1cec394e1f4e629ea08266f24dceea55b8c745a3e1ec99777d606a",
           "utf16_units": 28
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 28,
         "line_breaks": {
           "cr": 0,
@@ -14271,9 +13693,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "f10f19f84f1cec394e1f4e629ea08266f24dceea55b8c745a3e1ec99777d606a",
-          "nfd_sha256": "b5c57f67e5ce83562e97df5ad01adfa7fef0117f393566f4a96b42733aa2bdda"
+          "is_nfd": false
         },
         "utf16_units": 28,
         "utf8_bytes": 84
@@ -14339,16 +13759,14 @@
       ],
       "payload": "자막을 업데이트하고 있습니다. 평소 속도로 말해 주세요.",
       "payload_sha256": "83e9007e615104b638053c823bf05efb578db8a6342e1bf96c4ba385bea462f3",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 31,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 31,
-          "sha256": "83e9007e615104b638053c823bf05efb578db8a6342e1bf96c4ba385bea462f3",
           "utf16_units": 31
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 31,
         "line_breaks": {
           "cr": 0,
@@ -14360,9 +13778,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "83e9007e615104b638053c823bf05efb578db8a6342e1bf96c4ba385bea462f3",
-          "nfd_sha256": "b6a8780237e02ad1788c27ca5d3f1dd7228c7a87dfe9722bb9fb5ab912e7b695"
+          "is_nfd": false
         },
         "utf16_units": 31,
         "utf8_bytes": 77
@@ -14443,16 +13859,14 @@
       ],
       "payload": "הכתוביות מתעדכנות עכשיו. אפשר לדבר בקצב רגיל.",
       "payload_sha256": "eeb4da5d6a37be93e7da6eb5a139450ab66027800e47cc2a763733b87942c839",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 45,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 45,
-          "sha256": "eeb4da5d6a37be93e7da6eb5a139450ab66027800e47cc2a763733b87942c839",
           "utf16_units": 45
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 45,
         "line_breaks": {
           "cr": 0,
@@ -14464,9 +13878,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "eeb4da5d6a37be93e7da6eb5a139450ab66027800e47cc2a763733b87942c839",
-          "nfd_sha256": "eeb4da5d6a37be93e7da6eb5a139450ab66027800e47cc2a763733b87942c839"
+          "is_nfd": true
         },
         "utf16_units": 45,
         "utf8_bytes": 82
@@ -14551,16 +13963,14 @@
       ],
       "payload": "يتم تحديث النص الآن. يُرجى التحدث بوتيرة طبيعية.",
       "payload_sha256": "d90a028b1ea0d2f5cdc407a29ee6122515ace2cb9cf16f58d99eed100380d16a",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 48,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 47,
-          "sha256": "d90a028b1ea0d2f5cdc407a29ee6122515ace2cb9cf16f58d99eed100380d16a",
           "utf16_units": 48
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 47,
         "line_breaks": {
           "cr": 0,
@@ -14572,9 +13982,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "d90a028b1ea0d2f5cdc407a29ee6122515ace2cb9cf16f58d99eed100380d16a",
-          "nfd_sha256": "e8fee08cd186364af2fc1b0c383dde5e91772e2064f4c02c2ca69e00e941a090"
+          "is_nfd": false
         },
         "utf16_units": 48,
         "utf8_bytes": 87
@@ -14673,16 +14081,14 @@
       ],
       "payload": "زیرنویس در حال به‌روزرسانی است. لطفاً با سرعت معمولی صحبت کنید.",
       "payload_sha256": "6959aa8bba7b79adc52aa6a7cd71c11e1eda36349b9b710f5178e7aaff925969",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 63,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 61,
-          "sha256": "6959aa8bba7b79adc52aa6a7cd71c11e1eda36349b9b710f5178e7aaff925969",
           "utf16_units": 63
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 61,
         "line_breaks": {
           "cr": 0,
@@ -14694,9 +14100,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6959aa8bba7b79adc52aa6a7cd71c11e1eda36349b9b710f5178e7aaff925969",
-          "nfd_sha256": "6959aa8bba7b79adc52aa6a7cd71c11e1eda36349b9b710f5178e7aaff925969"
+          "is_nfd": true
         },
         "utf16_units": 63,
         "utf8_bytes": 115
@@ -14794,16 +14198,14 @@
       ],
       "payload": "سب ٹائٹل اپ ڈیٹ ہو رہے ہیں۔ براہ کرم معمول کی رفتار سے بولیں۔",
       "payload_sha256": "44ebd1480122c3c014154efcf7d9f7ca2c9ea752773ff2bf2b1a4b71037d3cf1",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 61,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 61,
-          "sha256": "44ebd1480122c3c014154efcf7d9f7ca2c9ea752773ff2bf2b1a4b71037d3cf1",
           "utf16_units": 61
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 61,
         "line_breaks": {
           "cr": 0,
@@ -14815,9 +14217,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "44ebd1480122c3c014154efcf7d9f7ca2c9ea752773ff2bf2b1a4b71037d3cf1",
-          "nfd_sha256": "1e578dc75a6f760630ec46bbd94b5a9e9e961836187b8419385cd08c04dc445e"
+          "is_nfd": false
         },
         "utf16_units": 61,
         "utf8_bytes": 109
@@ -14887,16 +14287,14 @@
       ],
       "payload": "कैप्शन अपडेट हो रहे हैं। कृपया सामान्य गति से बोलें।",
       "payload_sha256": "cbddecdf5255ef72a904fef9aab265d2fc9e30d0eb83eea351d47c1feee41ee4",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 52,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 33,
-          "sha256": "cbddecdf5255ef72a904fef9aab265d2fc9e30d0eb83eea351d47c1feee41ee4",
           "utf16_units": 52
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 33,
         "line_breaks": {
           "cr": 0,
@@ -14908,9 +14306,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "cbddecdf5255ef72a904fef9aab265d2fc9e30d0eb83eea351d47c1feee41ee4",
-          "nfd_sha256": "cbddecdf5255ef72a904fef9aab265d2fc9e30d0eb83eea351d47c1feee41ee4"
+          "is_nfd": true
         },
         "utf16_units": 52,
         "utf8_bytes": 138
@@ -14977,16 +14373,14 @@
       ],
       "payload": "ক্যাপশন আপডেট হচ্ছে। স্বাভাবিক গতিতে কথা বলুন।",
       "payload_sha256": "ab8f1635e92e66a2965a536373cc08d100798f5dc5481545bd00dd0893a3d0e4",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 46,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 30,
-          "sha256": "ab8f1635e92e66a2965a536373cc08d100798f5dc5481545bd00dd0893a3d0e4",
           "utf16_units": 46
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 30,
         "line_breaks": {
           "cr": 0,
@@ -14998,9 +14392,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "ab8f1635e92e66a2965a536373cc08d100798f5dc5481545bd00dd0893a3d0e4",
-          "nfd_sha256": "ab8f1635e92e66a2965a536373cc08d100798f5dc5481545bd00dd0893a3d0e4"
+          "is_nfd": true
         },
         "utf16_units": 46,
         "utf8_bytes": 126
@@ -15072,16 +14464,14 @@
       ],
       "payload": "குரல் தெளிவாகக் கேட்கிறது. இயல்பான வேகத்தில் பேசுங்கள்.",
       "payload_sha256": "284b90346d2a61bf722cece00acb8965df67deec0a3783d9dd2cdf485cc94ab1",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 55,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 35,
-          "sha256": "284b90346d2a61bf722cece00acb8965df67deec0a3783d9dd2cdf485cc94ab1",
           "utf16_units": 55
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 35,
         "line_breaks": {
           "cr": 0,
@@ -15093,9 +14483,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "284b90346d2a61bf722cece00acb8965df67deec0a3783d9dd2cdf485cc94ab1",
-          "nfd_sha256": "284b90346d2a61bf722cece00acb8965df67deec0a3783d9dd2cdf485cc94ab1"
+          "is_nfd": true
         },
         "utf16_units": 55,
         "utf8_bytes": 151
@@ -15165,16 +14553,14 @@
       ],
       "payload": "คำบรรยายกำลังอัปเดต โปรดพูดด้วยความเร็วปกติ",
       "payload_sha256": "0fb8332a88c6cf23674b168584c45150f469390becf0838684c165036add5952",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 43,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 35,
-          "sha256": "0fb8332a88c6cf23674b168584c45150f469390becf0838684c165036add5952",
           "utf16_units": 43
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 35,
         "line_breaks": {
           "cr": 0,
@@ -15186,9 +14572,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "0fb8332a88c6cf23674b168584c45150f469390becf0838684c165036add5952",
-          "nfd_sha256": "0fb8332a88c6cf23674b168584c45150f469390becf0838684c165036add5952"
+          "is_nfd": true
         },
         "utf16_units": 43,
         "utf8_bytes": 127
@@ -15256,16 +14640,14 @@
       ],
       "payload": "I can hear you clearly.\n我听得很清楚。",
       "payload_sha256": "5298899ea93d3411315c87355cba0871b09b44c5c59cfaf1b07c794f2f3f3e12",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 31,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 31,
-          "sha256": "5298899ea93d3411315c87355cba0871b09b44c5c59cfaf1b07c794f2f3f3e12",
           "utf16_units": 31
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 31,
         "line_breaks": {
           "cr": 0,
@@ -15277,9 +14659,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "5298899ea93d3411315c87355cba0871b09b44c5c59cfaf1b07c794f2f3f3e12",
-          "nfd_sha256": "5298899ea93d3411315c87355cba0871b09b44c5c59cfaf1b07c794f2f3f3e12"
+          "is_nfd": true
         },
         "utf16_units": 31,
         "utf8_bytes": 45
@@ -15352,16 +14732,14 @@
       ],
       "payload": "字幕正在更新。\nLive captions are updating.",
       "payload_sha256": "6dd5c76bbd16e8fa51c6bd1764348b123ca5c991259561b0e45999b7339a922f",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 35,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 35,
-          "sha256": "6dd5c76bbd16e8fa51c6bd1764348b123ca5c991259561b0e45999b7339a922f",
           "utf16_units": 35
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 35,
         "line_breaks": {
           "cr": 0,
@@ -15373,9 +14751,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6dd5c76bbd16e8fa51c6bd1764348b123ca5c991259561b0e45999b7339a922f",
-          "nfd_sha256": "6dd5c76bbd16e8fa51c6bd1764348b123ca5c991259561b0e45999b7339a922f"
+          "is_nfd": true
         },
         "utf16_units": 35,
         "utf8_bytes": 49
@@ -15445,16 +14821,14 @@
       ],
       "payload": "Please wait a moment.\n少しお待ちください。",
       "payload_sha256": "bcb7aef140ec593a0da185556633fe2c7b33d68a8cde0618f0f2d258a43b1b0d",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 32,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 32,
-          "sha256": "bcb7aef140ec593a0da185556633fe2c7b33d68a8cde0618f0f2d258a43b1b0d",
           "utf16_units": 32
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 32,
         "line_breaks": {
           "cr": 0,
@@ -15466,9 +14840,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": false,
-          "nfc_sha256": "bcb7aef140ec593a0da185556633fe2c7b33d68a8cde0618f0f2d258a43b1b0d",
-          "nfd_sha256": "ddb5992cf5210a8353064233e5dd10b9d078b815a457b7082fe2e87e540cb899"
+          "is_nfd": false
         },
         "utf16_units": 32,
         "utf8_bytes": 52
@@ -15532,16 +14904,14 @@
       ],
       "payload": "Ready | 準備完了 | جاهز | 42%",
       "payload_sha256": "c05dbefb520f0411be462be79b8fa360ac7cd20cde10732c3ce37275eff4717c",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 25,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 25,
-          "sha256": "c05dbefb520f0411be462be79b8fa360ac7cd20cde10732c3ce37275eff4717c",
           "utf16_units": 25
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 25,
         "line_breaks": {
           "cr": 0,
@@ -15553,9 +14923,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "c05dbefb520f0411be462be79b8fa360ac7cd20cde10732c3ce37275eff4717c",
-          "nfd_sha256": "c05dbefb520f0411be462be79b8fa360ac7cd20cde10732c3ce37275eff4717c"
+          "is_nfd": true
         },
         "utf16_units": 25,
         "utf8_bytes": 37
@@ -15609,16 +14977,14 @@
       ],
       "payload": "الحالة: Ready — 42%",
       "payload_sha256": "906d08d775ffe2e7b5130a4a2fb1fd7cc9249edadefd1576440e4a1520fa8cdc",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 19,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 19,
-          "sha256": "906d08d775ffe2e7b5130a4a2fb1fd7cc9249edadefd1576440e4a1520fa8cdc",
           "utf16_units": 19
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 19,
         "line_breaks": {
           "cr": 0,
@@ -15630,9 +14996,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "906d08d775ffe2e7b5130a4a2fb1fd7cc9249edadefd1576440e4a1520fa8cdc",
-          "nfd_sha256": "906d08d775ffe2e7b5130a4a2fb1fd7cc9249edadefd1576440e4a1520fa8cdc"
+          "is_nfd": true
         },
         "utf16_units": 19,
         "utf8_bytes": 27
@@ -15691,16 +15055,14 @@
       ],
       "payload": "الحالة: ⁦Ready — 42%⁩",
       "payload_sha256": "4f0ac97bd982eb986811089de08f1af2514adc212fe83519e50d1c5023b0a253",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 21,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 21,
-          "sha256": "4f0ac97bd982eb986811089de08f1af2514adc212fe83519e50d1c5023b0a253",
           "utf16_units": 21
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 21,
         "line_breaks": {
           "cr": 0,
@@ -15712,9 +15074,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "4f0ac97bd982eb986811089de08f1af2514adc212fe83519e50d1c5023b0a253",
-          "nfd_sha256": "4f0ac97bd982eb986811089de08f1af2514adc212fe83519e50d1c5023b0a253"
+          "is_nfd": true
         },
         "utf16_units": 21,
         "utf8_bytes": 33
@@ -15771,16 +15131,14 @@
       ],
       "payload": "Status: جاهز 42. End.",
       "payload_sha256": "0f36f55c3c7006d322ed755d02794cf1399e06681375d9ae773584bca89d71e9",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 21,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 21,
-          "sha256": "0f36f55c3c7006d322ed755d02794cf1399e06681375d9ae773584bca89d71e9",
           "utf16_units": 21
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 21,
         "line_breaks": {
           "cr": 0,
@@ -15792,9 +15150,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "0f36f55c3c7006d322ed755d02794cf1399e06681375d9ae773584bca89d71e9",
-          "nfd_sha256": "0f36f55c3c7006d322ed755d02794cf1399e06681375d9ae773584bca89d71e9"
+          "is_nfd": true
         },
         "utf16_units": 21,
         "utf8_bytes": 25
@@ -15855,16 +15211,14 @@
       ],
       "payload": "Status: ⁧جاهز 42⁩. End.",
       "payload_sha256": "44e5fe0ffdaca8bee9ef017d07fccd4d277aa399876730abfb16ec9f4a346a2c",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 23,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 23,
-          "sha256": "44e5fe0ffdaca8bee9ef017d07fccd4d277aa399876730abfb16ec9f4a346a2c",
           "utf16_units": 23
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 23,
         "line_breaks": {
           "cr": 0,
@@ -15876,9 +15230,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "44e5fe0ffdaca8bee9ef017d07fccd4d277aa399876730abfb16ec9f4a346a2c",
-          "nfd_sha256": "44e5fe0ffdaca8bee9ef017d07fccd4d277aa399876730abfb16ec9f4a346a2c"
+          "is_nfd": true
         },
         "utf16_units": 23,
         "utf8_bytes": 31
@@ -15929,16 +15281,14 @@
       ],
       "payload": "מחיר: 123.45 USD",
       "payload_sha256": "07e4bbeef2fa20c0024fdfdd1a1c054436fa5204d423b8595d0e947c23cdcfe3",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 16,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 16,
-          "sha256": "07e4bbeef2fa20c0024fdfdd1a1c054436fa5204d423b8595d0e947c23cdcfe3",
           "utf16_units": 16
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 16,
         "line_breaks": {
           "cr": 0,
@@ -15950,9 +15300,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "07e4bbeef2fa20c0024fdfdd1a1c054436fa5204d423b8595d0e947c23cdcfe3",
-          "nfd_sha256": "07e4bbeef2fa20c0024fdfdd1a1c054436fa5204d423b8595d0e947c23cdcfe3"
+          "is_nfd": true
         },
         "utf16_units": 16,
         "utf8_bytes": 20
@@ -16007,16 +15355,14 @@
       ],
       "payload": "מחיר: ⁦123.45 USD⁩",
       "payload_sha256": "4d1a3e21a33bda0045b3d82e12194fee3e982e9e73bc6d8878c5d58a9294aa2b",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 18,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 18,
-          "sha256": "4d1a3e21a33bda0045b3d82e12194fee3e982e9e73bc6d8878c5d58a9294aa2b",
           "utf16_units": 18
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 18,
         "line_breaks": {
           "cr": 0,
@@ -16028,9 +15374,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "4d1a3e21a33bda0045b3d82e12194fee3e982e9e73bc6d8878c5d58a9294aa2b",
-          "nfd_sha256": "4d1a3e21a33bda0045b3d82e12194fee3e982e9e73bc6d8878c5d58a9294aa2b"
+          "is_nfd": true
         },
         "utf16_units": 18,
         "utf8_bytes": 26
@@ -16099,16 +15443,14 @@
       ],
       "payload": "الرابط: https://example.com/a?x=1",
       "payload_sha256": "948b7848628d644a0bf0d3dd48d49172d808b79c41c7c400e43f48e5cd407053",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 33,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 33,
-          "sha256": "948b7848628d644a0bf0d3dd48d49172d808b79c41c7c400e43f48e5cd407053",
           "utf16_units": 33
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 33,
         "line_breaks": {
           "cr": 0,
@@ -16120,9 +15462,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "948b7848628d644a0bf0d3dd48d49172d808b79c41c7c400e43f48e5cd407053",
-          "nfd_sha256": "948b7848628d644a0bf0d3dd48d49172d808b79c41c7c400e43f48e5cd407053"
+          "is_nfd": true
         },
         "utf16_units": 33,
         "utf8_bytes": 39
@@ -16195,16 +15535,14 @@
       ],
       "payload": "الرابط: ⁦https://example.com/a?x=1⁩",
       "payload_sha256": "6c3d086c297aac907dc28df566d857ab403e13c9c3c4185a0dc23b0cd21c9a8a",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 35,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 35,
-          "sha256": "6c3d086c297aac907dc28df566d857ab403e13c9c3c4185a0dc23b0cd21c9a8a",
           "utf16_units": 35
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 35,
         "line_breaks": {
           "cr": 0,
@@ -16216,9 +15554,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "6c3d086c297aac907dc28df566d857ab403e13c9c3c4185a0dc23b0cd21c9a8a",
-          "nfd_sha256": "6c3d086c297aac907dc28df566d857ab403e13c9c3c4185a0dc23b0cd21c9a8a"
+          "is_nfd": true
         },
         "utf16_units": 35,
         "utf8_bytes": 45
@@ -16320,16 +15656,14 @@
       ],
       "payload": "Saved to C:\\Users\\Alex\\Videos\\VRChat\\caption-session-2026-08-13.json",
       "payload_sha256": "15979504d337a1726e1f587756ba045ef76012fed3f70596aef075676c0abf56",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 68,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 68,
-          "sha256": "15979504d337a1726e1f587756ba045ef76012fed3f70596aef075676c0abf56",
           "utf16_units": 68
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 68,
         "line_breaks": {
           "cr": 0,
@@ -16341,9 +15675,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "15979504d337a1726e1f587756ba045ef76012fed3f70596aef075676c0abf56",
-          "nfd_sha256": "15979504d337a1726e1f587756ba045ef76012fed3f70596aef075676c0abf56"
+          "is_nfd": true
         },
         "utf16_units": 68,
         "utf8_bytes": 68
@@ -16470,16 +15802,14 @@
       ],
       "payload": "Download: https://example.com/captions/session/1234567890abcdef?language=en-US&mode=live#latest",
       "payload_sha256": "9316ac323a23a11485e086e9c2a1d99fb06ac3f49674e989672d3fdadc284218",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 95,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 95,
-          "sha256": "9316ac323a23a11485e086e9c2a1d99fb06ac3f49674e989672d3fdadc284218",
           "utf16_units": 95
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 95,
         "line_breaks": {
           "cr": 0,
@@ -16491,9 +15821,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "9316ac323a23a11485e086e9c2a1d99fb06ac3f49674e989672d3fdadc284218",
-          "nfd_sha256": "9316ac323a23a11485e086e9c2a1d99fb06ac3f49674e989672d3fdadc284218"
+          "is_nfd": true
         },
         "utf16_units": 95,
         "utf8_bytes": 95
@@ -16586,16 +15914,14 @@
       ],
       "payload": "@caption-helper please retry #voice-accessibility after 20:30.",
       "payload_sha256": "90af94cfc4783f74f341b9c2e45ec2d05ac407f6aca9357eda3bf2bd419160d9",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 62,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 62,
-          "sha256": "90af94cfc4783f74f341b9c2e45ec2d05ac407f6aca9357eda3bf2bd419160d9",
           "utf16_units": 62
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 62,
         "line_breaks": {
           "cr": 0,
@@ -16607,9 +15933,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "90af94cfc4783f74f341b9c2e45ec2d05ac407f6aca9357eda3bf2bd419160d9",
-          "nfd_sha256": "90af94cfc4783f74f341b9c2e45ec2d05ac407f6aca9357eda3bf2bd419160d9"
+          "is_nfd": true
         },
         "utf16_units": 62,
         "utf8_bytes": 62
@@ -16698,16 +16022,14 @@
       ],
       "payload": "Send the transcript to caption.review+vrchat@example.com.",
       "payload_sha256": "329938bbe13d806a13981bfb91f0bb23637889cb1e581a3e7eb3ca8751752a2f",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 57,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 57,
-          "sha256": "329938bbe13d806a13981bfb91f0bb23637889cb1e581a3e7eb3ca8751752a2f",
           "utf16_units": 57
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 57,
         "line_breaks": {
           "cr": 0,
@@ -16719,9 +16041,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "329938bbe13d806a13981bfb91f0bb23637889cb1e581a3e7eb3ca8751752a2f",
-          "nfd_sha256": "329938bbe13d806a13981bfb91f0bb23637889cb1e581a3e7eb3ca8751752a2f"
+          "is_nfd": true
         },
         "utf16_units": 57,
         "utf8_bytes": 57
@@ -16800,16 +16120,14 @@
       ],
       "payload": "<b>bold?</b> <color=#ff0000>red?</color> & <tag>",
       "payload_sha256": "be2c8ab0c347f05c03c1241318a3f6fefbe7b39a28376ae64e8dad0e15477016",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 48,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 48,
-          "sha256": "be2c8ab0c347f05c03c1241318a3f6fefbe7b39a28376ae64e8dad0e15477016",
           "utf16_units": 48
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 48,
         "line_breaks": {
           "cr": 0,
@@ -16821,9 +16139,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "be2c8ab0c347f05c03c1241318a3f6fefbe7b39a28376ae64e8dad0e15477016",
-          "nfd_sha256": "be2c8ab0c347f05c03c1241318a3f6fefbe7b39a28376ae64e8dad0e15477016"
+          "is_nfd": true
         },
         "utf16_units": 48,
         "utf8_bytes": 48
@@ -16905,16 +16221,14 @@
       ],
       "payload": "Connection restored ✅ — 已重新连接。 Please continue 🎙️",
       "payload_sha256": "8c091329d83a86af283627e7d83da973af33ea25e61274eb84aad9b786883ead",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 49,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 48,
-          "sha256": "8c091329d83a86af283627e7d83da973af33ea25e61274eb84aad9b786883ead",
           "utf16_units": 50
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 48,
         "line_breaks": {
           "cr": 0,
@@ -16926,9 +16240,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "8c091329d83a86af283627e7d83da973af33ea25e61274eb84aad9b786883ead",
-          "nfd_sha256": "8c091329d83a86af283627e7d83da973af33ea25e61274eb84aad9b786883ead"
+          "is_nfd": true
         },
         "utf16_units": 50,
         "utf8_bytes": 70
@@ -17045,16 +16357,14 @@
       ],
       "payload": "Trace 550e8400-e29b-41d4-a716-446655440000 / sha256:9f86d081884c7d659a2feaa0c55ad015",
       "payload_sha256": "848431385aa1c579bf1b0e1af6667b40e80e716c38a83a79c9332f28d0137ada",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "below-143",
         "code_points": 84,
         "egc_safe_prefix_144": {
           "equals_payload": true,
           "graphemes": 84,
-          "sha256": "848431385aa1c579bf1b0e1af6667b40e80e716c38a83a79c9332f28d0137ada",
           "utf16_units": 84
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 84,
         "line_breaks": {
           "cr": 0,
@@ -17066,9 +16376,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "848431385aa1c579bf1b0e1af6667b40e80e716c38a83a79c9332f28d0137ada",
-          "nfd_sha256": "848431385aa1c579bf1b0e1af6667b40e80e716c38a83a79c9332f28d0137ada"
+          "is_nfd": true
         },
         "utf16_units": 84,
         "utf8_bytes": 84
@@ -17274,16 +16582,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx previous context latest words",
       "payload_sha256": "becf57b302d147bc3ce48b88cf873912d14c80877aa5ff3f3bba012f14f490e0",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "above-145",
         "code_points": 174,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 144,
-          "sha256": "0c862f309a9fa1f6fe3d0f17234a558daf08ae7d45e7cd0642403fdd91d406ab",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 174,
         "line_breaks": {
           "cr": 0,
@@ -17295,9 +16601,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "becf57b302d147bc3ce48b88cf873912d14c80877aa5ff3f3bba012f14f490e0",
-          "nfd_sha256": "becf57b302d147bc3ce48b88cf873912d14c80877aa5ff3f3bba012f14f490e0"
+          "is_nfd": true
         },
         "utf16_units": 174,
         "utf8_bytes": 174
@@ -17512,16 +16816,14 @@
       ],
       "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx previous context. latest, newest.",
       "payload_sha256": "2b6d24c6a3c67f071cc9a0d31cf5eed104531d96b2fb2cb23ee7dab0744e7b73",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "above-145",
         "code_points": 178,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 144,
-          "sha256": "0c862f309a9fa1f6fe3d0f17234a558daf08ae7d45e7cd0642403fdd91d406ab",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 178,
         "line_breaks": {
           "cr": 0,
@@ -17533,9 +16835,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "2b6d24c6a3c67f071cc9a0d31cf5eed104531d96b2fb2cb23ee7dab0744e7b73",
-          "nfd_sha256": "2b6d24c6a3c67f071cc9a0d31cf5eed104531d96b2fb2cb23ee7dab0744e7b73"
+          "is_nfd": true
         },
         "utf16_units": 178,
         "utf8_bytes": 178
@@ -17736,16 +17036,14 @@
       ],
       "payload": "OLDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxNEW",
       "payload_sha256": "4e92c22d20c7c2dbf119c5566e38595efa7c441ffb7e7098bd97d6d45ffb085d",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "above-145",
         "code_points": 166,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 144,
-          "sha256": "747fb791d6eb56d418f703a21758cc0abfc7694b90cd7c73dac63b87aa76d873",
           "utf16_units": 144
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 166,
         "line_breaks": {
           "cr": 0,
@@ -17757,9 +17055,7 @@
         },
         "normalization": {
           "is_nfc": true,
-          "is_nfd": true,
-          "nfc_sha256": "4e92c22d20c7c2dbf119c5566e38595efa7c441ffb7e7098bd97d6d45ffb085d",
-          "nfd_sha256": "4e92c22d20c7c2dbf119c5566e38595efa7c441ffb7e7098bd97d6d45ffb085d"
+          "is_nfd": true
         },
         "utf16_units": 166,
         "utf8_bytes": 166
@@ -17804,16 +17100,14 @@
       ],
       "payload": "é́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́ newest",
       "payload_sha256": "6bb7033140aa1226e876c831395d7d798c2e34993ebd4f3a03ada55852f27024",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "above-145",
         "code_points": 152,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 0,
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "utf16_units": 0
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 8,
         "line_breaks": {
           "cr": 0,
@@ -17825,9 +17119,7 @@
         },
         "normalization": {
           "is_nfc": false,
-          "is_nfd": true,
-          "nfc_sha256": "63e7f481926ade643eb2aa91ffab266996ba5d7424d2d2e0d7959530b37e4c33",
-          "nfd_sha256": "6bb7033140aa1226e876c831395d7d798c2e34993ebd4f3a03ada55852f27024"
+          "is_nfd": true
         },
         "utf16_units": 152,
         "utf8_bytes": 296
@@ -17871,16 +17163,14 @@
       ],
       "payload": "older é́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́",
       "payload_sha256": "56b220481bbb85fadcd497cefc342c75a2e738d34523bf333cba41923a3273e1",
-      "portable_unicode_facts": {
+      "unicode_facts": {
         "budget_class": "above-145",
         "code_points": 151,
         "egc_safe_prefix_144": {
           "equals_payload": false,
           "graphemes": 6,
-          "sha256": "585b9cd189814010f6ba8c22a18570c0648ecc413c29b0cce11c7284ee474e8e",
           "utf16_units": 6
         },
-        "evidence_class": "deterministic_unicode_computation",
         "graphemes": 7,
         "line_breaks": {
           "cr": 0,
@@ -17892,9 +17182,7 @@
         },
         "normalization": {
           "is_nfc": false,
-          "is_nfd": true,
-          "nfc_sha256": "4eb12cc4d97f08d0c5aa915e3d4a61584e3c8c32626a55d7c5d0f46779423a1b",
-          "nfd_sha256": "56b220481bbb85fadcd497cefc342c75a2e738d34523bf333cba41923a3273e1"
+          "is_nfd": true
         },
         "utf16_units": 151,
         "utf8_bytes": 295
@@ -17913,21 +17201,6 @@
       ]
     }
   ],
-  "description": "Portable Chatbox inputs and Unicode facts; this file contains neither VRChat runtime observations nor production-generated expected pages.",
-  "fixture_schema_version": 1,
-  "source": {
-    "corpus_id": "vrchat-chatbox-canonical",
-    "manifest_sha256": "fcbad159f2fb9ea6f0b9bd9fab33373c913d48e7b3213913bb73c8a3ac68e7d8",
-    "source_sha256": "f4899d95d0a2fac74a96423608cd4d9b88fa3afe28737c747356fcd3d4190731",
-    "unicode_fact_engines": {
-      "python": "3.13",
-      "regex": "2026.7.19",
-      "unicodedata2": "17.0.0"
-    },
-    "unicode_profile": {
-      "grapheme_algorithm": "extended grapheme clusters via regex 2026.7.19 \\X; Unicode data revision not separately asserted",
-      "normalization": "Unicode canonical normalization via unicodedata2",
-      "version": "17.0.0"
-    }
-  }
+  "description": "Product-owned synthetic Chatbox inputs and Unicode facts used by Rust regression tests.",
+  "fixture_schema_version": 1
 }

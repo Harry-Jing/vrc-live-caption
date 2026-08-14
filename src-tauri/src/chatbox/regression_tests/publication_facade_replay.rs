@@ -5,7 +5,8 @@ use super::super::text_pacing::{ChatboxTextPacer, Clock};
 use super::super::transport::{ChatboxSendReceipt, ChatboxTransport};
 use super::super::{ChatboxPublication, PublicationObservationOutcome, PublisherCloseReason};
 use super::support::{
-    PORTABLE_CORPUS_JSON, first_oversized_grapheme_utf16_units, has_test_target, required_string,
+    CHATBOX_REGRESSION_CORPUS_JSON, first_oversized_grapheme_utf16_units, has_test_target,
+    required_string,
 };
 use crate::caption::{
     ActiveCaptionStream, CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateChange,
@@ -203,7 +204,7 @@ impl ChatboxTransport for CorpusRecordingTransport {
 }
 
 fn parse_corpus() -> AppResult<Value> {
-    serde_json::from_str(PORTABLE_CORPUS_JSON)
+    serde_json::from_str(CHATBOX_REGRESSION_CORPUS_JSON)
         .map_err(|error| AppError::state(format!("Chatbox corpus was invalid JSON: {error}")))
 }
 

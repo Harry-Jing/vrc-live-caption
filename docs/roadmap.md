@@ -26,10 +26,10 @@ and a native Windows/VRChat real-microphone matrix on 2026-08-10, including long
 speech and mixed English/Chinese speech.
 
 A post-foundation Chatbox fidelity pass now covers preparation and layout with a
-portable corpus and a build-scoped VRChat client-observation fixture. Native
-replay of application-generated Completed pages and Live viewports remains
-pending; the existing evidence does not establish behavior for other VRChat
-builds, XR modes, or observer viewpoints.
+versioned regression corpus and a build-scoped VRChat client-observation
+fixture. Native replay of application-generated Completed pages and Live
+viewports remains pending; the existing evidence does not establish behavior
+for other VRChat builds, XR modes, or observer viewpoints.
 
 ## Phase 5: Completed translation
 

@@ -1,7 +1,6 @@
 use super::support::{
-    EXPECTED_MANIFEST_SHA256, EXPECTED_SOURCE_SHA256, PORTABLE_CORPUS_JSON,
-    assert_no_forbidden_expectation_fields, egc_end_utf16_offsets, required_string, required_usize,
-    required_usize_array, sha256_hex,
+    CHATBOX_REGRESSION_CORPUS_JSON, egc_end_utf16_offsets, require_object_fields, required_string,
+    required_usize, required_usize_array, sha256_hex,
 };
 use serde_json::Value;
 use std::collections::HashSet;
@@ -16,31 +15,103 @@ const ALLOWED_TEST_TARGETS: [&str; 4] = [
 ];
 
 #[test]
-fn portable_chatbox_corpus_has_stable_identity_and_unicode_facts()
+fn chatbox_regression_corpus_has_stable_identity_and_unicode_facts()
 -> Result<(), Box<dyn std::error::Error>> {
-    let corpus = serde_json::from_str::<Value>(PORTABLE_CORPUS_JSON)?;
+    let corpus = serde_json::from_str::<Value>(CHATBOX_REGRESSION_CORPUS_JSON)?;
     let cases = corpus["cases"]
         .as_array()
         .ok_or("Chatbox corpus cases must be an array.")?;
 
+    require_object_fields(
+        &corpus,
+        "Chatbox corpus",
+        &[
+            "case_count",
+            "cases",
+            "description",
+            "fixture_schema_version",
+        ],
+        &[],
+    )?;
+
     assert_eq!(corpus["fixture_schema_version"], 1);
     assert_eq!(corpus["case_count"], EXPECTED_CASE_COUNT);
     assert_eq!(cases.len(), EXPECTED_CASE_COUNT);
-    assert_eq!(corpus["source"]["corpus_id"], "vrchat-chatbox-canonical");
-    assert_eq!(corpus["source"]["source_sha256"], EXPECTED_SOURCE_SHA256);
-    assert_eq!(
-        corpus["source"]["manifest_sha256"],
-        EXPECTED_MANIFEST_SHA256
-    );
-    assert_eq!(corpus["source"]["unicode_profile"]["version"], "17.0.0");
-    assert_no_forbidden_expectation_fields(&corpus);
 
     let mut case_ids = HashSet::new();
     let mut payloads = HashSet::new();
     for case in cases {
         let case_id = required_string(case, "case_id")?;
         let payload = required_string(case, "payload")?;
-        let facts = &case["portable_unicode_facts"];
+        let facts = &case["unicode_facts"];
+
+        require_object_fields(
+            case,
+            &format!("Chatbox corpus case {case_id}"),
+            &[
+                "base_direction",
+                "case_id",
+                "egc_end_utf16_offsets",
+                "egc_safe_prefix_144",
+                "features",
+                "intent",
+                "language_tags",
+                "payload",
+                "payload_sha256",
+                "unicode_facts",
+                "scripts",
+                "test_targets",
+            ],
+            &["relation"],
+        )?;
+        require_object_fields(
+            facts,
+            &format!("Unicode facts for {case_id}"),
+            &[
+                "budget_class",
+                "code_points",
+                "egc_safe_prefix_144",
+                "graphemes",
+                "line_breaks",
+                "normalization",
+                "utf16_units",
+                "utf8_bytes",
+            ],
+            &[],
+        )?;
+        require_object_fields(
+            &facts["egc_safe_prefix_144"],
+            &format!("safe-prefix facts for {case_id}"),
+            &["equals_payload", "graphemes", "utf16_units"],
+            &[],
+        )?;
+        require_object_fields(
+            &facts["line_breaks"],
+            &format!("line-break facts for {case_id}"),
+            &[
+                "cr",
+                "crlf",
+                "lf",
+                "line_separator",
+                "nel",
+                "paragraph_separator",
+            ],
+            &[],
+        )?;
+        require_object_fields(
+            &facts["normalization"],
+            &format!("normalization facts for {case_id}"),
+            &["is_nfc", "is_nfd"],
+            &[],
+        )?;
+        if case.get("relation").is_some() {
+            require_object_fields(
+                &case["relation"],
+                &format!("relation for {case_id}"),
+                &["group", "member"],
+                &[],
+            )?;
+        }
 
         assert!(case_ids.insert(case_id), "duplicate case ID: {case_id}");
         assert!(
@@ -77,7 +148,6 @@ fn portable_chatbox_corpus_has_stable_identity_and_unicode_facts()
             sha256_hex(payload.as_bytes()),
             "payload SHA-256 drifted: {case_id}"
         );
-        assert_eq!(facts["evidence_class"], "deterministic_unicode_computation");
         assert_eq!(required_usize(facts, "utf8_bytes")?, payload.len());
         assert_eq!(
             required_usize(facts, "utf16_units")?,
@@ -118,9 +188,5 @@ fn portable_chatbox_corpus_has_stable_identity_and_unicode_facts()
         }));
     }
 
-    assert!(!PORTABLE_CORPUS_JSON.contains("C:\\\\Users\\\\Harry\\\\"));
-    assert!(!PORTABLE_CORPUS_JSON.contains("vrc-chatbox-layout-lab"));
-    assert!(!PORTABLE_CORPUS_JSON.contains("captures/"));
-    assert!(!PORTABLE_CORPUS_JSON.contains("captures\\\\"));
     Ok(())
 }
