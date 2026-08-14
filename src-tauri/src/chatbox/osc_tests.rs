@@ -1,5 +1,6 @@
 use super::super::layout::{PreparedChatboxText, prepare_single_message};
-use super::super::pacer::{ChatboxPacer, Clock};
+use super::super::pacer::ChatboxPacer;
+use super::super::test_support::AdvancingClock;
 use super::*;
 use crate::host_resolver::HostResolver;
 use rosc::{decoder, encoder};
@@ -7,45 +8,6 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
-
-struct AdvancingClock {
-    now: Mutex<Instant>,
-    sleeps: Mutex<Vec<Duration>>,
-}
-
-impl AdvancingClock {
-    fn new() -> Self {
-        Self {
-            now: Mutex::new(Instant::now()),
-            sleeps: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn total_sleep(&self) -> Duration {
-        self.sleeps
-            .lock()
-            .map(|sleeps| sleeps.iter().copied().sum())
-            .unwrap_or_default()
-    }
-}
-
-impl Clock for AdvancingClock {
-    fn now(&self) -> Instant {
-        self.now
-            .lock()
-            .map(|now| *now)
-            .unwrap_or_else(|poisoned| *poisoned.into_inner())
-    }
-
-    fn sleep(&self, duration: Duration) {
-        if let Ok(mut sleeps) = self.sleeps.lock() {
-            sleeps.push(duration);
-        }
-        if let Ok(mut now) = self.now.lock() {
-            *now += duration;
-        }
-    }
-}
 
 struct ScriptedOscTransport {
     target: String,

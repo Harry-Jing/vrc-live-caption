@@ -15,6 +15,9 @@ mod osc;
 mod pacer;
 mod transport;
 
+#[cfg(test)]
+mod test_support;
+
 use common::describe_layout_error;
 pub(crate) use common::{PublisherCloseReason, PublisherSubmitOutcome};
 pub(crate) use layout::PreparedChatboxText;
