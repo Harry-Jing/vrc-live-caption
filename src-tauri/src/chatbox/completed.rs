@@ -3,8 +3,8 @@
 //! Runtime producers submit Source-unit recognition lifecycle changes through
 //! a non-waiting in-memory seam. One dedicated worker owns pagination output,
 //! typing transitions, queue order, process-wide pacing, OSC attempts, and
-//! diagnostics. No producer waits for a Chatbox pacing opportunity or network
-//! operation.
+//! diagnostics. No producer waits for a Chatbox text-send pacing opportunity
+//! or network operation.
 
 use super::PreparedChatboxText;
 use super::common::{
@@ -12,7 +12,7 @@ use super::common::{
     TYPING_REASSERT_INTERVAL, describe_layout_error,
 };
 use super::layout::prepare_completed_pages;
-use super::pacer::{ChatboxAttemptPermit, ChatboxPacer};
+use super::text_pacing::{ChatboxTextAttemptPermit, ChatboxTextPacer};
 use super::transport::ChatboxTransport;
 use crate::caption::{CaptionAggregateChange, CaptionAggregateUpdate, CaptionLane, CaptionState};
 use crate::error::{AppError, AppResult};
@@ -98,7 +98,7 @@ struct PublisherShared {
     wake: Condvar,
     interrupt_text_wait: AtomicBool,
     transport: Arc<dyn ChatboxTransport>,
-    pacer: ChatboxPacer,
+    text_pacer: ChatboxTextPacer,
     committer: GenerationCommitter,
     reporter: CompletedPublisherReporter,
     limits: PublisherLimits,
@@ -153,13 +153,13 @@ enum WorkerItem {
 impl CompletedChatboxPublisher {
     pub(crate) fn start(
         transport: Arc<dyn ChatboxTransport>,
-        pacer: ChatboxPacer,
+        text_pacer: ChatboxTextPacer,
         committer: GenerationCommitter,
         reporter: CompletedPublisherReporter,
     ) -> AppResult<Self> {
         Self::start_with_limits(
             transport,
-            pacer,
+            text_pacer,
             committer,
             reporter,
             PublisherLimits {
@@ -171,7 +171,7 @@ impl CompletedChatboxPublisher {
 
     fn start_with_limits(
         transport: Arc<dyn ChatboxTransport>,
-        pacer: ChatboxPacer,
+        text_pacer: ChatboxTextPacer,
         committer: GenerationCommitter,
         reporter: CompletedPublisherReporter,
         limits: PublisherLimits,
@@ -200,7 +200,7 @@ impl CompletedChatboxPublisher {
             wake: Condvar::new(),
             interrupt_text_wait: AtomicBool::new(false),
             transport,
-            pacer,
+            text_pacer,
             committer,
             reporter,
             limits,
@@ -459,7 +459,7 @@ impl CompletedChatboxPublisher {
             return Ok(PublisherSubmitOutcome::Handled);
         }
 
-        let now = self.shared.pacer.now();
+        let now = self.shared.text_pacer.now();
         expire_unstarted_units(&mut state, now, self.shared.limits.max_unstarted_age)?;
         let page_count = pages.len();
         let protected_pages = state
@@ -564,8 +564,8 @@ fn run_publisher_worker(shared: Arc<PublisherShared>) -> AppResult<()> {
                 text,
             } => {
                 let permit = shared
-                    .pacer
-                    .wait_for_turn(Some(&shared.interrupt_text_wait))?;
+                    .text_pacer
+                    .wait_for_text_attempt(Some(&shared.interrupt_text_wait))?;
                 let Some(permit) = permit else {
                     continue;
                 };
@@ -662,7 +662,7 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
 
         expire_unstarted_units(
             &mut state,
-            shared.pacer.now(),
+            shared.text_pacer.now(),
             shared.limits.max_unstarted_age,
         )?;
 
@@ -676,7 +676,7 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
         if state.typing_desired
             && state
                 .next_typing_reassert_at
-                .is_some_and(|deadline| shared.pacer.now() >= deadline)
+                .is_some_and(|deadline| shared.text_pacer.now() >= deadline)
         {
             return Ok(WorkerItem::Typing {
                 epoch: state.typing_epoch,
@@ -704,7 +704,7 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
         }
 
         if let Some(deadline) = state.next_typing_reassert_at {
-            let remaining = deadline.saturating_duration_since(shared.pacer.now());
+            let remaining = deadline.saturating_duration_since(shared.text_pacer.now());
             let (next_state, _) = shared
                 .wake
                 .wait_timeout(state, remaining)
@@ -740,7 +740,7 @@ fn process_typing(shared: &PublisherShared, epoch: u64, is_typing: bool) -> AppR
     let Some(result) = transport_result? else {
         return Ok(());
     };
-    let attempted_at = shared.pacer.now();
+    let attempted_at = shared.text_pacer.now();
     let mut state = shared
         .state
         .lock()
@@ -814,7 +814,7 @@ fn attempt_selected_page(
     sequence: u64,
     page_index: usize,
     text: &PreparedChatboxText,
-    permit: ChatboxAttemptPermit<'_>,
+    permit: ChatboxTextAttemptPermit<'_>,
 ) -> AppResult<()> {
     {
         let mut state = shared
@@ -834,7 +834,7 @@ fn attempt_selected_page(
 
         if !unit.started
             && shared
-                .pacer
+                .text_pacer
                 .now()
                 .saturating_duration_since(unit.accepted_at)
                 >= shared.limits.max_unstarted_age

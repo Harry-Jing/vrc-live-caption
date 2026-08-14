@@ -1,5 +1,5 @@
 use super::super::layout::PreparedChatboxText;
-use super::super::pacer::Clock;
+use super::super::text_pacing::Clock;
 use super::super::transport::ChatboxSendReceipt;
 use super::*;
 use crate::generation_fence::{GenerationCommitter, GenerationFence};
@@ -571,7 +571,7 @@ fn advance_to_next_typing_reassert(
 fn publishes_every_exact_page_in_order() -> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(AdvancingClock::new());
-    let pacer = ChatboxPacer::with_clock(clock);
+    let pacer = ChatboxTextPacer::with_clock(clock);
     let committer = open_committer();
     let diagnostics = Arc::new(Mutex::new(Vec::new()));
     let recorded_diagnostics = Arc::clone(&diagnostics);
@@ -636,7 +636,7 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
     let clock = Arc::new(AdvancingClock::new());
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(clock),
+        ChatboxTextPacer::with_clock(clock),
         open_committer(),
         Arc::new(|_| {}),
         PublisherLimits {
@@ -713,9 +713,9 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
 fn overload_drops_only_the_oldest_whole_unstarted_unit() -> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(ControlledClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| AppError::runtime("Initial pacing reservation was cancelled."))?
         .attempt(|| Ok(()))?;
     let (reporter, diagnostics) = recording_reporter();
@@ -784,9 +784,9 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
     let clock = Arc::new(ControlledClock::new());
     let clock_for_transport: Arc<dyn Clock> = clock.clone();
     let transport = Arc::new(ScriptedTransport::new(clock_for_transport, [2]));
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| AppError::runtime("Initial pacing reservation was cancelled."))?
         .attempt(|| Ok(()))?;
     let (reporter, diagnostics) = recording_reporter();
@@ -882,7 +882,7 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
     let (reporter, diagnostics) = recording_reporter();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
+        ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         open_committer(),
         reporter,
         PublisherLimits {
@@ -959,9 +959,9 @@ fn started_unit_is_protected_and_new_unit_is_rejected_without_evicting_others() 
 fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(ControlledClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| AppError::runtime("Initial pacing reservation was cancelled."))?
         .attempt(|| Ok(()))?;
     let (reporter, diagnostics) = recording_reporter();
@@ -1018,9 +1018,9 @@ fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> A
 fn stale_unstarted_unit_expires_as_one_complete_publication() -> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(ControlledClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| AppError::runtime("Initial pacing reservation was cancelled."))?
         .attempt(|| Ok(()))?;
     let (reporter, diagnostics) = recording_reporter();
@@ -1095,7 +1095,7 @@ fn overlapping_activity_keeps_typing_on_until_the_last_unit_resolves() -> AppRes
     let transport = Arc::new(RecordingTransport::new());
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
+        ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         open_committer(),
         Arc::new(|_| {}),
         PublisherLimits {
@@ -1151,7 +1151,7 @@ fn active_typing_is_reasserted_on_the_best_effort_interval() -> AppResult<()> {
     let transport = Arc::new(ScriptedTransport::new(transport_clock, []));
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(clock.clone()),
+        ChatboxTextPacer::with_clock(clock.clone()),
         open_committer(),
         Arc::new(|_| {}),
         PublisherLimits {
@@ -1224,7 +1224,7 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
     let (reporter, diagnostics) = recording_reporter();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(clock.clone()),
+        ChatboxTextPacer::with_clock(clock.clone()),
         open_committer(),
         reporter,
         PublisherLimits {
@@ -1295,7 +1295,7 @@ fn stop_cancels_a_pending_typing_reassertion() -> AppResult<()> {
     let fence = GenerationFence::new();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(clock.clone()),
+        ChatboxTextPacer::with_clock(clock.clone()),
         fence.committer(),
         Arc::new(|_| {}),
         PublisherLimits {
@@ -1339,7 +1339,7 @@ fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<
     let committer = fence.committer();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(clock.clone()),
+        ChatboxTextPacer::with_clock(clock.clone()),
         committer.clone(),
         Arc::new(|_| {}),
         PublisherLimits {
@@ -1408,7 +1408,7 @@ fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<(
     assert!(page_count >= 6);
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(clock),
+        ChatboxTextPacer::with_clock(clock),
         open_committer(),
         Arc::new(|_| {}),
         PublisherLimits {
@@ -1464,7 +1464,7 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
     let (reporter, diagnostics) = recording_reporter();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
+        ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         open_committer(),
         reporter,
         PublisherLimits {
@@ -1517,7 +1517,7 @@ fn failed_typing_on_is_diagnosed_and_still_followed_by_typing_off() -> AppResult
     let (reporter, diagnostics) = recording_reporter();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(clock),
+        ChatboxTextPacer::with_clock(clock),
         open_committer(),
         reporter,
         PublisherLimits {
@@ -1570,9 +1570,9 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
 {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(ControlledClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| AppError::runtime("Initial pacing reservation was cancelled."))?
         .attempt(|| Ok(()))?;
     let fence = GenerationFence::new();
@@ -1648,7 +1648,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
     let (reporter, diagnostics) = recording_reporter();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
+        ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         committer.clone(),
         reporter,
         PublisherLimits {
@@ -1734,7 +1734,7 @@ fn concurrent_close_and_join_perform_one_cleanup() -> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
+        ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         open_committer(),
         Arc::new(|_| {}),
         PublisherLimits {
@@ -1771,7 +1771,7 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
     let (reporter, diagnostics) = recording_reporter();
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
-        ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
+        ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         open_committer(),
         reporter,
         PublisherLimits {

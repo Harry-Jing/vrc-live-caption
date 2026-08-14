@@ -1,7 +1,7 @@
 use super::super::layout::{
     ChatboxLayoutError, PreparedChatboxText, prepare_completed_pages, prepare_live_viewport,
 };
-use super::super::pacer::{ChatboxPacer, Clock};
+use super::super::text_pacing::{ChatboxTextPacer, Clock};
 use super::super::transport::{ChatboxSendReceipt, ChatboxTransport};
 use super::super::{ChatboxPublication, PublisherCloseReason, PublisherSubmitOutcome};
 use super::support::{
@@ -244,7 +244,7 @@ fn start_corpus_publication_with_reporter(
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::with_clock(Arc::new(AdvancingClock::new())),
+        ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         1,
         fence.committer(),
         timing,

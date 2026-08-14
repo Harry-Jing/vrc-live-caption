@@ -12,7 +12,7 @@ use super::common::{
     TYPING_REASSERT_INTERVAL, describe_layout_error,
 };
 use super::layout::prepare_live_viewport;
-use super::pacer::ChatboxPacer;
+use super::text_pacing::ChatboxTextPacer;
 use super::transport::ChatboxTransport;
 use crate::caption::{CaptionAggregateSnapshot, CaptionLane, CaptionSnapshot, CaptionState};
 use crate::caption_pipeline::ResolvedPublicationTiming;
@@ -72,7 +72,7 @@ struct LivePublisherShared {
     interrupt_text_wait: AtomicBool,
     output_gate: Mutex<()>,
     transport: Arc<dyn ChatboxTransport>,
-    pacer: ChatboxPacer,
+    text_pacer: ChatboxTextPacer,
     generation_id: u64,
     committer: GenerationCommitter,
     reporter: LivePublisherReporter,
@@ -156,7 +156,7 @@ enum LiveWorkerItem {
 impl LiveChatboxPublisher {
     pub(crate) fn start(
         transport: Arc<dyn ChatboxTransport>,
-        pacer: ChatboxPacer,
+        text_pacer: ChatboxTextPacer,
         generation_id: u64,
         committer: GenerationCommitter,
         policy: ResolvedPublicationTiming,
@@ -210,7 +210,7 @@ impl LiveChatboxPublisher {
             interrupt_text_wait: AtomicBool::new(false),
             output_gate: Mutex::new(()),
             transport,
-            pacer,
+            text_pacer,
             generation_id,
             committer,
             reporter,
@@ -271,7 +271,7 @@ impl LiveChatboxPublisher {
             return Ok(PublisherSubmitOutcome::Handled);
         }
 
-        let now = self.shared.pacer.now();
+        let now = self.shared.text_pacer.now();
         if state.stream_id.as_deref() != Some(active.stream_id.as_str()) {
             state.stream_id = Some(active.stream_id.clone());
             state.unit_first_seen.clear();
@@ -359,7 +359,7 @@ impl LiveChatboxPublisher {
             PublisherLifecycle::Closing { .. } | PublisherLifecycle::Closed => {}
         }
 
-        // A selected candidate clears this flag before waiting on the pacer.
+        // A selected candidate clears this flag before waiting on text-send pacing.
         // Reassert it under the state lock so Stop cannot lose its wake-up to
         // that selection race.
         self.shared
@@ -608,7 +608,7 @@ fn next_live_worker_item(shared: &LivePublisherShared) -> AppResult<LiveWorkerIt
         if state.typing_desired
             && state
                 .next_typing_reassert_at
-                .is_some_and(|deadline| shared.pacer.now() >= deadline)
+                .is_some_and(|deadline| shared.text_pacer.now() >= deadline)
         {
             return Ok(LiveWorkerItem::Typing {
                 epoch: state.typing_epoch,
@@ -620,7 +620,7 @@ fn next_live_worker_item(shared: &LivePublisherShared) -> AppResult<LiveWorkerIt
             return Ok(LiveWorkerItem::Diagnostic(diagnostic));
         }
 
-        let now = shared.pacer.now();
+        let now = shared.text_pacer.now();
         let mut next_deadline = state
             .typing_desired
             .then_some(state.next_typing_reassert_at)
@@ -649,7 +649,7 @@ fn next_live_worker_item(shared: &LivePublisherShared) -> AppResult<LiveWorkerIt
         }
 
         if let Some(deadline) = next_deadline {
-            let remaining = deadline.saturating_duration_since(shared.pacer.now());
+            let remaining = deadline.saturating_duration_since(shared.text_pacer.now());
             let (next_state, _) = shared
                 .wake
                 .wait_timeout(state, remaining.min(OBSERVATION_WAIT_POLL))
@@ -675,8 +675,8 @@ fn discard_live_candidate_on_close(state: &mut LivePublisherState, reason: Publi
 
 fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate) -> AppResult<()> {
     let permit = shared
-        .pacer
-        .wait_for_turn(Some(&shared.interrupt_text_wait))?;
+        .text_pacer
+        .wait_for_text_attempt(Some(&shared.interrupt_text_wait))?;
     let Some(permit) = permit else {
         return Ok(());
     };
@@ -703,7 +703,7 @@ fn process_live_candidate(shared: &LivePublisherShared, selected: LiveCandidate)
             && state.last_published.as_ref().is_none_or(|published| {
                 published.scope != selected.identity.scope || published.view != selected.view
             });
-        if !is_current || shared.pacer.now() < selected.ready_at {
+        if !is_current || shared.text_pacer.now() < selected.ready_at {
             return Ok(None);
         }
         state.pending_candidate = None;
@@ -800,7 +800,7 @@ fn process_typing(shared: &LivePublisherShared, epoch: u64, is_typing: bool) -> 
     let Some(result) = transport_result? else {
         return Ok(());
     };
-    let attempted_at = shared.pacer.now();
+    let attempted_at = shared.text_pacer.now();
     let mut state = shared
         .state
         .lock()

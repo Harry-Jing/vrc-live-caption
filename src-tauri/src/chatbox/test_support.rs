@@ -1,4 +1,4 @@
-use super::pacer::Clock;
+use super::text_pacing::Clock;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 

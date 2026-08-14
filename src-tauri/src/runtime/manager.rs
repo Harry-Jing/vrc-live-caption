@@ -5,7 +5,7 @@ use super::supervisor::run_runtime_thread;
 
 use crate::caption::CaptionAggregateStore;
 use crate::caption_pipeline::{plan_caption_pipeline, resolve_caption_pipeline_timing};
-use crate::chatbox::{ChatboxPacer, ChatboxPublication};
+use crate::chatbox::{ChatboxPublication, ChatboxTextPacer};
 use crate::config::AppConfig;
 use crate::credentials::CredentialId;
 use crate::error::{AppError, AppResult};
@@ -42,7 +42,7 @@ impl Drop for AudioProbeLease<'_> {
 
 pub(crate) struct RuntimeStartRequest {
     pub(crate) config: AppConfig,
-    pub(crate) chatbox_pacer: ChatboxPacer,
+    pub(crate) chatbox_text_pacer: ChatboxTextPacer,
     pub(crate) caption_aggregate: CaptionAggregateStore,
     pub(crate) chatbox_host_resolver: HostResolver,
     pub(crate) prepared_recognition: PreparedRecognition,
@@ -169,7 +169,7 @@ impl RuntimeManager {
     {
         let RuntimeStartRequest {
             config,
-            chatbox_pacer,
+            chatbox_text_pacer,
             caption_aggregate,
             chatbox_host_resolver,
             prepared_recognition,
@@ -232,7 +232,7 @@ impl RuntimeManager {
             &app,
             &config.osc,
             publication_timing,
-            chatbox_pacer,
+            chatbox_text_pacer,
             &generation,
             &chatbox_host_resolver,
             &start_cancelled,

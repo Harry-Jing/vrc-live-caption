@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const PACING_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const CHATBOX_ATTEMPT_INTERVAL: Duration = Duration::from_millis(1000);
+const CHATBOX_TEXT_ATTEMPT_INTERVAL: Duration = Duration::from_millis(1000);
 
 pub(crate) trait Clock: Send + Sync {
     fn now(&self) -> Instant;
@@ -30,7 +30,7 @@ impl Clock for SystemClock {
 }
 
 #[derive(Clone)]
-pub(crate) struct ChatboxPacer {
+pub(crate) struct ChatboxTextPacer {
     shared: Arc<SharedPacer>,
 }
 
@@ -49,18 +49,18 @@ struct TextAttempt {
     started_at: Instant,
 }
 
-pub(crate) struct ChatboxAttemptPermit<'a> {
+pub(crate) struct ChatboxTextAttemptPermit<'a> {
     clock: &'a dyn Clock,
     state: MutexGuard<'a, PacerState>,
 }
 
-impl Default for ChatboxPacer {
+impl Default for ChatboxTextPacer {
     fn default() -> Self {
         Self::new(Arc::new(SystemClock))
     }
 }
 
-impl ChatboxPacer {
+impl ChatboxTextPacer {
     fn new(clock: Arc<dyn Clock>) -> Self {
         Self {
             shared: Arc::new(SharedPacer {
@@ -81,24 +81,23 @@ impl ChatboxPacer {
 
     /// Waits until one caller can decide whether to make the next text-send
     /// attempt. The returned permit keeps that decision exclusive; dropping
-    /// it records nothing, while [`ChatboxAttemptPermit::attempt`] records the
+    /// it records nothing, while [`ChatboxTextAttemptPermit::attempt`] records the
     /// opportunity immediately before invoking transport.
-    pub(crate) fn wait_for_turn(
+    pub(crate) fn wait_for_text_attempt(
         &self,
         cancel: Option<&AtomicBool>,
-    ) -> AppResult<Option<ChatboxAttemptPermit<'_>>> {
+    ) -> AppResult<Option<ChatboxTextAttemptPermit<'_>>> {
         loop {
             if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
                 return Ok(None);
             }
 
-            let state =
-                self.shared.state.lock().map_err(|_| {
-                    crate::error::AppError::state("Chatbox pacer lock was poisoned.")
-                })?;
+            let state = self.shared.state.lock().map_err(|_| {
+                crate::error::AppError::state("Chatbox text-pacing lock was poisoned.")
+            })?;
             let now = self.shared.clock.now();
             let remaining = state.last_attempt.map(|last_attempt| {
-                CHATBOX_ATTEMPT_INTERVAL
+                CHATBOX_TEXT_ATTEMPT_INTERVAL
                     .saturating_sub(now.saturating_duration_since(last_attempt.started_at))
             });
 
@@ -108,7 +107,7 @@ impl ChatboxPacer {
                 continue;
             }
 
-            return Ok(Some(ChatboxAttemptPermit {
+            return Ok(Some(ChatboxTextAttemptPermit {
                 clock: self.shared.clock.as_ref(),
                 state,
             }));
@@ -116,7 +115,7 @@ impl ChatboxPacer {
     }
 }
 
-impl ChatboxAttemptPermit<'_> {
+impl ChatboxTextAttemptPermit<'_> {
     pub(crate) fn attempt<T>(mut self, attempt: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
         self.state.last_attempt = Some(TextAttempt {
             started_at: self.clock.now(),
@@ -128,5 +127,5 @@ impl ChatboxAttemptPermit<'_> {
 }
 
 #[cfg(test)]
-#[path = "pacer_tests.rs"]
+#[path = "text_pacing_tests.rs"]
 mod tests;

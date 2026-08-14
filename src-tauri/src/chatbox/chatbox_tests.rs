@@ -1,5 +1,5 @@
-use super::pacer::{ChatboxPacer, Clock};
 use super::test_support::AdvancingClock;
+use super::text_pacing::{ChatboxTextPacer, Clock};
 use super::transport::{ChatboxSendReceipt, ChatboxTransport};
 use super::*;
 use crate::caption::{
@@ -153,9 +153,9 @@ fn text_transport_accepts_only_prepared_chatbox_text() {
 }
 
 #[test]
-fn osc_test_message_uses_the_shared_pacer_and_prepared_transport() -> AppResult<()> {
+fn osc_test_message_uses_the_shared_text_pacer_and_prepared_transport() -> AppResult<()> {
     let clock = Arc::new(AdvancingClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     let (texts, receiver) = mpsc::channel();
     let transport: Arc<dyn ChatboxTransport> = Arc::new(RecordingTransport { texts });
     let udp_receiver =
@@ -172,10 +172,10 @@ fn osc_test_message_uses_the_shared_pacer_and_prepared_transport() -> AppResult<
         .ok_or_else(|| AppError::state("Runtime test text must not be empty."))?;
 
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| AppError::state("Runtime test pacing was cancelled."))?
         .attempt(|| transport.send_text(&runtime_text))?;
-    let receipt = send_test_message(
+    let receipt = send_osc_test_message(
         &OscConfig {
             host: "127.0.0.1".to_string(),
             port,
@@ -200,25 +200,25 @@ fn osc_test_message_uses_the_shared_pacer_and_prepared_transport() -> AppResult<
         OscPacket::Message(OscMessage {
             addr: "/chatbox/input".to_string(),
             args: vec![
-                OscType::String(OSC_TEST_MESSAGE.to_string()),
+                OscType::String(OSC_TEST_TEXT.to_string()),
                 OscType::Bool(true),
                 OscType::Bool(false),
             ],
         })
     );
-    assert!(receipt.byte_count > OSC_TEST_MESSAGE.len());
+    assert!(receipt.byte_count > OSC_TEST_TEXT.len());
     Ok(())
 }
 
 #[test]
 fn osc_test_resolution_failure_does_not_consume_a_text_attempt() -> AppResult<()> {
     let clock = Arc::new(AdvancingClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     let resolver = HostResolver::with_lookup(|_, _| {
         Err(std::io::Error::other("Scripted OSC resolution failure."))
     });
 
-    let error = match send_test_message(
+    let error = match send_osc_test_message(
         &OscConfig {
             host: "unresolved.test".to_string(),
             port: 9000,
@@ -241,7 +241,7 @@ fn osc_test_resolution_failure_does_not_consume_a_text_attempt() -> AppResult<()
         .map_err(|layout_error| AppError::runtime(describe_layout_error(layout_error)))?
         .ok_or_else(|| AppError::state("Next test text must not be empty."))?;
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| AppError::state("Next test pacing was cancelled."))?
         .attempt(|| transport.send_text(&next_text))?;
 
@@ -260,7 +260,7 @@ fn start_completed() -> AppResult<(ChatboxPublication, Receiver<String>)> {
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -275,7 +275,7 @@ fn start_live() -> AppResult<(ChatboxPublication, Receiver<String>)> {
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::LiveUnit {
@@ -389,7 +389,7 @@ fn facade_selects_completed_publication_without_exposing_its_worker() -> AppResu
     });
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -418,7 +418,7 @@ fn completed_publication_uses_exact_changes_across_revision_gaps_and_deduplicate
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::with_clock(clock.clone()),
+        ChatboxTextPacer::with_clock(clock.clone()),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -453,7 +453,7 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -530,7 +530,7 @@ fn completed_publication_ignores_duplicate_out_of_order_and_prior_generation_his
     });
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -564,7 +564,7 @@ fn completed_publication_ignores_duplicate_out_of_order_and_prior_generation_his
     });
     let current = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         2,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -613,7 +613,7 @@ fn start_for_closed_diagnostic(
     let fence = GenerationFence::new();
     ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         timing,
@@ -648,7 +648,7 @@ fn generation_stop_cutoff_keeps_stop_diagnostics_before_publication_shutdown() -
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         Arc::new(RecordingTransport { texts }),
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -822,7 +822,7 @@ fn active_publication_reports_closed_after_facade_shutdown() -> AppResult<()> {
 #[test]
 fn completed_and_live_publications_share_the_actual_attempt_pacing_boundary() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     let (texts, receiver) = mpsc::channel();
     let transport: Arc<dyn ChatboxTransport> = Arc::new(RecordingTransport { texts });
 

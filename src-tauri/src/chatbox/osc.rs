@@ -3,7 +3,7 @@
 //! This module only encodes and attempts OSC packets. Completed layout,
 //! pagination, queueing, pacing, typing lifecycle, diagnostics, and generation
 //! cancellation belong to the independent Chatbox publisher. The OSC Test
-//! command acquires the same process-wide pacer before calling this transport.
+//! command acquires the same process-wide text pacer before calling this transport.
 
 use super::PreparedChatboxText;
 use super::transport::{ChatboxSendReceipt, ChatboxTransport};

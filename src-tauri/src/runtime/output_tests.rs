@@ -806,7 +806,7 @@ fn runtime_test_live_publisher(
             text_sender,
             typing_sender: None,
         }),
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         generation.generation_id(),
         generation.committer(),
         ResolvedPublicationTiming::LiveUnit {

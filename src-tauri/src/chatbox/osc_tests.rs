@@ -1,6 +1,6 @@
 use super::super::layout::{PreparedChatboxText, prepare_single_message};
-use super::super::pacer::ChatboxPacer;
 use super::super::test_support::AdvancingClock;
+use super::super::text_pacing::ChatboxTextPacer;
 use super::*;
 use crate::host_resolver::HostResolver;
 use rosc::{decoder, encoder};
@@ -129,7 +129,7 @@ fn prepared_controls_are_sent_as_the_exact_product_policy() -> AppResult<()> {
 #[test]
 fn failed_transport_attempt_still_reserves_the_next_opportunity() -> AppResult<()> {
     let clock = Arc::new(AdvancingClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     let failing = ChatboxOscSender::with_transport(Arc::new(ScriptedOscTransport::new([true])));
     let succeeding = ChatboxOscSender::with_transport(Arc::new(ScriptedOscTransport::new([false])));
     let failed_text = prepared_text("failed")?;
@@ -137,13 +137,13 @@ fn failed_transport_attempt_still_reserves_the_next_opportunity() -> AppResult<(
 
     assert!(
         pacer
-            .wait_for_turn(None)?
+            .wait_for_text_attempt(None)?
             .ok_or_else(|| AppError::runtime("Failed OSC attempt was cancelled."))?
             .attempt(|| failing.send_text(&failed_text))
             .is_err()
     );
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| AppError::runtime("Follow-up OSC attempt was cancelled."))?
         .attempt(|| succeeding.send_text(&succeeded_text))?;
 

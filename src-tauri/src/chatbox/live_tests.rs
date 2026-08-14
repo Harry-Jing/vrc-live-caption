@@ -1,5 +1,5 @@
 use super::super::layout::{PreparedChatboxText, prepare_single_message};
-use super::super::pacer::Clock;
+use super::super::text_pacing::Clock;
 use super::super::transport::ChatboxSendReceipt;
 use super::*;
 use crate::caption::{
@@ -414,8 +414,8 @@ fn start_publisher(
     clock: Arc<ManualClock>,
     transport: Arc<RecordingTransport>,
     policy: ResolvedPublicationTiming,
-) -> AppResult<(LiveChatboxPublisher, ChatboxPacer)> {
-    let pacer = ChatboxPacer::with_clock(clock);
+) -> AppResult<(LiveChatboxPublisher, ChatboxTextPacer)> {
+    let pacer = ChatboxTextPacer::with_clock(clock);
     let publisher = LiveChatboxPublisher::start(
         transport,
         pacer.clone(),
@@ -430,7 +430,7 @@ fn start_publisher(
 fn start_unit_publisher(
     clock: Arc<ManualClock>,
     transport: Arc<RecordingTransport>,
-) -> AppResult<(LiveChatboxPublisher, ChatboxPacer)> {
+) -> AppResult<(LiveChatboxPublisher, ChatboxTextPacer)> {
     start_unit_publisher_with_window(clock, transport, 1_000)
 }
 
@@ -438,7 +438,7 @@ fn start_unit_publisher_with_window(
     clock: Arc<ManualClock>,
     transport: Arc<RecordingTransport>,
     observation_window_ms: u64,
-) -> AppResult<(LiveChatboxPublisher, ChatboxPacer)> {
+) -> AppResult<(LiveChatboxPublisher, ChatboxTextPacer)> {
     start_publisher(
         clock,
         transport,
@@ -747,12 +747,12 @@ fn removing_a_non_head_ongoing_unit_republishes_the_recomputed_viewport() -> App
 }
 
 #[test]
-fn newer_snapshot_replaces_candidate_while_pacer_is_waiting() -> AppResult<()> {
+fn newer_snapshot_replaces_candidate_while_text_pacer_is_waiting() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, pacer) = start_unit_publisher(clock.clone(), transport.clone())?;
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| AppError::state("Initial pacing permit was cancelled."))?
         .attempt(|| Ok::<(), AppError>(()))?;
 
@@ -793,7 +793,7 @@ fn newer_snapshot_replaces_candidate_while_pacer_is_waiting() -> AppResult<()> {
 fn newer_snapshot_waits_as_pending_after_an_older_view_is_admitted() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(BlockFirstTextTransport::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
         pacer,
@@ -894,7 +894,7 @@ fn close_waits_for_an_admitted_view_and_rejects_later_observations() -> AppResul
     let transport = Arc::new(BlockFirstTextTransport::new());
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
-        ChatboxPacer::with_clock(clock),
+        ChatboxTextPacer::with_clock(clock),
         1,
         open_committer(),
         ResolvedPublicationTiming::LiveUnit {
@@ -1090,7 +1090,7 @@ fn successful_view_is_not_reported_as_a_discarded_draft_on_close() -> AppResult<
     let (reporter, diagnostics) = recording_reporter();
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
-        ChatboxPacer::with_clock(clock),
+        ChatboxTextPacer::with_clock(clock),
         1,
         open_committer(),
         ResolvedPublicationTiming::LiveUnit {
@@ -1232,7 +1232,7 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
     let (reporter, diagnostics) = recording_reporter();
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
-        ChatboxPacer::with_clock(clock),
+        ChatboxTextPacer::with_clock(clock),
         1,
         committer.clone(),
         ResolvedPublicationTiming::LiveUnit {
@@ -1252,7 +1252,7 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
         view: prepare_single_message("never attempted")
             .map_err(|error| AppError::runtime(describe_layout_error(error)))?
             .ok_or_else(|| AppError::runtime("Live test candidate must not be empty."))?,
-        ready_at: publisher.shared.pacer.now(),
+        ready_at: publisher.shared.text_pacer.now(),
     };
     publisher
         .shared
@@ -1395,7 +1395,7 @@ fn worker_panic_discards_the_draft_cleans_typing_once_and_reports_failure() -> A
     let (reporter, diagnostics) = recording_reporter();
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
-        ChatboxPacer::with_clock(clock),
+        ChatboxTextPacer::with_clock(clock),
         1,
         open_committer(),
         ResolvedPublicationTiming::LiveUnit {
@@ -1447,7 +1447,7 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
     let (reporter, diagnostics) = recording_reporter();
     let publisher = LiveChatboxPublisher::start(
         transport.clone(),
-        ChatboxPacer::with_clock(clock),
+        ChatboxTextPacer::with_clock(clock),
         1,
         open_committer(),
         ResolvedPublicationTiming::LiveUnit {

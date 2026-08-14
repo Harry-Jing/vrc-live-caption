@@ -9,7 +9,7 @@ use crate::caption::{
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::chatbox::{
-    ChatboxPacer, ChatboxPublication, ChatboxPublicationStart, PublisherCloseReason,
+    ChatboxPublication, ChatboxPublicationStart, ChatboxTextPacer, PublisherCloseReason,
     PublisherSubmitOutcome,
 };
 use crate::config::OscConfig;
@@ -582,7 +582,7 @@ pub(super) fn initialize_chatbox_publication<R: Runtime>(
     app: &AppHandle<R>,
     config: &OscConfig,
     timing: ResolvedPublicationTiming,
-    chatbox_pacer: ChatboxPacer,
+    chatbox_text_pacer: ChatboxTextPacer,
     generation: &RuntimeGeneration,
     host_resolver: &HostResolver,
     is_cancelled: &dyn Fn() -> bool,
@@ -593,7 +593,7 @@ pub(super) fn initialize_chatbox_publication<R: Runtime>(
     ChatboxPublication::initialize(ChatboxPublicationStart {
         config,
         timing,
-        pacer: chatbox_pacer,
+        text_pacer: chatbox_text_pacer,
         generation_id: generation.generation_id(),
         committer: generation.committer(),
         host_resolver,

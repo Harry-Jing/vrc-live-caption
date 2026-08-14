@@ -12,7 +12,7 @@ mod diagnostics;
 mod layout;
 mod live;
 mod osc;
-mod pacer;
+mod text_pacing;
 mod transport;
 
 #[cfg(test)]
@@ -24,7 +24,7 @@ pub(crate) use layout::PreparedChatboxText;
 use layout::prepare_single_message;
 use osc::ChatboxOscSender;
 pub(crate) use osc::OSC_CHATBOX_INPUT_ADDRESS;
-pub(crate) use pacer::ChatboxPacer;
+pub(crate) use text_pacing::ChatboxTextPacer;
 pub(crate) use transport::{ChatboxSendReceipt, ChatboxTransport};
 
 use crate::caption::CaptionAggregateUpdate;
@@ -46,7 +46,7 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 const CLOSE_REASON_NONE: u8 = 0;
 const CLOSE_REASON_RUNTIME_ERROR: u8 = 1;
 const CLOSE_REASON_STOP: u8 = 2;
-const OSC_TEST_MESSAGE: &str = "VRC Live Caption OSC test.";
+const OSC_TEST_TEXT: &str = "VRC Live Caption OSC test.";
 
 #[derive(Clone)]
 pub(crate) struct ChatboxPublication {
@@ -73,7 +73,7 @@ pub(crate) enum ChatboxPublicationInit {
 pub(crate) struct ChatboxPublicationStart<'a> {
     pub(crate) config: &'a OscConfig,
     pub(crate) timing: ResolvedPublicationTiming,
-    pub(crate) pacer: ChatboxPacer,
+    pub(crate) text_pacer: ChatboxTextPacer,
     pub(crate) generation_id: u64,
     pub(crate) committer: GenerationCommitter,
     pub(crate) host_resolver: &'a HostResolver,
@@ -81,13 +81,13 @@ pub(crate) struct ChatboxPublicationStart<'a> {
     pub(crate) reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync>,
 }
 
-pub(crate) fn send_test_message(
+pub(crate) fn send_osc_test_message(
     config: &OscConfig,
-    pacer: &ChatboxPacer,
+    text_pacer: &ChatboxTextPacer,
     host_resolver: &HostResolver,
 ) -> AppResult<ChatboxSendReceipt> {
     let sender = ChatboxOscSender::new(config, host_resolver, &|| false)?;
-    let text = prepare_single_message(OSC_TEST_MESSAGE)
+    let text = prepare_single_message(OSC_TEST_TEXT)
         .map_err(|error| {
             AppError::state(format!(
                 "OSC test message could not be prepared: {}",
@@ -95,8 +95,8 @@ pub(crate) fn send_test_message(
             ))
         })?
         .ok_or_else(|| AppError::state("OSC test message must not be empty."))?;
-    pacer
-        .wait_for_turn(None)?
+    text_pacer
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| AppError::state("OSC Test pacing was cancelled."))?
         .attempt(|| sender.send_text(&text))
 }
@@ -106,7 +106,7 @@ impl ChatboxPublication {
         let ChatboxPublicationStart {
             config,
             timing,
-            pacer,
+            text_pacer,
             generation_id,
             committer,
             host_resolver,
@@ -123,7 +123,7 @@ impl ChatboxPublication {
         };
         match Self::start_with_transport(
             Arc::new(sender),
-            pacer,
+            text_pacer,
             generation_id,
             committer,
             timing,
@@ -136,7 +136,7 @@ impl ChatboxPublication {
 
     pub(crate) fn start_with_transport(
         transport: Arc<dyn ChatboxTransport>,
-        pacer: ChatboxPacer,
+        text_pacer: ChatboxTextPacer,
         generation_id: u64,
         committer: GenerationCommitter,
         timing: ResolvedPublicationTiming,
@@ -151,7 +151,7 @@ impl ChatboxPublication {
                 });
                 ChatboxPublisher::Completed(CompletedChatboxPublisher::start(
                     transport,
-                    pacer,
+                    text_pacer,
                     committer,
                     completed_reporter,
                 )?)
@@ -163,7 +163,7 @@ impl ChatboxPublication {
                 });
                 ChatboxPublisher::Live(LiveChatboxPublisher::start(
                     transport,
-                    pacer,
+                    text_pacer,
                     generation_id,
                     committer,
                     timing,

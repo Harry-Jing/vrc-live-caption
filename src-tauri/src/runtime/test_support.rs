@@ -5,7 +5,7 @@ use crate::caption::{
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::chatbox::{
-    ChatboxPacer, ChatboxPublication, ChatboxSendReceipt, ChatboxTransport, PreparedChatboxText,
+    ChatboxPublication, ChatboxSendReceipt, ChatboxTextPacer, ChatboxTransport, PreparedChatboxText,
 };
 use crate::error::{AppError, AppResult};
 use crate::events::DiagnosticUpdate;
@@ -58,7 +58,7 @@ pub(super) fn runtime_test_publisher(
             text_sender,
             typing_sender,
         }),
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         generation.generation_id(),
         generation.committer(),
         ResolvedPublicationTiming::Completed,
