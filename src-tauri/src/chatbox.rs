@@ -250,5 +250,5 @@ impl ChatboxPublication {
 mod tests;
 
 #[cfg(test)]
-#[path = "chatbox/contract_tests.rs"]
-mod contract_tests;
+#[path = "chatbox/regression_tests.rs"]
+mod regression_tests;

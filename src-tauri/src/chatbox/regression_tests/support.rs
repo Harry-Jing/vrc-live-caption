@@ -3,10 +3,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use unicode_segmentation::UnicodeSegmentation;
 
-pub(super) const FIXTURE: &str = include_str!("../../../../contracts/chatbox-layout-cases-v1.json");
-pub(super) const RUNTIME_OBSERVATIONS: &str = include_str!(
-    "../../../../contracts/chatbox-layout-runtime-observations-2026.3.1-1885-81193b80fa-v1.json"
-);
+pub(super) const FIXTURE: &str = include_str!("../../../testdata/chatbox/layout-cases-v1.json");
+pub(super) const RUNTIME_OBSERVATIONS: &str =
+    include_str!("../../../testdata/chatbox/runtime-observations-2026.3.1-1885-81193b80fa-v1.json");
 pub(super) const EXPECTED_SOURCE_SHA256: &str =
     "f4899d95d0a2fac74a96423608cd4d9b88fa3afe28737c747356fcd3d4190731";
 pub(super) const EXPECTED_MANIFEST_SHA256: &str =
