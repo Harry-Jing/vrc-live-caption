@@ -413,7 +413,7 @@ fn snapshot(
 fn start_publisher(
     clock: Arc<ManualClock>,
     transport: Arc<RecordingTransport>,
-    policy: ResolvedPublicationTiming,
+    publication_timing: ResolvedPublicationTiming,
 ) -> AppResult<(LiveChatboxPublisher, ChatboxTextPacer)> {
     let pacer = ChatboxTextPacer::with_clock(clock);
     let publisher = LiveChatboxPublisher::start(
@@ -421,7 +421,7 @@ fn start_publisher(
         pacer.clone(),
         1,
         open_committer(),
-        policy,
+        publication_timing,
         reporter(),
     )?;
     Ok((publisher, pacer))
@@ -630,7 +630,7 @@ fn unit_observation_window_comes_from_the_resolved_policy() -> AppResult<()> {
 }
 
 #[test]
-fn unit_that_completes_during_observation_publishes_only_completion() -> AppResult<()> {
+fn unit_that_completes_during_observation_sends_only_completion() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, _) = start_unit_publisher(clock.clone(), transport.clone())?;
@@ -665,7 +665,7 @@ fn unit_that_completes_during_observation_publishes_only_completion() -> AppResu
 }
 
 #[test]
-fn overlapping_units_do_not_publish_a_newer_draft_before_its_observation_window() -> AppResult<()> {
+fn overlapping_units_do_not_send_a_newer_draft_before_its_observation_window() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, _) = start_unit_publisher(clock.clone(), transport.clone())?;
@@ -715,7 +715,7 @@ fn overlapping_units_do_not_publish_a_newer_draft_before_its_observation_window(
 }
 
 #[test]
-fn removing_a_non_head_ongoing_unit_republishes_the_recomputed_viewport() -> AppResult<()> {
+fn removing_a_non_head_ongoing_unit_resends_the_recomputed_viewport() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, _) = start_unit_publisher(clock.clone(), transport.clone())?;
@@ -790,7 +790,7 @@ fn newer_snapshot_replaces_candidate_while_text_pacer_is_waiting() -> AppResult<
 }
 
 #[test]
-fn newer_snapshot_waits_as_pending_after_an_older_view_is_admitted() -> AppResult<()> {
+fn newer_snapshot_waits_as_pending_after_an_older_viewport_is_admitted() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(BlockFirstTextTransport::new());
     let pacer = ChatboxTextPacer::with_clock(clock.clone());
@@ -833,7 +833,7 @@ fn newer_snapshot_waits_as_pending_after_an_older_view_is_admitted() -> AppResul
             )],
         ),
     )?;
-    let (pending_view, in_flight_view, admitted_view_was_recorded_as_history) = {
+    let (pending_viewport, in_flight_viewport, admitted_viewport_was_recorded_as_history) = {
         let state = publisher
             .shared
             .state
@@ -843,24 +843,27 @@ fn newer_snapshot_waits_as_pending_after_an_older_view_is_admitted() -> AppResul
             state
                 .pending_candidate
                 .as_ref()
-                .map(|candidate| candidate.view.as_str().to_string()),
+                .map(|candidate| candidate.viewport.as_str().to_string()),
             state
                 .in_flight_candidate
                 .as_ref()
-                .map(|candidate| candidate.view.as_str().to_string()),
+                .map(|candidate| candidate.viewport.as_str().to_string()),
             state.last_attempted.is_some(),
         )
     };
-    let output_gate_available_during_transport = match publisher.shared.output_gate.try_lock() {
-        Ok(gate) => {
-            drop(gate);
-            true
-        }
-        Err(std::sync::TryLockError::WouldBlock) => false,
-        Err(std::sync::TryLockError::Poisoned(_)) => {
-            return Err(AppError::state("Live output test gate was poisoned."));
-        }
-    };
+    let send_admission_gate_available_during_transport =
+        match publisher.shared.send_admission_gate.try_lock() {
+            Ok(gate) => {
+                drop(gate);
+                true
+            }
+            Err(std::sync::TryLockError::WouldBlock) => false,
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(AppError::state(
+                    "Live send-admission test gate was poisoned.",
+                ));
+            }
+        };
 
     transport.release_first_attempt()?;
     assert_eq!(
@@ -875,21 +878,21 @@ fn newer_snapshot_waits_as_pending_after_an_older_view_is_admitted() -> AppResul
     );
     close(&publisher)?;
 
-    assert_eq!(pending_view.as_deref(), Some("pending newer view"));
-    assert_eq!(in_flight_view.as_deref(), Some("admitted older view"));
+    assert_eq!(pending_viewport.as_deref(), Some("pending newer view"));
+    assert_eq!(in_flight_viewport.as_deref(), Some("admitted older view"));
     assert!(
-        !admitted_view_was_recorded_as_history,
+        !admitted_viewport_was_recorded_as_history,
         "an admitted transport attempt must remain in-flight until it completes"
     );
     assert!(
-        output_gate_available_during_transport,
-        "the output admission gate must not be held across transport"
+        send_admission_gate_available_during_transport,
+        "the send-admission gate must not be held across transport"
     );
     Ok(())
 }
 
 #[test]
-fn close_waits_for_an_admitted_view_and_rejects_later_observations() -> AppResult<()> {
+fn close_waits_for_an_admitted_viewport_and_rejects_later_observations() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(BlockFirstTextTransport::new());
     let publisher = LiveChatboxPublisher::start(
@@ -996,7 +999,7 @@ fn close_waits_for_an_admitted_view_and_rejects_later_observations() -> AppResul
 }
 
 #[test]
-fn identical_completion_is_not_resent_after_successful_ongoing_view() -> AppResult<()> {
+fn identical_completion_is_not_resent_after_successful_ongoing_viewport() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, _) = start_unit_publisher(clock.clone(), transport.clone())?;
@@ -1039,7 +1042,7 @@ fn identical_completion_is_not_resent_after_successful_ongoing_view() -> AppResu
 }
 
 #[test]
-fn changed_completion_publishes_one_correction_after_ongoing_view() -> AppResult<()> {
+fn changed_completion_sends_one_correction_after_ongoing_viewport() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, _) = start_unit_publisher(clock.clone(), transport.clone())?;
@@ -1084,7 +1087,7 @@ fn changed_completion_publishes_one_correction_after_ongoing_view() -> AppResult
 }
 
 #[test]
-fn successful_view_is_not_reported_as_a_discarded_draft_on_close() -> AppResult<()> {
+fn successful_viewport_is_not_reported_as_pending_on_close() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (reporter, diagnostics) = recording_reporter();
@@ -1107,25 +1110,24 @@ fn successful_view_is_not_reported_as_a_discarded_draft_on_close() -> AppResult<
             vec![caption(
                 Some("unit-1"),
                 1,
-                "published view",
+                "sent viewport",
                 CaptionState::Completed,
             )],
         ),
     )?;
-    assert_eq!(transport.wait_for_texts(1)?, ["published view"]);
+    assert_eq!(transport.wait_for_texts(1)?, ["sent viewport"]);
     close(&publisher)?;
 
     let diagnostics = diagnostics
         .lock()
         .map_err(|_| AppError::state("Live diagnostics lock was poisoned."))?;
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| matches!(diagnostic, LivePublisherDiagnostic::ViewPublished { .. }))
-    );
+    assert!(diagnostics.iter().any(|diagnostic| matches!(
+        diagnostic,
+        LivePublisherDiagnostic::ViewportSendSucceeded { .. }
+    )));
     assert!(!diagnostics.iter().any(|diagnostic| matches!(
         diagnostic,
-        LivePublisherDiagnostic::DraftDiscardedOnClose { .. }
+        LivePublisherDiagnostic::PendingViewportDiscardedOnClose { .. }
     )));
     Ok(())
 }
@@ -1173,7 +1175,7 @@ fn failed_revision_is_not_retried_until_a_new_revision_arrives() -> AppResult<()
 }
 
 #[test]
-fn close_discards_observed_draft_and_sends_one_typing_off_cleanup() -> AppResult<()> {
+fn close_discards_pending_viewport_and_sends_one_typing_off_cleanup() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(RecordingTransport::new([]));
     let (publisher, _) = start_unit_publisher(clock, transport.clone())?;
@@ -1211,7 +1213,7 @@ fn close_discards_observed_draft_and_sends_one_typing_off_cleanup() -> AppResult
 }
 
 #[test]
-fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResult<()> {
+fn stop_before_the_generation_commit_reports_the_unattempted_viewport() -> AppResult<()> {
     let fence = GenerationFence::new();
     let committer = fence.committer();
     let blocker_committer = committer.clone();
@@ -1249,7 +1251,7 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
             revision: 1,
             state: CaptionState::Completed,
         },
-        view: prepare_single_message("never attempted")
+        viewport: prepare_single_message("never attempted")
             .map_err(|error| AppError::runtime(describe_layout_error(error)))?
             .ok_or_else(|| AppError::runtime("Live test candidate must not be empty."))?,
         ready_at: publisher.shared.text_pacer.now(),
@@ -1266,7 +1268,7 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
 
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
-        let output_gate_held = match publisher.shared.output_gate.try_lock() {
+        let send_admission_gate_held = match publisher.shared.send_admission_gate.try_lock() {
             Err(std::sync::TryLockError::WouldBlock) => true,
             Err(std::sync::TryLockError::Poisoned(_)) => {
                 return Err(AppError::state("Live output test gate was poisoned."));
@@ -1276,7 +1278,7 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
                 false
             }
         };
-        if output_gate_held {
+        if send_admission_gate_held {
             break;
         }
         if Instant::now() >= deadline {
@@ -1325,7 +1327,7 @@ fn stop_before_the_generation_commit_reports_the_unattempted_draft() -> AppResul
         .map_err(|_| AppError::state("Live diagnostics lock was poisoned."))?;
     assert!(diagnostics.iter().any(|diagnostic| matches!(
         diagnostic,
-        LivePublisherDiagnostic::DraftDiscardedOnClose {
+        LivePublisherDiagnostic::PendingViewportDiscardedOnClose {
             reason: PublisherCloseReason::Stop,
         }
     )));
@@ -1389,7 +1391,7 @@ fn ignores_out_of_order_and_other_generation_aggregates() -> AppResult<()> {
 }
 
 #[test]
-fn worker_panic_discards_the_draft_cleans_typing_once_and_reports_failure() -> AppResult<()> {
+fn worker_panic_discards_the_pending_viewport_cleans_typing_and_reports_failure() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
     let transport = Arc::new(PanicOnTypingTransport::new());
     let (reporter, diagnostics) = recording_reporter();
@@ -1428,7 +1430,7 @@ fn worker_panic_discards_the_draft_cleans_typing_once_and_reports_failure() -> A
         .map_err(|_| AppError::state("Live diagnostics lock was poisoned."))?;
     assert!(diagnostics.iter().any(|diagnostic| matches!(
         diagnostic,
-        LivePublisherDiagnostic::DraftDiscardedOnClose {
+        LivePublisherDiagnostic::PendingViewportDiscardedOnClose {
             reason: PublisherCloseReason::RuntimeError,
         }
     )));

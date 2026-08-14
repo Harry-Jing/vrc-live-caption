@@ -150,7 +150,7 @@ fn live_publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
     });
     let diagnostics = vec![
         (
-            LivePublisherDiagnostic::ViewPublished {
+            LivePublisherDiagnostic::ViewportSendSucceeded {
                 stream_id: "recognition-1-1".to_string(),
                 unit_id: Some("unit-1".to_string()),
                 revision: 2,
@@ -161,7 +161,7 @@ fn live_publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "info",
         ),
         (
-            LivePublisherDiagnostic::ViewSendFailed {
+            LivePublisherDiagnostic::ViewportSendFailed {
                 stream_id: "recognition-1-1".to_string(),
                 unit_id: None,
                 revision: 3,
@@ -181,14 +181,14 @@ fn live_publisher_diagnostics_keep_stable_osc_wire_codes() -> AppResult<()> {
             "warning",
         ),
         (
-            LivePublisherDiagnostic::DraftDiscardedOnClose {
+            LivePublisherDiagnostic::PendingViewportDiscardedOnClose {
                 reason: PublisherCloseReason::Stop,
             },
             "osc.live_draft_discarded_on_stop",
             "info",
         ),
         (
-            LivePublisherDiagnostic::DraftDiscardedOnClose {
+            LivePublisherDiagnostic::PendingViewportDiscardedOnClose {
                 reason: PublisherCloseReason::RuntimeError,
             },
             "osc.live_draft_discarded_on_error",

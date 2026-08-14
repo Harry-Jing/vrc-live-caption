@@ -167,7 +167,7 @@ pub(crate) fn completed_publisher_diagnostic(
 
 pub(crate) fn live_publisher_diagnostic(diagnostic: LivePublisherDiagnostic) -> DiagnosticUpdate {
     match diagnostic {
-        LivePublisherDiagnostic::ViewPublished {
+        LivePublisherDiagnostic::ViewportSendSucceeded {
             stream_id,
             unit_id,
             revision,
@@ -176,13 +176,13 @@ pub(crate) fn live_publisher_diagnostic(diagnostic: LivePublisherDiagnostic) -> 
         } => DiagnosticUpdate::info(
             DiagnosticCategory::Osc,
             "osc.live_view_sent",
-            "Live caption view published",
+            "Live caption viewport sent to Chatbox OSC",
             format!(
-                "Published revision {revision} for {} in {stream_id} to {target} using {byte_count} encoded byte(s).",
+                "Sent revision {revision} for {} in {stream_id} to {target} using {byte_count} encoded byte(s).",
                 unit_id.as_deref().unwrap_or("the unitless stream")
             ),
         ),
-        LivePublisherDiagnostic::ViewSendFailed {
+        LivePublisherDiagnostic::ViewportSendFailed {
             stream_id,
             unit_id,
             revision,
@@ -190,7 +190,7 @@ pub(crate) fn live_publisher_diagnostic(diagnostic: LivePublisherDiagnostic) -> 
         } => DiagnosticUpdate::error(
             DiagnosticCategory::Osc,
             "osc.live_view_send_failed",
-            "Live caption view could not be published",
+            "Live caption viewport could not be sent",
             format!(
                 "Revision {revision} for {} in {stream_id} failed and was not retried: {error}",
                 unit_id.as_deref().unwrap_or("the unitless stream")
@@ -204,13 +204,13 @@ pub(crate) fn live_publisher_diagnostic(diagnostic: LivePublisherDiagnostic) -> 
         } => DiagnosticUpdate::warning(
             DiagnosticCategory::Osc,
             "osc.live_layout_failed",
-            "Live caption view could not be laid out for Chatbox",
+            "Live caption viewport could not be prepared for Chatbox",
             format!(
-                "Revision {revision} for {} in {stream_id} was not published: {reason}",
+                "Revision {revision} for {} in {stream_id} was not sent: {reason}",
                 unit_id.as_deref().unwrap_or("the unitless stream")
             ),
         ),
-        LivePublisherDiagnostic::DraftDiscardedOnClose { reason } => {
+        LivePublisherDiagnostic::PendingViewportDiscardedOnClose { reason } => {
             let (code, message) = match reason {
                 PublisherCloseReason::Stop => (
                     "osc.live_draft_discarded_on_stop",
