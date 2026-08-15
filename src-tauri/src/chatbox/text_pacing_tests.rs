@@ -60,11 +60,11 @@ impl Clock for CancelOnSleepClock {
 #[test]
 fn first_actual_attempt_is_immediately_available() -> AppResult<()> {
     let clock = Arc::new(FakeClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     let cancel = AtomicBool::new(false);
 
     let permit = pacer
-        .wait_for_turn(Some(&cancel))?
+        .wait_for_text_attempt(Some(&cancel))?
         .ok_or_else(|| crate::error::AppError::runtime("First attempt was cancelled."))?;
     permit.attempt(|| Ok(()))?;
 
@@ -76,15 +76,15 @@ fn first_actual_attempt_is_immediately_available() -> AppResult<()> {
 #[test]
 fn actual_attempts_are_separated_by_the_fixed_one_second_interval() -> AppResult<()> {
     let clock = Arc::new(FakeClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     let cancel = AtomicBool::new(false);
 
     pacer
-        .wait_for_turn(Some(&cancel))?
+        .wait_for_text_attempt(Some(&cancel))?
         .ok_or_else(|| crate::error::AppError::runtime("First attempt was cancelled."))?
         .attempt(|| Ok(()))?;
     pacer
-        .wait_for_turn(Some(&cancel))?
+        .wait_for_text_attempt(Some(&cancel))?
         .ok_or_else(|| crate::error::AppError::runtime("Second attempt was cancelled."))?
         .attempt(|| Ok(()))?;
 
@@ -99,11 +99,11 @@ fn actual_attempts_are_separated_by_the_fixed_one_second_interval() -> AppResult
 #[test]
 fn failed_attempt_reserves_the_next_opportunity() -> AppResult<()> {
     let clock = Arc::new(FakeClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     let cancel = AtomicBool::new(false);
 
     let first_result = pacer
-        .wait_for_turn(Some(&cancel))?
+        .wait_for_text_attempt(Some(&cancel))?
         .ok_or_else(|| crate::error::AppError::runtime("First attempt was cancelled."))?
         .attempt::<()>(|| {
             Err(crate::error::AppError::osc_send(
@@ -114,7 +114,7 @@ fn failed_attempt_reserves_the_next_opportunity() -> AppResult<()> {
     assert!(first_result.is_err());
 
     pacer
-        .wait_for_turn(Some(&cancel))?
+        .wait_for_text_attempt(Some(&cancel))?
         .ok_or_else(|| crate::error::AppError::runtime("Second attempt was cancelled."))?
         .attempt(|| Ok(()))?;
 
@@ -129,14 +129,14 @@ fn failed_attempt_reserves_the_next_opportunity() -> AppResult<()> {
 #[test]
 fn unused_permit_does_not_consume_an_attempt() -> AppResult<()> {
     let clock = Arc::new(FakeClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
 
     let unused = pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| crate::error::AppError::runtime("Permit was cancelled."))?;
     drop(unused);
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| crate::error::AppError::runtime("Attempt was cancelled."))?
         .attempt(|| Ok(()))?;
 
@@ -149,7 +149,7 @@ fn unused_permit_does_not_consume_an_attempt() -> AppResult<()> {
 fn concurrent_callers_never_consume_an_initial_burst() -> AppResult<()> {
     for _ in 0..100 {
         let clock = Arc::new(FakeClock::new());
-        let pacer = ChatboxPacer::with_clock(clock.clone());
+        let pacer = ChatboxTextPacer::with_clock(clock.clone());
         let barrier = Arc::new(Barrier::new(3));
         let attempts = Arc::new(AtomicUsize::new(0));
         let mut workers = Vec::new();
@@ -161,7 +161,7 @@ fn concurrent_callers_never_consume_an_initial_burst() -> AppResult<()> {
             workers.push(std::thread::spawn(move || -> AppResult<()> {
                 worker_barrier.wait();
                 worker_pacer
-                    .wait_for_turn(None)?
+                    .wait_for_text_attempt(None)?
                     .ok_or_else(|| crate::error::AppError::runtime("Attempt was cancelled."))?
                     .attempt(|| {
                         worker_attempts.fetch_add(1, Ordering::Relaxed);
@@ -172,9 +172,9 @@ fn concurrent_callers_never_consume_an_initial_burst() -> AppResult<()> {
 
         barrier.wait();
         for worker in workers {
-            worker
-                .join()
-                .map_err(|_| crate::error::AppError::runtime("Pacer test worker panicked."))??;
+            worker.join().map_err(|_| {
+                crate::error::AppError::runtime("Text-pacing test worker panicked.")
+            })??;
         }
 
         assert_eq!(attempts.load(Ordering::Relaxed), 2);
@@ -194,13 +194,17 @@ fn cancellation_during_wait_does_not_reserve_an_attempt() -> AppResult<()> {
         clock: FakeClock::new(),
         cancel: cancel.clone(),
     });
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
 
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| crate::error::AppError::runtime("First attempt was cancelled."))?
         .attempt(|| Ok(()))?;
-    assert!(pacer.wait_for_turn(Some(cancel.as_ref()))?.is_none());
+    assert!(
+        pacer
+            .wait_for_text_attempt(Some(cancel.as_ref()))?
+            .is_none()
+    );
     assert_eq!(
         clock.clock.sleeps().into_iter().sum::<Duration>(),
         PACING_POLL_INTERVAL
@@ -208,12 +212,12 @@ fn cancellation_during_wait_does_not_reserve_an_attempt() -> AppResult<()> {
 
     cancel.store(false, Ordering::Relaxed);
     pacer
-        .wait_for_turn(None)?
+        .wait_for_text_attempt(None)?
         .ok_or_else(|| crate::error::AppError::runtime("Follow-up attempt was cancelled."))?
         .attempt(|| Ok(()))?;
     assert_eq!(
         clock.clock.sleeps().into_iter().sum::<Duration>(),
-        CHATBOX_ATTEMPT_INTERVAL
+        CHATBOX_TEXT_ATTEMPT_INTERVAL
     );
 
     Ok(())

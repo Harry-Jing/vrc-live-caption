@@ -9,7 +9,7 @@
 use crate::audio::{AudioProbeRequest, AudioProbeResult, probe_audio_input as run_audio_probe};
 use crate::caption::{CaptionAggregateSnapshot, CaptionAggregateStore};
 use crate::caption_pipeline::{plan_caption_pipeline, resolve_caption_pipeline_start_timing};
-use crate::chatbox::{ChatboxOscSender, ChatboxPacer, ChatboxSendReceipt, OSC_TEST_MESSAGE};
+use crate::chatbox::{ChatboxSendReceipt, ChatboxTextPacer};
 use crate::config::AppConfig;
 use crate::credentials::{
     CredentialId, credential_statuses, delete_credential, resolve_openai_credential,
@@ -38,7 +38,7 @@ pub(super) struct AppState {
     // credential capture. Stop never waits for this gate: file or credential
     // store I/O must not delay the hard generation boundary.
     desired_state_gate: Mutex<()>,
-    chatbox_pacer: ChatboxPacer,
+    chatbox_text_pacer: ChatboxTextPacer,
     caption_aggregate: CaptionAggregateStore,
     // OS hostname lookup is blocking. Keep the two current network subsystems
     // on separate bounded workers so a stuck OSC lookup cannot queue OpenAI
@@ -53,7 +53,7 @@ impl Default for AppState {
         Self {
             control: RuntimeControlStore::default(),
             desired_state_gate: Mutex::new(()),
-            chatbox_pacer: ChatboxPacer::default(),
+            chatbox_text_pacer: ChatboxTextPacer::default(),
             caption_aggregate: CaptionAggregateStore::default(),
             chatbox_host_resolver: HostResolver::default(),
             recognition_host_resolver: HostResolver::default(),
@@ -148,7 +148,7 @@ impl AppState {
             app.clone(),
             RuntimeStartRequest {
                 config,
-                chatbox_pacer: self.chatbox_pacer.clone(),
+                chatbox_text_pacer: self.chatbox_text_pacer.clone(),
                 caption_aggregate: self.caption_aggregate.clone(),
                 chatbox_host_resolver: self.chatbox_host_resolver.clone(),
                 prepared_recognition: PreparedRecognition::cloud(recognition_module, credential)?,
@@ -226,11 +226,11 @@ impl AppState {
 
     pub(super) fn send_osc_test_message(&self) -> AppResult<ChatboxSendReceipt> {
         let osc_config = self.control.effective_osc_config()?;
-        let sender = ChatboxOscSender::new(&osc_config, &self.chatbox_host_resolver, &|| false)?;
-        self.chatbox_pacer
-            .wait_for_turn(None)?
-            .ok_or_else(|| AppError::state("OSC Test pacing was cancelled."))?
-            .attempt(|| sender.send_text(OSC_TEST_MESSAGE))
+        crate::chatbox::send_osc_test_message(
+            &osc_config,
+            &self.chatbox_text_pacer,
+            &self.chatbox_host_resolver,
+        )
     }
 
     fn runtime_status_recorder(&self) -> RuntimeStatusRecorder {

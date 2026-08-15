@@ -100,7 +100,7 @@ fn runtime_start_request(
     Ok((
         RuntimeStartRequest {
             config,
-            chatbox_pacer: ChatboxPacer::default(),
+            chatbox_text_pacer: ChatboxTextPacer::default(),
             caption_aggregate: CaptionAggregateStore::default(),
             chatbox_host_resolver: HostResolver::default(),
             prepared_recognition: PreparedRecognition::cloud(
@@ -186,7 +186,7 @@ fn runtime_rejects_a_prepared_translation_for_source_only_selection() -> AppResu
             credential.clone(),
         )?),
         config: config.clone(),
-        chatbox_pacer: ChatboxPacer::default(),
+        chatbox_text_pacer: ChatboxTextPacer::default(),
         caption_aggregate: CaptionAggregateStore::default(),
         chatbox_host_resolver: HostResolver::default(),
         prepared_recognition: PreparedRecognition::cloud(
@@ -501,7 +501,7 @@ fn runtime_starts_the_prepared_module_with_its_bound_generation_metadata() -> Ap
     let (snapshot_sender, snapshot_receiver) = mpsc::sync_channel(1);
     let request = RuntimeStartRequest {
         config,
-        chatbox_pacer: ChatboxPacer::default(),
+        chatbox_text_pacer: ChatboxTextPacer::default(),
         caption_aggregate: CaptionAggregateStore::default(),
         chatbox_host_resolver: HostResolver::default(),
         prepared_recognition: PreparedRecognition::cloud(recognition_module, credential)?,
@@ -560,7 +560,7 @@ fn runtime_manager_closes_the_generation_before_joining_the_worker() -> AppResul
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
         *handle = Some(RuntimeHandle {
             generation: generation.clone(),
-            publisher: None,
+            chatbox_publication: None,
             join_handle,
         });
     }
@@ -623,7 +623,7 @@ fn stop_records_error_when_the_runtime_thread_panicked() -> AppResult<()> {
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
         *handle = Some(RuntimeHandle {
             generation: RuntimeGeneration::active(),
-            publisher: None,
+            chatbox_publication: None,
             join_handle,
         });
     }
@@ -668,7 +668,7 @@ fn finished_error_handle_is_reaped_before_a_restart_availability_check() -> AppR
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
         *handle = Some(RuntimeHandle {
             generation: RuntimeGeneration::active(),
-            publisher: None,
+            chatbox_publication: None,
             join_handle,
         });
     }
@@ -731,7 +731,7 @@ fn stop_supersedes_a_start_blocked_in_osc_hostname_resolution() -> AppResult<()>
     let expected_stop_epoch = manager.stop_epoch();
     let request = RuntimeStartRequest {
         config,
-        chatbox_pacer: ChatboxPacer::default(),
+        chatbox_text_pacer: ChatboxTextPacer::default(),
         caption_aggregate: CaptionAggregateStore::default(),
         chatbox_host_resolver: resolver,
         prepared_recognition: PreparedRecognition::cloud(
@@ -832,7 +832,7 @@ fn stop_cancels_an_installed_runtime_hostname_wait_before_joining() -> AppResult
             .map_err(|_| AppError::state("Runtime state lock was poisoned."))?;
         *handle = Some(RuntimeHandle {
             generation,
-            publisher: None,
+            chatbox_publication: None,
             join_handle,
         });
     }
@@ -877,7 +877,7 @@ fn runtime_start_fails_closed_when_its_derived_plan_is_incompatible() -> AppResu
     let recognition_module = test_recognition_module(&config)?;
     let request = RuntimeStartRequest {
         config,
-        chatbox_pacer: ChatboxPacer::default(),
+        chatbox_text_pacer: ChatboxTextPacer::default(),
         caption_aggregate: CaptionAggregateStore::default(),
         chatbox_host_resolver: HostResolver::default(),
         prepared_recognition: PreparedRecognition::cloud(

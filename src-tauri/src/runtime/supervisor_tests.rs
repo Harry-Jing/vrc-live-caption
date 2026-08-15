@@ -2,7 +2,7 @@ use super::super::test_support::{
     inactive_caption_update, receive_json_event, runtime_test_publisher,
 };
 use super::*;
-use crate::chatbox::PublisherSubmitOutcome;
+use crate::chatbox::PublicationObservationOutcome;
 use crate::error::AppError;
 use crate::runtime_control::RuntimeControlStore;
 use std::thread;
@@ -36,8 +36,8 @@ fn terminal_runtime_error_records_error_and_closes_outputs_without_hard_stop() -
     assert!(!generation.is_hard_stop_requested());
     assert!(!generation.commit_if_active(|| {})?);
     assert_eq!(
-        publisher.try_submit(&inactive_caption_update(1))?,
-        PublisherSubmitOutcome::Closed
+        publisher.try_observe(&inactive_caption_update(1))?,
+        PublicationObservationOutcome::Closed
     );
     publisher.join()?;
     drop(publisher);
@@ -93,8 +93,8 @@ fn runtime_thread_panic_invalidates_generation_and_closes_publisher() -> AppResu
     assert!(!generation.commit_if_active(|| {})?);
     publisher.join()?;
     assert_eq!(
-        publisher.try_submit(&inactive_caption_update(1))?,
-        PublisherSubmitOutcome::Closed
+        publisher.try_observe(&inactive_caption_update(1))?,
+        PublicationObservationOutcome::Closed
     );
     assert!(matches!(
         text_receiver.recv_timeout(Duration::from_millis(50)),

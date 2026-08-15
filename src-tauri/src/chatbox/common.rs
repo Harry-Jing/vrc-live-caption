@@ -10,10 +10,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-// VRChat auto-hides its OSC typing indicator after about five seconds without
-// fresh input. Reassert `true` every four seconds while activity remains active
-// so scheduler jitter does not create a visible gap. Typing packets deliberately
-// bypass ChatboxPacer and never consume a `/chatbox/input` text-send opportunity.
+// VRChat auto-hides a one-shot OSC typing indication after about five seconds.
+// Whether another `true` resets that timer is unverified, so four-second
+// reassertions are best effort rather than a keepalive guarantee. Typing packets
+// deliberately bypass ChatboxTextPacer and never consume a `/chatbox/input`
+// text-send opportunity.
 pub(crate) const TYPING_REASSERT_INTERVAL: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,7 +25,7 @@ pub(crate) enum PublisherCloseReason {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
-pub(crate) enum PublisherSubmitOutcome {
+pub(crate) enum PublicationObservationOutcome {
     Handled,
     Closed,
 }
@@ -100,6 +101,9 @@ pub(crate) fn describe_layout_error(error: ChatboxLayoutError) -> String {
     match error {
         ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units } => format!(
             "One grapheme requires {utf16_units} UTF-16 units, exceeding the {CHATBOX_MAX_UTF16_UNITS}-unit Chatbox input budget."
+        ),
+        ChatboxLayoutError::RequiresPagination { page_count } => format!(
+            "The text requires {page_count} Chatbox messages, but this operation accepts one message."
         ),
     }
 }

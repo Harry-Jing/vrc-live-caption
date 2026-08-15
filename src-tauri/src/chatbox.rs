@@ -12,12 +12,19 @@ mod diagnostics;
 mod layout;
 mod live;
 mod osc;
-mod pacer;
+mod text_pacing;
 mod transport;
 
-pub(crate) use common::{PublisherCloseReason, PublisherSubmitOutcome};
-pub(crate) use osc::{ChatboxOscSender, OSC_CHATBOX_INPUT_ADDRESS, OSC_TEST_MESSAGE};
-pub(crate) use pacer::ChatboxPacer;
+#[cfg(test)]
+mod test_support;
+
+use common::describe_layout_error;
+pub(crate) use common::{PublicationObservationOutcome, PublisherCloseReason};
+pub(crate) use layout::PreparedChatboxText;
+use layout::prepare_single_message;
+use osc::ChatboxOscSender;
+pub(crate) use osc::OSC_CHATBOX_INPUT_ADDRESS;
+pub(crate) use text_pacing::ChatboxTextPacer;
 pub(crate) use transport::{ChatboxSendReceipt, ChatboxTransport};
 
 use crate::caption::CaptionAggregateUpdate;
@@ -39,33 +46,34 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 const CLOSE_REASON_NONE: u8 = 0;
 const CLOSE_REASON_RUNTIME_ERROR: u8 = 1;
 const CLOSE_REASON_STOP: u8 = 2;
+const OSC_TEST_TEXT: &str = "VRC Live Caption OSC test.";
 
 #[derive(Clone)]
 pub(crate) struct ChatboxPublication {
     generation_id: u64,
-    highest_update_revision: Arc<AtomicU64>,
+    highest_snapshot_revision: Arc<AtomicU64>,
     close_reason: Arc<AtomicU8>,
     committer: GenerationCommitter,
     reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync>,
-    publisher: ChatboxPublisher,
+    worker: PublicationWorker,
 }
 
 #[derive(Clone)]
-enum ChatboxPublisher {
+enum PublicationWorker {
     Completed(CompletedChatboxPublisher),
     Live(LiveChatboxPublisher),
 }
 
-pub(crate) enum ChatboxPublicationInit {
+pub(crate) enum ChatboxPublicationStartOutcome {
     Disabled,
     Ready(ChatboxPublication),
     Unavailable(AppError),
 }
 
-pub(crate) struct ChatboxPublicationStart<'a> {
+pub(crate) struct ChatboxPublicationStartRequest<'a> {
     pub(crate) config: &'a OscConfig,
-    pub(crate) timing: ResolvedPublicationTiming,
-    pub(crate) pacer: ChatboxPacer,
+    pub(crate) publication_timing: ResolvedPublicationTiming,
+    pub(crate) text_pacer: ChatboxTextPacer,
     pub(crate) generation_id: u64,
     pub(crate) committer: GenerationCommitter,
     pub(crate) host_resolver: &'a HostResolver,
@@ -73,57 +81,79 @@ pub(crate) struct ChatboxPublicationStart<'a> {
     pub(crate) reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync>,
 }
 
+pub(crate) fn send_osc_test_message(
+    config: &OscConfig,
+    text_pacer: &ChatboxTextPacer,
+    host_resolver: &HostResolver,
+) -> AppResult<ChatboxSendReceipt> {
+    let sender = ChatboxOscSender::new(config, host_resolver, &|| false)?;
+    let text = prepare_single_message(OSC_TEST_TEXT)
+        .map_err(|error| {
+            AppError::state(format!(
+                "OSC test message could not be prepared: {}",
+                describe_layout_error(error)
+            ))
+        })?
+        .ok_or_else(|| AppError::state("OSC test message must not be empty."))?;
+    text_pacer
+        .wait_for_text_attempt(None)?
+        .ok_or_else(|| AppError::state("OSC Test pacing was cancelled."))?
+        .attempt(|| sender.send_text(&text))
+}
+
 impl ChatboxPublication {
-    pub(crate) fn initialize(start: ChatboxPublicationStart<'_>) -> ChatboxPublicationInit {
-        let ChatboxPublicationStart {
+    pub(crate) fn start(
+        request: ChatboxPublicationStartRequest<'_>,
+    ) -> ChatboxPublicationStartOutcome {
+        let ChatboxPublicationStartRequest {
             config,
-            timing,
-            pacer,
+            publication_timing,
+            text_pacer,
             generation_id,
             committer,
             host_resolver,
             is_cancelled,
             reporter,
-        } = start;
+        } = request;
         if !config.enabled {
-            return ChatboxPublicationInit::Disabled;
+            return ChatboxPublicationStartOutcome::Disabled;
         }
 
         let sender = match ChatboxOscSender::new(config, host_resolver, is_cancelled) {
             Ok(sender) => sender,
-            Err(error) => return ChatboxPublicationInit::Unavailable(error),
+            Err(error) => return ChatboxPublicationStartOutcome::Unavailable(error),
         };
         match Self::start_with_transport(
             Arc::new(sender),
-            pacer,
+            text_pacer,
             generation_id,
             committer,
-            timing,
+            publication_timing,
             reporter,
         ) {
-            Ok(publication) => ChatboxPublicationInit::Ready(publication),
-            Err(error) => ChatboxPublicationInit::Unavailable(error),
+            Ok(publication) => ChatboxPublicationStartOutcome::Ready(publication),
+            Err(error) => ChatboxPublicationStartOutcome::Unavailable(error),
         }
     }
 
     pub(crate) fn start_with_transport(
         transport: Arc<dyn ChatboxTransport>,
-        pacer: ChatboxPacer,
+        text_pacer: ChatboxTextPacer,
         generation_id: u64,
         committer: GenerationCommitter,
-        timing: ResolvedPublicationTiming,
+        publication_timing: ResolvedPublicationTiming,
         reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync>,
     ) -> AppResult<Self> {
         let publication_committer = committer.clone();
-        let publisher = match timing {
+        let worker = match publication_timing {
             ResolvedPublicationTiming::Completed => {
                 let diagnostic_reporter = Arc::clone(&reporter);
                 let completed_reporter: CompletedPublisherReporter = Arc::new(move |diagnostic| {
                     diagnostic_reporter(completed_publisher_diagnostic(diagnostic));
                 });
-                ChatboxPublisher::Completed(CompletedChatboxPublisher::start(
+                PublicationWorker::Completed(CompletedChatboxPublisher::start(
                     transport,
-                    pacer,
+                    text_pacer,
                     committer,
                     completed_reporter,
                 )?)
@@ -133,57 +163,57 @@ impl ChatboxPublication {
                 let live_reporter: LivePublisherReporter = Arc::new(move |diagnostic| {
                     diagnostic_reporter(live_publisher_diagnostic(diagnostic));
                 });
-                ChatboxPublisher::Live(LiveChatboxPublisher::start(
+                PublicationWorker::Live(LiveChatboxPublisher::start(
                     transport,
-                    pacer,
+                    text_pacer,
                     generation_id,
                     committer,
-                    timing,
+                    publication_timing,
                     live_reporter,
                 )?)
             }
         };
         Ok(Self {
             generation_id,
-            highest_update_revision: Arc::new(AtomicU64::new(0)),
+            highest_snapshot_revision: Arc::new(AtomicU64::new(0)),
             close_reason: Arc::new(AtomicU8::new(CLOSE_REASON_NONE)),
             committer: publication_committer,
             reporter,
-            publisher,
+            worker,
         })
     }
 
-    pub(crate) fn try_submit(
+    pub(crate) fn try_observe(
         &self,
         update: &CaptionAggregateUpdate,
-    ) -> AppResult<PublisherSubmitOutcome> {
+    ) -> AppResult<PublicationObservationOutcome> {
         if update
             .snapshot
             .active_stream
             .as_ref()
             .is_some_and(|active| active.generation != self.generation_id)
         {
-            return Ok(PublisherSubmitOutcome::Handled);
+            return Ok(PublicationObservationOutcome::Handled);
         }
         // The aggregate revision is the internal idempotency key. A publication
         // observes each strictly newer accepted update at most once; exact
         // replays and out-of-order delivery are successful no-ops.
         if self
-            .highest_update_revision
+            .highest_snapshot_revision
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
                 (update.snapshot.snapshot_revision > current)
                     .then_some(update.snapshot.snapshot_revision)
             })
             .is_err()
         {
-            return Ok(PublisherSubmitOutcome::Handled);
+            return Ok(PublicationObservationOutcome::Handled);
         }
 
-        let outcome = match &self.publisher {
-            ChatboxPublisher::Completed(publisher) => publisher.try_observe(update),
-            ChatboxPublisher::Live(publisher) => publisher.try_observe(&update.snapshot),
+        let outcome = match &self.worker {
+            PublicationWorker::Completed(publisher) => publisher.try_observe(update),
+            PublicationWorker::Live(publisher) => publisher.try_observe(&update.snapshot),
         }?;
-        if outcome == PublisherSubmitOutcome::Closed {
+        if outcome == PublicationObservationOutcome::Closed {
             self.report_discarded_after_close(update);
         }
         Ok(outcome)
@@ -191,16 +221,16 @@ impl ChatboxPublication {
 
     pub(crate) fn request_close(&self, reason: PublisherCloseReason) -> AppResult<()> {
         self.record_close_reason(reason);
-        match &self.publisher {
-            ChatboxPublisher::Completed(publisher) => publisher.request_close(reason),
-            ChatboxPublisher::Live(publisher) => publisher.request_close(reason),
+        match &self.worker {
+            PublicationWorker::Completed(publisher) => publisher.request_close(reason),
+            PublicationWorker::Live(publisher) => publisher.request_close(reason),
         }
     }
 
     pub(crate) fn join(&self) -> AppResult<()> {
-        match &self.publisher {
-            ChatboxPublisher::Completed(publisher) => publisher.join(),
-            ChatboxPublisher::Live(publisher) => publisher.join(),
+        match &self.worker {
+            PublicationWorker::Completed(publisher) => publisher.join(),
+            PublicationWorker::Live(publisher) => publisher.join(),
         }
     }
 
@@ -232,11 +262,11 @@ impl ChatboxPublication {
                 _ => PublisherCloseReason::RuntimeError,
             }
         };
-        let diagnostic = match &self.publisher {
-            ChatboxPublisher::Completed(_) => {
+        let diagnostic = match &self.worker {
+            PublicationWorker::Completed(_) => {
                 completed_update_discarded_after_close(update, reason)
             }
-            ChatboxPublisher::Live(_) => live_update_discarded_after_close(reason),
+            PublicationWorker::Live(_) => live_update_discarded_after_close(reason),
         };
         if let Some(diagnostic) = diagnostic {
             (self.reporter)(diagnostic);
@@ -247,3 +277,7 @@ impl ChatboxPublication {
 #[cfg(test)]
 #[path = "chatbox/chatbox_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "chatbox/regression_tests.rs"]
+mod regression_tests;

@@ -11,6 +11,9 @@ src-tauri/gen/
 components.d.ts
 .pnpm-store/
 
+# Large reviewed test fixtures
+src-tauri/testdata/chatbox/layout-cases-v1.json
+
 # Tool-managed or prose-heavy files
 pnpm-lock.yaml
 *.md

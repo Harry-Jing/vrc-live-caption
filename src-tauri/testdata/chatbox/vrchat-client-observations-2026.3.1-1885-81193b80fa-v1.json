@@ -1,0 +1,313 @@
+{
+  "observation_schema_version": 1,
+  "schema_version_scope": "test_fixture_only",
+  "fixture_id": "vrchat-chatbox-client-observations-2026.3.1-1885-81193b80fa",
+  "description": "Product-owned, build-scoped VRChat Chatbox observations used as regression expectations.",
+  "vrchat_profile": {
+    "vrchat_build": "2026.3.1-1885-81193b80fa-Release",
+    "unity_version": "2022.3.22f2-DWR",
+    "distribution": "Steam",
+    "platform": "standalonewindows",
+    "xr_device": "None",
+    "chat_bubble_scale": 1.5,
+    "chat_bubble_opacity": 1
+  },
+  "field_semantics": {
+    "visual_line_count": "Observed visible layout rows, including determinate empty rows.",
+    "soft_wrap_utf16_offsets": "UTF-16 prefix lengths before directly observed soft-wrap boundaries.",
+    "visible_line_clipping": "Whether input beyond the ninth visual row was present but not visible."
+  },
+  "observations": {
+    "width_calibration": [
+      {
+        "case_id": "WIDTH-X-29",
+        "payload_sha256": "1702245ac78581c3218750b9aa8c45403e5ac485bd41b428f79a60f7b11c379b",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-X-30",
+        "payload_sha256": "666a596df2cf2181e69835c4f812f7c6117ecbe5136a3a6be2a07ef4aaccd343",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [29]
+      },
+      {
+        "case_id": "WIDTH-W-UPPER-16",
+        "payload_sha256": "0beef244fbfd0c37cf6c6bb822e305a230b7e7baccad8caf3a0b6cde8642c2e9",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-W-UPPER-17",
+        "payload_sha256": "97c0a62531f1dc9b133e2cd5a104081da8013626d926e6fa914aab292049f8cd",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [16]
+      },
+      {
+        "case_id": "WIDTH-PERIOD-58",
+        "payload_sha256": "5a7668a9235f6693a798c1819a736f81815a0b5646c302a6ab65c691f40a5166",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-PERIOD-59",
+        "payload_sha256": "6927bca74ec6376982d83ac9423e1ab13de52c7ae1a9e83fd0f9541818be75c5",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [58]
+      },
+      {
+        "case_id": "WIDTH-CJK-15",
+        "payload_sha256": "e0daeb921ce2466d3cdcba358aaf260b01aba46bd85646e8907fe27d9d6ba18a",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-CJK-16",
+        "payload_sha256": "442efe767e0ccaa7b0ae38a20681dbf664042d3fdce93f2884abedf8a7c89b1e",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [15]
+      },
+      {
+        "case_id": "WIDTH-X-UPPER-26",
+        "payload_sha256": "b2cf0dec6e01b56e27a398cc0af83816405e66d604f990318f1ec362d0c25750",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-X-UPPER-27",
+        "payload_sha256": "65700c0b349cebbbe96fea79ba20f41adb9089edf87abca0009d7b6f6ab03f52",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [26]
+      },
+      {
+        "case_id": "WIDTH-DIGIT-ONE-27",
+        "payload_sha256": "9b0f3cba1b9ff6102c728d835e7eca4e3a83af46cd943e0e50b5c190b6a88778",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-DIGIT-ONE-28",
+        "payload_sha256": "9a66a1336ffa9ac12b816d7247d7c9feccb6be46bc4019d77bc746c74b298fcb",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [27]
+      },
+      {
+        "case_id": "WIDTH-M-16",
+        "payload_sha256": "c48ea7417f54c2573feec02d58538fe442bcfa5f09e43720ff7fe97297c5abfe",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-M-17",
+        "payload_sha256": "98c6baca9bed438347f24aaac870be42c57ec34d59c08fbfc97161ac290f1d8d",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [16]
+      },
+      {
+        "case_id": "WIDTH-W-LOWER-19",
+        "payload_sha256": "ff2d36422359e32e38df98f52015088248e3d0ca443381ae94cab4106f2dd7fb",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-W-LOWER-20",
+        "payload_sha256": "69658616f47113f4de5c6389ae0b1717dbdc641a7023480f0d8e9baebbdd579e",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [19]
+      },
+      {
+        "case_id": "WIDTH-DIGIT-ZERO-27",
+        "payload_sha256": "d18b431dbcc848237ea9d97c8ae5ad2f844148d2bd3a0da20bac52cf931582c3",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-DIGIT-ZERO-28",
+        "payload_sha256": "d77bd86a0e004d9c21a03cdbfeac637b484d184bdda05d72ad726e029c9003a1",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [27]
+      },
+      {
+        "case_id": "WIDTH-COLON-58",
+        "payload_sha256": "e80d641faf18e66113dee61804db0d96de3c076860efd077c6195a609cba5060",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-COLON-59",
+        "payload_sha256": "8bdaa7e19b0305aea922dcfbc9a658b77894b0c20c4a3de12830581676312b4e",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [58]
+      },
+      {
+        "case_id": "WIDTH-E-ACUTE-27",
+        "payload_sha256": "2276e051a6111964a16d9b9a7d073ae9a52d2ed9aebf654820a8c59a552f95cc",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-E-ACUTE-28",
+        "payload_sha256": "a2e7c1f809d17958e21b7cd370a1d7d030e07f3af72588be133d4f73fadee71d",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [27]
+      },
+      {
+        "case_id": "WIDTH-CURLY-APOSTROPHE-88",
+        "payload_sha256": "3eff567ecaa3da3bd3b01de418b264f9fbe8bb1b96a110a6c032ceee15b58288",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-CURLY-APOSTROPHE-89",
+        "payload_sha256": "1c539a7d6316187810fcb8e685ae689080fa7154a7e9d96b21c60758cacc66af",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [88]
+      },
+      {
+        "case_id": "WIDTH-OPEN-QUOTE-43",
+        "payload_sha256": "57ec15502d694568febcfa366c36dfbec83442bf741e2f8c6a0a266b76168e53",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-OPEN-QUOTE-44",
+        "payload_sha256": "bc9d61072e88030b7a9f05c49744393a6e922eada9587def701033bdb316bf08",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [43]
+      },
+      {
+        "case_id": "WIDTH-EM-DASH-15",
+        "payload_sha256": "75ee8c6bc0d2f39f59a4fa8dcab4f4e9309c5f303964ec83bc239d6d1f20c675",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-EM-DASH-16",
+        "payload_sha256": "27695047f98a6d65e5f37eb86dd411fccc6cad975f6b650e7d8132d8afbfd378",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [15]
+      },
+      {
+        "case_id": "WIDTH-FULLWIDTH-COMMA-15",
+        "payload_sha256": "49487178fca3a8fcd62b3a6006456fc715db4ea42f674b0dd2fcf7e27653793f",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "WIDTH-FULLWIDTH-COMMA-16",
+        "payload_sha256": "cd9d928e0f8f1a5758a8949d98be795d689e62ced0b7199a74bf154dc7a9e67a",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [15]
+      }
+    ],
+    "cjk_kinsoku": [
+      {
+        "case_id": "KINSOKU-OPEN-CONTROL",
+        "payload_sha256": "fba8b2763c437594ec2dae2684d1a863bb97531813ed3a52e8a41520f4422978",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [15]
+      },
+      {
+        "case_id": "KINSOKU-OPEN-PROBE",
+        "payload_sha256": "be76440457dcecee7d06e73fd68f7ae0f60265164519ff6599a4a2eaf98c736e",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [14]
+      },
+      {
+        "case_id": "KINSOKU-CLOSE-CONTROL",
+        "payload_sha256": "68ac346075d9fd92c77ad8ac998484aa1bfcb51d1008ec6ceba17981b9a2f85b",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [15]
+      },
+      {
+        "case_id": "KINSOKU-CLOSE-PROBE",
+        "payload_sha256": "1f45589914fda12391fb65d22c00b88c4f74443c0d171587917343cee75fb8c9",
+        "visual_line_count": 2,
+        "soft_wrap_utf16_offsets": [14]
+      }
+    ],
+    "control_characters": [
+      {
+        "case_id": "LINES-LF-BASIC",
+        "payload_sha256": "bbfb79e82216bd2db1ad2c507d44ddf80aeb12f64f9562056afe93aad43154d9",
+        "visual_line_count": 2
+      },
+      {
+        "case_id": "LINES-CRLF-BASIC",
+        "payload_sha256": "4854aaef74503959fd26363306e2ef967a9d50bdda90d033a3a4acacbbd57547",
+        "visual_line_count": 2
+      },
+      {
+        "case_id": "LINES-CR-BASIC",
+        "payload_sha256": "630777dbacbc99352e4be7dfc6a9e094737d160727dfb3b7e9ad8a61b11e68d0",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "LINES-NEL-BASIC",
+        "payload_sha256": "aa0ba198c62bb24a1ec70caff7f8a53d7e423117ac7cb452e1d5e77251bba9ec",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "LINES-LITERAL-BACKSLASH-N",
+        "payload_sha256": "1c84407d553ee0a51ca87d505fe8c029f7a7ad3dc78e02f514227f0ad8164107",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "LINES-VT-BASIC",
+        "payload_sha256": "3ba8594545b9b25f4ea614e62daa32cc504c4151333f68fce8cc1ad014c8b471",
+        "visual_line_count": 2
+      },
+      {
+        "case_id": "LINES-SEPARATOR",
+        "payload_sha256": "2a3cbecbbc1fd52bbc55b909afb6cf3fab80ade69ce0d314498de263f6b875a1",
+        "visual_line_count": 2
+      },
+      {
+        "case_id": "PARAGRAPH-SEPARATOR",
+        "payload_sha256": "33439e2362e959714da5710126d3336b38c91c2832de83ee89bc76f9480878c9",
+        "visual_line_count": 2
+      },
+      {
+        "case_id": "LINES-LEADING-LF",
+        "payload_sha256": "8ddab40783a9478db3532f1a4c9a4835a958bde6b5f4c9f72be3a240689c89b4",
+        "visual_line_count": 2
+      },
+      {
+        "case_id": "LINES-TRAILING-LF",
+        "payload_sha256": "48332fe667bc51ac4a51ba0efe734441c90def55c60a26d7db275ecbbcf42f15",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "LINES-CONSECUTIVE-LF",
+        "payload_sha256": "5cdf13d634a3bb0d586654dab8dab2ac16df824bc508e05f3d4686bd0b299b09",
+        "visual_line_count": 3
+      },
+      {
+        "case_id": "LINES-NINE-CR",
+        "payload_sha256": "aadb46895d5db3f4cf614f82e16abab3b4af68b1b6c84df5374af25198753bc9",
+        "visual_line_count": 1
+      },
+      {
+        "case_id": "LINES-NINE-CRLF",
+        "payload_sha256": "bf0273f6038249b2e5c09a1a9a2f74217e955ac274c924b18482428cceb8e882",
+        "visual_line_count": 9
+      },
+      {
+        "case_id": "LINES-NINE-LF-CONTROL",
+        "payload_sha256": "af64597b2ec3e6657c4bee4c13ebbec89907e48e319d60e62bc7c89c4123de10",
+        "visual_line_count": 9
+      }
+    ],
+    "visible_line_limit": [
+      {
+        "case_id": "LINES-NINE-LF",
+        "payload_sha256": "4590e824e464c79094eef03d1b8580a417fa4c1a1853f9daf98c9caa8b1e4499",
+        "visual_line_count": 9,
+        "visible_line_clipping": false
+      },
+      {
+        "case_id": "LINES-TEN-LF",
+        "payload_sha256": "7962d166136112ce61e6d734992e3b95fdc8220584cc413a97586657f2754d31",
+        "visual_line_count": 9,
+        "visible_line_clipping": true
+      },
+      {
+        "case_id": "LINES-SOFT-EXPLICIT-BASE",
+        "payload_sha256": "b17fd0c9f895baf0d7e4da4580e079d75d7c4a54c9afd7ca413457a58cb4161e",
+        "visual_line_count": 9,
+        "visible_line_clipping": false
+      },
+      {
+        "case_id": "LINES-SOFT-EXPLICIT-EXTRA",
+        "payload_sha256": "48e2499e44e07ccfe9a2943004fc07e68dc037029339d3258cb6801379de3d4c",
+        "visual_line_count": 9,
+        "visible_line_clipping": true
+      }
+    ]
+  }
+}

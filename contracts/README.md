@@ -1,14 +1,19 @@
 # Contract artifacts
 
-This directory holds shared evidence for the Rust/TypeScript boundary. The
-artifacts complement the Rust types, TypeScript decoders, and tests; payload
-fixtures are representative compatibility scenarios, not complete JSON Schema.
+This directory holds versioned artifacts that cross a runtime, persistence, or
+Rust/TypeScript boundary. The artifacts complement the Rust types, TypeScript
+decoders, and tests; payload fixtures are representative compatibility
+scenarios, not complete JSON Schema.
 
 - `*-vN.json` files are versioned payload scenarios consumed by both languages.
 - `tauri-ipc.json` is the exact manifest of command and event identifiers in one
   application build.
 - `wire-vocabulary.json` is the exact manifest of closed enum values and tagged
   union discriminators shared across the boundary.
+
+Large implementation-specific regression inputs are not contracts. Rust-owned
+Chatbox corpus and VRChat client-observation data live under
+[`src-tauri/testdata/chatbox/`](../src-tauri/testdata/chatbox/).
 
 ## Compatibility baseline
 

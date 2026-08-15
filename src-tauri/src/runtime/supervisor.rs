@@ -13,14 +13,14 @@ use tauri::{AppHandle, Runtime};
 
 pub(super) fn run_runtime_thread<R: Runtime>(execution: RuntimeExecution<R>) {
     let error_generation = execution.generation().clone();
-    let cleanup_publisher = execution.publisher().cloned();
+    let cleanup_chatbox_publication = execution.chatbox_publication().cloned();
     let supervisor_app = execution.app().clone();
     let runtime_status_recorder = execution.status_recorder().clone();
 
     supervise_runtime_thread(
         &supervisor_app,
         &error_generation,
-        cleanup_publisher.as_ref(),
+        cleanup_chatbox_publication.as_ref(),
         &runtime_status_recorder,
         move || execution.run(),
     );
@@ -29,7 +29,7 @@ pub(super) fn run_runtime_thread<R: Runtime>(execution: RuntimeExecution<R>) {
 fn supervise_runtime_thread<R: Runtime>(
     app: &AppHandle<R>,
     generation: &RuntimeGeneration,
-    publisher: Option<&ChatboxPublication>,
+    chatbox_publication: Option<&ChatboxPublication>,
     status_recorder: &RuntimeStatusRecorder,
     run: impl FnOnce() -> AppResult<()>,
 ) {
@@ -37,7 +37,12 @@ fn supervise_runtime_thread<R: Runtime>(
     let runtime_result = match outcome {
         Ok(runtime_result) => runtime_result,
         Err(panic) => {
-            finish_runtime_output(app, generation, publisher, PublisherCloseReason::Stop);
+            finish_runtime_output(
+                app,
+                generation,
+                chatbox_publication,
+                PublisherCloseReason::Stop,
+            );
             tracing::error!("runtime thread panicked; its generation and Publisher were stopped");
             record_and_emit_runtime_status(
                 app,
@@ -63,7 +68,7 @@ fn supervise_runtime_thread<R: Runtime>(
     } else {
         PublisherCloseReason::RuntimeError
     };
-    finish_runtime_output(app, generation, publisher, reason);
+    finish_runtime_output(app, generation, chatbox_publication, reason);
 
     if let Err(error) = runtime_result {
         tracing::warn!(

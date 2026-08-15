@@ -58,7 +58,7 @@ pub(crate) fn completed_publisher_diagnostic(
     diagnostic: CompletedPublisherDiagnostic,
 ) -> DiagnosticUpdate {
     match diagnostic {
-        CompletedPublisherDiagnostic::UnitPublished {
+        CompletedPublisherDiagnostic::UnitSendSucceeded {
             unit_id,
             page_count,
             byte_count,
@@ -66,9 +66,9 @@ pub(crate) fn completed_publisher_diagnostic(
         } => DiagnosticUpdate::info(
             DiagnosticCategory::Osc,
             "osc.completed_unit_sent",
-            "Completed caption published",
+            "Completed caption sent to Chatbox OSC",
             format!(
-                "Published {page_count} ordered page(s) for {unit_id} to {target} using {byte_count} encoded byte(s)."
+                "Sent {page_count} ordered page(s) for {unit_id} to {target} using {byte_count} encoded byte(s)."
             ),
         ),
         CompletedPublisherDiagnostic::UnitDroppedOverload {
@@ -79,7 +79,7 @@ pub(crate) fn completed_publisher_diagnostic(
             "osc.completed_unit_dropped_overload",
             "Completed caption dropped from Chatbox backlog",
             format!(
-                "Dropped the oldest unstarted caption unit {unit_id} as one complete {page_count}-page publication because the Chatbox backlog was full. The App caption remains available."
+                "Dropped the oldest caption unit {unit_id} whose first send attempt had not started, preserving it as one complete {page_count}-page publication, because the Chatbox backlog was full. The App caption remains available."
             ),
         ),
         CompletedPublisherDiagnostic::UnitRejectedOverload {
@@ -101,7 +101,7 @@ pub(crate) fn completed_publisher_diagnostic(
             "osc.completed_unit_expired",
             "Completed caption expired from Chatbox backlog",
             format!(
-                "Discarded unstarted caption unit {unit_id} as one complete {page_count}-page publication after it exceeded the provisional backlog age. The App caption remains available."
+                "Discarded caption unit {unit_id}, whose first send attempt had not started, as one complete {page_count}-page publication after it exceeded the provisional backlog age. The App caption remains available."
             ),
         ),
         CompletedPublisherDiagnostic::LayoutFailed { unit_id, reason } => {
@@ -109,7 +109,7 @@ pub(crate) fn completed_publisher_diagnostic(
                 DiagnosticCategory::Osc,
                 "osc.completed_layout_failed",
                 "Completed caption could not be laid out for Chatbox",
-                format!("Caption unit {unit_id} was not published: {reason}"),
+                format!("Caption unit {unit_id} was not sent: {reason}"),
             )
         }
         CompletedPublisherDiagnostic::UnitSendFailed {
@@ -121,14 +121,14 @@ pub(crate) fn completed_publisher_diagnostic(
         } => DiagnosticUpdate::from_error(
             &error,
             format!(
-                "Completed Chatbox publication failed for {unit_id} on page {page_index} of {page_count} after {pages_sent} successful page(s); the failed page was not retried and the unit's remaining pages were discarded"
+                "Completed Chatbox send failed for {unit_id} on page {page_index} of {page_count} after {pages_sent} successful page(s); the failed page was not retried and the unit's remaining pages were discarded"
             ),
         ),
         CompletedPublisherDiagnostic::PagesDiscardedOnClose {
             reason,
             unit_count,
             page_count,
-            started_unit_count,
+            send_started_unit_count,
         } => {
             let (code, message) = match reason {
                 PublisherCloseReason::Stop => (
@@ -145,7 +145,7 @@ pub(crate) fn completed_publisher_diagnostic(
                 code,
                 message,
                 format!(
-                    "Discarded {page_count} unsent page(s) across {unit_count} caption unit(s), including {started_unit_count} unit(s) whose publication had begun."
+                    "Discarded {page_count} unsent page(s) across {unit_count} caption unit(s), including {send_started_unit_count} unit(s) whose first send attempt had begun."
                 ),
             )
         }
@@ -167,7 +167,7 @@ pub(crate) fn completed_publisher_diagnostic(
 
 pub(crate) fn live_publisher_diagnostic(diagnostic: LivePublisherDiagnostic) -> DiagnosticUpdate {
     match diagnostic {
-        LivePublisherDiagnostic::ViewPublished {
+        LivePublisherDiagnostic::ViewportSendSucceeded {
             stream_id,
             unit_id,
             revision,
@@ -176,13 +176,13 @@ pub(crate) fn live_publisher_diagnostic(diagnostic: LivePublisherDiagnostic) -> 
         } => DiagnosticUpdate::info(
             DiagnosticCategory::Osc,
             "osc.live_view_sent",
-            "Live caption view published",
+            "Live caption viewport sent to Chatbox OSC",
             format!(
-                "Published revision {revision} for {} in {stream_id} to {target} using {byte_count} encoded byte(s).",
+                "Sent revision {revision} for {} in {stream_id} to {target} using {byte_count} encoded byte(s).",
                 unit_id.as_deref().unwrap_or("the unitless stream")
             ),
         ),
-        LivePublisherDiagnostic::ViewSendFailed {
+        LivePublisherDiagnostic::ViewportSendFailed {
             stream_id,
             unit_id,
             revision,
@@ -190,7 +190,7 @@ pub(crate) fn live_publisher_diagnostic(diagnostic: LivePublisherDiagnostic) -> 
         } => DiagnosticUpdate::error(
             DiagnosticCategory::Osc,
             "osc.live_view_send_failed",
-            "Live caption view could not be published",
+            "Live caption viewport could not be sent",
             format!(
                 "Revision {revision} for {} in {stream_id} failed and was not retried: {error}",
                 unit_id.as_deref().unwrap_or("the unitless stream")
@@ -204,13 +204,13 @@ pub(crate) fn live_publisher_diagnostic(diagnostic: LivePublisherDiagnostic) -> 
         } => DiagnosticUpdate::warning(
             DiagnosticCategory::Osc,
             "osc.live_layout_failed",
-            "Live caption view could not be laid out for Chatbox",
+            "Live caption viewport could not be prepared for Chatbox",
             format!(
-                "Revision {revision} for {} in {stream_id} was not published: {reason}",
+                "Revision {revision} for {} in {stream_id} was not sent: {reason}",
                 unit_id.as_deref().unwrap_or("the unitless stream")
             ),
         ),
-        LivePublisherDiagnostic::DraftDiscardedOnClose { reason } => {
+        LivePublisherDiagnostic::PendingViewportDiscardedOnClose { reason } => {
             let (code, message) = match reason {
                 PublisherCloseReason::Stop => (
                     "osc.live_draft_discarded_on_stop",

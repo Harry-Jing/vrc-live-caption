@@ -1,4 +1,5 @@
-use super::pacer::{ChatboxPacer, Clock};
+use super::test_support::AdvancingClock;
+use super::text_pacing::{ChatboxTextPacer, Clock};
 use super::transport::{ChatboxSendReceipt, ChatboxTransport};
 use super::*;
 use crate::caption::{
@@ -7,9 +8,13 @@ use crate::caption::{
     OpenSourceUnit,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
+use crate::config::OscConfig;
 use crate::error::AppError;
 use crate::events::{DiagnosticUpdate, emit_diagnostic};
 use crate::generation_fence::GenerationFence;
+use crate::host_resolver::HostResolver;
+use rosc::{OscMessage, OscPacket, OscType, decoder};
+use std::net::UdpSocket;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
@@ -103,13 +108,13 @@ struct TracingTransport {
 }
 
 impl ChatboxTransport for RecordingTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
         self.texts
-            .send(text.to_string())
+            .send(text.as_str().to_string())
             .map_err(|_| AppError::state("Recording transport receiver was dropped."))?;
         Ok(ChatboxSendReceipt {
             target: "recording".to_string(),
-            byte_count: text.len(),
+            byte_count: text.as_str().len(),
         })
     }
 
@@ -119,13 +124,13 @@ impl ChatboxTransport for RecordingTransport {
 }
 
 impl ChatboxTransport for TracingTransport {
-    fn send_text(&self, text: &str) -> AppResult<ChatboxSendReceipt> {
+    fn send_text(&self, text: &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> {
         self.events
-            .send(PublicationEvent::Text(text.to_string()))
+            .send(PublicationEvent::Text(text.as_str().to_string()))
             .map_err(|_| AppError::state("Tracing transport receiver was dropped."))?;
         Ok(ChatboxSendReceipt {
             target: "tracing".to_string(),
-            byte_count: text.len(),
+            byte_count: text.as_str().len(),
         })
     }
 
@@ -134,6 +139,115 @@ impl ChatboxTransport for TracingTransport {
             .send(PublicationEvent::Typing(is_typing))
             .map_err(|_| AppError::state("Tracing transport receiver was dropped."))
     }
+}
+
+#[test]
+fn text_transport_accepts_only_prepared_chatbox_text() {
+    fn assert_signature<T: ChatboxTransport>() {
+        let send: fn(&T, &PreparedChatboxText) -> AppResult<ChatboxSendReceipt> =
+            <T as ChatboxTransport>::send_text;
+        let _ = send;
+    }
+
+    assert_signature::<RecordingTransport>();
+}
+
+#[test]
+fn osc_test_message_uses_the_shared_text_pacer_and_prepared_transport() -> AppResult<()> {
+    let clock = Arc::new(AdvancingClock::new());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
+    let (texts, receiver) = mpsc::channel();
+    let transport: Arc<dyn ChatboxTransport> = Arc::new(RecordingTransport { texts });
+    let udp_receiver =
+        UdpSocket::bind("127.0.0.1:0").map_err(|error| AppError::osc_bind(error.to_string()))?;
+    udp_receiver
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|error| AppError::osc_bind(error.to_string()))?;
+    let port = udp_receiver
+        .local_addr()
+        .map_err(|error| AppError::osc_bind(error.to_string()))?
+        .port();
+    let runtime_text = prepare_single_message("runtime attempt")
+        .map_err(|error| AppError::runtime(describe_layout_error(error)))?
+        .ok_or_else(|| AppError::state("Runtime test text must not be empty."))?;
+
+    pacer
+        .wait_for_text_attempt(None)?
+        .ok_or_else(|| AppError::state("Runtime test pacing was cancelled."))?
+        .attempt(|| transport.send_text(&runtime_text))?;
+    let receipt = send_osc_test_message(
+        &OscConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            enabled: true,
+        },
+        &pacer,
+        &HostResolver::default(),
+    )?;
+
+    let mut datagram = [0_u8; 1024];
+    let (size, _) = udp_receiver
+        .recv_from(&mut datagram)
+        .map_err(|error| AppError::osc_send("test receiver", error.to_string()))?;
+    let (_, packet) = decoder::decode_udp(&datagram[..size])
+        .map_err(|error| AppError::osc_encode(error.to_string()))?;
+
+    assert_eq!(wait_for_text(&receiver)?, "runtime attempt");
+    assert_eq!(clock.total_sleep(), Duration::from_secs(1));
+    assert_eq!(receipt.target, format!("127.0.0.1:{port}"));
+    assert_eq!(
+        packet,
+        OscPacket::Message(OscMessage {
+            addr: "/chatbox/input".to_string(),
+            args: vec![
+                OscType::String(OSC_TEST_TEXT.to_string()),
+                OscType::Bool(true),
+                OscType::Bool(false),
+            ],
+        })
+    );
+    assert!(receipt.byte_count > OSC_TEST_TEXT.len());
+    Ok(())
+}
+
+#[test]
+fn osc_test_resolution_failure_does_not_consume_a_text_attempt() -> AppResult<()> {
+    let clock = Arc::new(AdvancingClock::new());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
+    let resolver = HostResolver::with_lookup(|_, _| {
+        Err(std::io::Error::other("Scripted OSC resolution failure."))
+    });
+
+    let error = match send_osc_test_message(
+        &OscConfig {
+            host: "unresolved.test".to_string(),
+            port: 9000,
+            enabled: true,
+        },
+        &pacer,
+        &resolver,
+    ) {
+        Ok(_) => {
+            return Err(AppError::state(
+                "A failed hostname lookup unexpectedly sent the OSC test message.",
+            ));
+        }
+        Err(error) => error,
+    };
+
+    let (texts, _receiver) = mpsc::channel();
+    let transport = RecordingTransport { texts };
+    let next_text = prepare_single_message("next attempt")
+        .map_err(|layout_error| AppError::runtime(describe_layout_error(layout_error)))?
+        .ok_or_else(|| AppError::state("Next test text must not be empty."))?;
+    pacer
+        .wait_for_text_attempt(None)?
+        .ok_or_else(|| AppError::state("Next test pacing was cancelled."))?
+        .attempt(|| transport.send_text(&next_text))?;
+
+    assert_eq!(error.code(), "osc.send_failed");
+    assert_eq!(clock.total_sleep(), Duration::ZERO);
+    Ok(())
 }
 
 fn reporter() -> Arc<dyn Fn(DiagnosticUpdate) + Send + Sync> {
@@ -146,7 +260,7 @@ fn start_completed() -> AppResult<(ChatboxPublication, Receiver<String>)> {
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -161,7 +275,7 @@ fn start_live() -> AppResult<(ChatboxPublication, Receiver<String>)> {
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::LiveUnit {
@@ -275,7 +389,7 @@ fn facade_selects_completed_publication_without_exposing_its_worker() -> AppResu
     });
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -283,8 +397,8 @@ fn facade_selects_completed_publication_without_exposing_its_worker() -> AppResu
     )?;
 
     assert_eq!(
-        publication.try_submit(&completed_update(1, "unit-1", "completed snapshot", true))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&completed_update(1, "unit-1", "completed snapshot", true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "completed snapshot");
     diagnostic_receiver
@@ -304,7 +418,7 @@ fn completed_publication_uses_exact_changes_across_revision_gaps_and_deduplicate
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::with_clock(clock.clone()),
+        ChatboxTextPacer::with_clock(clock.clone()),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -314,17 +428,17 @@ fn completed_publication_uses_exact_changes_across_revision_gaps_and_deduplicate
     let later = completed_update(25, "later", "second accepted", true);
 
     assert_eq!(
-        publication.try_submit(&old_trimmed)?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&old_trimmed)?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "first accepted");
     assert_eq!(
-        publication.try_submit(&old_trimmed)?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&old_trimmed)?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(
-        publication.try_submit(&later)?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&later)?,
+        PublicationObservationOutcome::Handled
     );
     clock.advance(Duration::from_secs(1));
     assert_eq!(wait_for_text(&receiver)?, "second accepted");
@@ -333,13 +447,13 @@ fn completed_publication_uses_exact_changes_across_revision_gaps_and_deduplicate
 }
 
 #[test]
-fn completed_publication_derives_started_completed_and_aborted_from_aggregates() -> AppResult<()> {
+fn completed_publication_derives_opened_completed_and_aborted_from_aggregates() -> AppResult<()> {
     let (events, receiver) = mpsc::channel();
     let transport: Arc<dyn ChatboxTransport> = Arc::new(TracingTransport { events });
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -347,19 +461,19 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
     )?;
 
     assert_eq!(
-        publication.try_submit(&opened_update(1, "aborted-unit"))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&opened_update(1, "aborted-unit"))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(
         receiver
             .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| AppError::runtime("Completed publication did not derive Started."))?,
+            .map_err(|_| AppError::runtime("Completed publication did not derive Opened."))?,
         PublicationEvent::Typing(true)
     );
 
     assert_eq!(
-        publication.try_submit(&aborted_update(2, "aborted-unit"))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&aborted_update(2, "aborted-unit"))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(
         receiver
@@ -369,8 +483,8 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
     );
 
     assert_eq!(
-        publication.try_submit(&opened_update(3, "completed-unit"))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&opened_update(3, "completed-unit"))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(
         receiver
@@ -379,13 +493,13 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
         PublicationEvent::Typing(true)
     );
     assert_eq!(
-        publication.try_submit(&completed_update(
+        publication.try_observe(&completed_update(
             4,
             "completed-unit",
             "completed from aggregate",
             true,
         ))?,
-        PublisherSubmitOutcome::Handled
+        PublicationObservationOutcome::Handled
     );
     let terminal_events = [
         receiver
@@ -393,7 +507,7 @@ fn completed_publication_derives_started_completed_and_aborted_from_aggregates()
             .map_err(|_| AppError::runtime("Completed publication did not resolve typing."))?,
         receiver
             .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| AppError::runtime("Completed publication did not publish text."))?,
+            .map_err(|_| AppError::runtime("Completed publication did not send text."))?,
     ];
     assert!(terminal_events.contains(&PublicationEvent::Typing(false)));
     assert!(terminal_events.contains(&PublicationEvent::Text(
@@ -416,25 +530,25 @@ fn completed_publication_ignores_duplicate_out_of_order_and_prior_generation_his
     });
     let publication = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
         reporter,
     )?;
     assert_eq!(
-        publication.try_submit(&completed_update(2, "unit-1", "publish once", true))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&completed_update(2, "unit-1", "publish once", true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "publish once");
 
     assert_eq!(
-        publication.try_submit(&completed_update(2, "unit-1", "duplicate", true))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&completed_update(2, "unit-1", "duplicate", true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(
-        publication.try_submit(&completed_update(1, "unit-1", "out of order", true))?,
-        PublisherSubmitOutcome::Handled
+        publication.try_observe(&completed_update(1, "unit-1", "out of order", true))?,
+        PublicationObservationOutcome::Handled
     );
     close(&publication)?;
     assert_no_text(&receiver);
@@ -450,7 +564,7 @@ fn completed_publication_ignores_duplicate_out_of_order_and_prior_generation_his
     });
     let current = ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         2,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -466,8 +580,8 @@ fn completed_publication_ignores_duplicate_out_of_order_and_prior_generation_his
         snapshot: prior_snapshot,
     };
     assert_eq!(
-        current.try_submit(&with_prior_history)?,
-        PublisherSubmitOutcome::Handled
+        current.try_observe(&with_prior_history)?,
+        PublicationObservationOutcome::Handled
     );
     close(&current)?;
     assert_no_text(&prior_history_receiver);
@@ -499,7 +613,7 @@ fn start_for_closed_diagnostic(
     let fence = GenerationFence::new();
     ChatboxPublication::start_with_transport(
         transport,
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         timing,
@@ -534,7 +648,7 @@ fn generation_stop_cutoff_keeps_stop_diagnostics_before_publication_shutdown() -
     let fence = GenerationFence::new();
     let publication = ChatboxPublication::start_with_transport(
         Arc::new(RecordingTransport { texts }),
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
@@ -544,7 +658,7 @@ fn generation_stop_cutoff_keeps_stop_diagnostics_before_publication_shutdown() -
     // Runtime establishes the generation cutoff before the potentially
     // blocking publication shutdown call records its own close reason.
     fence.request_stop();
-    let outcome = publication.try_submit(&completed_update(
+    let outcome = publication.try_observe(&completed_update(
         1,
         "after-stop-cutoff",
         "must not publish",
@@ -554,7 +668,7 @@ fn generation_stop_cutoff_keeps_stop_diagnostics_before_publication_shutdown() -
     publication.request_close(PublisherCloseReason::Stop)?;
     publication.join()?;
 
-    assert_eq!(outcome, PublisherSubmitOutcome::Closed);
+    assert_eq!(outcome, PublicationObservationOutcome::Closed);
     assert_eq!(diagnostic_code, "osc.send_skipped_on_stop");
     Ok(())
 }
@@ -576,8 +690,8 @@ fn closed_facade_restores_policy_specific_diagnostic_codes() -> AppResult<()> {
     completed_stop.request_close(PublisherCloseReason::Stop)?;
     completed_stop.join()?;
     assert_eq!(
-        completed_stop.try_submit(&completed_update(1, "stop", "too late", true))?,
-        PublisherSubmitOutcome::Closed
+        completed_stop.try_observe(&completed_update(1, "stop", "too late", true))?,
+        PublicationObservationOutcome::Closed
     );
     assert_eq!(
         receive_diagnostic_code(&diagnostic_receiver)?,
@@ -589,8 +703,8 @@ fn closed_facade_restores_policy_specific_diagnostic_codes() -> AppResult<()> {
     completed_error.request_close(PublisherCloseReason::RuntimeError)?;
     completed_error.join()?;
     assert_eq!(
-        completed_error.try_submit(&completed_update(1, "error", "too late", true))?,
-        PublisherSubmitOutcome::Closed
+        completed_error.try_observe(&completed_update(1, "error", "too late", true))?,
+        PublicationObservationOutcome::Closed
     );
     assert_eq!(
         receive_diagnostic_code(&diagnostic_receiver)?,
@@ -606,8 +720,8 @@ fn closed_facade_restores_policy_specific_diagnostic_codes() -> AppResult<()> {
     live_error.request_close(PublisherCloseReason::RuntimeError)?;
     live_error.join()?;
     assert_eq!(
-        live_error.try_submit(&completed_update(1, "live-error", "too late", true))?,
-        PublisherSubmitOutcome::Closed
+        live_error.try_observe(&completed_update(1, "live-error", "too late", true))?,
+        PublicationObservationOutcome::Closed
     );
     assert_eq!(
         receive_diagnostic_code(&diagnostic_receiver)?,
@@ -629,12 +743,12 @@ fn closed_completed_source_activity_updates_remain_silent() -> AppResult<()> {
     publication.join()?;
 
     assert_eq!(
-        publication.try_submit(&opened_update(1, "opened-after-close"))?,
-        PublisherSubmitOutcome::Closed
+        publication.try_observe(&opened_update(1, "opened-after-close"))?,
+        PublicationObservationOutcome::Closed
     );
     assert_eq!(
-        publication.try_submit(&aborted_update(2, "aborted-after-close"))?,
-        PublisherSubmitOutcome::Closed
+        publication.try_observe(&aborted_update(2, "aborted-after-close"))?,
+        PublicationObservationOutcome::Closed
     );
     assert_eq!(report_count.load(Ordering::SeqCst), 0);
     Ok(())
@@ -645,8 +759,8 @@ fn facade_selects_live_publication_without_exposing_its_worker() -> AppResult<()
     let (publisher, receiver) = start_live()?;
 
     assert_eq!(
-        publisher.try_submit(&completed_update(1, "unit-1", "live snapshot", true))?,
-        PublisherSubmitOutcome::Handled
+        publisher.try_observe(&completed_update(1, "unit-1", "live snapshot", true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "live snapshot");
 
@@ -654,19 +768,52 @@ fn facade_selects_live_publication_without_exposing_its_worker() -> AppResult<()
 }
 
 #[test]
+fn completed_facade_sends_the_centrally_prepared_control_policy() -> AppResult<()> {
+    let (publication, receiver) = start_completed()?;
+
+    assert_eq!(
+        publication.try_observe(&completed_update(
+            1,
+            "unit-1",
+            "one\rtwo\r\nthree\u{0085}four\u{000C}five",
+            true,
+        ))?,
+        PublicationObservationOutcome::Handled
+    );
+    assert_eq!(wait_for_text(&receiver)?, "one two\r\nthree four five");
+
+    close(&publication)
+}
+
+#[test]
+fn live_facade_preserves_edge_separators_and_prepared_spaces() -> AppResult<()> {
+    let (publication, receiver) = start_live()?;
+    let source = "\r\n\n\u{000B}\u{2028}\u{2029}\rnewest\u{0085}\u{000C}";
+    let expected = "\r\n\n\u{000B}\u{2028}\u{2029} newest  ";
+
+    assert_eq!(
+        publication.try_observe(&completed_update(1, "unit-1", source, true))?,
+        PublicationObservationOutcome::Handled
+    );
+    assert_eq!(wait_for_text(&receiver)?, expected);
+
+    close(&publication)
+}
+
+#[test]
 fn active_publication_reports_closed_after_facade_shutdown() -> AppResult<()> {
     let (completed, _receiver) = start_completed()?;
     close(&completed)?;
     assert_eq!(
-        completed.try_submit(&completed_update(1, "unit-1", "too late", true))?,
-        PublisherSubmitOutcome::Closed
+        completed.try_observe(&completed_update(1, "unit-1", "too late", true))?,
+        PublicationObservationOutcome::Closed
     );
 
     let (live, _receiver) = start_live()?;
     close(&live)?;
     assert_eq!(
-        live.try_submit(&completed_update(1, "unit-1", "too late", true))?,
-        PublisherSubmitOutcome::Closed
+        live.try_observe(&completed_update(1, "unit-1", "too late", true))?,
+        PublicationObservationOutcome::Closed
     );
 
     Ok(())
@@ -675,7 +822,7 @@ fn active_publication_reports_closed_after_facade_shutdown() -> AppResult<()> {
 #[test]
 fn completed_and_live_publications_share_the_actual_attempt_pacing_boundary() -> AppResult<()> {
     let clock = Arc::new(ManualClock::new());
-    let pacer = ChatboxPacer::with_clock(clock.clone());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
     let (texts, receiver) = mpsc::channel();
     let transport: Arc<dyn ChatboxTransport> = Arc::new(RecordingTransport { texts });
 
@@ -689,8 +836,8 @@ fn completed_and_live_publications_share_the_actual_attempt_pacing_boundary() ->
         reporter(),
     )?;
     assert_eq!(
-        completed.try_submit(&completed_update(1, "unit-1", "completed attempt", true))?,
-        PublisherSubmitOutcome::Handled
+        completed.try_observe(&completed_update(1, "unit-1", "completed attempt", true))?,
+        PublicationObservationOutcome::Handled
     );
     assert_eq!(wait_for_text(&receiver)?, "completed attempt");
     close(&completed)?;
@@ -707,8 +854,8 @@ fn completed_and_live_publications_share_the_actual_attempt_pacing_boundary() ->
         reporter(),
     )?;
     assert_eq!(
-        live.try_submit(&completed_update(1, "unit-1", "live attempt", true))?,
-        PublisherSubmitOutcome::Handled
+        live.try_observe(&completed_update(1, "unit-1", "live attempt", true))?,
+        PublicationObservationOutcome::Handled
     );
     clock.wait_for_sleep()?;
     assert_no_text(&receiver);

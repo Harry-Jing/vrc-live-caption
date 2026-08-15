@@ -30,7 +30,7 @@ pub(super) struct RuntimeExecution<R: Runtime> {
     app: AppHandle<R>,
     audio_config: AudioConfig,
     recognition_module: RecognitionModule,
-    publisher: Option<ChatboxPublication>,
+    chatbox_publication: Option<ChatboxPublication>,
     generation: RuntimeGeneration,
     status_recorder: RuntimeStatusRecorder,
 }
@@ -40,7 +40,7 @@ impl<R: Runtime> RuntimeExecution<R> {
         app: AppHandle<R>,
         audio_config: AudioConfig,
         recognition_module: RecognitionModule,
-        publisher: Option<ChatboxPublication>,
+        chatbox_publication: Option<ChatboxPublication>,
         generation: RuntimeGeneration,
         status_recorder: RuntimeStatusRecorder,
     ) -> Self {
@@ -48,7 +48,7 @@ impl<R: Runtime> RuntimeExecution<R> {
             app,
             audio_config,
             recognition_module,
-            publisher,
+            chatbox_publication,
             generation,
             status_recorder,
         }
@@ -58,8 +58,8 @@ impl<R: Runtime> RuntimeExecution<R> {
         &self.app
     }
 
-    pub(super) fn publisher(&self) -> Option<&ChatboxPublication> {
-        self.publisher.as_ref()
+    pub(super) fn chatbox_publication(&self) -> Option<&ChatboxPublication> {
+        self.chatbox_publication.as_ref()
     }
 
     pub(super) fn generation(&self) -> &RuntimeGeneration {
@@ -75,7 +75,7 @@ impl<R: Runtime> RuntimeExecution<R> {
             app,
             audio_config,
             recognition_module,
-            publisher,
+            chatbox_publication,
             generation,
             status_recorder,
         } = self;
@@ -104,7 +104,7 @@ impl<R: Runtime> RuntimeExecution<R> {
         let runtime_result = coordinate_running_recognition(
             &app,
             &audio_config,
-            publisher.as_ref(),
+            chatbox_publication.as_ref(),
             &generation,
             &mut recognition,
             &status_recorder,
@@ -165,7 +165,7 @@ enum RecognitionCoordinatorFlow {
 struct RecognitionCoordinator<'context, R: Runtime> {
     app: &'context AppHandle<R>,
     audio_config: &'context AudioConfig,
-    publisher: Option<&'context ChatboxPublication>,
+    chatbox_publication: Option<&'context ChatboxPublication>,
     generation: &'context RuntimeGeneration,
     status_recorder: &'context RuntimeStatusRecorder,
     open_capture: &'context dyn Fn(&AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
@@ -174,7 +174,7 @@ struct RecognitionCoordinator<'context, R: Runtime> {
 fn coordinate_running_recognition<R: Runtime>(
     app: &AppHandle<R>,
     audio_config: &AudioConfig,
-    publisher: Option<&ChatboxPublication>,
+    chatbox_publication: Option<&ChatboxPublication>,
     generation: &RuntimeGeneration,
     recognition: &mut RunningRecognition,
     status_recorder: &RuntimeStatusRecorder,
@@ -182,7 +182,7 @@ fn coordinate_running_recognition<R: Runtime>(
     coordinate_running_recognition_with_capture(
         app,
         audio_config,
-        publisher,
+        chatbox_publication,
         generation,
         recognition,
         status_recorder,
@@ -193,7 +193,7 @@ fn coordinate_running_recognition<R: Runtime>(
 fn coordinate_running_recognition_with_capture<R: Runtime>(
     app: &AppHandle<R>,
     audio_config: &AudioConfig,
-    publisher: Option<&ChatboxPublication>,
+    chatbox_publication: Option<&ChatboxPublication>,
     generation: &RuntimeGeneration,
     recognition: &mut RunningRecognition,
     status_recorder: &RuntimeStatusRecorder,
@@ -205,7 +205,7 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
     let coordinator = RecognitionCoordinator {
         app,
         audio_config,
-        publisher,
+        chatbox_publication,
         generation,
         status_recorder,
         open_capture,
@@ -217,7 +217,12 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
         if generation.is_work_cancelled() || generation.is_hard_stop_requested() {
             return Ok(());
         }
-        drain_translation_outcomes(app, publisher, generation, &translation_status_recorder)?;
+        drain_translation_outcomes(
+            app,
+            chatbox_publication,
+            generation,
+            &translation_status_recorder,
+        )?;
 
         loop {
             let signal = match recognition.signals.try_recv() {
@@ -226,7 +231,7 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
                 Err(TryRecvError::Disconnected) => {
                     return finish_unexpected_recognition_owner(
                         coordinator.app,
-                        coordinator.publisher,
+                        coordinator.chatbox_publication,
                         coordinator.generation,
                         recognition,
                         &mut active_capture,
@@ -238,7 +243,12 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
             {
                 return Ok(());
             }
-            drain_translation_outcomes(app, publisher, generation, &translation_status_recorder)?;
+            drain_translation_outcomes(
+                app,
+                chatbox_publication,
+                generation,
+                &translation_status_recorder,
+            )?;
         }
 
         let Some(active) = active_capture.as_mut() else {
@@ -248,7 +258,7 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
                 Err(RecvTimeoutError::Disconnected) => {
                     return finish_unexpected_recognition_owner(
                         coordinator.app,
-                        coordinator.publisher,
+                        coordinator.chatbox_publication,
                         coordinator.generation,
                         recognition,
                         &mut active_capture,
@@ -260,7 +270,12 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
             {
                 return Ok(());
             }
-            drain_translation_outcomes(app, publisher, generation, &translation_status_recorder)?;
+            drain_translation_outcomes(
+                app,
+                chatbox_publication,
+                generation,
+                &translation_status_recorder,
+            )?;
             continue;
         };
 
@@ -342,7 +357,7 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
     ) -> AppResult<RecognitionCoordinatorFlow> {
         let app = self.app;
         let audio_config = self.audio_config;
-        let publisher = self.publisher;
+        let chatbox_publication = self.chatbox_publication;
         let generation = self.generation;
         let status_recorder = self.status_recorder;
         let open_capture = self.open_capture;
@@ -418,7 +433,7 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
                 delay_ms,
             } => {
                 drop(active_capture.take());
-                generation.abort_open_source_units_for_reconnect(app, publisher)?;
+                generation.abort_open_source_units_for_reconnect(app, chatbox_publication)?;
                 let reconnecting = generation.commit_if_active(|| {
                     record_and_emit_runtime_status(
                         app,
@@ -448,7 +463,8 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
                 })
             }
             RecognitionSignal::Event(event) => {
-                let outcome = generation.submit_recognition_event(app, publisher, event)?;
+                let outcome =
+                    generation.submit_recognition_event(app, chatbox_publication, event)?;
                 if let RecognitionEventSubmitOutcome::AcceptedWithTranslationFailure(reason) =
                     outcome
                 {
@@ -470,12 +486,12 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
 
 fn drain_translation_outcomes<R: Runtime>(
     app: &AppHandle<R>,
-    publisher: Option<&ChatboxPublication>,
+    chatbox_publication: Option<&ChatboxPublication>,
     generation: &RuntimeGeneration,
     recorder: &RuntimeTranslationStatusRecorder,
 ) -> AppResult<()> {
     if let Some(reason) = generation
-        .drain_translation_outcomes(app, publisher)?
+        .drain_translation_outcomes(app, chatbox_publication)?
         .degradation
     {
         record_translation_degradation(app, recorder, reason)?;
@@ -496,7 +512,7 @@ fn record_translation_degradation<R: Runtime>(
 
 fn finish_unexpected_recognition_owner<R: Runtime>(
     app: &AppHandle<R>,
-    publisher: Option<&ChatboxPublication>,
+    chatbox_publication: Option<&ChatboxPublication>,
     generation: &RuntimeGeneration,
     recognition: &mut RunningRecognition,
     active_capture: &mut Option<ActiveRecognitionCapture>,
@@ -508,7 +524,7 @@ fn finish_unexpected_recognition_owner<R: Runtime>(
         )
     });
     if let Err(cleanup_error) =
-        generation.abort_open_source_units_for_terminal_failure(app, publisher)
+        generation.abort_open_source_units_for_terminal_failure(app, chatbox_publication)
     {
         emit_diagnostic(
             app,

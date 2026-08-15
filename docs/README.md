@@ -29,6 +29,7 @@ maintaining another copy.
 | [adr/](./adr/) | Accepted decisions whose trade-offs and reasoning need to survive the implementation. |
 | [research/](./research/) | External facts, measurements, experiments, candidate evaluations, and evidence-backed integration constraints. |
 | [contracts/](../contracts/) | Shared fixtures and manifests plus the V1 cutoff and versioning rules; the cutoff is the merge to `main`, not the first packaged release. |
+| [`src-tauri/testdata/`](../src-tauri/testdata/) | Large Rust-only regression inputs and build-scoped evidence consumed by tests, not runtime contracts. |
 | Code, tests, and configuration | Exact current mechanics, commands, versions, module names, protocol handling, and executable behavior. |
 
 ## Research library

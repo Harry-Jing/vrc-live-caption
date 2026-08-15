@@ -82,6 +82,11 @@ file loaded with `#[cfg(test)]` and `#[path = "..."]`. Use `src-tauri/tests/`
 only for crate-boundary integration tests; a small, focused inline test module
 may remain beside its implementation.
 
+Keep large Rust-only regression inputs under `src-tauri/testdata/<area>/`, with
+their provenance and update procedure documented beside them. Reserve
+`contracts/` for formats that cross a runtime, persistence, or language
+boundary.
+
 Do not hand-edit lockfiles or generated files. Let pnpm, Cargo, or Tauri update
 `pnpm-lock.yaml`, `src-tauri/Cargo.lock`, and `src-tauri/gen/`, and include only
 the generated changes required by the issue.

@@ -83,11 +83,11 @@ fn completed_source_events(
 fn drain_until_terminal<R: Runtime>(
     generation: &RuntimeGeneration,
     app: &AppHandle<R>,
-    publisher: Option<&ChatboxPublication>,
+    chatbox_publication: Option<&ChatboxPublication>,
 ) -> AppResult<TranslationDrainReport> {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
-        let report = generation.drain_translation_outcomes(app, publisher)?;
+        let report = generation.drain_translation_outcomes(app, chatbox_publication)?;
         if report.applied + report.ignored > 0 {
             return Ok(report);
         }
@@ -720,8 +720,8 @@ fn poisoned_generation_gate_still_closes_and_joins_the_publisher() -> AppResult<
     assert!(generation.request_stop(Some(&publisher)).is_err());
     publisher.join()?;
     assert_eq!(
-        publisher.try_submit(&inactive_caption_update(1))?,
-        PublisherSubmitOutcome::Closed
+        publisher.try_observe(&inactive_caption_update(1))?,
+        PublicationObservationOutcome::Closed
     );
     assert!(matches!(
         text_receiver.recv_timeout(Duration::from_millis(50)),
@@ -806,7 +806,7 @@ fn runtime_test_live_publisher(
             text_sender,
             typing_sender: None,
         }),
-        ChatboxPacer::default(),
+        ChatboxTextPacer::default(),
         generation.generation_id(),
         generation.committer(),
         ResolvedPublicationTiming::LiveUnit {

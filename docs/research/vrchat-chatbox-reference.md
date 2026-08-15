@@ -1,199 +1,350 @@
 # VRChat Chatbox Reference
 
-This document is the canonical evidence reference for VRChat Chatbox OSC and
-text-layout constraints used by `VRC Live Caption`. It records official
-interfaces, first-party client notes, real-client experiments, and extracted
-TMP layout/font data. Current publisher queues, lifecycle behavior,
-configuration, and other implementation mechanics belong in code and tests,
-not in this reference.
+This document is the canonical developer reference for VRChat Chatbox OSC,
+text limits, wrapping, and glyph behavior used by VRC Live Caption. It combines
+VRChat's public interface, read-only client-resource inspection, controlled
+runtime measurements, and the matching public TextMesh Pro source baseline.
 
-The OSC and rate-limit sections were re-verified against first-party VRChat
-documentation on 2026-07-15. Layout extraction facts retain their original
-verification basis.
+The findings were reviewed on 2026-08-13. Layout behavior is build-scoped:
+VRChat may change assets or private runtime logic without changing the OSC
+address.
 
-## Overview
+## Developer summary
 
-- The chatbox model is a fixed TMP text layout, not a configurable heuristic width model.
-- Long-text behavior is defined by a fixed text rectangle, fixed margins, fixed font size, the VRChat font/fallback stack, real glyph widths, TMP line-break tables, and a hard `9`-line cap.
-- For this project, the important target is text layout and clipping inside the `ChatText` rectangle, not full world-space chat bubble rendering.
+Here, a **Completed page** is one sendable, ordered slice of final caption text.
+A **Live viewport** is one replacement message that keeps the newest useful
+context from an ongoing caption.
 
-## OSC and client-behavior evidence
+- Send text with `/chatbox/input (text, true, false)`. The first Boolean sends
+  immediately; the second suppresses the notification sound.
+- VRChat documents a limit of 144 characters and 9 displayed lines. On the
+  tested Windows client, the visible input was the first **144 UTF-16 code
+  units**, not 144 Unicode scalar values or grapheme clusters.
+- VRChat's cutoff is not Unicode-safe. It can split a surrogate pair, combining
+  sequence, emoji modifier sequence, ZWJ sequence, or CRLF pair.
+- VRChat does not paginate an oversized OSC string. A sender must produce every
+  safe Completed page or Live viewport before sending it.
+- At most 9 visual lines are shown. Soft wraps and explicit line breaks consume
+  the same line budget.
+- Wrapping is glyph-width dependent. The useful text width is 280 local TMP
+  units, but the number of characters that fit varies greatly by glyph.
+- The tested client uses a TextMesh Pro 3.0.6-compatible layout configuration,
+  Noto Sans as its primary font, and an ordered 19-font fallback list.
+- Asset configuration and public TMP source explain much of the behavior, but
+  the private VRChat component and the exact truncation and line-cap code were
+  not recovered. They must not be presented as verified implementation details.
+- UDP send success is not display or delivery acknowledgement. Pacing and
+  remote-observer behavior require runtime validation.
 
-### Official OSC surface
+## Evidence and build scope
 
-- `/chatbox/input s b n`: sets the chatbox text. `s` is the message, `b` true
-  sends immediately (false opens the in-game keyboard instead), `n` true plays
-  the notification sound for nearby players.
-- Chatbox input is limited to `144` characters and `9` lines. The official
-  reference does not define which Unicode counting unit “character” means.
-- `/chatbox/typing b`: toggles the typing indicator on the chat bubble. Useful
-  for showing activity while speech is still being recognized.
+This report separates evidence from product policy:
 
-The endpoint shape, `144`-character limit, and `9`-line limit are documented in
-[VRChat's current OSC input reference](https://docs.vrchat.com/docs/osc-as-input-controller#chatbox).
+| Class | Meaning |
+|---|---|
+| **Official** | A behavior documented by VRChat, Unity, or Unicode. |
+| **Client asset** | Raw bytes, names, object relationships, or built-in fields read from a hash-pinned installed client. Names for custom TMP fields depend on the disclosed public schema. |
+| **Runtime observed** | A result visible after a controlled OSC input on the tested client. |
+| **Source baseline** | Behavior explained by public TMP 3.0.6 source or API; useful as a model, but not proof of VRChat's private machine code. |
+| **Deterministic Unicode** | Counts or boundaries computed from the exact input under a named Unicode or indexing rule. |
+| **Product contract** | A safety or publication guarantee chosen by VRC Live Caption, not behavior attributed to VRChat. |
+| **Unknown** | A private implementation detail or untested profile that the evidence cannot identify. |
 
-### Typing indicator persistence
+The layout measurements came from 178 individually sent cases on 2026-08-13.
+Each case used `/chatbox/input (payload, true, false)` and was checked after the
+client had settled. Case identifiers were not included in the payload. Payload
+and image hashes, ordering, and image integrity were independently checked for
+all 178 cases. One empty payload produced no bubble; the other 177 cases
+displayed.
+
+A VRChat log covering the measurement interval and the matching static install
+metadata identified this profile:
+
+| Property | Value | Evidence |
+|---|---|---|
+| VRChat release | `2026.3.1-1885-81193b80fa-Release` | correlated log and embedded PlayerSettings value |
+| Steam build | `24702028` | Steam app manifest |
+| Unity | `2022.3.22f2-DWR` | correlated log and serialized-file metadata |
+| Platform | Windows Steam, `standalonewindows` | correlated log |
+| XR state | `XR Device: None` (Desktop) | correlated log |
+| Chat bubble scale / opacity | `1.5` / `1` | correlated log |
+| Observer viewpoint | Not recorded | unknown |
+
+The log correlation is separate from the captured observations, so the
+viewpoint remains unknown. These measurements do not establish PCVR, Quest,
+remote-observer, or mirrored-prefab behavior.
+
+The static asset findings use the same installed release. The two principal
+containers were pinned as follows:
+
+| File | SHA-256 |
+|---|---|
+| `VRChat_Data/resources.assets` | `0d5d00afcf06349e7dd286a8c3209b45851b973104d9c0fd80bece6312e2a940` |
+| `VRChat_Data/sharedassets0.assets` | `ee488660d8faabc1fe03f36f4757883568236790cb9a6ab0c95c01b3f9708e08` |
+
+## OSC interface and pacing
+
+### Official interface
+
+VRChat's [OSC input reference](https://docs.vrchat.com/docs/osc-as-input-controller#chatbox)
+defines:
+
+- `/chatbox/input s b n`: `s` is the text; `b = true` sends immediately and
+  `b = false` opens the keyboard; `n = false` suppresses the notification sound.
+- `/chatbox/typing b`: toggles the typing indicator.
+- Chatbox text is limited to 144 characters, and at most 9 lines are displayed,
+  including explicit line breaks and word wrap.
+
+VRChat's [OSC overview](https://docs.vrchat.com/docs/osc-overview) uses UDP port
+`9000` for input by default. On the wire, `(text, true, false)` has the OSC type
+tag string `,sTF`; under the [OSC 1.0 specification](https://opensoundcontrol.stanford.edu/spec-1_0.html),
+`T` and `F` carry no argument bytes. VRChat added UTF-8 Chatbox input in
+[VRChat 2022.4.1](https://docs.vrchat.com/docs/vrchat-202241).
+
+The public reference does not define the Unicode unit counted by “character.”
+The UTF-16 result below is therefore a tested-build observation, not an official
+protocol promise.
 
 An [official 2022 client update](https://ask.vrchat.com/t/developer-update-19-august-2022/12775)
-documented that the typing indicator automatically hides after five seconds of
-inactive input. A July 2026 real-client test reproduced that behavior:
-one `/chatbox/typing true` packet disappeared after about five seconds while the
-speaker continued talking for roughly twenty seconds.
+states that the typing indicator hides after five seconds without input. A
+runtime recheck in July 2026 reproduced that one-shot timeout. The available
+evidence does not establish whether sending `/chatbox/typing true` again resets
+the timer. Validate that refresh behavior before relying on it as a keepalive.
 
-### Current rate-limit evidence
+### Rate limiting
 
-VRChat 2026.2.1 removed the old flat Chatbox timeout and introduced a leaky
-bucket. The release note says users may send five messages within five seconds
-before the next message must wait. It also says auto-sent messages do not count
-toward that limit and only manually sent messages are limited. See
-[VRChat 2026.2.1](https://docs.vrchat.com/docs/vrchat-202621).
-The later live [2026.2.2](https://docs.vrchat.com/docs/vrchat-202622) and
-[2026.2.3](https://docs.vrchat.com/docs/vrchat-202623) notes do not document a
-subsequent Chatbox rate-limit change as of this verification date.
+[VRChat 2026.2.1](https://docs.vrchat.com/docs/vrchat-202621) replaced the old
+flat timeout with a leaky-bucket limiter. The release note allows five messages
+within five seconds before another manual message must wait, and says auto-sent
+messages do not contribute to that limit.
 
-This is not a documented fixed minimum interval per message. In particular,
-`1.5` seconds is not a current hard protocol limit. That number came from a
-[2022 official development update](https://ask.vrchat.com/t/developer-update-11-august-2022/12286),
-which recommended updating every 1.5 seconds under the older cooldown behavior
-and two-second minimum display setting. It remains useful historical UX
-context, not the current rate-limit contract.
+The current OSC documentation does not specify whether any particular
+`/chatbox/input` Boolean combination is classified as manual or auto-sent.
+Therefore `(text, true, false)` must not be described as unlimited.
 
-VRChat's current OSC reference only guarantees that `n = false` suppresses the
-notification sound. Earlier official material called this field
-`MessageComplete`, and Chatbox 2.0 later added live auto-send while typing, so
-`n = false` may map to the exempt auto-sent category. No current official OSC
-document makes that mapping a contract. The project must therefore not claim
-that `(text, true, false)` has unlimited update rate. The continuous-send
-experiment below also shows that sustained sub-second updates are not reliable
-on the tested client.
+A sustained numbered-message experiment in July 2026 produced this practical
+boundary:
 
-### Project continuous-send experiment
-
-A real-client numbered-message test was completed in July 2026 with
-`/chatbox/input (text, true, false)`:
-
-| Cadence | Observed result |
+| Attempt interval | Observed result |
 |---:|---|
-| 200, 250, 500 ms | skipped sequence numbers quickly |
-| 800 ms | initially worked, then skipped periodically under sustained sending |
-| 900 ms | 40 messages appeared successful; a 100-message run began skipping near message 41-42 |
-| 1000 ms | 120 consecutive messages without an observed skip |
+| 200-500 ms | Sequence numbers were skipped quickly. |
+| 800 ms | Initially worked, then skipped periodically. |
+| 900 ms | A short run worked; a 100-message run began skipping near 41-42. |
+| 1000 ms | 120 consecutive messages displayed without an observed skip. |
 
-The pattern is strongly consistent with an initial bucket of about five
-messages and recovery of about one message per second. It is experimental
-evidence, not a documented OSC protocol guarantee. In particular, a short 900
-ms test can look successful because it consumes the initial allowance slowly.
+Use one second between sustained text-send attempts as a conservative
+integration constraint. It is not a documented protocol minimum. The older
+[1.5-second recommendation](https://ask.vrchat.com/t/developer-update-11-august-2022/12286)
+described the pre-2026 cooldown and remains historical UX context only.
 
-### Derived pacing constraint
+VRChat carries this OSC input over UDP and provides no Chatbox acknowledgement.
+A successful socket send only proves that the local operating system accepted
+the datagram. It does not prove that VRChat displayed or relayed the text.
 
-On the tested July 2026 client, `1000 ms` between sustained numbered sends was
-the reliable conservative boundary. This is an experimental integration
-constraint, not a documented fixed minimum interval and not a statement about
-the current publisher implementation.
+## Runtime text behavior
 
-Future current-client validation should still use numbered messages and a
-remote observer when available. A successful UDP send proves only that the
-local socket accepted the packet, not that VRChat displayed or relayed it.
+### The input boundary is a 144-unit UTF-16 prefix
 
-## Verified layout contract
+The tested client behaved as though it retained the first 144 UTF-16 code units
+and discarded the rest:
 
-### Text object paths
+| Probe | Runtime observation |
+|---|---|
+| 143 / 144 / 145 ASCII units | 144 and 145 produced the same Chatbox pixels; the 145th unit was absent. |
+| 71 emoji plus `a` / 72 emoji / 72 emoji plus `a` | The 144- and 145-unit results were identical; the final `a` was absent. |
+| Surrogate pair across the boundary | The pair was split and a replacement-like shape appeared. |
+| Combining sequence across the boundary | The base remained and the combining mark was removed. |
+| Emoji modifier across the boundary | The sequence was split and a replacement-like shape appeared. |
+| ZWJ sequence across the boundary | The sequence was cut between components. |
+| `CRLF` across the boundary | The prefix ended after CR; LF was discarded. |
+| 288 / 289 ASCII units | Both displayed the same first 144-unit prefix. No pagination occurred. |
 
-- Chat content:
-  - `VRCPlayer > NameplateContainer > ChatBubble > Canvas > Chat > ChatText`
-  - `VRCPlayer > NameplateContainer > ChatBubbleMirror > Canvas > Chat > ChatText`
-- Typing indicator:
-  - `VRCPlayer > NameplateContainer > ChatBubble > Canvas > TypingIndicator > Text`
-  - `VRCPlayer > NameplateContainer > ChatBubbleMirror > Canvas > TypingIndicator > Text`
+This is strong evidence for visible UTF-16 prefix truncation on this build. It
+does not identify whether the cutoff occurs at OSC ingress, in VRChat's private
+Chatbox preprocessing, or later in the rendering path.
 
-### ChatText TMP fields
+For a sender, the consequence is unambiguous: every transmitted string must be
+at most 144 UTF-16 code units before it reaches VRChat. Choose that boundary at
+an extended grapheme-cluster boundary even though VRChat itself does not. If a
+single grapheme exceeds 144 units, the sender must apply an explicit error,
+drop, replacement, or split policy; lossless output, no split, and a 144-unit
+maximum cannot all be satisfied at once.
 
-These values are high-confidence extracted values for both normal and mirrored `ChatText`.
+### Explicit lines and control characters
+
+[VRChat 2024.1.1](https://docs.vrchat.com/docs/vrchat-202411) officially
+allowlisted newline characters for OSC Chatbox input and introduced the hard
+nine-line limit. The exact controls below are runtime observations; they are
+literal Unicode characters in the OSC string, not backslash escape notation:
+
+| Input | Tested-build behavior |
+|---|---|
+| LF (`U+000A`) | Starts a new line. |
+| CRLF | Starts one new line. |
+| VT (`U+000B`) | Starts a new line. |
+| LINE SEPARATOR (`U+2028`) | Starts a new line. |
+| PARAGRAPH SEPARATOR (`U+2029`) | Starts a new line. |
+| bare CR (`U+000D`) | Does not add a line; it resets horizontal position and later text overdraws the current line. |
+| NEL (`U+0085`) | Does not add a line; the tested client displayed its missing-glyph marker. |
+| literal `\n` | Displays a backslash and `n`; it is not a line break. |
+| FORM FEED (`U+000C`) | Not measured. |
+
+Leading LF preserves a blank first row. Consecutive LFs preserve internal blank
+rows. A trailing LF does not add visible trailing height. These details matter
+when predicting a page independently from its source context.
+
+An empty payload produced no bubble. A spaces-only payload produced an empty
+bubble, and a payload made only from eight LFs produced a tall empty bubble.
+
+Nine visual lines are shown. A ten-line input displayed lines one through nine
+while hiding the tenth line's text. The bubble background still grew to the
+ten-line height. A mixed probe with soft wraps and explicit LFs behaved the same
+way, proving that both consume one shared nine-line visibility budget.
+
+The line cap must not be derived from the text rectangle's height alone. The
+public TMP API exposes `maxVisibleLines`, which can explain this result, but the
+private VRChat field or runtime assignment that selects 9 was not recovered.
+
+### Width and soft wrapping
+
+The ChatText rectangle is 300 by 265 local units with 10-unit margins on every
+side, leaving a nominal 280 by 245 text area. The observed boundaries are
+glyph-width dependent, not a fixed characters-per-line grid. The extracted TMP
+configuration enables wrapping and kerning and supplies fallback and line-break
+tables; public TMP source explains how those inputs can drive layout.
+
+Fifteen repeated-glyph pairs produced exact adjacent one-line/wrap boundaries:
+
+| Glyph | Maximum on one line | First count that wrapped |
+|---|---:|---:|
+| `x` | 29 | 30 |
+| `W` | 16 | 17 |
+| `.` | 58 | 59 |
+| `中` | 15 | 16 |
+| `X` | 26 | 27 |
+| `1` | 27 | 28 |
+| `m` | 16 | 17 |
+| `w` | 19 | 20 |
+| `0` | 27 | 28 |
+| `:` | 58 | 59 |
+| `é` | 27 | 28 |
+| `’` | 88 | 89 |
+| `“` | 43 | 44 |
+| `—` | 15 | 16 |
+| `，` | 15 | 16 |
+
+These are regression anchors for this build, not a replacement for measuring
+arbitrary text. Punctuation can also participate in line-break rules, so not
+every capacity should be interpreted as a pure isolated advance measurement.
+
+Additional break observations:
+
+- ASCII space and NBSP produced the same two-line pixels in the tested probe.
+  That equality does not distinguish a legal break from an emergency wrap.
+- NNBSP remained on one line in its probe.
+- ZWSP and soft hyphen were invisible and remained on one line in their probes.
+- Word joiner, hyphen-minus, and non-breaking hyphen produced two lines, with
+  different text placement.
+- CJK opening and closing punctuation changed the measured break from UTF-16
+  offset 15 to 14, consistent with the client's extracted line-break tables.
+
+These results are compatible with tailored TMP line breaking. They do not prove
+full conformance to the Unicode Line Breaking Algorithm.
+
+### Normalization, graphemes, emoji, and bidirectional text
+
+VRChat did not provide a visible normalization guarantee:
+
+- Latin NFC and NFD probes looked similar but were pixel-different.
+- Hangul NFD remained visibly decomposed into Jamo instead of being normalized
+  to precomposed syllables.
+- A CJK ideographic variation sequence displayed the normal base ideograph plus
+  the ring-point marker at the variation-selector position; no distinct IVS
+  glyph was confirmed.
+
+If VRC Live Caption chooses an NFC policy, it must normalize before measuring
+and sending and treat that as a product transformation, not client behavior.
+
+An extended grapheme cluster is also not necessarily one VRChat glyph or one
+unbreakable layout unit. On the tested client:
+
+- text-presentation and emoji-presentation smileys rendered identically as a
+  monochrome glyph;
+- a skin-tone sequence displayed a base thumbs-up plus a separate tofu-like
+  marker;
+- technologist and family ZWJ sequences decomposed into component glyphs;
+- regional-indicator flags displayed as letters rather than flag glyphs;
+- keycaps displayed the base character plus a separate square;
+- a tag flag displayed only its base flag;
+- a technologist ZWJ sequence placed at the wrap edge split visually across
+  lines.
+
+The sender should still preserve extended grapheme clusters. That is a safer
+product guarantee than VRChat's native behavior, not an attempt to reproduce
+its unsafe splits.
+
+Four mixed-direction pairs compared raw text with RLI/LRI...PDI isolates:
+Arabic-first plus LTR, LTR-first plus Arabic, Hebrew plus a price, and Arabic
+plus a URL. Each raw/isolate pair produced identical pixels in the fixed
+Chatbox region. This only establishes that the tested isolates had no visible
+effect in those inputs. It does not prove that isolates are always ignored or
+that either visual order is linguistically correct.
+
+## Client layout configuration
+
+### Serialized ChatText templates
+
+The current `resources.assets` contains four serialized ChatText templates:
+
+```text
+VRCPlayer     / NameplateContainer / ChatBubble       / Canvas / HeightOffsetRect / Chat / ChatText
+VRCPlayer     / NameplateContainer / ChatBubbleMirror / Canvas / HeightOffsetRect / Chat / ChatText
+VRCPlayer_New / NameplateContainer / ChatBubble       / Canvas / HeightOffsetRect / Chat / ChatText
+VRCPlayer_New / NameplateContainer / ChatBubbleMirror / Canvas / HeightOffsetRect / Chat / ChatText
+```
+
+All four ChatText `RectTransform` objects use the same centered 300 by 265
+rectangle. All four component payloads are identical after their GameObject
+pointer.
+
+The component is an obfuscated `Assembly-CSharp` type. A matching public TMP
+3.0.6 schema decodes the first 536 of its 592 bytes as a coherent
+`TextMeshProUGUI` base. The remaining 56 bytes are identical across the four
+objects but have no recovered field names.
+
+Important serialized base fields are:
 
 | Field | Value |
 |---|---:|
-| `fontSize` | `18.0` |
-| `fontSizeBase` | `18.0` |
-| `fontWeight` | `400` (`Regular`) |
-| `fontStyle` | `Normal` |
-| `enableAutoSizing` | `false` |
-| `fontSizeMin` | `16.0` |
-| `fontSizeMax` | `26.0` |
-| `characterSpacing` | `0.0` |
-| `wordSpacing` | `0.0` |
-| `lineSpacing` | `0.0` |
-| `lineSpacingAdjustment` | `0.0` |
-| `paragraphSpacing` | `0.0` |
-| `characterWidthAdjustment` | `0.0` |
-| `textWrappingMode` | `Normal` |
-| `wordWrappingRatios` | `0.4` |
-| `margin` | `(10, 10, 10, 10)` |
-| horizontal alignment | `Center` |
-| vertical alignment | `Middle` |
+| font asset | `NotoSans-Regular SDF` |
+| font size / base size | `18` / `18` |
+| font weight | `400` (Regular in TMP 3.0.6) |
+| auto sizing | off |
+| auto-size range | `16` to `26` |
+| horizontal / vertical alignment | center / middle |
+| character, word, line, paragraph spacing | `0` |
+| character width adjustment | `0` |
+| word wrapping | on |
+| word-wrapping ratio | `0.4` |
+| overflow mode | serialized `0` (`Overflow` in TMP 3.0.6) |
+| kerning | on |
+| rich text | off |
+| parse control-character escapes | off |
+| serialized right-to-left flag | off |
+| margins | `(10, 10, 10, 10)` |
 
-Notes:
+Do not invent a serialized `textWrappingMode = Normal` field for this build;
+the matching 3.0.6 base schema exposes the legacy word-wrapping Boolean. The
+`0.4` ratio is a serialized TMP value, not a complete line-break specification.
 
-- Treat wrapping as enabled in practice. `enableWordWrapping` was not independently confirmed as a separate field, but runtime behavior wraps text and `textWrappingMode = Normal` was extracted directly.
+These fields establish prefab configuration. They do not prove which of the
+four branches a given player uses or whether the private component changes a
+field after instantiation.
 
-### ChatText RectTransform
+### Fonts and fallback order
 
-These values apply to both normal and mirrored `ChatText`.
-
-| Field | Value |
-|---|---|
-| `sizeDelta` | `(300, 265)` |
-| `anchorMin` | `(0.5, 0.5)` |
-| `anchorMax` | `(0.5, 0.5)` |
-| `anchoredPosition` | `(0, 0)` |
-| `pivot` | `(0.5, 0.5)` |
-
-### Chat container and canvas
-
-- `Chat` stretches to the parent `Canvas`.
-- `Canvas` local scale is `(2, 2, 2)`.
-- parent `ChatBubble` local scale is `(0.5, 0.5, 0.5)`.
-- These scales should not be included in the wrap-width formula. Wrapping is driven by the local `ChatText` rectangle plus TMP settings.
-
-### TypingIndicator parameters
-
-TypingIndicator uses the same primary font asset but a different text configuration:
-
-- `fontSize = 40`
-- `margin = (0, 5, 0, 5)`
-- `characterSpacing = 0`
-- `wordSpacing = 0`
-- `lineSpacing = 0`
-- `enableAutoSizing = false`
-
-## Fonts and fallbacks
-
-### Primary fonts
-
-- primary TMP font asset: `NotoSans-Regular SDF`
-- primary raw font: `NotoSans-Regular`
-- primary raw font PostScript name: `NotoSans-Regular`
-- chatbox material: `NotoSans-Regular SDF Nameplates ChatBubble`
-- SDF atlas: `NotoSans-Regular SDF Atlas`
-
-`NotoSans-Regular` is the direct width model for Latin text. The raw font name table confirms:
-
-- family: `Noto Sans`
-- style: `Regular`
-- full name: `Noto Sans Regular`
-- PostScript: `NotoSans-Regular`
-- version: `Version 2.000;GOOG;...`
-
-### Fallbacks
-
-- primary CJK fallback: `NotoSansCJK-JP-Regular SDF`
-- primary CJK raw font: `NotoSansCJK-JP-Regular`
-- emoji fallback is present: `NotoEmoji-Regular SDF`
-
-For Chinese, Japanese, and full-width punctuation, use `NotoSansCJK-JP-Regular` as the primary width model before considering later fallbacks.
-
-### Observed fallback chain
-
-Observed local fallback order in `NotoSans-Regular SDF`:
+The primary TMP font asset is `NotoSans-Regular SDF`. Its local fallback table
+contains these 19 assets in order:
 
 1. `VRCCustom SDF`
 2. `NotoEmoji-Regular SDF`
@@ -215,149 +366,205 @@ Observed local fallback order in `NotoSans-Regular SDF`:
 18. `NotoSansTelugu-Regular SDF`
 19. `NotoSansTibetanV-Regular SDF`
 
-Notes:
+This order was decoded from the font asset's fallback field, not inferred from
+nearby names. The TMP global fallback list is empty. Emoji, Arabic, and CJK-JP
+are dynamic font assets backed by raw fonts; an empty serialized glyph table for
+one of those assets does not mean that the script is unsupported.
 
-- This fallback chain is a high-confidence inference from the raw `TMP_FontAsset` `PPtr` array, not a full typetree text export.
-- `sharedassets0.assets` also contains `NotoSansCJK-SC/TC/KR` assets, but the directly observed local CJK primary fallback for this chatbox remains `NotoSansCJK-JP-Regular SDF`.
+The TMP Settings missing-glyph character is `U+2E30 RING POINT`. That matches
+the repeated ring-shaped marker in missing-glyph probes. The fallback table
+defines a search order, but asset inspection and observed pixels do not reveal
+the actual font and atlas chosen for every glyph at runtime.
 
-## Line-break rules
+Additional CJK-KR, CJK-SC, and CJK-TC assets exist in the client, but they are
+not entries in this primary font's local fallback list. Do not infer
+locale-specific Chatbox font selection from their presence alone.
 
-VRChat ships TMP line-break resources in `resources.assets`. These tables are more authoritative than handwritten punctuation rules.
+### Extracted line-break tables
 
-### Leading characters
+TMP Settings directly references two line-break TextAssets. Their leading BOM
+is omitted below. The `Leading Characters` resource contains a real ASCII space
+immediately before `#`.
+
+`Leading Characters` — prefer not to leave these at the end of a line:
 
 ```text
 ([｛〔〈《「『【〘〖〝‘“｟«$—…‥〳〴〵\［（{£¥"々〇〉》」＄｠￥￦ #
 ```
 
-Implementation meaning:
-
-- Prefer not to leave these characters at line end.
-
-### Following characters
+`Following Characters` — prefer not to start a line with these:
 
 ```text
 )]｝〕〉》」』】〙〗〟’”｠»ヽヾーァィゥェォッャュョヮヵヶぁぃぅぇぉっゃゅょゎゕゖㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ々〻‐゠–〜?!‼⁇⁈⁉・、%,.:;。！？］）：；＝}¢°"†‡℃〆％，．
 ```
 
-Verification note:
+The serialized setting `useModernHangulLineBreakingRules` is false. These
+tables are stronger inputs than handwritten punctuation categories, but they
+still do not define the entire wrapping algorithm.
 
-- `Leading Characters` and `Following Characters` come from `resources.assets` TextAssets.
-- `Leading Characters` includes one real ASCII space before `#`.
+### What TMP 3.0.6 explains—and what it does not
 
-Implementation meaning:
+The installed client's package inventory names `com.unity.textmeshpro@3.0.6`.
+The corresponding [Unity package documentation](https://docs.unity3d.com/Packages/com.unity.textmeshpro%403.0/manual/index.html)
+and a version-tagged [browsable mirror of the 3.0.6 UPM source](https://github.com/needle-mirror/com.unity.textmeshpro/tree/3.0.6/Scripts/Runtime)
+explain plausible mechanisms for:
 
-- Prefer not to start a line with these characters.
+- local then global fallback lookup and dynamic glyph population;
+- glyph-advance-based wrapping and the two line-break tables;
+- CR horizontal-position reset and LF/VT/LS/PS line advance;
+- hiding mesh content after `maxVisibleLines`.
 
-## Derived constraints and validation
+The package files used for this source comparison came from Unity's local UPM
+cache and were pinned by SHA-256:
 
-### Usable area
+| File | SHA-256 |
+|---|---|
+| `package.json` | `640c3c9ea8d7e5431bfefaccc70d85ea7aed204686d16a596d412286d2b9ba0b` |
+| [`TMP_Text.cs`](https://github.com/needle-mirror/com.unity.textmeshpro/blob/3.0.6/Scripts/Runtime/TMP_Text.cs) | `2cfcb00a4464c48ca87d05c692c752087a2a8a96944d54b83606d7762f0c7806` |
+| [`TMPro_UGUI_Private.cs`](https://github.com/needle-mirror/com.unity.textmeshpro/blob/3.0.6/Scripts/Runtime/TMPro_UGUI_Private.cs) | `1f8ba223bdd284bd0dfff1aefcf5988c872c9f6dd616673a8d4d58a9b2bf816a` |
+| [`TMP_FontAssetUtilities.cs`](https://github.com/needle-mirror/com.unity.textmeshpro/blob/3.0.6/Scripts/Runtime/TMP_FontAssetUtilities.cs) | `fb2d13588d6ebacc34ba1fd32e75780d16f3df90347546482a9cc4bf1328cf60` |
 
-- width: `300 - 10 - 10 = 280`
-- height: `265 - 10 - 10 = 245`
+This is a source baseline, not recovered VRChat private code. The Player assets
+have stripped type trees, the derived class name is obfuscated, and ordinary
+IL2CPP metadata recovery failed because the metadata header is transformed.
+Consequently, the following remain unknown:
 
-`280 × 245` is the real layout budget. Single-character capacity observations are validation anchors, not the primary model.
+- where the 144-unit cutoff is applied;
+- which private field or method supplies the value 9;
+- how the bubble background is sized;
+- whether VRChat performs text or bidi preprocessing before TMP;
+- what the 56-byte derived-field tail represents.
 
-### Why the limit is 9 lines
+## Glyph and language coverage
 
-- Latin line height from `NotoSans-Regular` at `fontSize = 18` is about `24.516 px`
-- `245 / 24.516 ≈ 9.99`, which yields `9`
-- CJK line height from `NotoSansCJK-JP-Regular` at `fontSize = 18` is about `26.064 px`
-- `245 / 26.064 ≈ 9.39`, which also yields `9`
+Font presence is not the same as language support. The tested runtime produced
+these narrower results:
 
-The `9`-line cap is explained directly by text height, font size, and font metrics.
+| Test group | Observation on the tested build |
+|---|---|
+| Natural caption samples | Text was visible without the ring-point marker for English, Spanish, French, German, Brazilian Portuguese, Italian, Turkish, Vietnamese, Indonesian, Polish, Russian, Ukrainian, Greek, Simplified and Traditional Chinese, Japanese, Korean, Hebrew, Arabic, Persian, Urdu, Hindi, Bengali, Tamil, and Thai. |
+| Positive script probes | Armenian, Georgian, Gujarati, Gurmukhi, Kannada, Lao, Malayalam, Odia, Tamil, Telugu, and Tibetan produced non-ring glyphs. |
+| Missing-glyph probes | Every tested scalar for Cherokee, Ethiopic, Khmer, Myanmar, Sinhala, Gothic, and generic Private Use Area sentinels produced the ring-point marker. |
+| VRChat private-use control | `U+E040` produced a real VRCCustom glyph. |
 
-### Width anchors
+These observations apply only to the tested strings and build. Most non-English
+samples still require native review for character order, joining, mark
+placement, shaping, word segmentation, and semantic correctness. In particular,
+“no missing-glyph marker” is not evidence that Arabic, Hebrew, Indic, Thai, Lao,
+or Tibetan layout is correct.
 
-- `x`: `advance = 529`, width at `18px` is about `9.522 px`, so `280 / 9.522 ≈ 29.40`, which yields `29`
-- `中`: `advance = 1000`, width at `18px` is `18 px`, so `280 / 18 ≈ 15.55`, which yields `15`
-- `.`: `advance = 268`, width at `18px` is about `4.824 px`, so `280 / 4.824 ≈ 58.04`, which yields `58`
+Complex emoji support is also partial despite the emoji fallback. A base emoji
+may render while its modifier, ZWJ composition, flag composition, or keycap
+composition does not. Model these cases conservatively and validate any
+user-facing support claim with real-client observations.
 
-ASCII punctuation such as `.`, `,`, `:`, and `;` stays narrow under `NotoSans-Regular`. It should not be treated like CJK full-width punctuation.
+## Integration requirements for VRC Live Caption
 
-### Validation anchors
+The following are project-side safety and fidelity rules derived from the
+evidence above. They are intentionally stronger than VRChat's native behavior.
 
-Key observed anchors are explained by the fixed model:
+### Input preparation
 
-| Character | Measured | Predicted |
-|---|---:|---:|
-| `中` | `15` | `15` |
-| `x` | `29` | `29` |
-| `X` | `26` | `26` |
-| `1` | `27` | `27` |
-| `m` | `16` | `16` |
-| `w` | `19` | `19` |
-| `W` | `16` | `16` |
-| `0` | `27` | `27` |
-| `.` | `58` | `58` |
-| `:` | `58` | `58` |
-| `，` | `15` | `15` |
+1. Count the exact outgoing string in UTF-16 code units and keep it at or below
+   144.
+2. Select every cutoff at an extended grapheme-cluster boundary. The current
+   lockfile resolves `unicode-segmentation` to 1.13.3, which implements Unicode
+   17.0 text segmentation. Treat a dependency update as a behavior change and
+   rerun the regression cases.
+3. Define an explicit policy for a single grapheme larger than 144 units; never
+   silently loop or split it by accident.
+4. Do not assume that VRChat performs NFC normalization. If the product
+   normalizes, do it before both layout and transmission.
+5. Treat rich-text-looking content literally. The current ChatText has rich
+   text disabled, and `<b>`, `<color>`, and unknown tags rendered as text.
 
-Additional confirmed validation:
+### Layout and pagination
 
-- the `a..z` and `A..H` sample set matched the model `34 / 34`
-- `中 × 144` showing only `135` visible characters is explained by `15 × 9 = 135`
+1. Wrap against 280 local units and no more than 9 visual lines.
+2. Use measured glyph advances for the verified fonts. Do not use a fixed
+   character count or treat narrow ASCII punctuation as full-width CJK text.
+   A conservative model may apply positive pair adjustments from a hash-pinned
+   raw font, but must not present them as observed runtime glyph provenance.
+   Ignoring negative adjustments is safer than making a page narrower without
+   equivalent runtime evidence.
+3. Use Unicode line-break opportunities as a baseline, then apply the extracted
+   TMP leading/following restrictions. The current model uses
+   `unicode-linebreak` 0.1.5: Unicode 15.0 data with the crate's documented
+   `SA`-to-`AL` tailoring. This is product-model behavior, not evidence of
+   VRChat's internal Unicode revision. Revalidate the corpus after changing the
+   dependency or tailoring.
+4. Prefer a legal break that fits. If none exists, break only at a safe grapheme
+   boundary and account for that emergency behavior explicitly.
+5. Re-layout each Completed page from start-of-text context. Preserve prepared
+   text order and content across pages; do not rely on VRChat to continue an
+   oversized string.
+6. For Live output, send a latest-wins safe viewport. Do not send a raw
+   oversized caption and expect VRChat to retain the newest suffix; it retains
+   the old prefix on the tested build.
+7. Preserve Unicode normalization and the verified CRLF, LF, VT, LINE SEPARATOR,
+   and PARAGRAPH SEPARATOR controls. Before both layout and send, replace each
+   bare CR, NEL, and FORM FEED with one ASCII space. Bare CR and NEL are unsafe
+   to pass through because their observed rendering is not a normal line break;
+   FORM FEED uses the same conservative product policy while its client behavior
+   remains unknown.
+8. Scripts requiring shaping or bidi reordering need shaped glyph advances.
+   When the implementation cannot shape a grapheme confidently, reserve space
+   conservatively rather than underestimating it.
 
-## Implementation rules
+### Publication and validation
 
-- Use real glyph widths from the verified font/fallback model, not a fixed
-  character-count heuristic. Scripts that require shaping or reordering need
-  shaped glyph advances rather than per-codepoint widths.
-- Wrap against the usable width budget of `280 px`.
-- Preserve grapheme clusters as the text-processing boundary.
-- Determine legal wrap opportunities from Unicode line-breaking behavior plus
-  the extracted TMP leading/following tables.
-- Prefer legal break opportunities and fall back to the nearest legal break
-  before a boundary; if none exists, hard-break at a grapheme-cluster boundary.
-- Spaces consume width and act as break opportunities; when wrapping at a
-  space, do not retain that leading break-space on the next line.
-- Continuous CJK text is breakable between characters by default, while still
-  respecting the TMP leading/following restrictions.
-- Treat the official `144`-character input cap conservatively as a `144`
-  UTF-16-unit safety budget, and never satisfy that budget by splitting a
-  grapheme. This convention does not claim that VRChat documents UTF-16
-  counting.
-- Keep every transmitted view within `9` visible lines after wrapping.
+- Share one process-wide text-send pacer across Completed and Live publishers.
+  One second between sustained attempts is the current conservative boundary.
+- Keep typing-indicator control separate from text-send pacing and stop it when
+  publication activity stops. Do not depend on periodic `true` packets as a
+  keepalive until their reset semantics have been measured.
+- Treat every UDP send receipt as a local transport result, never a VRChat
+  display receipt.
+- Keep the 15 measured width pairs as regression anchors, but test natural,
+  multilingual, control-character, long-token, and fallback cases as well.
+- Validate actual publisher output—not only raw oversized source strings—in a
+  running client. Completed pages and Live viewports have different product
+  contracts and should be replayed separately.
 
-## Known unknowns
+## Known unknowns and revalidation
 
-- The chatbox display duration model is unverified: how long a message stays
-  visible, whether a new `/chatbox/input` resets the timer, and when the bubble
-  fades. These need in-game measurement before tuning replacement pacing.
-- Whether OSC `(text, true, false)` is classified as exempt auto-sent text is
-  not documented.
-- The exact internal bucket implementation and what every excess update does
-  are not documented; the numbered-send experiment does not resolve those
-  internals.
-- The official `144`-character limit does not define whether VRChat counts
-  Unicode scalar values, UTF-16 code units, grapheme clusters, or another unit.
-- Local-sender and remote-observer behavior may differ and must be measured
-  independently.
-- The full custom MonoBehaviour typetree was not recovered, so some non-critical fields remain inferred rather than directly dumped.
-- Short-text bubble background sizing remains unverified. The inspected object
-  chain did not expose `ContentSizeFitter`, `LayoutElement`,
-  `HorizontalLayoutGroup`, or `VerticalLayoutGroup`, so custom script logic
-  remains the leading explanation. This does not affect long-text wrapping and
-  clipping inside `ChatText`.
-- Small non-critical field differences between normal and mirrored objects, including possible `overflowMode` differences, should not be used as primary implementation inputs unless re-verified.
+The following are not established by the current evidence:
 
-## Verification appendix
+- the private function that truncates to 144 UTF-16 units;
+- the private mechanism behind the nine-line visibility cap;
+- the active old/new and normal/mirrored prefab branch for each viewpoint;
+- exact dynamic-font and atlas provenance for every runtime glyph;
+- linguistic correctness of complex shaping and bidirectional layout;
+- local-versus-remote, Desktop-versus-PCVR, and PC-versus-Quest equivalence;
+- how different Chatbox scale settings affect world-space appearance;
+- the display-duration and fade model for repeated OSC updates;
+- whether `(text, true, false)` is classified as rate-limit-exempt auto-send;
+- whether another `/chatbox/typing true` packet resets the five-second typing
+  timeout;
+- FORM FEED behavior.
 
-Selected IDs for future spot-checking:
+After a VRChat update, retain the old build-scoped results and rerun the same
+stable cases. Record the exact release, Steam build, Unity version, platform,
+XR mode, observer viewpoint, Chatbox scale, OSC arguments, and capture timing.
+Discover resources by hierarchy and names; Unity path IDs are not stable across
+builds.
 
-- `TMP Settings`: `resources.assets`, path id `107463`
-- `LineBreaking Leading Characters` TextAsset: `1767`
-- `LineBreaking Following Characters` TextAsset: `1784`
-- primary TMP font asset `NotoSans-Regular SDF`: `sharedassets0.assets`, path id `6203`
-- primary raw font `NotoSans-Regular`: `Font`, path id `925`
-- primary CJK raw font `NotoSansCJK-JP-Regular`: `Font`, path id `923`
-- chatbox material `NotoSans-Regular SDF Nameplates ChatBubble`: path id `103`
-- SDF atlas `NotoSans-Regular SDF Atlas`: path id `494`
-- normal `ChatText` component: `6792`
-- mirrored `ChatText` component: `6471`
-- normal `ChatText` RectTransform: `5914`
-- mirrored `ChatText` RectTransform: `6022`
-- normal `Chat` RectTransform: `5902`
-- normal `Canvas` RectTransform: `6024`
-- `ChatBubble` Transform: `4145`
-- `ChatBubbleMirror` Transform: `4871`
+## References
+
+- [VRChat: OSC as Input Controller](https://docs.vrchat.com/docs/osc-as-input-controller#chatbox)
+- [VRChat: OSC overview](https://docs.vrchat.com/docs/osc-overview)
+- [VRChat: OSC DIY](https://docs.vrchat.com/docs/osc-diy)
+- [OSC 1.0 specification](https://opensoundcontrol.stanford.edu/spec-1_0.html)
+- [VRChat 2024.1.1 release notes](https://docs.vrchat.com/docs/vrchat-202411)
+- [VRChat 2022.4.1 release notes](https://docs.vrchat.com/docs/vrchat-202241)
+- [VRChat 2026.2.1 release notes](https://docs.vrchat.com/docs/vrchat-202621)
+- [VRChat developer update: 19 August 2022](https://ask.vrchat.com/t/developer-update-19-august-2022/12775)
+- [VRChat developer update: 11 August 2022](https://ask.vrchat.com/t/developer-update-11-august-2022/12286)
+- [Unity TextMesh Pro 3.0 API: `TMP_Text`](https://docs.unity.cn/Packages/com.unity.textmeshpro%403.0/api/TMPro.TMP_Text.html)
+- [Unity TextMesh Pro 3.0 API: `TMP_FontAsset`](https://docs.unity.cn/Packages/com.unity.textmeshpro%403.0/api/TMPro.TMP_FontAsset.html)
+- [Unity TextMesh Pro 3.0.6 package documentation](https://docs.unity3d.com/Packages/com.unity.textmeshpro%403.0/manual/index.html)
+- [TextMesh Pro 3.0.6 UPM source mirror](https://github.com/needle-mirror/com.unity.textmeshpro/tree/3.0.6/Scripts/Runtime)
+- [`unicode-segmentation` 1.13.3](https://docs.rs/unicode-segmentation/1.13.3/unicode_segmentation/)
+- [`unicode-linebreak` 0.1.5](https://docs.rs/unicode-linebreak/0.1.5/unicode_linebreak/)
+- [Unicode Standard Annex #29 revision 47: Text Segmentation, Unicode 17.0](https://www.unicode.org/reports/tr29/tr29-47.html)
+- [Unicode Standard Annex #14 revision 49: Line Breaking, Unicode 15.0](https://www.unicode.org/reports/tr14/tr14-49.html)
