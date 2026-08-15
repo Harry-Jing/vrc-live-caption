@@ -2,7 +2,9 @@
 import { useToast } from "@nuxt/ui/composables";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { onBeforeRouteLeave } from "vue-router";
+import CompletedTranslationSettings from "./CompletedTranslationSettings.vue";
 import MicrophoneProbeControl from "./MicrophoneProbeControl.vue";
+import ServiceCredentialControl from "./ServiceCredentialControl.vue";
 import { uiText } from "../../i18n/uiText";
 import { requestConfirmation } from "../../platform/confirmation";
 import { useRuntimeContext } from "../../runtime/context";
@@ -20,22 +22,21 @@ import {
   RECOGNITION_PATHS,
   type PublicationMode,
 } from "../../runtime/captionPipeline";
-import { openAiCredentialStatusPresentation } from "./openAiCredentialStatusPresentation";
+import type { CredentialId } from "../../runtime/runtimeControl";
+import type { ServiceCredentialControlCopy } from "./serviceCredentialControl";
 import { useSettingsDraft } from "./settingsDraft";
 
 const {
   audioInputDevices,
   audioProbeFailure,
   audioProbeResult,
-  credentialFailure,
+  credentialOperationStates,
   credentialStatuses,
   currentGeneration,
-  currentGenerationUploadsMicrophoneAudio,
   deleteCredential,
   desiredCaptionPipelinePlan,
   desiredConfig,
   isAudioProbeRunning,
-  isCredentialBusy,
   isSettingsBusy,
   loadAudioInputDevices,
   pendingGenerationChanges,
@@ -47,31 +48,34 @@ const {
 
 const MICROPHONE_PROBE_DURATION_MS = 2_000;
 const toast = useToast();
-const activeGenerationUploadsMicrophoneAudio = computed(
-  () =>
-    currentGenerationUploadsMicrophoneAudio.value &&
-    (currentGeneration.value?.phase === "starting" ||
-      currentGeneration.value?.phase === "running" ||
-      currentGeneration.value?.phase === "reconnecting"),
-);
 
 const {
+  canSave,
   createSaveConfig,
   draft: form,
   hasValidExpectedLanguages,
   isDirty: isFormDirty,
+  selectContent,
+  selectTranslationEndpoint,
+  selectTranslationTarget,
+  setCustomTranslationApiBaseUrl,
+  translationIssues,
 } = useSettingsDraft(() => desiredConfig.value);
-const apiKeyInput = ref("");
 const isConfigSaveSubmitting = ref(false);
-const isRemoveKeyModalOpen = ref(false);
 const recognitionFields = ref<HTMLElement | null>(null);
 const lastTestedInputDeviceId = ref<string | null | undefined>(undefined);
 
 const openAiCredentialStatus = computed(
   () => credentialStatuses.value.openai ?? null,
 );
-const openAiCredentialPresentation = computed(() =>
-  openAiCredentialStatusPresentation(openAiCredentialStatus.value),
+const customTranslationCredentialStatus = computed(
+  () => credentialStatuses.value.customTranslation ?? null,
+);
+const openAiCredentialOperation = computed(
+  () => credentialOperationStates.value.openai,
+);
+const customTranslationCredentialOperation = computed(
+  () => credentialOperationStates.value.customTranslation,
 );
 const areConfigControlsDisabled = computed(
   () => isConfigSaveSubmitting.value || isSettingsBusy.value,
@@ -99,11 +103,6 @@ const visibleAudioProbeError = computed(() =>
 const settingsFailureMessage = computed(
   () => settingsFailure.value?.message ?? "",
 );
-const credentialFailureMessage = computed(
-  () => credentialFailure.value?.message ?? "",
-);
-
-const canSaveOpenAiApiKey = computed(() => apiKeyInput.value.trim().length > 0);
 
 const pendingGenerationChangesDescription = computed(() => {
   const changes = pendingGenerationChanges.value
@@ -133,13 +132,80 @@ const pendingGenerationChangesDescription = computed(() => {
   );
 });
 
-const removeOpenAiCredentialDescription = computed(() =>
-  uiText(
-    activeGenerationUploadsMicrophoneAudio.value
-      ? "settings.credentials.openai.removeDialog.currentGenerationDescription"
-      : "settings.credentials.openai.removeDialog.description",
-  ),
+const activeGenerationCredentialIds = computed<ReadonlySet<CredentialId>>(
+  () => {
+    const phase = currentGeneration.value?.phase;
+    if (
+      phase !== "starting" &&
+      phase !== "running" &&
+      phase !== "reconnecting"
+    ) {
+      return new Set<CredentialId>();
+    }
+
+    return new Set(
+      currentGeneration.value?.credentials.map((credential) => credential.id),
+    );
+  },
 );
+
+const shouldShowCustomTranslationCredential = computed(
+  () =>
+    form.value?.publication.content !== "sourceOnly" &&
+    form.value?.translation?.endpointKind === "custom",
+);
+
+const openAiCredentialCopy: ServiceCredentialControlCopy = {
+  title: uiText("settings.credentials.openai.title"),
+  disclosure: uiText("settings.credentials.openai.cloudDisclosure"),
+  inputLabel: uiText("settings.credentials.openai.apiKey"),
+  inputPlaceholder: uiText("settings.credentials.openai.apiKeyPlaceholder"),
+  save: uiText("settings.credentials.openai.actions.save"),
+  replace: uiText("settings.credentials.openai.actions.replace"),
+  remove: uiText("settings.credentials.openai.actions.remove"),
+  actionFailed: uiText("settings.credentials.openai.errors.actionFailed"),
+  removeDialogTitle: uiText("settings.credentials.openai.removeDialog.title"),
+  removeDialogDescription: uiText(
+    "settings.credentials.openai.removeDialog.description",
+  ),
+  removeDialogCurrentGenerationDescription: uiText(
+    "settings.credentials.openai.removeDialog.currentGenerationDescription",
+  ),
+  removeDialogCancel: uiText("settings.credentials.openai.removeDialog.cancel"),
+  removeDialogConfirm: uiText(
+    "settings.credentials.openai.removeDialog.confirm",
+  ),
+};
+
+const customTranslationCredentialCopy: ServiceCredentialControlCopy = {
+  title: uiText("settings.credentials.customTranslation.title"),
+  disclosure: uiText("settings.credentials.customTranslation.disclosure"),
+  inputLabel: uiText("settings.credentials.customTranslation.apiKey"),
+  inputPlaceholder: uiText(
+    "settings.credentials.customTranslation.apiKeyPlaceholder",
+  ),
+  save: uiText("settings.credentials.customTranslation.actions.save"),
+  replace: uiText("settings.credentials.customTranslation.actions.replace"),
+  remove: uiText("settings.credentials.customTranslation.actions.remove"),
+  actionFailed: uiText(
+    "settings.credentials.customTranslation.errors.actionFailed",
+  ),
+  removeDialogTitle: uiText(
+    "settings.credentials.customTranslation.removeDialog.title",
+  ),
+  removeDialogDescription: uiText(
+    "settings.credentials.customTranslation.removeDialog.description",
+  ),
+  removeDialogCurrentGenerationDescription: uiText(
+    "settings.credentials.customTranslation.removeDialog.currentGenerationDescription",
+  ),
+  removeDialogCancel: uiText(
+    "settings.credentials.customTranslation.removeDialog.cancel",
+  ),
+  removeDialogConfirm: uiText(
+    "settings.credentials.customTranslation.removeDialog.confirm",
+  ),
+};
 
 // Sentinel for "use the system default device": the config stores null, but
 // reka-ui's Select forbids empty-string item values.
@@ -261,12 +327,8 @@ async function save() {
   }
 }
 
-function saveOpenAiApiKey() {
-  void saveCredential("openai", apiKeyInput.value);
-  // Do not retain plaintext in the form while waiting for secure-store I/O.
-  // Full control snapshots are unrelated acknowledgements and must never be
-  // used to decide when this local secret input is cleared.
-  apiKeyInput.value = "";
+function saveOpenAiApiKey(secret: string) {
+  void saveCredential("openai", secret);
 }
 
 function testMicrophone() {
@@ -282,17 +344,22 @@ function testMicrophone() {
   });
 }
 
-function requestDeleteOpenAiApiKey() {
-  isRemoveKeyModalOpen.value = true;
-}
-
-function closeRemoveKeyModal() {
-  isRemoveKeyModalOpen.value = false;
-}
-
-function confirmDeleteOpenAiApiKey() {
-  isRemoveKeyModalOpen.value = false;
+function deleteOpenAiApiKey() {
   void deleteCredential("openai");
+}
+
+function saveCustomTranslationApiKey(secret: string) {
+  void saveCredential("customTranslation", secret);
+}
+
+function deleteCustomTranslationApiKey() {
+  void deleteCredential("customTranslation");
+}
+
+function useCompletedPublication() {
+  if (form.value) {
+    form.value.publication.mode = "completed";
+  }
 }
 
 function selectPublicationMode(mode: PublicationMode) {
@@ -428,80 +495,6 @@ async function focusRecognitionPath() {
               />
             </UFormField>
           </div>
-
-          <div
-            class="grid gap-3 rounded-md border border-default bg-muted/30 p-3"
-          >
-            <div class="flex items-center justify-between gap-3">
-              <span class="text-sm font-medium text-highlighted">
-                {{ uiText("settings.credentials.openai.title") }}
-              </span>
-              <UBadge
-                :color="openAiCredentialPresentation.color"
-                variant="subtle"
-              >
-                {{ openAiCredentialPresentation.label }}
-              </UBadge>
-            </div>
-
-            <p class="text-sm text-muted">
-              {{ uiText("settings.credentials.openai.cloudDisclosure") }}
-            </p>
-
-            <div
-              class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end"
-            >
-              <UFormField :label="uiText('settings.credentials.openai.apiKey')">
-                <UInput
-                  v-model="apiKeyInput"
-                  autocapitalize="off"
-                  autocomplete="off"
-                  class="w-full"
-                  :placeholder="
-                    uiText('settings.credentials.openai.apiKeyPlaceholder')
-                  "
-                  spellcheck="false"
-                  type="password"
-                />
-              </UFormField>
-              <UButton
-                :disabled="isCredentialBusy || !canSaveOpenAiApiKey"
-                icon="i-lucide-key-round"
-                :label="uiText('settings.credentials.openai.actions.save')"
-                type="button"
-                variant="subtle"
-                @click="saveOpenAiApiKey"
-              />
-              <UButton
-                v-if="openAiCredentialPresentation.canRemove"
-                :disabled="isCredentialBusy"
-                color="error"
-                icon="i-lucide-trash-2"
-                :label="uiText('settings.credentials.openai.actions.remove')"
-                type="button"
-                variant="ghost"
-                @click="requestDeleteOpenAiApiKey"
-              />
-            </div>
-
-            <UAlert
-              v-if="credentialFailureMessage"
-              color="error"
-              icon="i-lucide-circle-alert"
-              role="alert"
-              :title="uiText('settings.credentials.openai.errors.actionFailed')"
-              :description="credentialFailureMessage"
-              variant="subtle"
-            />
-
-            <p
-              v-if="openAiCredentialPresentation.failureMessage"
-              class="text-xs text-error"
-              role="alert"
-            >
-              {{ openAiCredentialPresentation.failureMessage }}
-            </p>
-          </div>
         </section>
 
         <USeparator />
@@ -522,10 +515,33 @@ async function focusRecognitionPath() {
               :legend="uiText('settings.fields.publicationMode')"
               name="publicationMode"
               orientation="horizontal"
-              :ui="{ legend: 'sr-only' }"
+              :ui="{
+                fieldset: 'flex-wrap',
+                item: 'min-w-56 flex-1',
+                legend: 'sr-only',
+              }"
               variant="card"
             />
           </UFormField>
+
+          <USeparator />
+
+          <CompletedTranslationSettings
+            :content="form.publication.content"
+            :custom-credential-status="customTranslationCredentialStatus"
+            :disabled="areConfigControlsDisabled"
+            :issues="translationIssues"
+            :open-ai-credential-status="openAiCredentialStatus"
+            :publication-mode="form.publication.mode"
+            :translation="form.translation"
+            @select-content="selectContent"
+            @select-endpoint="selectTranslationEndpoint"
+            @select-target="selectTranslationTarget"
+            @set-custom-api-base-url="setCustomTranslationApiBaseUrl"
+            @use-completed="useCompletedPublication"
+          />
+
+          <USeparator />
 
           <p
             v-if="publicationView.state === 'unavailable'"
@@ -574,6 +590,7 @@ async function focusRecognitionPath() {
                 @click="selectPublicationMode(mode)"
               />
               <UButton
+                v-if="form.publication.content === 'sourceOnly'"
                 color="neutral"
                 :label="
                   uiText('settings.publication.incompatible.changePath', {
@@ -634,7 +651,7 @@ async function focusRecognitionPath() {
         </section>
 
         <UButton
-          :disabled="areConfigControlsDisabled || !hasValidExpectedLanguages"
+          :disabled="areConfigControlsDisabled || !canSave"
           icon="i-lucide-save"
           :label="uiText('settings.actions.save')"
           type="submit"
@@ -651,28 +668,46 @@ async function focusRecognitionPath() {
       </p>
     </UCard>
 
-    <UModal
-      v-model:open="isRemoveKeyModalOpen"
-      :title="uiText('settings.credentials.openai.removeDialog.title')"
-      :description="removeOpenAiCredentialDescription"
-    >
-      <template #footer>
-        <div class="flex w-full justify-end gap-2">
-          <UButton
-            color="neutral"
-            :label="uiText('settings.credentials.openai.removeDialog.cancel')"
-            variant="outline"
-            @click="closeRemoveKeyModal"
-          />
-          <UButton
-            :disabled="isCredentialBusy"
-            color="error"
-            icon="i-lucide-trash-2"
-            :label="uiText('settings.credentials.openai.removeDialog.confirm')"
-            @click="confirmDeleteOpenAiApiKey"
-          />
+    <UCard :ui="{ body: 'p-5' }">
+      <template #header>
+        <div>
+          <h2 class="text-base font-semibold text-highlighted">
+            {{ uiText("settings.sections.serviceCredentials") }}
+          </h2>
+          <p class="mt-1 text-sm text-muted">
+            {{ uiText("settings.credentials.description") }}
+          </p>
         </div>
       </template>
-    </UModal>
+
+      <div class="grid gap-4">
+        <ServiceCredentialControl
+          :action-failure="openAiCredentialOperation.failure?.message ?? ''"
+          :busy="openAiCredentialOperation.isBusy"
+          :captured-by-active-generation="
+            activeGenerationCredentialIds.has('openai')
+          "
+          :copy="openAiCredentialCopy"
+          :status="openAiCredentialStatus"
+          @delete="deleteOpenAiApiKey"
+          @save="saveOpenAiApiKey"
+        />
+
+        <ServiceCredentialControl
+          v-if="shouldShowCustomTranslationCredential"
+          :action-failure="
+            customTranslationCredentialOperation.failure?.message ?? ''
+          "
+          :busy="customTranslationCredentialOperation.isBusy"
+          :captured-by-active-generation="
+            activeGenerationCredentialIds.has('customTranslation')
+          "
+          :copy="customTranslationCredentialCopy"
+          :status="customTranslationCredentialStatus"
+          @delete="deleteCustomTranslationApiKey"
+          @save="saveCustomTranslationApiKey"
+        />
+      </div>
+    </UCard>
   </div>
 </template>

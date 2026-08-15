@@ -128,6 +128,78 @@ describe("preview runtime planning", () => {
 });
 
 describe("preview App Config V2 validation", () => {
+  test("round-trips every supported content and endpoint shape", async () => {
+    const gateway = createPreviewAppGateway();
+    const sourceOnlyWithDormantCustom = config(
+      "openai/gpt-transcribe",
+      "completed",
+    );
+    sourceOnlyWithDormantCustom.translation = {
+      path: "openai/responses-completed-text",
+      target: "zh-Hans",
+      endpoint: {
+        kind: "custom",
+        apiBaseUrl: "https://translation.example/v1",
+      },
+    };
+
+    const translationOnlyOfficial = config(
+      "openai/gpt-transcribe",
+      "completed",
+    );
+    translationOnlyOfficial.publication.content = "translationOnly";
+    translationOnlyOfficial.translation = {
+      path: "openai/responses-completed-text",
+      target: "en",
+      endpoint: { kind: "official" },
+    };
+
+    const bilingualCustom = config("openai/gpt-live-transcribe", "completed");
+    bilingualCustom.publication.content = "bilingual";
+    bilingualCustom.translation = {
+      path: "openai/responses-completed-text",
+      target: "zh-Hans",
+      endpoint: {
+        kind: "custom",
+        apiBaseUrl: "https://translation.example/v1",
+      },
+    };
+
+    for (const expected of [
+      sourceOnlyWithDormantCustom,
+      translationOnlyOfficial,
+      bilingualCustom,
+    ]) {
+      const saved = await gateway.saveAppConfig(expected);
+      const pulled = await gateway.getRuntimeControlSnapshot();
+
+      expect(saved.desired.config).toEqual(expected);
+      expect(pulled.desired.config).toEqual(expected);
+      expect(pulled.generation).toBeNull();
+    }
+  });
+
+  test("matches App Config V2 compatibility for an existing Custom URL", async () => {
+    const gateway = createPreviewAppGateway();
+    const expected = config("openai/gpt-transcribe", "completed");
+    expected.publication.content = "bilingual";
+    expected.translation = {
+      path: "openai/responses-completed-text",
+      target: "zh-Hans",
+      endpoint: {
+        kind: "custom",
+        apiBaseUrl: "https://example.com/api%/v1",
+      },
+    };
+
+    const saved = await gateway.saveAppConfig(expected);
+
+    expect(saved.desired.config).toEqual(expected);
+    expect((await gateway.getRuntimeControlSnapshot()).desired.config).toEqual(
+      expected,
+    );
+  });
+
   test("rejects Translation content without a selection and retains desired settings", async () => {
     const gateway = createPreviewAppGateway();
     const before = await gateway.getRuntimeControlSnapshot();

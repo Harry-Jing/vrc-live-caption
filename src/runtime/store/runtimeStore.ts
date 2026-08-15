@@ -39,14 +39,22 @@ function assertUnreachableRuntimeAction(action: never): never {
   throw new Error(`Unsupported runtime action: ${String(action)}`);
 }
 
-// One busy/error scope per action domain, so a slow settings save cannot
-// disable runtime controls or surface its error on an unrelated page.
+type CredentialOperationState = Readonly<{
+  failure: AppFailure | null;
+  isBusy: boolean;
+}>;
+
+// Keep unrelated actions in separate busy/error scopes. Credential operations
+// instantiate this state once per CredentialId.
 function createActionState() {
   const inFlightCount = ref(0);
   const failure = shallowRef<AppFailure | null>(null);
   const isBusy = computed(() => inFlightCount.value > 0);
+  let latestAttemptId = 0;
 
   async function run(action: () => Promise<void>) {
+    latestAttemptId += 1;
+    const attemptId = latestAttemptId;
     failure.value = null;
     inFlightCount.value += 1;
 
@@ -54,10 +62,13 @@ function createActionState() {
       await action();
       return true;
     } catch (cause) {
-      failure.value = normalizeAppFailure(
-        cause,
-        uiText("runtime.errors.unknownAction"),
-      );
+      // An older completion must not replace feedback for a newer request.
+      if (attemptId === latestAttemptId) {
+        failure.value = normalizeAppFailure(
+          cause,
+          uiText("runtime.errors.unknownAction"),
+        );
+      }
       return false;
     } finally {
       inFlightCount.value -= 1;
@@ -88,7 +99,10 @@ export function createRuntimeStore(gateway: AppGateway) {
   const inFlightRuntimeAction = ref<RuntimeAction | null>(null);
   const runtimeAction = createActionState();
   const settingsAction = createActionState();
-  const credentialAction = createActionState();
+  const credentialActions = {
+    openai: createActionState(),
+    customTranslation: createActionState(),
+  } satisfies Record<CredentialId, ReturnType<typeof createActionState>>;
   const runtimeSynchronization = shallowRef<RuntimeSynchronizationSnapshot>({
     isSynchronized: false,
     isSynchronizing: false,
@@ -134,6 +148,18 @@ export function createRuntimeStore(gateway: AppGateway) {
   const credentialStatuses = computed(
     () => controlView.value.credentialStatuses,
   );
+  const credentialOperationStates = computed<
+    Readonly<Record<CredentialId, CredentialOperationState>>
+  >(() => ({
+    openai: {
+      failure: credentialActions.openai.failure.value,
+      isBusy: credentialActions.openai.isBusy.value,
+    },
+    customTranslation: {
+      failure: credentialActions.customTranslation.failure.value,
+      isBusy: credentialActions.customTranslation.isBusy.value,
+    },
+  }));
   const runtimeFailure = computed(
     () => runtimeSynchronization.value.failure ?? runtimeAction.failure.value,
   );
@@ -147,7 +173,8 @@ export function createRuntimeStore(gateway: AppGateway) {
   );
   const credentialFailure = computed(
     () =>
-      credentialAction.failure.value ?? runtimeSynchronization.value.failure,
+      credentialOperationStates.value.openai.failure ??
+      runtimeSynchronization.value.failure,
   );
 
   const runtimeView = computed(() => selectRuntimeView(runtimeState.value));
@@ -408,13 +435,13 @@ export function createRuntimeStore(gateway: AppGateway) {
   }
 
   async function saveCredential(id: CredentialId, secret: string) {
-    await credentialAction.run(async () => {
+    await credentialActions[id].run(async () => {
       applyControlSnapshot(await gateway.saveCredential(id, secret));
     });
   }
 
   async function deleteCredential(id: CredentialId) {
-    await credentialAction.run(async () => {
+    await credentialActions[id].run(async () => {
       applyControlSnapshot(await gateway.deleteCredential(id));
     });
   }
@@ -583,6 +610,7 @@ export function createRuntimeStore(gateway: AppGateway) {
       captionPreviewStatus,
       completedCaptions,
       credentialFailure,
+      credentialOperationStates,
       credentialStatuses,
       currentGeneration,
       currentGenerationCaptionPipelinePlan,
@@ -594,7 +622,7 @@ export function createRuntimeStore(gateway: AppGateway) {
       diagnostics,
       isRuntimeBusy,
       isAudioProbeRunning: audioInput.isAudioProbeRunning,
-      isCredentialBusy: credentialAction.isBusy,
+      isCredentialBusy: credentialActions.openai.isBusy,
       isSettingsBusy: settingsAction.isBusy,
       loadAudioInputDevices,
       latestAudioLevel: audioInput.latestAudioLevel,

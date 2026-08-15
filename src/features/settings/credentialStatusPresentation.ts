@@ -1,51 +1,56 @@
 import { uiText } from "../../i18n/uiText";
 import type { CredentialStatus } from "../../runtime/runtimeControl";
 
-type OpenAiCredentialStatusPresentation = Readonly<{
+export type CredentialStatusPresentation = Readonly<{
   label: string;
   color: "error" | "neutral" | "success";
   failureMessage: string;
   canRemove: boolean;
+  isStoredByApp: boolean;
 }>;
 
-export function openAiCredentialStatusPresentation(
+export function credentialStatusPresentation(
   status: CredentialStatus | null,
-): OpenAiCredentialStatusPresentation {
+): CredentialStatusPresentation {
   if (status === null) {
     return {
-      label: uiText("settings.credentials.openai.status.checking"),
+      label: uiText("settings.credentials.status.checking"),
       color: "neutral",
       failureMessage: "",
       canRemove: false,
+      isStoredByApp: false,
     };
   }
 
   switch (status.state) {
     case "unconfigured":
       return {
-        label: uiText("settings.credentials.openai.status.notSaved"),
+        label: uiText("settings.credentials.status.notSaved"),
         color: "neutral",
         failureMessage: "",
         canRemove: false,
+        isStoredByApp: false,
       };
     case "configured":
       return {
         label: uiText(
           status.storage === "environment"
-            ? "settings.credentials.openai.status.environment"
-            : "settings.credentials.openai.status.system",
+            ? "settings.credentials.status.environment"
+            : "settings.credentials.status.system",
           { displaySuffix: status.displaySuffix },
         ),
         color: "success",
         failureMessage: "",
         canRemove: status.storage === "systemCredentialStore",
+        isStoredByApp: status.storage === "systemCredentialStore",
       };
     case "unavailable":
       return {
-        label: uiText("settings.credentials.openai.status.unavailable"),
+        label: uiText("settings.credentials.status.unavailable"),
         color: "error",
         failureMessage: status.failure.message,
         canRemove: false,
+        isStoredByApp: false,
       };
   }
 }
