@@ -16,7 +16,14 @@ use std::collections::HashMap;
 use unicode_linebreak::{BreakOpportunity, linebreaks};
 use unicode_segmentation::UnicodeSegmentation;
 
+mod bilingual;
 mod model;
+
+#[allow(
+    unused_imports,
+    reason = "GitHub issue #25 will consume the bilingual Completed layout interface"
+)]
+pub(crate) use bilingual::{PreparedBilingualCompletedPage, prepare_bilingual_completed_pages};
 
 use model::{
     TMP_FOLLOWING_CHARACTERS, TMP_LEADING_CHARACTERS, fits_chatbox_width, grapheme_advance_units,
@@ -115,23 +122,34 @@ pub(crate) fn prepare_completed_pages(
     text: &str,
 ) -> Result<Vec<PreparedChatboxText>, ChatboxLayoutError> {
     let text = apply_control_character_policy(text);
-    let text = text.as_ref();
-    if text.is_empty() {
-        return Ok(Vec::new());
-    }
+    let prepared = LayoutText::new(text.as_ref())?;
+    prepare_completed_pages_from_layout(&prepared, 0)
+}
 
-    let prepared = LayoutText::new(text)?;
+fn prepare_completed_pages_from_layout(
+    prepared: &LayoutText<'_>,
+    mut page_start: usize,
+) -> Result<Vec<PreparedChatboxText>, ChatboxLayoutError> {
     let mut pages = Vec::new();
-    let mut page_start = 0;
 
     while page_start < prepared.graphemes.len() {
         let proposed_end = prepared.next_page_end(page_start);
-        let (page_end, page) = prepared.standalone_safe_page(page_start, proposed_end)?;
-        pages.push(PreparedChatboxText(page));
+        let (page_end, page) =
+            prepare_completed_page_from_layout(prepared, page_start, proposed_end)?;
+        pages.push(page);
         page_start = page_end;
     }
 
     Ok(pages)
+}
+
+fn prepare_completed_page_from_layout(
+    prepared: &LayoutText<'_>,
+    page_start: usize,
+    proposed_end: usize,
+) -> Result<(usize, PreparedChatboxText), ChatboxLayoutError> {
+    let (page_end, page) = prepared.standalone_safe_page(page_start, proposed_end)?;
+    Ok((page_end, PreparedChatboxText(page)))
 }
 
 /// Returns one safe Live viewport that always retains the newest source text.
@@ -423,6 +441,38 @@ impl<'text> LayoutText<'text> {
         }
     }
 
+    /// Iterates only breaks that start another rendered logical line. An
+    /// authored terminal separator remains in the payload but adds no row.
+    fn nonterminal_layout_breaks(&self) -> impl Iterator<Item = LayoutBreak> + '_ {
+        let mut line_start = 0;
+
+        std::iter::from_fn(move || {
+            if line_start >= self.graphemes.len() {
+                return None;
+            }
+
+            let Some(layout_break) = self
+                .scan_line(line_start, self.graphemes.len())
+                .layout_break
+            else {
+                line_start = self.graphemes.len();
+                return None;
+            };
+            if layout_break.next_line_start == self.graphemes.len() {
+                line_start = self.graphemes.len();
+                return None;
+            }
+
+            line_start = layout_break.next_line_start;
+            Some(layout_break)
+        })
+    }
+
+    fn fits_within_line_budget(&self, maximum_lines: usize) -> bool {
+        maximum_lines > 0
+            && self.nonterminal_layout_breaks().take(maximum_lines).count() < maximum_lines
+    }
+
     #[cfg(test)]
     fn predict(&self) -> ChatboxLayoutPrediction {
         if self.graphemes.is_empty() {
@@ -435,23 +485,14 @@ impl<'text> LayoutText<'text> {
             };
         }
 
-        let mut line_start = 0;
         let mut soft_break_utf16_offsets = Vec::new();
         let mut explicit_break_utf16_offsets = Vec::new();
-        while line_start < self.graphemes.len() {
-            let line = self.scan_line(line_start, self.graphemes.len());
-            let Some(layout_break) = line.layout_break else {
-                break;
-            };
-            if layout_break.next_line_start == self.graphemes.len() {
-                break;
-            }
+        for layout_break in self.nonterminal_layout_breaks() {
             let utf16_offset = self.utf16_prefix[layout_break.next_line_start];
             match layout_break.kind {
                 LayoutBreakKind::Soft => soft_break_utf16_offsets.push(utf16_offset),
                 LayoutBreakKind::Explicit => explicit_break_utf16_offsets.push(utf16_offset),
             }
-            line_start = layout_break.next_line_start;
         }
 
         let logical_line_count =
