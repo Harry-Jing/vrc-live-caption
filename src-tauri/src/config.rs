@@ -188,6 +188,8 @@ pub(crate) struct ApiBaseUrl(Url);
 
 impl ApiBaseUrl {
     pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        // This parser owns the established App Config V2 compatibility
+        // contract. New settings edits are constrained before reaching Rust.
         // `url::Url` normalizes an empty userinfo marker away, so inspect the
         // raw authority first to reject every syntactic userinfo form.
         let authority = value

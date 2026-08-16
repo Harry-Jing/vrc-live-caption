@@ -162,6 +162,79 @@ fn current_v2_settings_save_and_load_through_the_temporary_path() -> AppResult<(
 }
 
 #[test]
+fn v2_custom_url_loads_without_rewrite_or_compatibility_defaults() -> AppResult<()> {
+    let directory = TestSettingsDirectory::new("v2-custom-url-compatibility")?;
+    let path = directory.config_path();
+    let contents = serde_json::json!({
+        "schemaVersion": 2,
+        "audio": { "inputDeviceId": "saved-translation-device" },
+        "recognition": {
+            "path": "openai/gpt-live-transcribe",
+            "expectedLanguages": ["zh", "en"]
+        },
+        "translation": {
+            "path": "openai/responses-completed-text",
+            "target": "zh-Hans",
+            "endpoint": {
+                "kind": "custom",
+                "apiBaseUrl": " https://translation.example.test/api/v1"
+            }
+        },
+        "osc": { "host": "192.0.2.25", "port": 9001, "enabled": false },
+        "publication": { "mode": "completed", "content": "bilingual" },
+        "ui": { "showOngoingPreview": false }
+    })
+    .to_string();
+    fs::write(&path, &contents).map_err(|error| {
+        AppError::config_io(format!(
+            "Failed to write V2 compatibility fixture at {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    let loaded = match load_from_path(path.clone())? {
+        SavedSettingsLoad::Ready(config) => config,
+        SavedSettingsLoad::DefaultsRequireReview { .. } => {
+            return Err(AppError::state(
+                "Supported V2 Custom URL unexpectedly loaded defaults.",
+            ));
+        }
+    };
+
+    assert_eq!(
+        loaded.audio.input_device_id.as_deref(),
+        Some("saved-translation-device")
+    );
+    assert_eq!(loaded.publication.content, ContentSelection::Bilingual);
+    assert!(!loaded.osc.enabled);
+    let api_base_url = match loaded.translation {
+        Some(crate::config::TranslationConfig {
+            endpoint: crate::config::TranslationEndpoint::Custom { api_base_url },
+            ..
+        }) => api_base_url,
+        _ => {
+            return Err(AppError::state(
+                "Supported V2 Custom Translation selection was not retained.",
+            ));
+        }
+    };
+    assert_eq!(
+        api_base_url.as_url().as_str(),
+        "https://translation.example.test/api/v1"
+    );
+    assert_eq!(
+        fs::read_to_string(path).map_err(|error| {
+            AppError::config_io(format!(
+                "Failed to reread V2 compatibility fixture: {error}"
+            ))
+        })?,
+        contents
+    );
+
+    Ok(())
+}
+
+#[test]
 fn custom_translation_v2_round_trips_with_the_exact_persisted_shape() -> AppResult<()> {
     let directory = TestSettingsDirectory::new("custom-translation-round-trip")?;
     let path = directory.config_path();

@@ -73,6 +73,12 @@ function createRuntimeStoreHarness() {
 
   const startRuntime = vi.fn(() => pendingStart.promise);
   const sendOscTestMessage = vi.fn(() => Promise.resolve());
+  const saveCredential = vi.fn<AppGateway["saveCredential"]>(() =>
+    Promise.resolve(currentControl),
+  );
+  const deleteCredential = vi.fn<AppGateway["deleteCredential"]>(() =>
+    Promise.resolve(currentControl),
+  );
   const getRuntimeControlSnapshot = vi.fn(() => {
     callOrder.push("getRuntimeControlSnapshot");
     return Promise.resolve(currentControl);
@@ -112,18 +118,20 @@ function createRuntimeStoreHarness() {
         clipping: false,
         gateOpen: true,
       }),
-    saveCredential: () => Promise.resolve(currentControl),
-    deleteCredential: () => Promise.resolve(currentControl),
+    saveCredential,
+    deleteCredential,
   };
 
   return {
     callOrder,
     controlListener,
+    deleteCredential,
     eventListener,
     getRuntimeControlSnapshot,
     pendingStart,
     runningCaption,
     runningControl,
+    saveCredential,
     startRuntime,
     sendOscTestMessage,
     store: createRuntimeStore(gateway),
@@ -206,6 +214,101 @@ test("retains a structured runtime action failure", async () => {
   expect(harness.store.runtime.runtimeFailure.value).toEqual({
     code: "osc.send_failed",
     message: "Chatbox send failed.",
+  });
+  harness.store.dispose();
+});
+
+test("attributes concurrent operation state to each credential", async () => {
+  const harness = createRuntimeStoreHarness();
+  const openAiSave = deferred<RuntimeControlSnapshot>();
+  const customSave = deferred<RuntimeControlSnapshot>();
+  harness.saveCredential.mockImplementation((id) =>
+    id === "openai" ? openAiSave.promise : customSave.promise,
+  );
+
+  const saveOpenAi = harness.store.runtime.saveCredential(
+    "openai",
+    "test-openai-secret",
+  );
+  const saveCustom = harness.store.runtime.saveCredential(
+    "customTranslation",
+    "test-custom-secret",
+  );
+
+  expect(harness.store.runtime.credentialOperationStates.value).toEqual({
+    openai: { failure: null, isBusy: true },
+    customTranslation: { failure: null, isBusy: true },
+  });
+
+  customSave.reject(
+    Object.assign(new Error("Custom credential save failed."), {
+      code: "credential.custom_save_failed",
+    }),
+  );
+  await saveCustom;
+
+  expect(
+    harness.store.runtime.credentialOperationStates.value.customTranslation,
+  ).toEqual({
+    failure: {
+      code: "credential.custom_save_failed",
+      message: "Custom credential save failed.",
+    },
+    isBusy: false,
+  });
+  expect(harness.store.runtime.credentialOperationStates.value.openai).toEqual({
+    failure: null,
+    isBusy: true,
+  });
+  expect(harness.store.runtime.credentialFailure.value).toBeNull();
+  expect(harness.store.runtime.isCredentialBusy.value).toBe(true);
+
+  openAiSave.resolve(harness.runningControl);
+  await saveOpenAi;
+
+  harness.deleteCredential.mockResolvedValueOnce(harness.runningControl);
+  const deleteCustom =
+    harness.store.runtime.deleteCredential("customTranslation");
+  expect(
+    harness.store.runtime.credentialOperationStates.value.customTranslation,
+  ).toEqual({ failure: null, isBusy: true });
+
+  await deleteCustom;
+  expect(
+    harness.store.runtime.credentialOperationStates.value.customTranslation,
+  ).toEqual({ failure: null, isBusy: false });
+  harness.store.dispose();
+});
+
+test("lets the newest same-credential request own failure feedback", async () => {
+  const harness = createRuntimeStoreHarness();
+  const olderSave = deferred<RuntimeControlSnapshot>();
+  const newerSave = deferred<RuntimeControlSnapshot>();
+  harness.saveCredential
+    .mockImplementationOnce(() => olderSave.promise)
+    .mockImplementationOnce(() => newerSave.promise);
+
+  const olderResult = harness.store.runtime.saveCredential(
+    "openai",
+    "test-older-secret",
+  );
+  const newerResult = harness.store.runtime.saveCredential(
+    "openai",
+    "test-newer-secret",
+  );
+
+  newerSave.resolve(harness.runningControl);
+  await newerResult;
+  expect(harness.store.runtime.credentialOperationStates.value.openai).toEqual({
+    failure: null,
+    isBusy: true,
+  });
+
+  olderSave.reject(new Error("Stale credential failure."));
+  await olderResult;
+  expect(harness.store.runtime.credentialOperationStates.value.openai).toEqual({
+    failure: null,
+    isBusy: false,
   });
   harness.store.dispose();
 });

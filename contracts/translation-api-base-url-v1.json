@@ -1,0 +1,130 @@
+{
+  "fixtureVersion": 1,
+  "accepted": [
+    {
+      "name": "HTTPS host with an API path",
+      "url": "https://example.com/v1"
+    },
+    {
+      "name": "HTTPS host without an explicit path",
+      "url": "https://example.com"
+    },
+    {
+      "name": "custom port and percent-encoded path",
+      "url": "https://translation.example.test:8443/api%20space/v1"
+    },
+    {
+      "name": "IPv6 host and trailing slash",
+      "url": "https://[2001:db8::1]:8443/api/v1/"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "unparseable text",
+      "url": "not a URL",
+      "reasonCode": "invalidUrl"
+    },
+    {
+      "name": "HTTP scheme",
+      "url": "http://example.com/v1",
+      "reasonCode": "httpsRequired"
+    },
+    {
+      "name": "username and password",
+      "url": "https://user:secret@example.com/v1",
+      "reasonCode": "userInformationForbidden"
+    },
+    {
+      "name": "empty user information marker",
+      "url": "https://@example.com/v1",
+      "reasonCode": "userInformationForbidden"
+    },
+    {
+      "name": "empty query",
+      "url": "https://example.com/v1?",
+      "reasonCode": "queryOrFragmentForbidden"
+    },
+    {
+      "name": "query",
+      "url": "https://example.com/v1?region=test",
+      "reasonCode": "queryOrFragmentForbidden"
+    },
+    {
+      "name": "empty fragment",
+      "url": "https://example.com/v1#",
+      "reasonCode": "queryOrFragmentForbidden"
+    },
+    {
+      "name": "fragment",
+      "url": "https://example.com/v1#responses",
+      "reasonCode": "queryOrFragmentForbidden"
+    },
+    {
+      "name": "Responses endpoint without a trailing slash",
+      "url": "https://example.com/v1/responses",
+      "reasonCode": "responsesEndpointForbidden"
+    },
+    {
+      "name": "Responses endpoint",
+      "url": "https://example.com/v1/responses/",
+      "reasonCode": "responsesEndpointForbidden"
+    },
+    {
+      "name": "percent-encoded Responses endpoint prefix",
+      "url": "https://example.com/v1/%72esponses",
+      "reasonCode": "responsesEndpointForbidden"
+    },
+    {
+      "name": "percent-encoded Responses endpoint suffix",
+      "url": "https://example.com/v1/respon%73es",
+      "reasonCode": "responsesEndpointForbidden"
+    },
+    {
+      "name": "incomplete percent encoding",
+      "url": "https://example.com/v1/%",
+      "reasonCode": "invalidPercentEncoding"
+    },
+    {
+      "name": "invalid UTF-8 percent encoding in the final segment",
+      "url": "https://example.com/v1/%FF",
+      "reasonCode": "invalidPercentEncoding"
+    }
+  ],
+  "newEditRejectedV2Compatible": [
+    {
+      "name": "leading space",
+      "url": " https://example.com/v1",
+      "reasonCode": "invalidUrl"
+    },
+    {
+      "name": "trailing space",
+      "url": "https://example.com/v1 ",
+      "reasonCode": "invalidUrl"
+    },
+    {
+      "name": "leading null control",
+      "url": "\u0000https://example.com/v1",
+      "reasonCode": "invalidUrl"
+    },
+    {
+      "name": "trailing newline",
+      "url": "https://example.com/v1\n",
+      "reasonCode": "invalidUrl"
+    },
+    {
+      "name": "embedded tab",
+      "url": "https://exa\tmple.com/v1",
+      "reasonCode": "invalidUrl"
+    },
+    {
+      "name": "incomplete percent encoding in a parent segment",
+      "url": "https://example.com/api%/v1",
+      "reasonCode": "invalidPercentEncoding"
+    },
+    {
+      "name": "invalid UTF-8 percent encoding in a parent segment",
+      "url": "https://example.com/%FF/v1",
+      "reasonCode": "invalidPercentEncoding"
+    }
+  ]
+}

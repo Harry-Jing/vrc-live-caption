@@ -33,9 +33,9 @@ for other VRChat builds, XR modes, or observer viewpoints.
 
 ## Phase 5: Completed translation
 
-Status: **in progress**. Contracts, bounded provider transport, and
-generation-scoped terminal outcomes are implemented; settings, selected-content
-publication, and release validation remain.
+Status: **in progress**. Contracts, bounded provider transport,
+generation-scoped terminal outcomes, and settings are implemented;
+selected-content publication and release validation remain.
 
 Goal: deliver the smallest reliable text-driven translation path, which is the
 original cross-language product need.

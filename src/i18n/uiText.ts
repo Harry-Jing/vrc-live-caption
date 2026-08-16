@@ -189,10 +189,12 @@ const englishMessages = {
   "settings.feedback.nextStart.change.translation": "translation",
   "settings.feedback.nextStart.change.credential": "service credential",
   "settings.feedback.nextStart.change.chatboxOutput": "Chatbox output",
-  "settings.feedback.nextStart.change.publication": "publication timing",
+  "settings.feedback.nextStart.change.publication":
+    "caption content or publication timing",
   "settings.sections.audio": "Audio",
   "settings.sections.recognition": "Speech recognition",
   "settings.sections.chatboxOutput": "Chatbox output",
+  "settings.sections.serviceCredentials": "Service credentials",
   "settings.fields.microphone": "Microphone",
   "settings.fields.language": "Expected languages",
   "settings.fields.language.description":
@@ -224,29 +226,101 @@ const englishMessages = {
   }: {
     mode: string;
   }) => `Keep ${mode} · Change recognition path`,
+  "settings.translation.title": "Completed Translation",
+  "settings.translation.description":
+    "Choose which completed caption lanes to publish and how Translation is prepared.",
+  "settings.translation.content.legend": "Caption content",
+  "settings.translation.content.description":
+    "Translation choices are available for Completed publication only.",
+  "settings.translation.content.sourceOnly": "Source only",
+  "settings.translation.content.sourceOnly.description":
+    "Publish completed Source text.",
+  "settings.translation.content.translationOnly": "Translation only",
+  "settings.translation.content.translationOnly.description":
+    "Publish completed Translation text without Source text.",
+  "settings.translation.content.bilingual": "Bilingual",
+  "settings.translation.content.bilingual.description":
+    "Publish Source above Translation in one Chatbox view.",
+  "settings.translation.inactive.title": "Translation inactive",
+  "settings.translation.inactive.description":
+    "Saved Translation choices remain dormant while Source-only content is selected.",
+  "settings.translation.path":
+    "Uses the fixed Responses completed-text Translation path.",
+  "settings.translation.target.legend": "Translation target",
+  "settings.translation.target.description":
+    "Choose explicitly; the app never infers this from UI language, recognition hints, or Source text.",
+  "settings.translation.target.required": "Choose a Translation target.",
+  "settings.translation.target.en": "English (en)",
+  "settings.translation.target.zhHans": "Simplified Chinese (zh-Hans)",
+  "settings.translation.endpoint.legend": "Translation endpoint",
+  "settings.translation.endpoint.official": "Official OpenAI",
+  "settings.translation.endpoint.official.description":
+    "Reuse the existing OpenAI credential without copying it into App Config.",
+  "settings.translation.endpoint.custom": "Custom HTTPS endpoint",
+  "settings.translation.endpoint.custom.description":
+    "Use a separate Custom Translation credential for this endpoint.",
+  "settings.translation.officialDisclosure.title":
+    "Official Translation data use",
+  "settings.translation.officialDisclosure.description":
+    "Completed Source text is sent to OpenAI for Translation. Requests use store: false; that setting does not by itself provide Zero Data Retention. Official Translation uses the existing OpenAI credential.",
+  "settings.translation.customDisclosure.title": "Custom Translation data use",
+  "settings.translation.customDisclosure.description":
+    "Completed Source text and the separate Custom Translation credential are sent to the selected endpoint. store: false does not define or guarantee the operator's retention policy. Recognition audio is not rerouted to this endpoint. The Official OpenAI credential is not sent.",
+  "settings.translation.customApiBaseUrl": "Custom API base URL",
+  "settings.translation.customApiBaseUrl.description":
+    "Enter the HTTPS base URL only. VRC Live Caption appends one responses path segment.",
+  "settings.translation.customApiBaseUrl.placeholder":
+    "https://gateway.example/v1",
+  "settings.translation.customApiBaseUrl.error.invalidUrl":
+    "API base URL must be a valid URL without whitespace or control characters.",
+  "settings.translation.customApiBaseUrl.error.httpsRequired":
+    "API base URL must use HTTPS.",
+  "settings.translation.customApiBaseUrl.error.hostRequired":
+    "API base URL must include a host.",
+  "settings.translation.customApiBaseUrl.error.userInformationForbidden":
+    "API base URL cannot contain user information.",
+  "settings.translation.customApiBaseUrl.error.queryOrFragmentForbidden":
+    "API base URL cannot contain a query or fragment.",
+  "settings.translation.customApiBaseUrl.error.invalidPercentEncoding":
+    "API base URL must contain valid percent encoding.",
+  "settings.translation.customApiBaseUrl.error.responsesEndpointForbidden":
+    "Enter the API base URL without the Responses endpoint.",
+  "settings.translation.credentialStatus.openai": "OpenAI credential",
+  "settings.translation.credentialStatus.custom":
+    "Custom Translation credential",
+  "settings.translation.nextStart":
+    "Saved changes take effect on the next Start and do not change the current run.",
+  "settings.translation.liveIncompatible.title":
+    "Translation content requires Completed publication",
+  "settings.translation.liveIncompatible.description":
+    "Keep both choices explicit, or switch publication timing to Completed before Start.",
+  "settings.translation.liveIncompatible.action": "Use Completed",
   "settings.loading": "Loading settings...",
   "settings.loadFailed": "Settings could not be loaded.",
+  "settings.credentials.description":
+    "Credentials are stored separately from App Config and are never shown again in plaintext.",
+  "settings.credentials.status.checking": "Checking",
+  "settings.credentials.status.notSaved": "Not saved",
+  "settings.credentials.status.unavailable": "Unavailable",
+  "settings.credentials.status.environment": ({
+    displaySuffix,
+  }: {
+    displaySuffix: string | null;
+  }) => `Environment ${displaySuffix ? `...${displaySuffix}` : "configured"}`,
+  "settings.credentials.status.system": ({
+    displaySuffix,
+  }: {
+    displaySuffix: string | null;
+  }) => `System ${displaySuffix ? `...${displaySuffix}` : "configured"}`,
   "settings.credentials.openai.title": "OpenAI credentials",
   "settings.credentials.openai.cloudDisclosure":
     "When OpenAI cloud speech recognition is selected, microphone audio is uploaded to OpenAI for transcription.",
   "settings.credentials.openai.apiKey": "API key",
   "settings.credentials.openai.apiKeyPlaceholder": "sk-...",
   "settings.credentials.openai.actions.save": "Save Key",
+  "settings.credentials.openai.actions.replace": "Replace key",
   "settings.credentials.openai.actions.remove": "Remove key",
   "settings.credentials.openai.errors.actionFailed": "API key action failed",
-  "settings.credentials.openai.status.checking": "Checking",
-  "settings.credentials.openai.status.notSaved": "Not saved",
-  "settings.credentials.openai.status.unavailable": "Unavailable",
-  "settings.credentials.openai.status.environment": ({
-    displaySuffix,
-  }: {
-    displaySuffix: string | null;
-  }) => `Env ${displaySuffix ? `...${displaySuffix}` : "saved"}`,
-  "settings.credentials.openai.status.system": ({
-    displaySuffix,
-  }: {
-    displaySuffix: string | null;
-  }) => `System ${displaySuffix ? `...${displaySuffix}` : "saved"}`,
   "settings.credentials.openai.removeDialog.title": "Remove OpenAI API key?",
   "settings.credentials.openai.removeDialog.description":
     "The saved key will be removed from the system credential store. You can add it again later.",
@@ -254,6 +328,27 @@ const englishMessages = {
     "The saved key will be removed from the system credential store. The current run keeps the credential captured at Start until you Stop the runtime.",
   "settings.credentials.openai.removeDialog.cancel": "Cancel",
   "settings.credentials.openai.removeDialog.confirm": "Remove API key",
+  "settings.credentials.customTranslation.title":
+    "Custom Translation credentials",
+  "settings.credentials.customTranslation.disclosure":
+    "This separate key is sent only to the selected Custom Translation endpoint.",
+  "settings.credentials.customTranslation.apiKey": "API key",
+  "settings.credentials.customTranslation.apiKeyPlaceholder":
+    "Custom Translation API key",
+  "settings.credentials.customTranslation.actions.save": "Save key",
+  "settings.credentials.customTranslation.actions.replace": "Replace key",
+  "settings.credentials.customTranslation.actions.remove": "Remove key",
+  "settings.credentials.customTranslation.errors.actionFailed":
+    "Custom credential action failed",
+  "settings.credentials.customTranslation.removeDialog.title":
+    "Remove Custom Translation API key?",
+  "settings.credentials.customTranslation.removeDialog.description":
+    "The saved key will be removed from the system credential store. You can add it again later.",
+  "settings.credentials.customTranslation.removeDialog.currentGenerationDescription":
+    "The saved key will be removed from the system credential store. The current run keeps the credential captured at Start until you Stop the runtime.",
+  "settings.credentials.customTranslation.removeDialog.cancel": "Cancel",
+  "settings.credentials.customTranslation.removeDialog.confirm":
+    "Remove API key",
 
   "notFound.eyebrow": "Page not found",
   "notFound.title": "This route does not exist",

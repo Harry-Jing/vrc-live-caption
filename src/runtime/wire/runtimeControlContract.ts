@@ -3,7 +3,7 @@
 import { createDecoders } from "./contractDecoding";
 import {
   APP_CONFIG_SCHEMA_VERSION,
-  translationApiBaseUrlValidationError,
+  translationApiBaseUrlV2ValidationError,
   type AppConfig,
   type TranslationConfig,
   type TranslationEndpoint,
@@ -150,7 +150,7 @@ function decodeRecognitionConfig(
 
 function decodeApiBaseUrl(value: unknown, path: string): string {
   const raw = string(value, path);
-  const validationError = translationApiBaseUrlValidationError(raw);
+  const validationError = translationApiBaseUrlV2ValidationError(raw);
   if (validationError !== null) {
     throw new RuntimeControlContractError(path, validationError);
   }

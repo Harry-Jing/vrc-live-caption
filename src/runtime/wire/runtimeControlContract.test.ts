@@ -137,6 +137,28 @@ describe("decodeRuntimeControlSnapshot", () => {
     );
   });
 
+  test("decodes a V2-compatible Custom URL that stricter new edits reject", () => {
+    const apiBaseUrl = "https://example.com/api%/v1";
+    const payload = {
+      ...completePayload,
+      desired: {
+        ...completePayload.desired,
+        config: {
+          ...completePayload.desired.config,
+          translation: {
+            ...completePayload.desired.config.translation,
+            endpoint: { kind: "custom", apiBaseUrl },
+          },
+        },
+      },
+    };
+
+    expect(
+      decodeRuntimeControlSnapshot(payload).desired.config.translation
+        ?.endpoint,
+    ).toEqual({ kind: "custom", apiBaseUrl });
+  });
+
   test("rejects Translation content without an explicit selection", () => {
     const payload = {
       ...completePayload,

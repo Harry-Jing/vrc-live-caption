@@ -42,9 +42,40 @@ export type AppConfig = {
   };
 };
 
-export function translationApiBaseUrlValidationError(
+const translationApiBaseUrlValidationMessages = {
+  invalidUrl: "API base URL must be a valid URL.",
+  httpsRequired: "API base URL must use HTTPS.",
+  hostRequired: "API base URL must include a host.",
+  userInformationForbidden: "API base URL cannot contain user information.",
+  queryOrFragmentForbidden: "API base URL cannot contain a query or fragment.",
+  invalidPercentEncoding: "API base URL must contain valid percent encoding.",
+  responsesEndpointForbidden:
+    "API base URL cannot include the Responses endpoint.",
+} as const;
+
+export type TranslationApiBaseUrlValidationReason =
+  keyof typeof translationApiBaseUrlValidationMessages;
+
+type TranslationApiBaseUrlValidationPolicy = "appConfigV2" | "newEdit";
+
+function translationApiBaseUrlValidationReason(
   raw: string,
-): string | null {
+  policy: TranslationApiBaseUrlValidationPolicy,
+): TranslationApiBaseUrlValidationReason | null {
+  if (policy === "newEdit") {
+    let containsControlCharacter = false;
+    for (let index = 0; index < raw.length; index += 1) {
+      const codeUnit = raw.charCodeAt(index);
+      if (codeUnit <= 0x1f || (codeUnit >= 0x7f && codeUnit <= 0x9f)) {
+        containsControlCharacter = true;
+        break;
+      }
+    }
+    if (raw.trim() !== raw || containsControlCharacter) {
+      return "invalidUrl";
+    }
+  }
+
   // URL parsers normalize an empty userinfo marker away, so inspect the raw
   // authority before parsing to reject every syntactic userinfo form.
   const schemeSeparator = raw.indexOf("://");
@@ -56,45 +87,82 @@ export function translationApiBaseUrlValidationError(
           .split(/[/?#]/u, 1)
           .at(0) ?? "");
   if (authority.includes("@")) {
-    return "API base URL cannot contain user information.";
+    return "userInformationForbidden";
   }
 
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
-    return "API base URL must be a valid URL.";
+    return "invalidUrl";
   }
   if (parsed.protocol !== "https:") {
-    return "API base URL must use HTTPS.";
+    return "httpsRequired";
   }
   if (parsed.hostname.length === 0) {
-    return "API base URL must include a host.";
+    return "hostRequired";
   }
   if (parsed.username.length > 0 || parsed.password.length > 0) {
-    return "API base URL cannot contain user information.";
+    return "userInformationForbidden";
   }
   if (raw.includes("?") || raw.includes("#")) {
-    return "API base URL cannot contain a query or fragment.";
+    return "queryOrFragmentForbidden";
   }
 
-  const finalSegment = parsed.pathname
-    .split("/")
+  const pathSegments = parsed.pathname.split("/");
+  const finalSegment = pathSegments
     .filter((segment) => segment.length > 0)
     .at(-1);
-  if (finalSegment !== undefined) {
-    let decodedFinalSegment: string;
+  const segmentsToValidate =
+    policy === "newEdit"
+      ? pathSegments
+      : finalSegment === undefined
+        ? []
+        : [finalSegment];
+  let decodedFinalSegment = "";
+  for (const segment of segmentsToValidate) {
+    let decodedSegment: string;
     try {
-      decodedFinalSegment = decodeURIComponent(finalSegment);
+      decodedSegment = decodeURIComponent(segment);
     } catch {
-      return "API base URL must contain valid percent encoding.";
+      return "invalidPercentEncoding";
     }
-    if (decodedFinalSegment.toLocaleLowerCase("en") === "responses") {
-      return "API base URL cannot include the Responses endpoint.";
+
+    if (decodedSegment.length > 0) {
+      decodedFinalSegment = decodedSegment;
     }
+  }
+  if (decodedFinalSegment.toLocaleLowerCase("en") === "responses") {
+    return "responsesEndpointForbidden";
   }
 
   return null;
+}
+
+function translationApiBaseUrlValidationError(
+  raw: string,
+  policy: TranslationApiBaseUrlValidationPolicy,
+): string | null {
+  const reason = translationApiBaseUrlValidationReason(raw, policy);
+  return reason === null
+    ? null
+    : translationApiBaseUrlValidationMessages[reason];
+}
+
+// App Config V2 already accepted URL-parser normalization and only verified
+// the final path segment. Persisted and runtime payloads keep that contract.
+export function translationApiBaseUrlV2ValidationError(
+  raw: string,
+): string | null {
+  return translationApiBaseUrlValidationError(raw, "appConfigV2");
+}
+
+// New settings edits use stricter syntax without retroactively invalidating
+// App Config V2 values that the application has already persisted.
+export function translationApiBaseUrlNewEditValidationReason(
+  raw: string,
+): TranslationApiBaseUrlValidationReason | null {
+  return translationApiBaseUrlValidationReason(raw, "newEdit");
 }
 
 export function appConfigValidationError(config: AppConfig): string | null {
@@ -124,7 +192,7 @@ export function appConfigValidationError(config: AppConfig): string | null {
     return "Translation content requires a translation selection.";
   }
   if (config.translation?.endpoint.kind === "custom") {
-    return translationApiBaseUrlValidationError(
+    return translationApiBaseUrlV2ValidationError(
       config.translation.endpoint.apiBaseUrl,
     );
   }

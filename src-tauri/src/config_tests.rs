@@ -212,40 +212,104 @@ fn translation_config_and_endpoint_variants_require_exact_tagged_fields() -> App
 }
 
 #[test]
-fn config_accepts_only_verified_custom_translation_api_base_urls() -> AppResult<()> {
-    let mut valid = valid_translation_config_json();
-    valid["translation"]["endpoint"] = serde_json::json!({
-        "kind": "custom",
-        "apiBaseUrl": "https://example.com/v1"
-    });
-    let config: AppConfig = serde_json::from_value(valid.clone()).map_err(|error| {
-        AppError::state(format!(
-            "Verified API base URL failed to deserialize: {error}"
-        ))
-    })?;
-    config.validate()?;
+fn config_preserves_v2_custom_translation_api_base_url_validation() -> AppResult<()> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct UrlCase {
+        name: String,
+        url: String,
+    }
 
-    for invalid in [
-        "http://example.com/v1",
-        "https://user:secret@example.com/v1",
-        "https://@example.com/v1",
-        "https://example.com/v1?region=test",
-        "https://example.com/v1?",
-        "https://example.com/v1#responses",
-        "https://example.com/v1#",
-        "https://example.com/v1/responses",
-        "https://example.com/v1/responses/",
-        "https://example.com/v1/%72esponses",
-        "https://example.com/v1/respon%73es",
-        "https://example.com/v1/%",
-        "not a URL",
-    ] {
-        let mut value = valid.clone();
-        value["translation"]["endpoint"]["apiBaseUrl"] = serde_json::json!(invalid);
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct RejectedUrlCase {
+        name: String,
+        url: String,
+        reason_code: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ApiBaseUrlFixture {
+        fixture_version: u32,
+        accepted: Vec<UrlCase>,
+        rejected: Vec<RejectedUrlCase>,
+        new_edit_rejected_v2_compatible: Vec<RejectedUrlCase>,
+    }
+
+    let fixture: ApiBaseUrlFixture = serde_json::from_str(include_str!(
+        "../../contracts/translation-api-base-url-v1.json"
+    ))
+    .map_err(|error| AppError::state(format!("API base URL fixture is invalid: {error}")))?;
+    assert_eq!(fixture.fixture_version, 1);
+
+    for case in fixture.accepted {
+        let mut value = valid_translation_config_json();
+        value["translation"]["endpoint"] = serde_json::json!({
+            "kind": "custom",
+            "apiBaseUrl": case.url
+        });
         let accepted = serde_json::from_value::<AppConfig>(value)
             .is_ok_and(|candidate| candidate.validate().is_ok());
 
-        assert!(!accepted, "invalid API base URL was accepted: {invalid}");
+        assert!(accepted, "valid API base URL was rejected: {}", case.name);
+    }
+
+    for case in fixture.new_edit_rejected_v2_compatible {
+        let mut value = valid_translation_config_json();
+        value["translation"]["endpoint"] = serde_json::json!({
+            "kind": "custom",
+            "apiBaseUrl": case.url
+        });
+        let accepted = serde_json::from_value::<AppConfig>(value)
+            .is_ok_and(|candidate| candidate.validate().is_ok());
+
+        assert!(
+            accepted,
+            "App Config V2-compatible API base URL was rejected: {} ({})",
+            case.name, case.reason_code
+        );
+    }
+
+    for case in fixture.rejected {
+        let mut value = valid_translation_config_json();
+        value["translation"]["endpoint"] = serde_json::json!({
+            "kind": "custom",
+            "apiBaseUrl": case.url
+        });
+        let rejection = match serde_json::from_value::<AppConfig>(value) {
+            Err(error) => error.to_string(),
+            Ok(candidate) => match candidate.validate() {
+                Err(error) => error.to_string(),
+                Ok(()) => {
+                    return Err(AppError::state(format!(
+                        "Invalid API base URL was accepted: {} ({})",
+                        case.name, case.reason_code
+                    )));
+                }
+            },
+        };
+        let expected_message = match case.reason_code.as_str() {
+            "invalidUrl" => "API base URL must be a valid URL.",
+            "httpsRequired" => "API base URL must use HTTPS.",
+            "hostRequired" => "API base URL must include a host.",
+            "userInformationForbidden" => "API base URL cannot contain user information.",
+            "queryOrFragmentForbidden" => "API base URL cannot contain a query or fragment.",
+            "invalidPercentEncoding" => "API base URL must contain valid percent encoding.",
+            "responsesEndpointForbidden" => "API base URL cannot include the Responses endpoint.",
+            unsupported => {
+                return Err(AppError::state(format!(
+                    "Unknown API base URL reason code in the shared fixture: {unsupported}"
+                )));
+            }
+        };
+
+        assert!(
+            rejection.contains(expected_message),
+            "API base URL rejection diverged for {} ({}): {rejection}",
+            case.name,
+            case.reason_code
+        );
     }
 
     Ok(())

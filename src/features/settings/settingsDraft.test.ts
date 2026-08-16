@@ -152,3 +152,223 @@ test("preserves a finite edited port in the save payload", () => {
 
   expect(settings.createSaveConfig()?.osc.port).toBe(9_001);
 });
+
+test.each(["translationOnly", "bilingual"] as const)(
+  "requires an explicit Translation target for %s content",
+  (content) => {
+    const saved = ref<AppConfig | null>(appConfig());
+    const settings = useSettingsDraft(() => saved.value);
+
+    settings.selectContent(content);
+
+    expect(settings.draft.value?.publication.content).toBe(content);
+    expect(settings.draft.value?.translation).toMatchObject({
+      target: null,
+      endpointKind: "official",
+    });
+    expect(settings.translationIssues.value).toEqual({
+      target: "required",
+      customApiBaseUrl: null,
+    });
+    expect(settings.canSave.value).toBe(false);
+    expect(settings.createSaveConfig()).toBeNull();
+
+    settings.selectTranslationTarget("zh-Hans");
+
+    expect(settings.translationIssues.value).toEqual({
+      target: null,
+      customApiBaseUrl: null,
+    });
+    expect(settings.canSave.value).toBe(true);
+    expect(settings.createSaveConfig()).toMatchObject({
+      publication: { content },
+      translation: {
+        path: "openai/responses-completed-text",
+        target: "zh-Hans",
+        endpoint: { kind: "official" },
+      },
+    });
+  },
+);
+
+test("supports both explicit targets without inferring from recognition hints", () => {
+  const savedConfig = appConfig();
+  savedConfig.recognition.expectedLanguages = ["zh-Hans"];
+  const saved = ref<AppConfig | null>(savedConfig);
+  const settings = useSettingsDraft(() => saved.value);
+
+  settings.selectContent("translationOnly");
+  expect(settings.draft.value?.translation?.target).toBeNull();
+
+  settings.selectTranslationTarget("en");
+  expect(settings.createSaveConfig()?.translation?.target).toBe("en");
+
+  settings.selectTranslationTarget("zh-Hans");
+  expect(settings.createSaveConfig()?.translation?.target).toBe("zh-Hans");
+});
+
+test("preserves dormant Translation while Source-only stays effective", () => {
+  const savedConfig = appConfig();
+  savedConfig.translation = {
+    path: "openai/responses-completed-text",
+    target: "en",
+    endpoint: {
+      kind: "custom",
+      apiBaseUrl: "https://translation.example/v1",
+    },
+  };
+  const saved = ref<AppConfig | null>(savedConfig);
+  const settings = useSettingsDraft(() => saved.value);
+
+  expect(settings.draft.value?.publication.content).toBe("sourceOnly");
+  expect(settings.canSave.value).toBe(true);
+  expect(settings.createSaveConfig()?.translation).toEqual(
+    savedConfig.translation,
+  );
+
+  settings.selectContent("bilingual");
+  settings.selectTranslationTarget("zh-Hans");
+  settings.selectContent("sourceOnly");
+
+  expect(settings.draft.value?.translation?.target).toBe("zh-Hans");
+  expect(settings.createSaveConfig()).toMatchObject({
+    publication: { content: "sourceOnly" },
+    translation: {
+      path: "openai/responses-completed-text",
+      target: "zh-Hans",
+      endpoint: {
+        kind: "custom",
+        apiBaseUrl: "https://translation.example/v1",
+      },
+    },
+  });
+});
+
+test("preserves a dormant V2-compatible Custom URL but validates it when activated", () => {
+  const apiBaseUrl = "https://example.com/api%/v1";
+  const savedConfig = appConfig();
+  savedConfig.translation = {
+    path: "openai/responses-completed-text",
+    target: "en",
+    endpoint: { kind: "custom", apiBaseUrl },
+  };
+  const saved = ref<AppConfig | null>(savedConfig);
+  const settings = useSettingsDraft(() => saved.value);
+
+  expect(settings.isDirty.value).toBe(false);
+  expect(settings.translationIssues.value.customApiBaseUrl).toBeNull();
+  expect(settings.canSave.value).toBe(true);
+  expect(settings.createSaveConfig()?.translation).toEqual(
+    savedConfig.translation,
+  );
+
+  settings.selectContent("bilingual");
+
+  expect(settings.translationIssues.value.customApiBaseUrl).toBe(
+    "invalidPercentEncoding",
+  );
+  expect(settings.canSave.value).toBe(false);
+  expect(settings.createSaveConfig()).toBeNull();
+  expect(settings.draft.value?.translation?.customApiBaseUrl).toBe(apiBaseUrl);
+});
+
+test("retains an active V2-compatible Custom URL without inventing an edit", () => {
+  const apiBaseUrl = "https://example.com/api%/v1";
+  const savedConfig = appConfig();
+  savedConfig.publication.content = "translationOnly";
+  savedConfig.translation = {
+    path: "openai/responses-completed-text",
+    target: "en",
+    endpoint: { kind: "custom", apiBaseUrl },
+  };
+  const saved = ref<AppConfig | null>(savedConfig);
+  const settings = useSettingsDraft(() => saved.value);
+
+  expect(settings.isDirty.value).toBe(false);
+  expect(settings.translationIssues.value.customApiBaseUrl).toBe(
+    "invalidPercentEncoding",
+  );
+  expect(settings.canSave.value).toBe(false);
+  expect(settings.createSaveConfig()).toBeNull();
+  expect(settings.draft.value?.translation?.customApiBaseUrl).toBe(apiBaseUrl);
+
+  settings.setCustomTranslationApiBaseUrl("https://example.com/v1");
+
+  expect(settings.isDirty.value).toBe(true);
+  expect(settings.translationIssues.value.customApiBaseUrl).toBeNull();
+  expect(settings.canSave.value).toBe(true);
+});
+
+test("does not replace a valid dormant Translation with an incomplete draft", () => {
+  const savedConfig = appConfig();
+  savedConfig.translation = {
+    path: "openai/responses-completed-text",
+    target: "en",
+    endpoint: { kind: "official" },
+  };
+  const saved = ref<AppConfig | null>(savedConfig);
+  const settings = useSettingsDraft(() => saved.value);
+
+  settings.selectContent("translationOnly");
+  const translation = settings.draft.value?.translation;
+  if (!translation) {
+    throw new Error("The saved Translation must create a Translation draft.");
+  }
+  translation.target = null;
+  settings.selectContent("sourceOnly");
+
+  expect(settings.canSave.value).toBe(true);
+  expect(settings.createSaveConfig()?.translation).toEqual(
+    savedConfig.translation,
+  );
+});
+
+test("keeps Custom endpoint input raw and rejects it before save", () => {
+  const saved = ref<AppConfig | null>(appConfig());
+  const settings = useSettingsDraft(() => saved.value);
+
+  settings.selectContent("bilingual");
+  settings.selectTranslationTarget("en");
+  settings.selectTranslationEndpoint("custom");
+  settings.setCustomTranslationApiBaseUrl(" http://example.com/v1 ");
+
+  expect(settings.draft.value?.translation?.customApiBaseUrl).toBe(
+    " http://example.com/v1 ",
+  );
+  expect(settings.translationIssues.value.target).toBeNull();
+  expect(settings.translationIssues.value.customApiBaseUrl).not.toBeNull();
+  expect(settings.canSave.value).toBe(false);
+  expect(settings.createSaveConfig()).toBeNull();
+
+  settings.setCustomTranslationApiBaseUrl("https://example.com/v1");
+
+  expect(settings.canSave.value).toBe(true);
+  expect(settings.createSaveConfig()?.translation?.endpoint).toEqual({
+    kind: "custom",
+    apiBaseUrl: "https://example.com/v1",
+  });
+});
+
+test("keeps an unsaved Custom URL while toggling the endpoint", () => {
+  const saved = ref<AppConfig | null>(appConfig());
+  const settings = useSettingsDraft(() => saved.value);
+
+  settings.selectContent("translationOnly");
+  settings.selectTranslationTarget("en");
+  settings.selectTranslationEndpoint("custom");
+  settings.setCustomTranslationApiBaseUrl("https://example.com/v1");
+  settings.selectTranslationEndpoint("official");
+
+  expect(settings.draft.value?.translation?.customApiBaseUrl).toBe(
+    "https://example.com/v1",
+  );
+  expect(settings.createSaveConfig()?.translation?.endpoint).toEqual({
+    kind: "official",
+  });
+
+  settings.selectTranslationEndpoint("custom");
+  expect(settings.createSaveConfig()?.translation?.endpoint).toEqual({
+    kind: "custom",
+    apiBaseUrl: "https://example.com/v1",
+  });
+});

@@ -239,6 +239,7 @@ test("keeps the public runtime composable surface stable", async () => {
       "captionPreviewStatus",
       "completedCaptions",
       "credentialFailure",
+      "credentialOperationStates",
       "credentialStatuses",
       "currentGeneration",
       "currentGenerationCaptionPipelinePlan",
