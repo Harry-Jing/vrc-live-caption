@@ -19,6 +19,8 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 use std::sync::{Arc, Once, OnceLock};
+#[cfg(test)]
+use std::sync::{Condvar, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::runtime::{Handle, Runtime};
@@ -217,6 +219,10 @@ fn build_runtime() -> Result<Runtime, ()> {
 #[derive(Default)]
 struct PhysicalAttemptGate {
     occupied: AtomicBool,
+    #[cfg(test)]
+    released: Condvar,
+    #[cfg(test)]
+    release_lock: Mutex<()>,
 }
 
 impl PhysicalAttemptGate {
@@ -233,6 +239,20 @@ impl PhysicalAttemptGate {
     fn is_occupied(&self) -> bool {
         self.occupied.load(Ordering::Acquire)
     }
+
+    #[cfg(test)]
+    fn wait_until_released(&self, timeout: Duration) -> bool {
+        let Ok(guard) = self.release_lock.lock() else {
+            return false;
+        };
+        let Ok((_guard, _wait)) = self
+            .released
+            .wait_timeout_while(guard, timeout, |_| self.is_occupied())
+        else {
+            return false;
+        };
+        !self.is_occupied()
+    }
 }
 
 struct PhysicalAttemptPermit {
@@ -241,7 +261,21 @@ struct PhysicalAttemptPermit {
 
 impl Drop for PhysicalAttemptPermit {
     fn drop(&mut self) {
+        #[cfg(not(test))]
         self.gate.occupied.store(false, Ordering::Release);
+        #[cfg(test)]
+        {
+            // The mutex exists only for the test quiescence milestone. Holding
+            // it across predicate mutation and notify prevents a lost wakeup
+            // between the waiter's atomic check and Condvar sleep.
+            let _release = self
+                .gate
+                .release_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.gate.occupied.store(false, Ordering::Release);
+            self.gate.released.notify_all();
+        }
     }
 }
 
