@@ -64,6 +64,72 @@ For documentation-only changes, build checks are unnecessary unless the change
 alters a command, configuration, or description of runtime behavior. State that
 the checks were skipped and why in the pull request.
 
+### Isolated test runs and CI evidence
+
+Required Rust tests use `cargo-nextest` 0.9.143. Each test runs in its own
+process, the repository assigns explicit timeout classes in
+`src-tauri/.config/nextest.toml`, and the required run always uses four workers
+and zero retries on Linux, Windows, and macOS. Rust documentation tests remain a
+separate `cargo test --doc` step because nextest does not execute them.
+
+Install the pinned runner and reproduce the required Rust test selection with:
+
+```sh
+cargo install cargo-nextest --version 0.9.143 --locked
+cd src-tauri
+cargo nextest run --workspace --locked --profile ci --retries 0
+cargo test --workspace --doc --locked
+```
+
+Set `PROPTEST_RNG_SEED` to the value recorded by CI before running nextest to
+replay the same property-test input stream. The following profiles are stable
+entry points for narrower investigations; their definitions, rather than
+shell-authored test-name substrings, own the selections:
+
+| Profile | Selection |
+|---|---|
+| `risk-runtime-coordination` | Runtime ownership, lifecycle, and recognition coordination |
+| `risk-translation` | Translation Module and Responses Adapter |
+| `risk-loopback-network` | Host resolution, OSC, proxy, WebSocket, and Responses loopback tests |
+| `risk-timeout` | Owner, deadline, and intentionally bounded wait paths |
+| `risk-cancellation` | Stop, disconnect, cancellation, and cleanup paths |
+| `risk-property-regression` | Chatbox property and regression suites |
+| `risk-all` | Union used by the scheduled stress workflow |
+
+When adding or moving an owner/concurrency, loopback/network, or
+property/regression test, update its timeout group and every relevant risk
+profile in the same change. Use `cargo nextest show-config test-groups` and
+`cargo nextest list --profile <profile>` to verify the resulting selections.
+
+For example:
+
+```sh
+cargo nextest run --workspace --locked --profile risk-translation --retries 0
+```
+
+When the required Rust run fails, CI starts two separately labeled diagnostic
+runs over the named loopback/network, owner/concurrency, and
+property/regression test groups: first with the same four-worker schedule, then
+with one worker. They are new zero-retry runs, not retries that can change the
+required result. Download the `rust-test-results-<os>` artifact for the original
+JUnit report, captured failure output, environment and seed metadata, doctest
+output, and any diagnostic JUnit reports. The `frontend-test-results` artifact
+contains the required Vitest JUnit report.
+
+Vitest's normal pool, isolation, worker count, timeouts, retry count, and
+unshuffled order are defined in `vitest.config.ts`. To replay a scheduled
+frontend order, use the seed from the `frontend-stress` artifact:
+
+```sh
+pnpm exec vitest run --retry=0 --maxWorkers=4 \
+  --sequence.shuffle.files --sequence.shuffle.tests --sequence.seed=12345
+```
+
+The weekly `Test Stress` workflow repeats only repository-owned fake-driver,
+loopback, coordination, Translation, timeout/cancellation, and property groups.
+It runs them with one and eight nextest workers on all three desktop platforms;
+it does not use credentials, live providers, a microphone, or VRChat.
+
 ## Change standards
 
 - Keep a change focused on its issue; avoid unrelated rewrites or formatting.

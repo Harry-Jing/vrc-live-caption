@@ -30,7 +30,8 @@
     "prepare": "lefthook install",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:frontend": "vitest run"
+    "test:frontend": "vitest run",
+    "test:frontend:ci": "vitest run --reporter=default --reporter=junit --outputFile.junit=test-results/frontend/junit.xml"
   },
   "dependencies": {
     "@nuxt/ui": "^4.10.0",
