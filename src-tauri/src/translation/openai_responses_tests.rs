@@ -4,7 +4,7 @@ use crate::caption::{
 };
 use crate::config::{ApiBaseUrl, TranslationEndpoint};
 use crate::credentials::{CredentialId, CredentialStorage, ResolvedCredential};
-use crate::host_resolver::HostResolver;
+use crate::host_resolver::{HostResolutionError, HostResolver};
 use crate::system_proxy::{DialTarget, SelectedHttpsRoute};
 use crate::translation::{
     AdapterCompletion, AttemptControl, CompletedTextRequest, TestPolicyDependencies,
@@ -1017,6 +1017,45 @@ fn selected_route_resolution_failures_are_provider_neutral() -> Result<(), Strin
         assert_eq!(failure.retry_after, None);
     }
     Ok(())
+}
+
+#[test]
+fn typed_resolution_failures_preserve_translation_policy() {
+    let cases = [
+        (
+            HostResolutionError::DeadlineExceeded,
+            TranslationFailureClass::DeadlineExceeded,
+            true,
+        ),
+        (
+            HostResolutionError::LookupFailed("synthetic lookup failure".to_string()),
+            TranslationFailureClass::ServiceUnavailable,
+            true,
+        ),
+        (
+            HostResolutionError::QueueFull,
+            TranslationFailureClass::ServiceUnavailable,
+            true,
+        ),
+        (
+            HostResolutionError::Cancelled,
+            TranslationFailureClass::Unknown,
+            false,
+        ),
+        (
+            HostResolutionError::WorkerUnavailable("synthetic worker failure".to_string()),
+            TranslationFailureClass::Unknown,
+            false,
+        ),
+    ];
+
+    for (resolution_error, expected_class, expected_retryable) in cases {
+        let failure = map_resolution_error(resolution_error);
+        assert_eq!(failure.class, expected_class);
+        assert_eq!(failure.retryable, expected_retryable);
+        assert_eq!(failure.retry_after, None);
+        assert!(!failure.request_outcome_ambiguous);
+    }
 }
 
 #[test]
