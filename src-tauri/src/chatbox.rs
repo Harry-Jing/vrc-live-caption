@@ -234,6 +234,21 @@ impl ChatboxPublication {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn wait_until_text_quiescent_for_test(
+        &self,
+        timeout: std::time::Duration,
+    ) -> AppResult<()> {
+        match &self.worker {
+            PublicationWorker::Completed(publisher) => {
+                publisher.wait_until_text_quiescent_for_test(timeout)
+            }
+            PublicationWorker::Live(_) => Err(AppError::state(
+                "Completed text quiescence was requested from a Live publisher.",
+            )),
+        }
+    }
+
     fn record_close_reason(&self, reason: PublisherCloseReason) {
         match reason {
             PublisherCloseReason::Stop => {

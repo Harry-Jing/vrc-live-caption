@@ -422,6 +422,43 @@ impl CompletedChatboxPublisher {
         self.worker_join.join()
     }
 
+    #[cfg(test)]
+    pub(crate) fn wait_until_text_quiescent_for_test(&self, timeout: Duration) -> AppResult<()> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
+        let mut state = self.lock_state()?;
+        loop {
+            if state.lifecycle != PublisherLifecycle::Running {
+                return Err(AppError::state(
+                    "Completed publisher closed before text became quiescent.",
+                ));
+            }
+            // A selected or in-flight page remains resident until its transport
+            // attempt has returned, so an empty queue is a causal text barrier.
+            if state.units.is_empty() {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(AppError::state(
+                    "Completed publisher text did not quiesce before the test watchdog expired.",
+                ));
+            }
+            let (next_state, wait_result) = self
+                .shared
+                .wake
+                .wait_timeout(state, remaining)
+                .map_err(|_| AppError::state("Completed publisher state lock was poisoned."))?;
+            state = next_state;
+            if wait_result.timed_out() && !state.units.is_empty() {
+                return Err(AppError::state(
+                    "Completed publisher text did not quiesce before the test watchdog expired.",
+                ));
+            }
+        }
+    }
+
     fn try_enqueue_completed_source(
         &self,
         unit_id: String,
