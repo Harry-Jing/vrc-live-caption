@@ -14,6 +14,7 @@ use crate::translation::{
 };
 use secrecy::SecretString;
 use std::sync::Arc;
+use std::sync::mpsc::TryRecvError;
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::Listener;
@@ -162,7 +163,8 @@ fn completed_source_is_published_while_translation_moves_from_pending_to_complet
             caption.lane == CaptionLane::Translation && caption.text == "你好"
         })
     );
-    assert!(text_receiver.try_recv().is_err());
+    publisher.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert!(matches!(text_receiver.try_recv(), Err(TryRecvError::Empty)));
 
     generation.request_stop(Some(&publisher))?;
     publisher.join()?;

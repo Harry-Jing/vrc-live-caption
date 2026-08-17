@@ -698,10 +698,13 @@ fn overlapping_units_do_not_send_a_newer_draft_before_its_observation_window() -
             ],
         ),
     )?;
+    publisher.wait_until_snapshot_evaluated_for_test(3, clock.now(), Duration::from_secs(1))?;
     assert!(transport.text_events()?.is_empty());
 
     clock.advance(Duration::from_millis(899));
+    let before_deadline = clock.now();
     publisher.shared.wake.notify_all();
+    publisher.wait_until_snapshot_evaluated_for_test(3, before_deadline, Duration::from_secs(1))?;
     assert!(transport.text_events()?.is_empty());
 
     clock.advance(Duration::from_millis(1));

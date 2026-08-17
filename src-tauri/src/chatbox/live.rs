@@ -100,6 +100,10 @@ struct LivePublisherState {
     typing_attempted_epoch: Option<u64>,
     next_typing_reassert_at: Option<Instant>,
     diagnostics: VecDeque<LivePublisherDiagnostic>,
+    #[cfg(test)]
+    last_evaluated_snapshot_revision: u64,
+    #[cfg(test)]
+    last_evaluated_at: Option<Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -205,6 +209,10 @@ impl LiveChatboxPublisher {
                 typing_attempted_epoch: Some(0),
                 next_typing_reassert_at: None,
                 diagnostics: VecDeque::new(),
+                #[cfg(test)]
+                last_evaluated_snapshot_revision: 0,
+                #[cfg(test)]
+                last_evaluated_at: None,
             }),
             wake: Condvar::new(),
             interrupt_text_wait: AtomicBool::new(false),
@@ -435,6 +443,55 @@ impl LiveChatboxPublisher {
         self.worker_join.join()
     }
 
+    #[cfg(test)]
+    pub(crate) fn wait_until_snapshot_evaluated_for_test(
+        &self,
+        snapshot_revision: u64,
+        evaluated_at_or_after: Instant,
+        timeout: Duration,
+    ) -> AppResult<()> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
+        let mut state = self.lock_state()?;
+        loop {
+            if state.lifecycle != PublisherLifecycle::Running {
+                return Err(AppError::state(
+                    "Live publisher closed before evaluating the expected snapshot.",
+                ));
+            }
+            let evaluated = state.last_evaluated_snapshot_revision >= snapshot_revision
+                && state
+                    .last_evaluated_at
+                    .is_some_and(|evaluated_at| evaluated_at >= evaluated_at_or_after);
+            if evaluated {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(AppError::state(
+                    "Live publisher did not evaluate the snapshot before the test watchdog expired.",
+                ));
+            }
+            let (next_state, wait_result) = self
+                .shared
+                .wake
+                .wait_timeout(state, remaining)
+                .map_err(|_| AppError::state("Live publisher state lock was poisoned."))?;
+            state = next_state;
+            if wait_result.timed_out()
+                && (state.last_evaluated_snapshot_revision < snapshot_revision
+                    || state
+                        .last_evaluated_at
+                        .is_none_or(|evaluated_at| evaluated_at < evaluated_at_or_after))
+            {
+                return Err(AppError::state(
+                    "Live publisher did not evaluate the snapshot before the test watchdog expired.",
+                ));
+            }
+        }
+    }
+
     fn candidate_from_captions(
         &self,
         state: &mut LivePublisherState,
@@ -647,6 +704,15 @@ fn next_live_worker_item(shared: &LivePublisherShared) -> AppResult<LiveWorkerIt
                     deadline.min(candidate.ready_at)
                 }));
             }
+        }
+
+        #[cfg(test)]
+        {
+            // Tests use this as a causal barrier: the worker has examined the
+            // exact revision at the stated logical time and selected no text.
+            state.last_evaluated_snapshot_revision = state.highest_snapshot_revision;
+            state.last_evaluated_at = Some(now);
+            shared.wake.notify_all();
         }
 
         if let Some(deadline) = next_deadline {

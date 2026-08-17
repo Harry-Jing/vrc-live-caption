@@ -6,8 +6,8 @@ use crate::config::{
     TranslationPath, TranslationTarget,
 };
 use crate::recognition::{
-    RecognitionDriver, RecognitionDriverIo, RecognitionEvent, RecognitionGenerationScope,
-    RecognitionModule,
+    RecognitionDriver, RecognitionDriverInput, RecognitionDriverIo, RecognitionEvent,
+    RecognitionGenerationScope, RecognitionModule,
 };
 use crate::runtime_control::{
     ChatboxPublicationSnapshot, RuntimeControlStore, RuntimeGenerationPhase,
@@ -15,20 +15,21 @@ use crate::runtime_control::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::thread;
 use std::time::Duration;
 use tauri::Listener;
 
-struct ReconnectAfterCaptureOpensDriver {
-    capture_opened: mpsc::Receiver<()>,
-    pause_acknowledged: mpsc::SyncSender<()>,
+const TEST_WATCHDOG: Duration = Duration::from_secs(5);
+
+enum LifecycleDriverPlan {
+    ReadyUntilStopped,
+    FailAfterRelease { release: mpsc::Receiver<()> },
+    FailAfterFirstAudio { capture: CaptureProbe },
+    ReconnectAfterFirstAudio { capture: CaptureProbe },
 }
 
-struct TerminalAfterCaptureOpensDriver {
-    capture_opened: mpsc::Receiver<()>,
+struct LifecycleRecognitionDriver {
+    plan: LifecycleDriverPlan,
 }
-
-struct ReadyUntilStoppedDriver;
 
 struct DropTrackedRecognitionDriver {
     dropped: Arc<AtomicBool>,
@@ -101,72 +102,144 @@ impl RecognitionDriver for DropTrackedRecognitionDriver {
     }
 }
 
-impl RecognitionDriver for TerminalAfterCaptureOpensDriver {
+impl RecognitionDriver for LifecycleRecognitionDriver {
     fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
         io.ready(false)?;
-        self.capture_opened
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|error| {
-                AppError::state(format!("Runtime test capture did not open: {error}"))
-            })?;
-        io.emit_event(RecognitionEvent::UnitStarted {
-            generation: io.scope().generation,
-            stream_id: io.scope().stream_id.clone(),
-            unit_id: "terminal-active-unit".to_string(),
-            started_at_ms: 321,
-        })?;
-        Err(AppError::recognition_provider(
-            crate::error::ProviderFailureClass::Authentication,
-            "The recognition provider rejected the configured credential.",
-        ))
+        match self.plan {
+            LifecycleDriverPlan::ReadyUntilStopped => io.wait_until_stopped(),
+            LifecycleDriverPlan::FailAfterRelease { release } => {
+                release.recv_timeout(TEST_WATCHDOG).map_err(|error| {
+                    AppError::state(format!(
+                        "Capture opening did not release the Recognition owner: {error}"
+                    ))
+                })?;
+                Err(terminal_authentication_error())
+            }
+            LifecycleDriverPlan::FailAfterFirstAudio { capture } => {
+                if !receive_first_audio(&io)? {
+                    return Ok(());
+                }
+                capture.mark_audio_admitted();
+                io.emit_event(RecognitionEvent::UnitStarted {
+                    generation: io.scope().generation,
+                    stream_id: io.scope().stream_id.clone(),
+                    unit_id: "terminal-active-unit".to_string(),
+                    started_at_ms: 321,
+                })?;
+                Err(terminal_authentication_error())
+            }
+            LifecycleDriverPlan::ReconnectAfterFirstAudio { capture } => {
+                if !receive_first_audio(&io)? {
+                    return Ok(());
+                }
+                capture.mark_audio_admitted();
+                io.reconnecting(7, 1, Duration::from_millis(10))?;
+                io.wait_until_stopped()
+            }
+        }
     }
 }
 
-impl RecognitionDriver for ReconnectAfterCaptureOpensDriver {
-    fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
-        io.ready(false)?;
-        self.capture_opened
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|error| {
-                AppError::state(format!("Runtime test capture did not open: {error}"))
-            })?;
-        io.reconnecting(7, 1, Duration::from_millis(10))?;
-        self.pause_acknowledged
-            .send(())
-            .map_err(|_| AppError::state("Runtime test dropped its capture-pause receiver."))?;
-        io.wait_until_stopped()
+fn receive_first_audio(io: &RecognitionDriverIo) -> AppResult<bool> {
+    match io.receive(TEST_WATCHDOG)? {
+        RecognitionDriverInput::Audio(_) => Ok(true),
+        RecognitionDriverInput::Stopped => Ok(false),
+        RecognitionDriverInput::Idle => Err(AppError::state(
+            "Active capture did not admit audio before the test watchdog expired.",
+        )),
     }
 }
 
-impl RecognitionDriver for ReadyUntilStoppedDriver {
-    fn run(self: Box<Self>, io: RecognitionDriverIo) -> AppResult<()> {
-        io.ready(false)?;
-        io.wait_until_stopped()
-    }
+fn terminal_authentication_error() -> AppError {
+    AppError::recognition_provider(
+        crate::error::ProviderFailureClass::Authentication,
+        "The recognition provider rejected the configured credential.",
+    )
 }
 
-struct DropAwareRecognitionCapture {
+#[derive(Clone, Default)]
+struct CaptureProbe {
+    returned: Arc<AtomicBool>,
+    first_receive_entered: Arc<AtomicBool>,
+    audio_admitted: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
 }
 
-struct HardStopRecognitionCapture {
-    _drop_tracker: DropAwareRecognitionCapture,
-    generation: RuntimeGeneration,
+impl CaptureProbe {
+    fn mark_returned(&self) {
+        self.returned.store(true, Ordering::SeqCst);
+    }
+
+    fn begin_receive(&self, control: &RuntimeControlStore) -> AppResult<bool> {
+        if self.first_receive_entered.swap(true, Ordering::SeqCst) {
+            return Ok(false);
+        }
+        if control.snapshot()?.runtime_status.status != RuntimeStatus::Running {
+            return Err(AppError::state(
+                "Microphone capture received audio before Runtime committed Running.",
+            ));
+        }
+        Ok(true)
+    }
+
+    fn mark_audio_admitted(&self) {
+        self.audio_admitted.store(true, Ordering::SeqCst);
+    }
+
+    fn mark_dropped(&self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+
+    fn was_returned(&self) -> bool {
+        self.returned.load(Ordering::SeqCst)
+    }
+
+    fn receive_was_entered(&self) -> bool {
+        self.first_receive_entered.load(Ordering::SeqCst)
+    }
+
+    fn audio_was_admitted(&self) -> bool {
+        self.audio_admitted.load(Ordering::SeqCst)
+    }
+
+    fn was_dropped(&self) -> bool {
+        self.dropped.load(Ordering::SeqCst)
+    }
 }
 
-impl RecognitionCapture for DropAwareRecognitionCapture {
+struct OneFrameRecognitionCapture {
+    control: RuntimeControlStore,
+    probe: CaptureProbe,
+}
+
+struct HardStopRecognitionCapture {
+    control: RuntimeControlStore,
+    generation: RuntimeGeneration,
+    probe: CaptureProbe,
+}
+
+impl RecognitionCapture for OneFrameRecognitionCapture {
     fn sample_rate(&self) -> u32 {
         16_000
     }
 
     fn receive(&self, _timeout: Duration) -> AppResult<Option<Vec<f32>>> {
-        Ok(None)
+        if !self.probe.begin_receive(&self.control)? {
+            return Ok(None);
+        }
+        Ok(Some(vec![0.0; 160]))
     }
 }
 
-impl Drop for DropAwareRecognitionCapture {
+impl Drop for OneFrameRecognitionCapture {
     fn drop(&mut self) {
-        self.dropped.store(true, Ordering::SeqCst);
+        self.probe.mark_dropped();
+    }
+}
+
+impl Drop for HardStopRecognitionCapture {
+    fn drop(&mut self) {
+        self.probe.mark_dropped();
     }
 }
 
@@ -176,7 +249,9 @@ impl RecognitionCapture for HardStopRecognitionCapture {
     }
 
     fn receive(&self, _timeout: Duration) -> AppResult<Option<Vec<f32>>> {
-        self.generation.request_stop(None)?;
+        if self.probe.begin_receive(&self.control)? {
+            self.generation.request_stop(None)?;
+        }
         Ok(None)
     }
 }
@@ -217,61 +292,57 @@ fn coordinator_drops_capture_before_acknowledging_reconnect() -> AppResult<()> {
     let status_recorder = control.status_recorder();
     let caption_aggregate = CaptionAggregateStore::default();
     let generation = RuntimeGeneration::activate(app.handle(), 1, caption_aggregate)?;
-    let (capture_opened, opened) = mpsc::sync_channel(1);
-    let (pause_acknowledged, acknowledged) = mpsc::sync_channel(1);
+    let capture = CaptureProbe::default();
     let module = RecognitionModule::with_audio_budget(
         Duration::from_millis(100),
         1,
-        ReconnectAfterCaptureOpensDriver {
-            capture_opened: opened,
-            pause_acknowledged,
+        LifecycleRecognitionDriver {
+            plan: LifecycleDriverPlan::ReconnectAfterFirstAudio {
+                capture: capture.clone(),
+            },
         },
     )?;
     let mut recognition = module.start(RecognitionGenerationScope {
         generation: generation.generation_id(),
         stream_id: generation.stream_id().to_string(),
     })?;
-    let capture_dropped = Arc::new(AtomicBool::new(false));
-    let opened_capture_dropped = Arc::clone(&capture_dropped);
+    let opened_capture = capture.clone();
+    let capture_control = control.clone();
     let open_capture = move |_config: &AudioConfig| {
-        capture_opened.send(()).map_err(|_| {
-            AppError::state("Runtime test recognition owner stopped before capture opened.")
-        })?;
-        Ok(Box::new(DropAwareRecognitionCapture {
-            dropped: Arc::clone(&opened_capture_dropped),
+        opened_capture.mark_returned();
+        Ok(Box::new(OneFrameRecognitionCapture {
+            control: capture_control.clone(),
+            probe: opened_capture.clone(),
         }) as Box<dyn RecognitionCapture>)
     };
-
+    let capture_at_acknowledgement = capture.clone();
     let stop_generation = generation.clone();
-    let observed_capture_drop = Arc::clone(&capture_dropped);
-    let stopper = thread::spawn(move || -> AppResult<()> {
-        acknowledged
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|error| {
-                AppError::state(format!("Reconnect pause was not acknowledged: {error}"))
-            })?;
-        if !observed_capture_drop.load(Ordering::SeqCst) {
+    let before_capture_pause_acknowledgement = move || {
+        if !capture_at_acknowledgement.was_dropped() {
             return Err(AppError::state(
-                "Reconnect was acknowledged before microphone capture was dropped.",
+                "Reconnect acknowledged capture pause before microphone capture was dropped.",
             ));
         }
         stop_generation.request_stop(None)
-    });
+    };
 
-    coordinate_running_recognition_with_capture(
+    coordinate_running_recognition_with_capture_adapter(
         app.handle(),
         &AudioConfig::default(),
         None,
         &generation,
         &mut recognition,
         &status_recorder,
-        &open_capture,
+        RecognitionCaptureAdapter::with_pause_acknowledgement(
+            &open_capture,
+            &before_capture_pause_acknowledgement,
+        ),
     )?;
-    stopper
-        .join()
-        .map_err(|_| AppError::runtime("Runtime test stopper thread panicked."))??;
     recognition.stop()?;
-    assert!(capture_dropped.load(Ordering::SeqCst));
+    assert!(capture.was_returned());
+    assert!(capture.receive_was_entered());
+    assert!(capture.audio_was_admitted());
+    assert!(capture.was_dropped());
     assert_eq!(
         control.snapshot()?.runtime_status.status,
         RuntimeStatus::Reconnecting
@@ -289,21 +360,24 @@ fn hard_stop_drops_active_capture_before_coordinator_returns() -> AppResult<()> 
     let module = RecognitionModule::with_audio_budget(
         Duration::from_millis(100),
         1,
-        ReadyUntilStoppedDriver,
+        LifecycleRecognitionDriver {
+            plan: LifecycleDriverPlan::ReadyUntilStopped,
+        },
     )?;
     let mut recognition = module.start(RecognitionGenerationScope {
         generation: generation.generation_id(),
         stream_id: generation.stream_id().to_string(),
     })?;
-    let capture_dropped = Arc::new(AtomicBool::new(false));
-    let opened_capture_dropped = Arc::clone(&capture_dropped);
+    let capture = CaptureProbe::default();
+    let opened_capture = capture.clone();
+    let capture_control = control.clone();
     let stop_generation = generation.clone();
     let open_capture = move |_config: &AudioConfig| {
+        opened_capture.mark_returned();
         Ok(Box::new(HardStopRecognitionCapture {
-            _drop_tracker: DropAwareRecognitionCapture {
-                dropped: Arc::clone(&opened_capture_dropped),
-            },
+            control: capture_control.clone(),
             generation: stop_generation.clone(),
+            probe: opened_capture.clone(),
         }) as Box<dyn RecognitionCapture>)
     };
 
@@ -318,48 +392,51 @@ fn hard_stop_drops_active_capture_before_coordinator_returns() -> AppResult<()> 
     )?;
 
     assert!(generation.is_hard_stop_requested());
-    assert!(capture_dropped.load(Ordering::SeqCst));
+    assert!(capture.was_returned());
+    assert!(capture.receive_was_entered());
+    assert!(capture.was_dropped());
+    assert_eq!(
+        control.snapshot()?.runtime_status.status,
+        RuntimeStatus::Running
+    );
     recognition.stop()?;
     Ok(())
 }
 
 #[test]
-fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<()> {
+fn owner_termination_before_capture_activation_does_not_commit_running() -> AppResult<()> {
     let app = tauri::test::mock_app();
     let control = RuntimeControlStore::default();
     let status_recorder = control.status_recorder();
-    let caption_aggregate = CaptionAggregateStore::default();
-    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_aggregate.clone())?;
-    let capture_dropped = Arc::new(AtomicBool::new(false));
-    let observed_capture_drop = Arc::clone(&capture_dropped);
-    let (aggregate_closed_sender, aggregate_closed_receiver) = mpsc::channel();
-    app.listen("caption-aggregate-changed", move |event| {
-        let Ok(snapshot) = serde_json::from_str::<CaptionAggregateSnapshot>(event.payload()) else {
-            return;
-        };
-        if snapshot.open_source_units.is_empty() {
-            let _ = aggregate_closed_sender.send(observed_capture_drop.load(Ordering::SeqCst));
-        }
-    });
-    let (capture_opened, opened) = mpsc::sync_channel(1);
+    let generation =
+        RuntimeGeneration::activate(app.handle(), 1, CaptionAggregateStore::default())?;
+    let (capture_open_entered, capture_open_entry) = mpsc::sync_channel(1);
     let module = RecognitionModule::with_audio_budget(
         Duration::from_millis(100),
         1,
-        TerminalAfterCaptureOpensDriver {
-            capture_opened: opened,
+        LifecycleRecognitionDriver {
+            plan: LifecycleDriverPlan::FailAfterRelease {
+                release: capture_open_entry,
+            },
         },
     )?;
     let mut recognition = module.start(RecognitionGenerationScope {
         generation: generation.generation_id(),
         stream_id: generation.stream_id().to_string(),
     })?;
-    let opened_capture_dropped = Arc::clone(&capture_dropped);
+    let owner_termination = recognition.owner_termination_observer();
+    let capture = CaptureProbe::default();
+    let opened_capture = capture.clone();
+    let capture_control = control.clone();
     let open_capture = move |_config: &AudioConfig| {
-        capture_opened.send(()).map_err(|_| {
-            AppError::state("Runtime test recognition owner stopped before capture opened.")
+        capture_open_entered.send(()).map_err(|_| {
+            AppError::state("Recognition owner stopped before capture opening was observed.")
         })?;
-        Ok(Box::new(DropAwareRecognitionCapture {
-            dropped: Arc::clone(&opened_capture_dropped),
+        owner_termination.wait_for_termination(TEST_WATCHDOG)?;
+        opened_capture.mark_returned();
+        Ok(Box::new(OneFrameRecognitionCapture {
+            control: capture_control.clone(),
+            probe: opened_capture.clone(),
         }) as Box<dyn RecognitionCapture>)
     };
 
@@ -379,11 +456,102 @@ fn coordinator_drops_capture_and_preserves_terminal_owner_error() -> AppResult<(
             ));
         }
     };
+
     assert_eq!(error.code(), "stt.provider_authentication_failed");
-    assert!(capture_dropped.load(Ordering::SeqCst));
+    assert_eq!(
+        error.provider_failure_class(),
+        Some(crate::error::ProviderFailureClass::Authentication)
+    );
+    assert!(capture.was_returned());
+    assert!(capture.was_dropped());
+    assert!(!capture.receive_was_entered());
+    assert!(!capture.audio_was_admitted());
+    assert_eq!(
+        control.snapshot()?.runtime_status.status,
+        RuntimeStatus::Idle
+    );
+    recognition.stop()?;
+    generation.request_stop(None)?;
+    Ok(())
+}
+
+#[test]
+fn owner_termination_after_capture_activation_drops_capture_and_closes_source_unit() -> AppResult<()>
+{
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
+    let caption_aggregate = CaptionAggregateStore::default();
+    let generation = RuntimeGeneration::activate(app.handle(), 1, caption_aggregate.clone())?;
+    let capture = CaptureProbe::default();
+    let source_unit_opened = Arc::new(AtomicBool::new(false));
+    let observed_capture = capture.clone();
+    let observed_source_unit_opened = Arc::clone(&source_unit_opened);
+    let (aggregate_closed_sender, aggregate_closed_receiver) = mpsc::channel();
+    app.listen("caption-aggregate-changed", move |event| {
+        let Ok(snapshot) = serde_json::from_str::<CaptionAggregateSnapshot>(event.payload()) else {
+            return;
+        };
+        if !snapshot.open_source_units.is_empty() {
+            observed_source_unit_opened.store(true, Ordering::SeqCst);
+        } else if observed_source_unit_opened.load(Ordering::SeqCst) {
+            let _ = aggregate_closed_sender.send(observed_capture.was_dropped());
+        }
+    });
+    let module = RecognitionModule::with_audio_budget(
+        Duration::from_millis(100),
+        1,
+        LifecycleRecognitionDriver {
+            plan: LifecycleDriverPlan::FailAfterFirstAudio {
+                capture: capture.clone(),
+            },
+        },
+    )?;
+    let mut recognition = module.start(RecognitionGenerationScope {
+        generation: generation.generation_id(),
+        stream_id: generation.stream_id().to_string(),
+    })?;
+    let owner_termination = recognition.owner_termination_observer();
+    let opened_capture = capture.clone();
+    let capture_control = control.clone();
+    let open_capture = move |_config: &AudioConfig| {
+        opened_capture.mark_returned();
+        Ok(Box::new(OneFrameRecognitionCapture {
+            control: capture_control.clone(),
+            probe: opened_capture.clone(),
+        }) as Box<dyn RecognitionCapture>)
+    };
+
+    let error = match coordinate_running_recognition_with_capture(
+        app.handle(),
+        &AudioConfig::default(),
+        None,
+        &generation,
+        &mut recognition,
+        &status_recorder,
+        &open_capture,
+    ) {
+        Err(error) => error,
+        Ok(()) => {
+            return Err(AppError::state(
+                "Terminal recognition error did not cross the coordinator boundary.",
+            ));
+        }
+    };
+    owner_termination.wait_for_termination(TEST_WATCHDOG)?;
+    assert_eq!(error.code(), "stt.provider_authentication_failed");
+    assert_eq!(
+        error.provider_failure_class(),
+        Some(crate::error::ProviderFailureClass::Authentication)
+    );
+    assert!(capture.was_returned());
+    assert!(capture.receive_was_entered());
+    assert!(capture.audio_was_admitted());
+    assert!(capture.was_dropped());
+    assert!(source_unit_opened.load(Ordering::SeqCst));
     assert!(caption_aggregate.snapshot()?.open_source_units.is_empty());
     let capture_was_dropped = aggregate_closed_receiver
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(TEST_WATCHDOG)
         .map_err(|_| {
             AppError::state("Terminal open source unit did not close in the aggregate.")
         })?;
