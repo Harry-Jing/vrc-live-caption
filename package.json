@@ -43,11 +43,11 @@
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.1",
-    "@commitlint/config-conventional": "^21.2.0",
+    "@commitlint/config-conventional": "^21.2.2",
     "@eslint/js": "^10.0.1",
-    "@iconify-json/lucide": "^1.2.122",
+    "@iconify-json/lucide": "^1.2.123",
     "@tauri-apps/cli": "^2.11.4",
-    "@tsconfig/node24": "^24.0.4",
+    "@tsconfig/node24": "^24.0.5",
     "@types/node": "^24.13.3",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/eslint-config-typescript": "^14.9.0",
@@ -64,7 +64,7 @@
     "typescript": "~6.0.3",
     "vite": "^8.2.1",
     "vitest": "^4.1.10",
-    "vue-tsc": "^3.3.9"
+    "vue-tsc": "^3.3.10"
   },
   "packageManager": "pnpm@11.21.0"
 }
