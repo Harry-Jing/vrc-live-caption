@@ -63,7 +63,7 @@ winhttp = { version = "0.1.3", default-features = false }
 
 [dev-dependencies]
 proptest = { version = "1.11.0", default-features = false, features = ["std"] }
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 tauri = { version = "2", features = ["test"] }
 
 [lints.rust]
