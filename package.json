@@ -33,38 +33,38 @@
     "test:frontend": "vitest run"
   },
   "dependencies": {
-    "@nuxt/ui": "^4.10.0",
+    "@nuxt/ui": "^4.11.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "tailwindcss": "^4.3.3",
-    "vue": "3.5.41",
-    "vue-router": "^5.2.0"
+    "vue": "3.5.42",
+    "vue-router": "^5.3.0"
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.2.1",
-    "@commitlint/config-conventional": "^21.2.0",
+    "@commitlint/cli": "^21.2.2",
+    "@commitlint/config-conventional": "^21.2.2",
     "@eslint/js": "^10.0.1",
-    "@iconify-json/lucide": "^1.2.122",
+    "@iconify-json/lucide": "^1.2.127",
     "@tauri-apps/cli": "^2.11.4",
-    "@tsconfig/node24": "^24.0.4",
+    "@tsconfig/node24": "^24.0.5",
     "@types/node": "^24.13.3",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/eslint-config-typescript": "^14.9.0",
-    "@vue/server-renderer": "3.5.41",
-    "@vue/test-utils": "2.4.11",
+    "@vue/server-renderer": "3.5.42",
+    "@vue/test-utils": "2.5.0",
     "@vue/tsconfig": "^0.9.1",
-    "eslint": "^10.8.1",
+    "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-vue": "^10.10.0",
-    "happy-dom": "20.11.2",
-    "lefthook": "^2.1.10",
+    "happy-dom": "20.11.15",
+    "lefthook": "^2.1.12",
     "prettier": "^3.9.6",
     "prettier-plugin-tailwindcss": "^0.8.1",
     "typescript": "~6.0.3",
-    "vite": "^8.2.1",
-    "vitest": "^4.1.10",
-    "vue-tsc": "^3.3.9"
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11",
+    "vue-tsc": "^3.3.11"
   },
   "packageManager": "pnpm@11.21.0"
 }
