@@ -293,6 +293,45 @@ pub(crate) struct TranslationModule {
     worker: Option<JoinHandle<()>>,
 }
 
+#[cfg(test)]
+mod owner_quiescence {
+    use super::*;
+
+    /// Opaque registration for the exact owner that may call a test adapter.
+    pub(super) struct TranslationOwnerRegistration(std::sync::Weak<TranslationShared>);
+
+    /// Opaque proof that the exact registered owner has completed Stop/join.
+    pub(super) struct TranslationOwnerQuiesced(Arc<TranslationShared>);
+
+    impl TranslationOwnerRegistration {
+        pub(super) fn matches_module(&self, module: &TranslationModule) -> bool {
+            std::sync::Weak::ptr_eq(&self.0, &Arc::downgrade(&module.shared))
+        }
+
+        pub(super) fn accepts(&self, proof: &TranslationOwnerQuiesced) -> bool {
+            self.0
+                .upgrade()
+                .is_some_and(|shared| Arc::ptr_eq(&shared, &proof.0))
+        }
+    }
+
+    impl TranslationModule {
+        pub(super) fn owner_registration(&self) -> TranslationOwnerRegistration {
+            TranslationOwnerRegistration(Arc::downgrade(&self.shared))
+        }
+
+        pub(super) fn stop_and_confirm_owner_quiesced(
+            &mut self,
+        ) -> AppResult<TranslationOwnerQuiesced> {
+            self.stop()?;
+            Ok(TranslationOwnerQuiesced(Arc::clone(&self.shared)))
+        }
+    }
+}
+
+#[cfg(test)]
+use owner_quiescence::{TranslationOwnerQuiesced, TranslationOwnerRegistration};
+
 /// Provider owner and metadata created from one credential-bound selection.
 ///
 /// Its private fields prevent Runtime from relabeling a Module after the
@@ -399,6 +438,7 @@ impl TranslationModule {
             attempt_start_gate: Mutex::new(()),
             stopped: AtomicBool::new(false),
             clock: Arc::clone(&dependencies.clock),
+            delay: Arc::clone(&dependencies.delay),
             budget: Arc::new(TranslationBudget::default()),
         });
         let worker_shared = Arc::clone(&shared);
@@ -582,6 +622,7 @@ struct TranslationShared {
     attempt_start_gate: Mutex<()>,
     stopped: AtomicBool,
     clock: Arc<dyn TranslationClock>,
+    delay: Arc<dyn CancellableDelay>,
     budget: Arc<TranslationBudget>,
 }
 
@@ -682,6 +723,7 @@ impl TranslationShared {
         } else {
             self.stopped.store(true, Ordering::SeqCst);
         }
+        self.delay.cancel();
         self.wake.notify_all();
     }
 
@@ -731,6 +773,8 @@ impl TranslationClock for SystemClock {
 
 trait CancellableDelay: Send + Sync {
     fn wait(&self, duration: Duration, stopped: &AtomicBool, clock: &dyn TranslationClock) -> bool;
+
+    fn cancel(&self) {}
 }
 
 struct SystemDelay;

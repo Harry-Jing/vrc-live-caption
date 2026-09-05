@@ -5,533 +5,34 @@ use crate::credentials::{CredentialId, CredentialStorage, ResolvedCredential};
 use crate::error::{AppError, AppResult};
 use crate::host_resolver::HostResolver;
 use secrecy::SecretString;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
+
+#[path = "policy_test_fixture.rs"]
+mod fixture;
+
+use fixture::{AttemptScript, FixtureModule, TranslationPolicyFixture};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
-#[derive(Clone)]
-struct ScriptedAdapter {
-    state: Arc<Mutex<ScriptedAdapterState>>,
+fn fixture_error(error: fixture::FixtureError) -> AppError {
+    AppError::state(error.to_string())
 }
 
-struct ScriptedAdapterState {
-    results: VecDeque<Result<String, AdapterFailure>>,
-    sources: Vec<String>,
-    targets: Vec<TranslationTarget>,
-    budgets: Vec<(Duration, Duration)>,
+fn stop_and_finish_fixture(
+    fixture: &TranslationPolicyFixture,
+    module: &mut FixtureModule,
+) -> AppResult<Vec<fixture::AttemptRecord>> {
+    let owner = module.stop_and_confirm_owner_quiesced()?;
+    fixture.finish(owner).map_err(fixture_error)
 }
 
-impl ScriptedAdapter {
-    fn successes<const N: usize>(translations: [&str; N]) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(ScriptedAdapterState {
-                results: translations
-                    .into_iter()
-                    .map(|translation| Ok(translation.to_string()))
-                    .collect(),
-                sources: Vec::new(),
-                targets: Vec::new(),
-                budgets: Vec::new(),
-            })),
-        }
-    }
-
-    fn sources(&self) -> Vec<String> {
-        self.state
-            .lock()
-            .map(|state| state.sources.clone())
-            .unwrap_or_default()
-    }
-
-    fn targets(&self) -> Vec<TranslationTarget> {
-        self.state
-            .lock()
-            .map(|state| state.targets.clone())
-            .unwrap_or_default()
-    }
-
-    fn budgets(&self) -> Vec<(Duration, Duration)> {
-        self.state
-            .lock()
-            .map(|state| state.budgets.clone())
-            .unwrap_or_default()
-    }
-
-    fn with_results(results: impl IntoIterator<Item = Result<String, AdapterFailure>>) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(ScriptedAdapterState {
-                results: results.into_iter().collect(),
-                sources: Vec::new(),
-                targets: Vec::new(),
-                budgets: Vec::new(),
-            })),
-        }
-    }
-}
-
-impl CompletedTextAdapter for ScriptedAdapter {
-    fn begin(
-        &self,
-        request: CompletedTextRequest,
-        control: AttemptControl,
-        completion: AdapterCompletion,
-    ) -> Result<Box<dyn ActiveTranslationCall>, AdapterFailure> {
-        let mut state = self.state.lock().map_err(|_| AdapterFailure {
-            class: TranslationFailureClass::Unknown,
-            retryable: false,
-            retry_after: None,
-            request_outcome_ambiguous: false,
-        })?;
-        state.sources.push(request.source_text);
-        state.targets.push(request.target);
-        state
-            .budgets
-            .push((control.attempt_budget, control.total_budget));
-        let result = state.results.pop_front().unwrap_or(Err(AdapterFailure {
-            class: TranslationFailureClass::Unknown,
-            retryable: false,
-            retry_after: None,
-            request_outcome_ambiguous: false,
-        }));
-        drop(state);
-        completion.finish(result);
-        Ok(Box::new(NoopActiveCall))
-    }
-}
-
-struct NoopActiveCall;
-
-impl ActiveTranslationCall for NoopActiveCall {
-    fn cancel(&mut self) -> CancellationStatus {
-        CancellationStatus::Confirmed
-    }
-}
-
-#[derive(Default)]
-struct ManualClock {
-    now_ms: std::sync::atomic::AtomicU64,
-}
-
-impl ManualClock {
-    fn advance(&self, duration: Duration) {
-        self.now_ms.fetch_add(
-            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
-            Ordering::SeqCst,
-        );
-    }
-}
-
-impl TranslationClock for ManualClock {
-    fn now(&self) -> Duration {
-        Duration::from_millis(self.now_ms.load(Ordering::SeqCst))
-    }
-}
-
-struct AdvancingDelay {
-    clock: Arc<ManualClock>,
-    waits: Mutex<Vec<Duration>>,
-}
-
-impl AdvancingDelay {
-    fn new(clock: Arc<ManualClock>) -> Self {
-        Self {
-            clock,
-            waits: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn waits(&self) -> Vec<Duration> {
-        self.waits
-            .lock()
-            .map(|waits| waits.clone())
-            .unwrap_or_default()
-    }
-}
-
-impl CancellableDelay for AdvancingDelay {
-    fn wait(
-        &self,
-        duration: Duration,
-        stopped: &AtomicBool,
-        _clock: &dyn TranslationClock,
-    ) -> bool {
-        if stopped.load(Ordering::SeqCst) {
-            return false;
-        }
-        if let Ok(mut waits) = self.waits.lock() {
-            waits.push(duration);
-        }
-        self.clock.advance(duration);
-        true
-    }
-}
-
-#[derive(Default)]
-struct StopAwareBlockingDelay {
-    entered: AtomicBool,
-}
-
-impl StopAwareBlockingDelay {
-    fn wait_until_entered(&self, timeout: Duration) -> AppResult<()> {
-        let deadline = std::time::Instant::now()
-            .checked_add(timeout)
-            .unwrap_or_else(std::time::Instant::now);
-        while !self.entered.load(Ordering::SeqCst) {
-            if std::time::Instant::now() >= deadline {
-                return Err(AppError::state("Retry backoff did not begin in time."));
-            }
-            std::thread::yield_now();
-        }
-        Ok(())
-    }
-}
-
-impl CancellableDelay for StopAwareBlockingDelay {
-    fn wait(
-        &self,
-        _duration: Duration,
-        stopped: &AtomicBool,
-        _clock: &dyn TranslationClock,
-    ) -> bool {
-        self.entered.store(true, Ordering::SeqCst);
-        while !stopped.load(Ordering::SeqCst) {
-            std::thread::yield_now();
-        }
-        false
-    }
-}
-
-struct FixedJitter(Duration);
-
-impl RetryJitter for FixedJitter {
-    fn delay(&self, _base: Duration) -> Duration {
-        self.0
-    }
-}
-
-struct QueuedNearDeadlineAdapter {
-    clock: Arc<ManualClock>,
-    calls: std::sync::atomic::AtomicU64,
-    budgets: Mutex<Vec<(Duration, Duration)>>,
-}
-
-#[derive(Clone)]
-struct LateAmbiguousAdapter {
-    clock: Arc<ManualClock>,
-    calls: Arc<std::sync::atomic::AtomicU64>,
-}
-
-impl CompletedTextAdapter for LateAmbiguousAdapter {
-    fn begin(
-        &self,
-        _request: CompletedTextRequest,
-        _control: AttemptControl,
-        completion: AdapterCompletion,
-    ) -> Result<Box<dyn ActiveTranslationCall>, AdapterFailure> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        self.clock
-            .advance(ATTEMPT_DEADLINE + Duration::from_millis(1));
-        completion.finish(Err(AdapterFailure {
-            class: TranslationFailureClass::DeadlineExceeded,
-            retryable: false,
-            retry_after: None,
-            request_outcome_ambiguous: true,
-        }));
-        Ok(Box::new(NoopActiveCall))
-    }
-}
-
-impl QueuedNearDeadlineAdapter {
-    fn new(clock: Arc<ManualClock>) -> Self {
-        Self {
-            clock,
-            calls: std::sync::atomic::AtomicU64::new(0),
-            budgets: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn calls(&self) -> u64 {
-        self.calls.load(Ordering::SeqCst)
-    }
-
-    fn budgets(&self) -> Vec<(Duration, Duration)> {
-        self.budgets
-            .lock()
-            .map(|budgets| budgets.clone())
-            .unwrap_or_default()
-    }
-}
-
-impl CompletedTextAdapter for QueuedNearDeadlineAdapter {
-    fn begin(
-        &self,
-        _request: CompletedTextRequest,
-        control: AttemptControl,
-        completion: AdapterCompletion,
-    ) -> Result<Box<dyn ActiveTranslationCall>, AdapterFailure> {
-        if let Ok(mut budgets) = self.budgets.lock() {
-            budgets.push((control.attempt_budget, control.total_budget));
-        }
-        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if call <= 2 {
-            self.clock.advance(Duration::from_millis(4_900));
-            completion.finish(Ok(format!("translated-{call}")));
-        } else {
-            self.clock.advance(Duration::from_millis(1_900));
-            completion.finish(Err(AdapterFailure {
-                class: TranslationFailureClass::RateLimited,
-                retryable: true,
-                retry_after: Some(Duration::from_secs(30)),
-                request_outcome_ambiguous: false,
-            }));
-        }
-        Ok(Box::new(NoopActiveCall))
-    }
-}
-
-#[derive(Clone)]
-struct BlockingAdapter {
-    shared: Arc<BlockingAdapterShared>,
-}
-
-#[derive(Default)]
-struct BlockingAdapterShared {
-    state: Mutex<BlockingAdapterState>,
-    changed: Condvar,
-}
-
-#[derive(Default)]
-struct BlockingAdapterState {
-    calls: usize,
-    cancelled: bool,
-    completion: Option<AdapterCompletion>,
-}
-
-impl Default for BlockingAdapter {
-    fn default() -> Self {
-        Self {
-            shared: Arc::new(BlockingAdapterShared::default()),
-        }
-    }
-}
-
-impl BlockingAdapter {
-    fn wait_until_called(&self, timeout: Duration) -> AppResult<()> {
-        self.wait_until_call_count(1, timeout)
-    }
-
-    fn wait_until_call_count(&self, expected: usize, timeout: Duration) -> AppResult<()> {
-        let deadline = std::time::Instant::now()
-            .checked_add(timeout)
-            .unwrap_or_else(std::time::Instant::now);
-        let mut state = self
-            .shared
-            .state
-            .lock()
-            .map_err(|_| AppError::state("Blocking Adapter test lock was poisoned."))?;
-        while state.calls < expected {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(AppError::state("Blocking Adapter was not called in time."));
-            }
-            let (next_state, wait) = self
-                .shared
-                .changed
-                .wait_timeout(state, remaining)
-                .map_err(|_| AppError::state("Blocking Adapter test wait was poisoned."))?;
-            state = next_state;
-            if wait.timed_out() && state.calls < expected {
-                return Err(AppError::state("Blocking Adapter was not called in time."));
-            }
-        }
-        Ok(())
-    }
-
-    fn was_cancelled(&self) -> bool {
-        self.shared
-            .state
-            .lock()
-            .map(|state| state.cancelled)
-            .unwrap_or_default()
-    }
-
-    fn complete(&self, text: &str) {
-        let completion = self
-            .shared
-            .state
-            .lock()
-            .ok()
-            .and_then(|mut state| state.completion.take());
-        if let Some(completion) = completion {
-            completion.finish(Ok(text.to_string()));
-        }
-    }
-
-    fn calls(&self) -> usize {
-        self.shared
-            .state
-            .lock()
-            .map(|state| state.calls)
-            .unwrap_or_default()
-    }
-}
-
-impl CompletedTextAdapter for BlockingAdapter {
-    fn begin(
-        &self,
-        _request: CompletedTextRequest,
-        _control: AttemptControl,
-        completion: AdapterCompletion,
-    ) -> Result<Box<dyn ActiveTranslationCall>, AdapterFailure> {
-        let mut state = self.shared.state.lock().map_err(|_| AdapterFailure {
-            class: TranslationFailureClass::Unknown,
-            retryable: false,
-            retry_after: None,
-            request_outcome_ambiguous: false,
-        })?;
-        state.calls = state.calls.saturating_add(1);
-        state.completion = Some(completion);
-        drop(state);
-        self.shared.changed.notify_all();
-        Ok(Box::new(BlockingActiveCall {
-            shared: Arc::clone(&self.shared),
-        }))
-    }
-}
-
-struct BlockingActiveCall {
-    shared: Arc<BlockingAdapterShared>,
-}
-
-impl ActiveTranslationCall for BlockingActiveCall {
-    fn cancel(&mut self) -> CancellationStatus {
-        if let Ok(mut state) = self.shared.state.lock() {
-            state.cancelled = true;
-            // Dropping the only callback sender makes this scripted call
-            // incapable of completing after cancellation returns.
-            state.completion.take();
-            return CancellationStatus::Confirmed;
-        }
-        CancellationStatus::Unconfirmed
-    }
-}
-
-#[derive(Clone, Default)]
-struct NonCooperativeAdapter {
-    release: Arc<AtomicBool>,
-}
-
-#[derive(Clone, Default)]
-struct UnconfirmedCancelAdapter {
-    shared: Arc<UnconfirmedCancelShared>,
-}
-
-#[derive(Default)]
-struct UnconfirmedCancelShared {
-    calls: std::sync::atomic::AtomicU64,
-    begun: Mutex<bool>,
-    changed: Condvar,
-    release: AtomicBool,
-    completion: Mutex<Option<AdapterCompletion>>,
-}
-
-impl UnconfirmedCancelAdapter {
-    fn wait_until_called(&self, timeout: Duration) -> AppResult<()> {
-        let deadline = std::time::Instant::now()
-            .checked_add(timeout)
-            .unwrap_or_else(std::time::Instant::now);
-        let mut begun = self
-            .shared
-            .begun
-            .lock()
-            .map_err(|_| AppError::state("Unconfirmed Adapter test lock was poisoned."))?;
-        while !*begun {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(AppError::state(
-                    "Unconfirmed Adapter was not called in time.",
-                ));
-            }
-            let (next, wait) = self
-                .shared
-                .changed
-                .wait_timeout(begun, remaining)
-                .map_err(|_| AppError::state("Unconfirmed Adapter test wait was poisoned."))?;
-            begun = next;
-            if wait.timed_out() && !*begun {
-                return Err(AppError::state(
-                    "Unconfirmed Adapter was not called in time.",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn calls(&self) -> u64 {
-        self.shared.calls.load(Ordering::SeqCst)
-    }
-
-    fn release(&self) {
-        self.shared.release.store(true, Ordering::SeqCst);
-    }
-}
-
-impl CompletedTextAdapter for UnconfirmedCancelAdapter {
-    fn begin(
-        &self,
-        _request: CompletedTextRequest,
-        _control: AttemptControl,
-        completion: AdapterCompletion,
-    ) -> Result<Box<dyn ActiveTranslationCall>, AdapterFailure> {
-        self.shared.calls.fetch_add(1, Ordering::SeqCst);
-        if let Ok(mut begun) = self.shared.begun.lock() {
-            *begun = true;
-        }
-        self.shared.changed.notify_all();
-        if let Ok(mut stored) = self.shared.completion.lock() {
-            *stored = Some(completion);
-        }
-        Ok(Box::new(UnconfirmedActiveCall {
-            shared: Arc::clone(&self.shared),
-        }))
-    }
-}
-
-struct UnconfirmedActiveCall {
-    shared: Arc<UnconfirmedCancelShared>,
-}
-
-impl ActiveTranslationCall for UnconfirmedActiveCall {
-    fn cancel(&mut self) -> CancellationStatus {
-        while !self.shared.release.load(Ordering::SeqCst) {
-            std::thread::yield_now();
-        }
-        CancellationStatus::Unconfirmed
-    }
-}
-
-impl NonCooperativeAdapter {
-    fn release(&self) {
-        self.release.store(true, Ordering::SeqCst);
-    }
-}
-
-impl CompletedTextAdapter for NonCooperativeAdapter {
-    fn begin(
-        &self,
-        _request: CompletedTextRequest,
-        _control: AttemptControl,
-        completion: AdapterCompletion,
-    ) -> Result<Box<dyn ActiveTranslationCall>, AdapterFailure> {
-        while !self.release.load(Ordering::SeqCst) {
-            std::thread::yield_now();
-        }
-        completion.finish(Ok("late private translation".to_string()));
-        Ok(Box::new(NoopActiveCall))
-    }
+fn distinct_source(byte_len: usize, discriminator: u8) -> String {
+    let mut source = "x".repeat(byte_len.max(1));
+    source.replace_range(
+        ..1,
+        &char::from(b'a'.saturating_add(discriminator % 26)).to_string(),
+    );
+    source
 }
 
 fn reservation(
@@ -652,79 +153,131 @@ fn production_factory_binds_each_endpoint_to_its_own_credential() -> AppResult<(
 #[test]
 fn completed_work_is_fifo_and_correlation_stays_owned_by_the_module() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = ScriptedAdapter::successes(["one translated", "two translated"]);
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter.clone()),
-        TestPolicyDependencies::real(),
-    )?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
     assert!(matches!(
         outcomes.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)
     ));
 
-    module
-        .try_submit(reservation(&store, 1, "one", "first private source")?)
-        .map_err(|_| AppError::state("First source was rejected."))?;
-    module
-        .try_submit(reservation(&store, 1, "two", "second private source")?)
-        .map_err(|_| AppError::state("Second source was rejected."))?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 1, "one", "first private source")?,
+            [AttemptScript::held_confirmed()],
+        )
+        .map_err(fixture_error)?;
+    let first_attempt = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
+    let second = reservation(&store, 1, "two", "repeated private source")?;
+    let third = reservation(&store, 1, "three", "repeated private source")?;
+    fixture
+        .admit(&module, second, [AttemptScript::success("two translated")])
+        .map_err(fixture_error)?;
+    fixture
+        .admit(&module, third, [AttemptScript::success("three translated")])
+        .map_err(fixture_error)?;
+    fixture
+        .complete(first_attempt, "one translated")
+        .map_err(fixture_error)?;
 
-    let first = outcomes
+    let first_outcome = outcomes
         .recv_timeout(TEST_TIMEOUT)
         .map_err(|_| AppError::state("First terminal translation outcome was not received."))?;
-    let second = outcomes
+    let second_outcome = outcomes
         .recv_timeout(TEST_TIMEOUT)
         .map_err(|_| AppError::state("Second terminal translation outcome was not received."))?;
-    assert_eq!(first.source_ref().unit_id, "one");
-    assert_eq!(second.source_ref().unit_id, "two");
-    assert!(matches!(first, TranslationTerminalOutcome::Completed(_)));
-    assert!(matches!(second, TranslationTerminalOutcome::Completed(_)));
-    assert_eq!(
-        adapter.sources(),
-        ["first private source", "second private source"]
-    );
-    let TranslationTerminalOutcome::Completed(first) = first else {
+    let third_outcome = outcomes
+        .recv_timeout(TEST_TIMEOUT)
+        .map_err(|_| AppError::state("Third terminal translation outcome was not received."))?;
+    assert_eq!(first_outcome.source_ref().unit_id, "one");
+    assert_eq!(second_outcome.source_ref().unit_id, "two");
+    assert_eq!(third_outcome.source_ref().unit_id, "three");
+    let first_ref = first_outcome.source_ref().clone();
+    let second_ref = second_outcome.source_ref().clone();
+    let third_ref = third_outcome.source_ref().clone();
+    let TranslationTerminalOutcome::Completed(first) = first_outcome else {
         return Err(AppError::state("First translation was not completed."));
     };
-    let aggregate_update = first
+    let TranslationTerminalOutcome::Completed(second) = second_outcome else {
+        return Err(AppError::state("Second translation was not completed."));
+    };
+    let TranslationTerminalOutcome::Completed(third) = third_outcome else {
+        return Err(AppError::state("Third translation was not completed."));
+    };
+    let first_update = first
         .complete(30)?
-        .ok_or_else(|| AppError::state("Completed translation was not finalized."))?;
-    assert!(matches!(
-        aggregate_update.change,
-        crate::caption::CaptionAggregateChange::CaptionAccepted(CaptionSnapshot {
-            lane: CaptionLane::Translation,
-            ..
-        })
-    ));
+        .ok_or_else(|| AppError::state("First translation was not finalized."))?;
+    let second_update = second
+        .complete(31)?
+        .ok_or_else(|| AppError::state("Second translation was not finalized."))?;
+    let third_update = third
+        .complete(32)?
+        .ok_or_else(|| AppError::state("Third translation was not finalized."))?;
+    let snapshots = [first_update, second_update, third_update].map(|update| match update.change {
+        crate::caption::CaptionAggregateChange::CaptionAccepted(snapshot) => Ok(snapshot),
+        _ => Err(AppError::state(
+            "Completed translation did not produce a caption snapshot.",
+        )),
+    });
+    let [first_snapshot, second_snapshot, third_snapshot] = snapshots;
+    let first_snapshot = first_snapshot?;
+    let second_snapshot = second_snapshot?;
+    let third_snapshot = third_snapshot?;
+    assert_eq!(first_snapshot.lane, CaptionLane::Translation);
+    assert_eq!(second_snapshot.lane, CaptionLane::Translation);
+    assert_eq!(third_snapshot.lane, CaptionLane::Translation);
+    assert_eq!(first_snapshot.text, "one translated");
+    assert_eq!(second_snapshot.text, "two translated");
+    assert_eq!(third_snapshot.text, "three translated");
+    assert_eq!(first_snapshot.unit_id.as_deref(), Some("one"));
+    assert_eq!(second_snapshot.unit_id.as_deref(), Some("two"));
+    assert_eq!(third_snapshot.unit_id.as_deref(), Some("three"));
 
-    module.stop()?;
+    let records = stop_and_finish_fixture(&fixture, &mut module)?;
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0].source_ref().unit_id, "one");
+    assert_eq!(records[1].source_ref().unit_id, "two");
+    assert_eq!(records[2].source_ref().unit_id, "three");
+    assert_eq!(records[0].source_ref(), &first_ref);
+    assert_eq!(records[1].source_ref(), &second_ref);
+    assert_eq!(records[2].source_ref(), &third_ref);
+    assert_ne!(records[1].source_id(), records[2].source_id());
+    assert_eq!(records[0].target(), TranslationTarget::SimplifiedChinese);
+    assert_eq!(records[0].attempt_number(), 1);
     Ok(())
 }
 
 #[test]
 fn admission_enforces_count_and_source_byte_budgets_without_waiting() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = Arc::new(BlockingAdapter::default());
-    let (mut module, _outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        adapter,
-        TestPolicyDependencies::real(),
-    )?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, _outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
 
     for index in 0_u64..8 {
-        assert_eq!(
-            module
-                .try_submit(reservation(
+        fixture
+            .admit(
+                &module,
+                reservation(
                     &store,
                     2,
                     &format!("unit-{index}"),
-                    "x".repeat(8 * 1024),
-                )?)
-                .map_err(|rejection| rejection.kind()),
-            Ok(())
-        );
+                    distinct_source(8 * 1024, u8::try_from(index).unwrap_or_default()),
+                )?,
+                (index == 0).then_some(AttemptScript::held_confirmed()),
+            )
+            .map_err(fixture_error)?;
     }
+    let active = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
     assert_eq!(
         module
             .try_submit(reservation(&store, 2, "ninth", "x")?)
@@ -743,29 +296,39 @@ fn admission_enforces_count_and_source_byte_budgets_without_waiting() -> AppResu
         Err(TranslationSubmitError::SourceTooLarge)
     );
 
-    module.stop()?;
+    let owner = module.stop_and_confirm_owner_quiesced()?;
+    fixture
+        .wait_for_quiescence(active, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    fixture.finish(owner).map_err(fixture_error)?;
     Ok(())
 }
 
 #[test]
 fn rejected_submission_retains_the_one_shot_failure_capability() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = Arc::new(BlockingAdapter::default());
-    let (mut module, _outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        adapter,
-        TestPolicyDependencies::real(),
-    )?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, _outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
     for index in 0_u64..OUTSTANDING_LIMIT as u64 {
-        module
-            .try_submit(reservation(
-                &store,
-                31,
-                &format!("admitted-{index}"),
-                "admitted source",
-            )?)
-            .map_err(|_| AppError::state("Budget setup source was rejected."))?;
+        fixture
+            .admit(
+                &module,
+                reservation(
+                    &store,
+                    31,
+                    &format!("admitted-{index}"),
+                    format!("admitted source {index}"),
+                )?,
+                (index == 0).then_some(AttemptScript::held_confirmed()),
+            )
+            .map_err(fixture_error)?;
     }
+    let active = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
 
     let rejection = module
         .try_submit(reservation(&store, 31, "rejected", "rejected source")?)
@@ -797,28 +360,34 @@ fn rejected_submission_retains_the_one_shot_failure_capability() -> AppResult<()
             }
         )
     ));
-    module.stop()?;
+    let owner = module.stop_and_confirm_owner_quiesced()?;
+    fixture
+        .wait_for_quiescence(active, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    fixture.finish(owner).map_err(fixture_error)?;
     Ok(())
 }
 
 #[test]
 fn completed_outcomes_hold_source_bytes_until_finalized_or_dropped() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = ScriptedAdapter::successes(["one", "two", "three", "four", "five"]);
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter),
-        TestPolicyDependencies::real(),
-    )?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
     for index in 0_u64..4 {
-        module
-            .try_submit(reservation(
-                &store,
-                13,
-                &format!("held-{index}"),
-                "x".repeat(SOURCE_BYTE_LIMIT),
-            )?)
-            .map_err(|_| AppError::state("Held-outcome test source was rejected."))?;
+        fixture
+            .admit(
+                &module,
+                reservation(
+                    &store,
+                    13,
+                    &format!("held-{index}"),
+                    distinct_source(SOURCE_BYTE_LIMIT, u8::try_from(index).unwrap_or_default()),
+                )?,
+                [AttemptScript::success(format!("translated-{index}"))],
+            )
+            .map_err(fixture_error)?;
     }
     let mut held = Vec::new();
     for _ in 0..4 {
@@ -841,79 +410,90 @@ fn completed_outcomes_hold_source_bytes_until_finalized_or_dropped() -> AppResul
         Err(TranslationSubmitError::RetainedSourceLimit)
     );
     drop(held.pop());
-    assert_eq!(
-        module
-            .try_submit(reservation(
+    fixture
+        .admit(
+            &module,
+            reservation(
                 &store,
                 13,
                 "after-release",
-                "x".repeat(SOURCE_BYTE_LIMIT),
-            )?)
-            .map_err(|rejection| rejection.kind()),
-        Ok(())
-    );
-    module.stop()?;
+                distinct_source(SOURCE_BYTE_LIMIT, 5),
+            )?,
+            [AttemptScript::success("translated-after-release")],
+        )
+        .map_err(fixture_error)?;
+    fixture
+        .wait_for_attempt_count(5, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    stop_and_finish_fixture(&fixture, &mut module)?;
     Ok(())
 }
 
 #[test]
 fn unconsumed_outcomes_continue_to_hold_the_outstanding_slots() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = ScriptedAdapter::successes([
-        "one", "two", "three", "four", "five", "six", "seven", "eight",
-    ]);
-    let observed_adapter = adapter.clone();
-    let (mut module, _outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter),
-        TestPolicyDependencies::real(),
-    )?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, _outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
     for index in 0_u64..8 {
-        module
-            .try_submit(reservation(&store, 14, &format!("outcome-{index}"), "x")?)
-            .map_err(|_| AppError::state("Unconsumed-outcome test source was rejected."))?;
+        fixture
+            .admit(
+                &module,
+                reservation(
+                    &store,
+                    14,
+                    &format!("outcome-{index}"),
+                    format!("source-{index}"),
+                )?,
+                [AttemptScript::success(format!("translated-{index}"))],
+            )
+            .map_err(fixture_error)?;
     }
-    let deadline = std::time::Instant::now()
-        .checked_add(TEST_TIMEOUT)
-        .unwrap_or_else(std::time::Instant::now);
-    while observed_adapter.sources().len() < 8 {
-        if std::time::Instant::now() >= deadline {
-            return Err(AppError::state(
-                "Unconsumed outcomes were not produced in time.",
-            ));
-        }
-        std::thread::yield_now();
-    }
+    fixture
+        .wait_for_attempt_count(8, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
     assert_eq!(
         module
             .try_submit(reservation(&store, 14, "ninth", "x")?)
             .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::OutstandingLimit)
     );
-    module.stop()?;
+    stop_and_finish_fixture(&fixture, &mut module)?;
     Ok(())
 }
 
 #[test]
 fn stop_releases_active_and_queued_reservations_and_suppresses_late_results() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = Arc::new(BlockingAdapter::default());
-    let module_adapter: Arc<dyn CompletedTextAdapter> = adapter.clone();
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        module_adapter,
-        TestPolicyDependencies::real(),
-    )?;
-    module
-        .try_submit(reservation(&store, 3, "active", "active private source")?)
-        .map_err(|_| AppError::state("Active test source was rejected."))?;
-    module
-        .try_submit(reservation(&store, 3, "queued", "queued private source")?)
-        .map_err(|_| AppError::state("Queued test source was rejected."))?;
-    adapter.wait_until_called(TEST_TIMEOUT)?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 3, "active", "active private source")?,
+            [AttemptScript::held_confirmed()],
+        )
+        .map_err(fixture_error)?;
+    let active = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 3, "queued", "queued private source")?,
+            [],
+        )
+        .map_err(fixture_error)?;
 
-    module.stop()?;
-    adapter.complete("late private translation");
+    let owner = module.stop_and_confirm_owner_quiesced()?;
+    fixture
+        .wait_for_quiescence(active, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    fixture.finish(owner).map_err(fixture_error)?;
     assert!(outcomes.recv_timeout(Duration::from_millis(50)).is_err());
     assert_eq!(
         module
@@ -928,21 +508,60 @@ fn stop_releases_active_and_queued_reservations_and_suppresses_late_results() ->
 #[test]
 fn stop_does_not_wait_for_a_non_cooperative_adapter_to_return() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = Arc::new(NonCooperativeAdapter::default());
-    let module_adapter: Arc<dyn CompletedTextAdapter> = adapter.clone();
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        module_adapter,
-        TestPolicyDependencies::real(),
-    )?;
-    module
-        .try_submit(reservation(&store, 4, "non-cooperative", "private source")?)
-        .map_err(|_| AppError::state("Non-cooperative test source was rejected."))?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 4, "non-cooperative", "private source")?,
+            [AttemptScript::non_cooperative_success(
+                "late private translation",
+            )],
+        )
+        .map_err(fixture_error)?;
+    let attempt = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
 
-    let started = std::time::Instant::now();
-    module.stop()?;
-    assert!(started.elapsed() < Duration::from_millis(100));
-    adapter.release();
+    let (stopped_sender, stopped_receiver) = std::sync::mpsc::sync_channel(1);
+    let owner = std::thread::scope(|scope| -> AppResult<TranslationOwnerQuiesced> {
+        let stop_task = scope.spawn(move || {
+            let result = module.stop_and_confirm_owner_quiesced();
+            let _ignored = stopped_sender.send(());
+            result
+        });
+        if stopped_receiver.recv_timeout(TEST_TIMEOUT).is_err() {
+            fixture
+                .release_non_cooperative(attempt)
+                .map_err(fixture_error)?;
+            let _ignored = stop_task.join();
+            return Err(AppError::state(
+                "Translation Stop did not return before the fixture watchdog.",
+            ));
+        }
+        let record = fixture
+            .wait_for_attempt_count(1, TEST_TIMEOUT)
+            .map_err(fixture_error)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::state("Non-cooperative attempt was not recorded."))?;
+        assert!(!record.is_quiesced());
+        fixture
+            .release_non_cooperative(attempt)
+            .map_err(fixture_error)?;
+        fixture
+            .wait_for_quiescence(attempt, TEST_TIMEOUT)
+            .map_err(fixture_error)?;
+        let owner = stop_task
+            .join()
+            .map_err(|_| AppError::state("Translation Stop test thread panicked."))??;
+        Ok(owner)
+    })?;
+
+    fixture.finish(owner).map_err(fixture_error)?;
     assert!(outcomes.recv_timeout(Duration::from_millis(50)).is_err());
 
     Ok(())
@@ -951,129 +570,147 @@ fn stop_does_not_wait_for_a_non_cooperative_adapter_to_return() -> AppResult<()>
 #[test]
 fn retryable_failure_uses_two_attempts_and_the_deterministic_backoff() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = ScriptedAdapter::with_results([
-        Err(AdapterFailure {
-            class: TranslationFailureClass::ServiceUnavailable,
-            retryable: true,
-            retry_after: None,
-            request_outcome_ambiguous: false,
-        }),
-        Ok("translated".to_string()),
-    ]);
-    let clock = Arc::new(ManualClock::default());
-    let delay = Arc::new(AdvancingDelay::new(Arc::clone(&clock)));
-    let dependencies = TestPolicyDependencies {
-        clock,
-        delay: delay.clone(),
-        jitter: Arc::new(FixedJitter(Duration::from_millis(250))),
-    };
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter.clone()),
-        dependencies,
-    )?;
-    module
-        .try_submit(reservation(&store, 5, "retry", "private source")?)
-        .map_err(|_| AppError::state("Retry test source was rejected."))?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module_with_jitter(
+            TranslationTarget::SimplifiedChinese,
+            Duration::from_millis(250),
+        )
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 5, "retry", "private source")?,
+            [
+                AttemptScript::failure(
+                    TranslationFailureClass::ServiceUnavailable,
+                    true,
+                    None,
+                    false,
+                ),
+                AttemptScript::success("translated"),
+            ],
+        )
+        .map_err(fixture_error)?;
+    fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    let delays = fixture
+        .wait_for_delay_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    assert_eq!(delays[0].requested(), Duration::from_millis(250));
+    assert_eq!(delays[0].started_at(), Duration::ZERO);
+    assert_eq!(delays[0].finished_at(), None);
+    fixture
+        .advance(Duration::from_millis(250))
+        .map_err(fixture_error)?;
 
     assert!(matches!(
         outcomes.recv_timeout(TEST_TIMEOUT),
         Ok(TranslationTerminalOutcome::Completed(_))
     ));
-    assert_eq!(adapter.sources().len(), 2);
+    let records = stop_and_finish_fixture(&fixture, &mut module)?;
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].source_id(), records[1].source_id());
+    assert_eq!(records[0].attempt_number(), 1);
+    assert_eq!(records[1].attempt_number(), 2);
+    assert_eq!(records[0].finished_at(), Some(Duration::ZERO));
+    assert_eq!(records[1].finished_at(), Some(Duration::from_millis(250)));
+    assert_eq!(records[0].target(), TranslationTarget::SimplifiedChinese);
+    assert_eq!(records[1].target(), TranslationTarget::SimplifiedChinese);
     assert_eq!(
-        adapter.targets(),
-        [
-            TranslationTarget::SimplifiedChinese,
-            TranslationTarget::SimplifiedChinese,
-        ]
+        (records[0].attempt_budget(), records[0].total_budget()),
+        (Duration::from_secs(5), Duration::from_secs(12))
     );
     assert_eq!(
-        adapter.budgets(),
-        [
-            (Duration::from_secs(5), Duration::from_secs(12)),
-            (Duration::from_secs(5), Duration::from_millis(11_750)),
-        ]
+        (records[1].attempt_budget(), records[1].total_budget()),
+        (Duration::from_secs(5), Duration::from_millis(11_750))
     );
-    assert_eq!(delay.waits(), [Duration::from_millis(250)]);
-    module.stop()?;
     Ok(())
 }
 
 #[test]
 fn confirmed_attempt_timeout_cancels_before_retrying() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = Arc::new(BlockingAdapter::default());
-    let clock = Arc::new(ManualClock::default());
-    let delay = Arc::new(AdvancingDelay::new(Arc::clone(&clock)));
-    let dependencies = TestPolicyDependencies {
-        clock: clock.clone(),
-        delay: delay.clone(),
-        jitter: Arc::new(FixedJitter(Duration::from_millis(250))),
-    };
-    let module_adapter: Arc<dyn CompletedTextAdapter> = adapter.clone();
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        module_adapter,
-        dependencies,
-    )?;
-    module
-        .try_submit(reservation(
-            &store,
-            24,
-            "attempt-deadline",
-            "private source",
-        )?)
-        .map_err(|_| AppError::state("Attempt-deadline test source was rejected."))?;
-    adapter.wait_until_called(TEST_TIMEOUT)?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module_with_jitter(
+            TranslationTarget::SimplifiedChinese,
+            Duration::from_millis(250),
+        )
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 24, "attempt-deadline", "private source")?,
+            [
+                AttemptScript::held_confirmed(),
+                AttemptScript::held_confirmed(),
+            ],
+        )
+        .map_err(fixture_error)?;
+    let first = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
 
-    clock.advance(ATTEMPT_DEADLINE);
-    adapter.wait_until_call_count(2, TEST_TIMEOUT)?;
-    assert!(adapter.was_cancelled());
-    assert_eq!(delay.waits(), [Duration::from_millis(250)]);
-    adapter.complete("translated");
+    fixture.advance(ATTEMPT_DEADLINE).map_err(fixture_error)?;
+    let delays = fixture
+        .wait_for_delay_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    assert_eq!(delays[0].requested(), Duration::from_millis(250));
+    let cancelled = fixture
+        .wait_for_quiescence(first, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    assert_eq!(
+        cancelled.terminal(),
+        Some(fixture::AttemptTerminal::CancelledConfirmed)
+    );
+    fixture
+        .advance(Duration::from_millis(250))
+        .map_err(fixture_error)?;
+    let second = fixture
+        .wait_for_attempt_count(2, TEST_TIMEOUT)
+        .map_err(fixture_error)?[1]
+        .id();
+    fixture
+        .complete(second, "translated")
+        .map_err(fixture_error)?;
     assert!(matches!(
         outcomes.recv_timeout(TEST_TIMEOUT),
         Ok(TranslationTerminalOutcome::Completed(_))
     ));
-    assert_eq!(adapter.calls(), 2);
-    module.stop()?;
+    assert_eq!(stop_and_finish_fixture(&fixture, &mut module)?.len(), 2);
     Ok(())
 }
 
 #[test]
 fn stop_cancels_retry_backoff_before_another_call_starts() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = ScriptedAdapter::with_results([
-        Err(AdapterFailure {
-            class: TranslationFailureClass::ServiceUnavailable,
-            retryable: true,
-            retry_after: None,
-            request_outcome_ambiguous: false,
-        }),
-        Ok("must not run".to_string()),
-    ]);
-    let observed_adapter = adapter.clone();
-    let delay = Arc::new(StopAwareBlockingDelay::default());
-    let dependencies = TestPolicyDependencies {
-        clock: Arc::new(ManualClock::default()),
-        delay: delay.clone(),
-        jitter: Arc::new(FixedJitter(Duration::from_millis(250))),
-    };
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter),
-        dependencies,
-    )?;
-    module
-        .try_submit(reservation(&store, 25, "stop-backoff", "private source")?)
-        .map_err(|_| AppError::state("Stop-backoff test source was rejected."))?;
-    delay.wait_until_entered(TEST_TIMEOUT)?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module_with_jitter(
+            TranslationTarget::SimplifiedChinese,
+            Duration::from_millis(250),
+        )
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 25, "stop-backoff", "private source")?,
+            [AttemptScript::failure(
+                TranslationFailureClass::ServiceUnavailable,
+                true,
+                None,
+                false,
+            )],
+        )
+        .map_err(fixture_error)?;
+    fixture
+        .wait_for_delay_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
 
-    let started = std::time::Instant::now();
-    module.stop()?;
-    assert!(started.elapsed() < Duration::from_millis(100));
-    assert_eq!(observed_adapter.sources().len(), 1);
+    assert_eq!(stop_and_finish_fixture(&fixture, &mut module)?.len(), 1);
     assert!(outcomes.recv_timeout(Duration::from_millis(50)).is_err());
     Ok(())
 }
@@ -1087,25 +724,17 @@ fn terminal_provider_failures_preserve_the_closed_provider_neutral_class() -> Ap
         (23, TranslationFailureClass::UsageLimit),
     ] {
         let store = CaptionAggregateStore::default();
-        let adapter = ScriptedAdapter::with_results([Err(AdapterFailure {
-            class,
-            retryable: false,
-            retry_after: None,
-            request_outcome_ambiguous: false,
-        })]);
-        let (mut module, outcomes) = TranslationModule::start_for_test(
-            TranslationTarget::SimplifiedChinese,
-            Arc::new(adapter),
-            TestPolicyDependencies::real(),
-        )?;
-        module
-            .try_submit(reservation(
-                &store,
-                generation,
-                "provider-failure",
-                "private source",
-            )?)
-            .map_err(|_| AppError::state("Provider-failure test source was rejected."))?;
+        let fixture = TranslationPolicyFixture::new();
+        let (mut module, outcomes) = fixture
+            .start_module(TranslationTarget::SimplifiedChinese)
+            .map_err(fixture_error)?;
+        fixture
+            .admit(
+                &module,
+                reservation(&store, generation, "provider-failure", "private source")?,
+                [AttemptScript::failure(class, false, None, false)],
+            )
+            .map_err(fixture_error)?;
 
         let outcome = outcomes
             .recv_timeout(TEST_TIMEOUT)
@@ -1116,7 +745,7 @@ fn terminal_provider_failures_preserve_the_closed_provider_neutral_class() -> Ap
             ));
         };
         assert_eq!(failed.class, class);
-        module.stop()?;
+        stop_and_finish_fixture(&fixture, &mut module)?;
     }
     Ok(())
 }
@@ -1124,25 +753,22 @@ fn terminal_provider_failures_preserve_the_closed_provider_neutral_class() -> Ap
 #[test]
 fn failed_outcome_keeps_its_source_reserved_until_failure_is_recorded() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = ScriptedAdapter::with_results([Err(AdapterFailure {
-        class: TranslationFailureClass::ServiceUnavailable,
-        retryable: false,
-        retry_after: None,
-        request_outcome_ambiguous: false,
-    })]);
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter),
-        TestPolicyDependencies::real(),
-    )?;
-    module
-        .try_submit(reservation(
-            &store,
-            30,
-            "failed",
-            "source retained through failure",
-        )?)
-        .map_err(|_| AppError::state("Failure-retention source was rejected."))?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 30, "failed", "source retained through failure")?,
+            [AttemptScript::failure(
+                TranslationFailureClass::ServiceUnavailable,
+                false,
+                None,
+                false,
+            )],
+        )
+        .map_err(fixture_error)?;
 
     let outcome = outcomes
         .recv_timeout(TEST_TIMEOUT)
@@ -1180,7 +806,7 @@ fn failed_outcome_keeps_its_source_reserved_until_failure_is_recorded() -> AppRe
             }
         )
     ));
-    module.stop()?;
+    stop_and_finish_fixture(&fixture, &mut module)?;
     Ok(())
 }
 
@@ -1233,30 +859,25 @@ fn provider_neutral_failure_classes_map_to_closed_aggregate_reasons() {
 #[test]
 fn retry_after_beyond_the_total_budget_finishes_without_an_early_retry() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = ScriptedAdapter::with_results([
-        Err(AdapterFailure {
-            class: TranslationFailureClass::RateLimited,
-            retryable: true,
-            retry_after: Some(Duration::from_secs(30)),
-            request_outcome_ambiguous: false,
-        }),
-        Ok("translated".to_string()),
-    ]);
-    let clock = Arc::new(ManualClock::default());
-    let delay = Arc::new(AdvancingDelay::new(Arc::clone(&clock)));
-    let dependencies = TestPolicyDependencies {
-        clock,
-        delay: delay.clone(),
-        jitter: Arc::new(FixedJitter(Duration::from_millis(300))),
-    };
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter.clone()),
-        dependencies,
-    )?;
-    module
-        .try_submit(reservation(&store, 6, "retry-after", "private source")?)
-        .map_err(|_| AppError::state("Retry-After test source was rejected."))?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module_with_jitter(
+            TranslationTarget::SimplifiedChinese,
+            Duration::from_millis(300),
+        )
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 6, "retry-after", "private source")?,
+            [AttemptScript::failure(
+                TranslationFailureClass::RateLimited,
+                true,
+                Some(Duration::from_secs(30)),
+                false,
+            )],
+        )
+        .map_err(fixture_error)?;
 
     assert!(matches!(
         outcomes.recv_timeout(TEST_TIMEOUT),
@@ -1265,84 +886,125 @@ fn retry_after_beyond_the_total_budget_finishes_without_an_early_retry() -> AppR
             ..
         }))
     ));
-    assert_eq!(adapter.sources().len(), 1);
-    assert!(delay.waits().is_empty());
-    module.stop()?;
+    assert_eq!(stop_and_finish_fixture(&fixture, &mut module)?.len(), 1);
+    assert!(fixture.delay_records().map_err(fixture_error)?.is_empty());
     Ok(())
 }
 
 #[test]
 fn retry_after_within_the_total_budget_is_honored_without_jitter() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = ScriptedAdapter::with_results([
-        Err(AdapterFailure {
-            class: TranslationFailureClass::RateLimited,
-            retryable: true,
-            retry_after: Some(Duration::from_secs(2)),
-            request_outcome_ambiguous: false,
-        }),
-        Ok("translated".to_string()),
-    ]);
-    let clock = Arc::new(ManualClock::default());
-    let delay = Arc::new(AdvancingDelay::new(Arc::clone(&clock)));
-    let dependencies = TestPolicyDependencies {
-        clock,
-        delay: delay.clone(),
-        jitter: Arc::new(FixedJitter(Duration::from_millis(300))),
-    };
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter.clone()),
-        dependencies,
-    )?;
-    module
-        .try_submit(reservation(
-            &store,
-            26,
-            "retry-after-within-budget",
-            "private source",
-        )?)
-        .map_err(|_| AppError::state("Retry-After test source was rejected."))?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module_with_jitter(
+            TranslationTarget::SimplifiedChinese,
+            Duration::from_millis(300),
+        )
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 26, "retry-after-within-budget", "private source")?,
+            [
+                AttemptScript::failure(
+                    TranslationFailureClass::RateLimited,
+                    true,
+                    Some(Duration::from_secs(2)),
+                    false,
+                ),
+                AttemptScript::success("translated"),
+            ],
+        )
+        .map_err(fixture_error)?;
+    let delays = fixture
+        .wait_for_delay_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    assert_eq!(delays[0].requested(), Duration::from_secs(2));
+    fixture
+        .advance(Duration::from_secs(2))
+        .map_err(fixture_error)?;
 
     assert!(matches!(
         outcomes.recv_timeout(TEST_TIMEOUT),
         Ok(TranslationTerminalOutcome::Completed(_))
     ));
-    assert_eq!(adapter.sources().len(), 2);
-    assert_eq!(delay.waits(), [Duration::from_secs(2)]);
-    module.stop()?;
+    assert_eq!(stop_and_finish_fixture(&fixture, &mut module)?.len(), 2);
     Ok(())
 }
 
 #[test]
 fn queued_work_does_not_shorten_retry_after_to_fit_the_remaining_budget() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let clock = Arc::new(ManualClock::default());
-    let adapter = Arc::new(QueuedNearDeadlineAdapter::new(Arc::clone(&clock)));
-    let delay = Arc::new(AdvancingDelay::new(Arc::clone(&clock)));
-    let dependencies = TestPolicyDependencies {
-        clock,
-        delay: delay.clone(),
-        jitter: Arc::new(FixedJitter(Duration::from_millis(250))),
-    };
-    let module_adapter: Arc<dyn CompletedTextAdapter> = adapter.clone();
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        module_adapter,
-        dependencies,
-    )?;
-    for unit in ["queue-one", "queue-two", "remaining-budget"] {
-        module
-            .try_submit(reservation(&store, 12, unit, "private source")?)
-            .map_err(|_| AppError::state("Remaining-budget test source was rejected."))?;
-    }
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 12, "queue-one", "private source one")?,
+            [AttemptScript::held_confirmed()],
+        )
+        .map_err(fixture_error)?;
+    let first = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 12, "queue-two", "private source two")?,
+            [AttemptScript::held_confirmed()],
+        )
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 12, "remaining-budget", "private source three")?,
+            [AttemptScript::held_confirmed()],
+        )
+        .map_err(fixture_error)?;
 
-    for _ in 0..2 {
-        assert!(matches!(
-            outcomes.recv_timeout(TEST_TIMEOUT),
-            Ok(TranslationTerminalOutcome::Completed(_))
-        ));
-    }
+    fixture
+        .advance(Duration::from_millis(4_900))
+        .map_err(fixture_error)?;
+    fixture
+        .complete(first, "translated-one")
+        .map_err(fixture_error)?;
+    assert!(matches!(
+        outcomes.recv_timeout(TEST_TIMEOUT),
+        Ok(TranslationTerminalOutcome::Completed(_))
+    ));
+    let second = fixture
+        .wait_for_attempt_count(2, TEST_TIMEOUT)
+        .map_err(fixture_error)?[1]
+        .id();
+    fixture
+        .advance(Duration::from_millis(4_900))
+        .map_err(fixture_error)?;
+    fixture
+        .complete(second, "translated-two")
+        .map_err(fixture_error)?;
+    assert!(matches!(
+        outcomes.recv_timeout(TEST_TIMEOUT),
+        Ok(TranslationTerminalOutcome::Completed(_))
+    ));
+    let third = fixture
+        .wait_for_attempt_count(3, TEST_TIMEOUT)
+        .map_err(fixture_error)?[2]
+        .id();
+    fixture
+        .advance(Duration::from_millis(1_900))
+        .map_err(fixture_error)?;
+    fixture
+        .fail(
+            third,
+            TranslationFailureClass::RateLimited,
+            true,
+            Some(Duration::from_secs(30)),
+            false,
+        )
+        .map_err(fixture_error)?;
 
     let outcome = outcomes
         .recv_timeout(TEST_TIMEOUT)
@@ -1354,51 +1016,55 @@ fn queued_work_does_not_shorten_retry_after_to_fit_the_remaining_budget() -> App
             ..
         })
     ));
-    assert_eq!(adapter.calls(), 3);
-    let budgets = adapter.budgets();
-    assert_eq!(budgets.len(), 3);
+    fixture
+        .wait_for_quiescence(third, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    let records = stop_and_finish_fixture(&fixture, &mut module)?;
+    assert_eq!(records.len(), 3);
     assert_eq!(
-        budgets[0],
+        (records[0].attempt_budget(), records[0].total_budget()),
         (Duration::from_secs(5), Duration::from_secs(12))
     );
-    assert!(budgets[1].0 <= Duration::from_secs(5));
-    assert!(budgets[1].1 <= Duration::from_millis(7_100));
-    assert_eq!(budgets[2].0, budgets[2].1);
-    assert!(budgets[2].1 <= Duration::from_millis(2_200));
-    assert!(delay.waits().is_empty());
-    module.stop()?;
+    assert_eq!(records[1].started_at(), Duration::from_millis(4_900));
+    assert_eq!(
+        (records[1].attempt_budget(), records[1].total_budget()),
+        (Duration::from_secs(5), Duration::from_millis(7_100))
+    );
+    assert_eq!(records[2].started_at(), Duration::from_millis(9_800));
+    assert_eq!(
+        (records[2].attempt_budget(), records[2].total_budget()),
+        (Duration::from_millis(2_200), Duration::from_millis(2_200))
+    );
+    assert!(fixture.delay_records().map_err(fixture_error)?.is_empty());
     Ok(())
 }
 
 #[test]
 fn unconfirmed_attempt_timeout_fails_closed_without_starting_more_work() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = Arc::new(UnconfirmedCancelAdapter::default());
-    let clock = Arc::new(ManualClock::default());
-    let dependencies = TestPolicyDependencies {
-        clock: clock.clone(),
-        delay: Arc::new(AdvancingDelay::new(Arc::clone(&clock))),
-        jitter: Arc::new(FixedJitter(Duration::from_millis(250))),
-    };
-    let module_adapter: Arc<dyn CompletedTextAdapter> = adapter.clone();
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        module_adapter,
-        dependencies,
-    )?;
-    module
-        .try_submit(reservation(
-            &store,
-            10,
-            "attempt-timeout",
-            "private source",
-        )?)
-        .map_err(|_| AppError::state("Attempt-timeout test source was rejected."))?;
-    module
-        .try_submit(reservation(&store, 10, "queued", "queued private source")?)
-        .map_err(|_| AppError::state("Queued timeout test source was rejected."))?;
-    adapter.wait_until_called(TEST_TIMEOUT)?;
-    clock.advance(TOTAL_DEADLINE);
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 10, "attempt-timeout", "private source")?,
+            [AttemptScript::held_unconfirmed()],
+        )
+        .map_err(fixture_error)?;
+    let first = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 10, "queued", "queued private source")?,
+            [],
+        )
+        .map_err(fixture_error)?;
+    fixture.advance(TOTAL_DEADLINE).map_err(fixture_error)?;
 
     for _ in 0..2 {
         let outcome = outcomes
@@ -1412,48 +1078,69 @@ fn unconfirmed_attempt_timeout_fails_closed_without_starting_more_work() -> AppR
             })
         ));
     }
-    assert_eq!(adapter.calls(), 1);
+    let cancelled = fixture
+        .wait_for_cancellation(first, CancellationStatus::Unconfirmed, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    assert_eq!(
+        cancelled.terminal(),
+        Some(fixture::AttemptTerminal::CancelledUnconfirmed)
+    );
+    assert_eq!(
+        cancelled.cancellation(),
+        Some(CancellationStatus::Unconfirmed)
+    );
+    assert!(!cancelled.is_quiesced());
+    fixture.quiesce_unconfirmed(first).map_err(fixture_error)?;
+    fixture
+        .wait_for_quiescence(first, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
     assert_eq!(
         module
             .try_submit(reservation(&store, 10, "after-close", "private source")?)
             .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::Closed)
     );
-    module.stop()?;
-    adapter.release();
+    let owner = module.stop_and_confirm_owner_quiesced()?;
+    assert_eq!(fixture.finish(owner).map_err(fixture_error)?.len(), 1);
     Ok(())
 }
 
 #[test]
 fn late_ambiguous_result_keeps_its_fail_closed_semantics() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let clock = Arc::new(ManualClock::default());
-    let calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let adapter = LateAmbiguousAdapter {
-        clock: Arc::clone(&clock),
-        calls: Arc::clone(&calls),
-    };
-    let dependencies = TestPolicyDependencies {
-        clock,
-        delay: Arc::new(SystemDelay),
-        jitter: Arc::new(FixedJitter(Duration::from_millis(250))),
-    };
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter),
-        dependencies,
-    )?;
-    module
-        .try_submit(reservation(&store, 29, "late-ambiguous", "private source")?)
-        .map_err(|_| AppError::state("Late ambiguous source was rejected."))?;
-    module
-        .try_submit(reservation(
-            &store,
-            29,
-            "must-not-start",
-            "queued private source",
-        )?)
-        .map_err(|_| AppError::state("Queued ambiguous source was rejected."))?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 29, "late-ambiguous", "private source")?,
+            [AttemptScript::non_cooperative_failure(
+                TranslationFailureClass::DeadlineExceeded,
+                false,
+                None,
+                true,
+            )],
+        )
+        .map_err(fixture_error)?;
+    let first = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 29, "must-not-start", "queued private source")?,
+            [],
+        )
+        .map_err(fixture_error)?;
+    fixture
+        .advance(ATTEMPT_DEADLINE + Duration::from_millis(1))
+        .map_err(fixture_error)?;
+    fixture
+        .release_non_cooperative(first)
+        .map_err(fixture_error)?;
 
     for _ in 0..2 {
         let outcome = outcomes
@@ -1467,7 +1154,9 @@ fn late_ambiguous_result_keeps_its_fail_closed_semantics() -> AppResult<()> {
             })
         ));
     }
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    fixture
+        .wait_for_quiescence(first, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
     assert!(matches!(
         module
             .try_submit(reservation(
@@ -1479,34 +1168,37 @@ fn late_ambiguous_result_keeps_its_fail_closed_semantics() -> AppResult<()> {
             .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::Closed)
     ));
-    module.stop()?;
+    let owner = module.stop_and_confirm_owner_quiesced()?;
+    assert_eq!(fixture.finish(owner).map_err(fixture_error)?.len(), 1);
     Ok(())
 }
 
 #[test]
 fn total_deadline_starts_at_admission_and_includes_fifo_queue_time() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = Arc::new(BlockingAdapter::default());
-    let clock = Arc::new(ManualClock::default());
-    let dependencies = TestPolicyDependencies {
-        clock: clock.clone(),
-        delay: Arc::new(AdvancingDelay::new(Arc::clone(&clock))),
-        jitter: Arc::new(FixedJitter(Duration::from_millis(250))),
-    };
-    let module_adapter: Arc<dyn CompletedTextAdapter> = adapter.clone();
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        module_adapter,
-        dependencies,
-    )?;
-    module
-        .try_submit(reservation(&store, 11, "active", "first private source")?)
-        .map_err(|_| AppError::state("Active deadline test source was rejected."))?;
-    module
-        .try_submit(reservation(&store, 11, "queued", "second private source")?)
-        .map_err(|_| AppError::state("Queued deadline test source was rejected."))?;
-    adapter.wait_until_called(TEST_TIMEOUT)?;
-    clock.advance(TOTAL_DEADLINE);
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 11, "active", "first private source")?,
+            [AttemptScript::held_confirmed()],
+        )
+        .map_err(fixture_error)?;
+    let first = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 11, "queued", "second private source")?,
+            [],
+        )
+        .map_err(fixture_error)?;
+    fixture.advance(TOTAL_DEADLINE).map_err(fixture_error)?;
 
     for _ in 0..2 {
         let outcome = outcomes
@@ -1520,8 +1212,11 @@ fn total_deadline_starts_at_admission_and_includes_fifo_queue_time() -> AppResul
             })
         ));
     }
-    assert_eq!(adapter.calls(), 1);
-    module.stop()?;
+    fixture
+        .wait_for_quiescence(first, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
+    let owner = module.stop_and_confirm_owner_quiesced()?;
+    assert_eq!(fixture.finish(owner).map_err(fixture_error)?.len(), 1);
     Ok(())
 }
 
@@ -1532,20 +1227,17 @@ fn empty_and_oversized_outputs_are_safe_terminal_failures() -> AppResult<()> {
         (8, "x".repeat(TRANSLATION_BYTE_LIMIT + 1)),
     ] {
         let store = CaptionAggregateStore::default();
-        let adapter = ScriptedAdapter::with_results([Ok(output)]);
-        let (mut module, outcomes) = TranslationModule::start_for_test(
-            TranslationTarget::SimplifiedChinese,
-            Arc::new(adapter),
-            TestPolicyDependencies::real(),
-        )?;
-        module
-            .try_submit(reservation(
-                &store,
-                generation,
-                "invalid",
-                "private source",
-            )?)
-            .map_err(|_| AppError::state("Invalid-output test source was rejected."))?;
+        let fixture = TranslationPolicyFixture::new();
+        let (mut module, outcomes) = fixture
+            .start_module(TranslationTarget::SimplifiedChinese)
+            .map_err(fixture_error)?;
+        fixture
+            .admit(
+                &module,
+                reservation(&store, generation, "invalid", "private source")?,
+                [AttemptScript::success(output)],
+            )
+            .map_err(fixture_error)?;
 
         let outcome = outcomes
             .recv_timeout(TEST_TIMEOUT)
@@ -1557,7 +1249,7 @@ fn empty_and_oversized_outputs_are_safe_terminal_failures() -> AppResult<()> {
                 ..
             })
         ));
-        module.stop()?;
+        stop_and_finish_fixture(&fixture, &mut module)?;
     }
     Ok(())
 }
@@ -1565,15 +1257,17 @@ fn empty_and_oversized_outputs_are_safe_terminal_failures() -> AppResult<()> {
 #[test]
 fn terminal_debug_does_not_expose_source_translation_or_provider_body() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = ScriptedAdapter::successes(["private translation"]);
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        Arc::new(adapter),
-        TestPolicyDependencies::real(),
-    )?;
-    module
-        .try_submit(reservation(&store, 9, "debug", "private source")?)
-        .map_err(|_| AppError::state("Debug test source was rejected."))?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 9, "debug", "private source")?,
+            [AttemptScript::success("private translation")],
+        )
+        .map_err(fixture_error)?;
 
     let outcome = outcomes
         .recv_timeout(TEST_TIMEOUT)
@@ -1581,7 +1275,9 @@ fn terminal_debug_does_not_expose_source_translation_or_provider_body() -> AppRe
     let debug = format!("{outcome:?}");
     assert!(!debug.contains("private source"));
     assert!(!debug.contains("private translation"));
-    module.stop()?;
+    let fixture_debug = format!("{:?}", stop_and_finish_fixture(&fixture, &mut module)?);
+    assert!(!fixture_debug.contains("private source"));
+    assert!(!fixture_debug.contains("private translation"));
     Ok(())
 }
 
@@ -1598,46 +1294,51 @@ fn production_retry_jitter_stays_within_twenty_percent() {
 #[test]
 fn dropping_outcome_receiver_stops_admission_and_releases_work() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = Arc::new(BlockingAdapter::default());
-    let module_adapter: Arc<dyn CompletedTextAdapter> = adapter.clone();
-    let (mut module, outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        module_adapter,
-        TestPolicyDependencies::real(),
-    )?;
-    module
-        .try_submit(reservation(&store, 15, "receiver-drop", "private source")?)
-        .map_err(|_| AppError::state("Receiver-drop test source was rejected."))?;
-    adapter.wait_until_called(TEST_TIMEOUT)?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 15, "receiver-drop", "private source")?,
+            [AttemptScript::held_confirmed()],
+        )
+        .map_err(fixture_error)?;
+    let first = fixture
+        .wait_for_attempt_count(1, TEST_TIMEOUT)
+        .map_err(fixture_error)?[0]
+        .id();
 
     drop(outcomes);
+    fixture
+        .wait_for_quiescence(first, TEST_TIMEOUT)
+        .map_err(fixture_error)?;
     assert_eq!(
         module
             .try_submit(reservation(&store, 15, "late", "late source")?)
             .map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::Stopped)
     );
-    module.stop()?;
+    let owner = module.stop_and_confirm_owner_quiesced()?;
+    fixture.finish(owner).map_err(fixture_error)?;
     Ok(())
 }
 
 #[test]
 fn stop_wins_an_admission_race_after_submission_preparation() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
-    let adapter = Arc::new(BlockingAdapter::default());
-    let (mut module, _outcomes) = TranslationModule::start_for_test(
-        TranslationTarget::SimplifiedChinese,
-        adapter,
-        TestPolicyDependencies::real(),
-    )?;
+    let fixture = TranslationPolicyFixture::new();
+    let (mut module, _outcomes) = fixture
+        .start_module(TranslationTarget::SimplifiedChinese)
+        .map_err(fixture_error)?;
     let prepared = reservation(&store, 16, "race", "private source")?;
-    let shared = Arc::clone(&module.shared);
-    let result = module.try_submit_with_hook(prepared, move || shared.request_stop());
+    let result = module.try_submit_with_stop_hook(prepared);
 
     assert_eq!(
         result.map_err(|rejection| rejection.kind()),
         Err(TranslationSubmitError::Stopped)
     );
-    module.stop()?;
+    stop_and_finish_fixture(&fixture, &mut module)?;
     Ok(())
 }
