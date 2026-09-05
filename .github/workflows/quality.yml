@@ -34,6 +34,9 @@ jobs:
           - windows-latest
           - macos-latest
 
+    env:
+      VITEST_SEQUENCE_SEED: "20260817"
+
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,6 +49,7 @@ jobs:
           install: false
 
       - name: Install dependencies
+        id: frontend_dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Check pull request title
@@ -54,18 +58,62 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: printf '%s\n' "$PR_TITLE" | pnpm commitlint
 
-      - name: Run frontend quality gate
-        run: pnpm check:frontend
+      - name: Check frontend formatting
+        if: ${{ !cancelled() && steps.frontend_dependencies.conclusion == 'success' }}
+        run: pnpm format:check
 
-  rust:
-    name: Rust (${{ matrix.os }})
+      - name: Lint frontend
+        if: ${{ !cancelled() && steps.frontend_dependencies.conclusion == 'success' }}
+        run: pnpm lint
+
+      - name: Record frontend test environment
+        if: ${{ !cancelled() && steps.frontend_dependencies.conclusion == 'success' }}
+        shell: bash
+        run: |
+          mkdir -p test-results/frontend
+          {
+            printf 'runner-os=%s\n' "$RUNNER_OS"
+            printf 'runner-arch=%s\n' "$RUNNER_ARCH"
+            printf 'image-os=%s\n' "${ImageOS:-unknown}"
+            printf 'image-version=%s\n' "${ImageVersion:-unknown}"
+            printf 'vitest-pool=forks\n'
+            printf 'vitest-isolate=true\n'
+            printf 'vitest-max-workers=4\n'
+            printf 'vitest-retries=0\n'
+            printf 'vitest-shuffle=false\n'
+            printf 'vitest-sequence-seed=%s\n' "$VITEST_SEQUENCE_SEED"
+            node --version
+            pnpm --version
+            pnpm exec vitest --version
+          } | tee test-results/frontend/environment.log
+
+      - name: Run frontend tests
+        if: ${{ !cancelled() && steps.frontend_dependencies.conclusion == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm test:frontend:ci \
+            2>&1 | tee test-results/frontend/required.log
+
+      - name: Build frontend
+        if: ${{ !cancelled() && steps.frontend_dependencies.conclusion == 'success' }}
+        run: pnpm build
+
+      - name: Upload frontend test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-test-results-${{ matrix.os }}
+          path: test-results/frontend
+          if-no-files-found: warn
+          retention-days: 14
+
+  rust_static:
+    name: Rust static analysis (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Windows needs headroom for the first uncached Rust compile.
     timeout-minutes: 45
 
     strategy:
-      # Report all desktop platforms even when one fails; Windows is the
-      # release platform and its result matters independently.
       fail-fast: false
       matrix:
         os:
@@ -95,17 +143,6 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libxdo-dev
 
-      - name: Set up pnpm and Node
-        uses: pnpm/setup@4700d737c3d7a2e7199f3d42a920f0bf7f34e411 # v2.0.1
-        with:
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          install: false
-
-      # Keep dependency resolution explicit and locked for the Rust gate too.
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
       # Keep this version in sync with rust-toolchain.toml.
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
@@ -117,8 +154,157 @@ jobs:
         with:
           workspaces: ./src-tauri -> target
 
-      - name: Run Rust quality gate
-        run: pnpm check:rust:locked
+      - name: Check Rust formatting
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Check Rust targets
+        if: ${{ !cancelled() }}
+        working-directory: src-tauri
+        run: cargo check --workspace --all-targets --locked
+
+      - name: Lint Rust targets
+        if: ${{ !cancelled() }}
+        working-directory: src-tauri
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  rust:
+    name: Rust tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Windows needs headroom for the first uncached Rust compile.
+    timeout-minutes: 45
+
+    strategy:
+      # Report all desktop platforms even when one fails; Windows is the
+      # release platform and its result matters independently.
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+
+    env:
+      NEXTEST_RETRIES: 0
+      PROPTEST_RNG_SEED: ${{ github.run_id }}
+      RUST_BACKTRACE: 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            curl \
+            file \
+            wget \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libdbus-1-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
+
+      # Keep this version in sync with rust-toolchain.toml.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: cargo-nextest@0.9.143
+          fallback: none
+
+      - name: Record Rust test environment
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          mkdir -p target/nextest/ci
+          {
+            printf 'runner-os=%s\n' "$RUNNER_OS"
+            printf 'runner-arch=%s\n' "$RUNNER_ARCH"
+            printf 'image-os=%s\n' "${ImageOS:-unknown}"
+            printf 'image-version=%s\n' "${ImageVersion:-unknown}"
+            printf 'nextest-test-threads=4\n'
+            printf 'nextest-retries=%s\n' "$NEXTEST_RETRIES"
+            printf 'nextest-profile=ci\n'
+            printf 'nextest-selection=--workspace --locked --profile ci\n'
+            printf '%s\n' 'diagnostic-filter=group(loopback-network) | group(owner-concurrency) | group(property-regression)'
+            printf 'diagnostic-parallel-threads=4\n'
+            printf 'diagnostic-serial-threads=1\n'
+            printf 'proptest-rng-seed=%s\n' "$PROPTEST_RNG_SEED"
+            rustc -Vv
+            cargo -V
+            cargo nextest --version
+            cargo nextest show-config version --profile ci
+          } | tee target/nextest/ci/environment.log
+
+      - name: Run Rust tests (required, zero retries)
+        id: rust_tests
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          set -o pipefail
+          cargo nextest run --workspace --locked --profile ci --retries 0 \
+            2>&1 | tee target/nextest/ci/required.log
+
+      - name: Diagnostic rerun of risk groups with the required scheduling
+        if: ${{ failure() && steps.rust_tests.conclusion == 'failure' }}
+        continue-on-error: true
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          set -o pipefail
+          mkdir -p target/nextest/ci-diagnostic-parallel
+          cargo nextest run --workspace --locked \
+            --profile ci-diagnostic-parallel --retries 0 \
+            -E 'group(loopback-network) | group(owner-concurrency) | group(property-regression)' \
+            2>&1 | tee target/nextest/ci-diagnostic-parallel/diagnostic.log
+
+      - name: Diagnostic rerun of risk groups with one worker
+        if: ${{ failure() && steps.rust_tests.conclusion == 'failure' }}
+        continue-on-error: true
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          set -o pipefail
+          mkdir -p target/nextest/ci-diagnostic-serial
+          cargo nextest run --workspace --locked \
+            --profile ci-diagnostic-serial --retries 0 \
+            -E 'group(loopback-network) | group(owner-concurrency) | group(property-regression)' \
+            2>&1 | tee target/nextest/ci-diagnostic-serial/diagnostic.log
+
+      - name: Run Rust documentation tests
+        if: ${{ !cancelled() }}
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          set -o pipefail
+          mkdir -p target/nextest/ci
+          cargo test --workspace --doc --locked \
+            2>&1 | tee target/nextest/ci/doctest.log
+
+      - name: Upload Rust test evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-test-results-${{ matrix.os }}
+          path: |
+            src-tauri/target/nextest/**/junit.xml
+            src-tauri/target/nextest/**/*.log
+          if-no-files-found: warn
+          retention-days: 14
 
   audit_pnpm:
     name: Dependency Audit (pnpm)
@@ -160,6 +346,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - frontend
+      - rust_static
       - rust
       - audit_pnpm
       - audit_cargo
@@ -171,6 +358,7 @@ jobs:
         if: >-
           ${{
             needs.frontend.result != 'success' ||
+            needs.rust_static.result != 'success' ||
             needs.rust.result != 'success' ||
             needs.audit_pnpm.result != 'success' ||
             needs.audit_cargo.result != 'success'

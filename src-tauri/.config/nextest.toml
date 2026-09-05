@@ -1,0 +1,171 @@
+nextest-version = "0.9.143"
+
+# These groups describe execution cost and timeout behavior. The risk profiles
+# below are the stable, possibly overlapping selections used for reproduction.
+[test-groups]
+loopback-network = { max-threads = 4 }
+owner-concurrency = { max-threads = 4 }
+property-regression = { max-threads = 2 }
+
+[profile.default]
+fail-fast = false
+flaky-result = "fail"
+retries = 0
+slow-timeout = { period = "10s", terminate-after = 2, grace-period = "2s" }
+test-threads = 4
+
+[[profile.default.overrides]]
+filter = 'test(/^chatbox::(layout|regression_tests)::/)'
+slow-timeout = { period = "30s", terminate-after = 2, grace-period = "2s" }
+test-group = "property-regression"
+
+[[profile.default.overrides]]
+filter = '''
+test(/^host_resolver::tests::/) |
+test(/^chatbox::osc::tests::/) |
+test(/^recognition::openai::transport::/) |
+test(/^translation::openai_responses::tests::/)
+'''
+slow-timeout = { period = "30s", terminate-after = 3, grace-period = "2s" }
+test-group = "loopback-network"
+
+[[profile.default.overrides]]
+filter = '''
+test(/^audio::(capture|probe)::tests::/) |
+test(/^chatbox::(completed|live|text_pacing)::tests::/) |
+test(/^recognition::(openai::(realtime|reconnect|tests)::|tests::)/) |
+test(/^runtime::(coordinator|manager|output|supervisor)::tests::/) |
+test(/^translation::tests::/)
+'''
+slow-timeout = { period = "20s", terminate-after = 2, grace-period = "2s" }
+test-group = "owner-concurrency"
+
+[profile.ci]
+inherits = "default"
+fail-fast = false
+global-timeout = "30m"
+retries = 0
+test-threads = 4
+
+[profile.ci.junit]
+path = "junit.xml"
+report-name = "rust-required"
+report-skipped = "all"
+store-failure-output = true
+store-success-output = false
+
+[profile.ci-diagnostic-parallel]
+inherits = "ci"
+retries = 0
+test-threads = 4
+
+[profile.ci-diagnostic-parallel.junit]
+path = "junit.xml"
+report-name = "rust-diagnostic-parallel"
+report-skipped = "all"
+store-failure-output = true
+store-success-output = false
+
+[profile.ci-diagnostic-serial]
+inherits = "ci"
+retries = 0
+test-threads = 1
+
+[profile.ci-diagnostic-serial.junit]
+path = "junit.xml"
+report-name = "rust-diagnostic-serial"
+report-skipped = "all"
+store-failure-output = true
+store-success-output = false
+
+# Each risk profile is a repository-owned selection. This keeps local and
+# scheduled commands independent of test-name substrings typed at the shell.
+[profile.risk-runtime-coordination]
+inherits = "ci"
+default-filter = '''
+test(/^runtime::(coordinator|manager|output|supervisor)::tests::/) |
+test(/^recognition::tests::/) |
+test(/^desktop::state::tests::/)
+'''
+
+[profile.risk-runtime-coordination.junit]
+path = "junit.xml"
+report-name = "risk-runtime-coordination"
+
+[profile.risk-translation]
+inherits = "ci"
+default-filter = 'test(/^translation::/)'
+
+[profile.risk-translation.junit]
+path = "junit.xml"
+report-name = "risk-translation"
+
+[profile.risk-loopback-network]
+inherits = "ci"
+default-filter = '''
+test(/^host_resolver::tests::/) |
+test(/^chatbox::osc::tests::/) |
+test(/^recognition::openai::transport::/) |
+test(/^translation::openai_responses::tests::/)
+'''
+
+[profile.risk-loopback-network.junit]
+path = "junit.xml"
+report-name = "risk-loopback-network"
+
+[profile.risk-timeout]
+inherits = "ci"
+default-filter = '''
+test(/^audio::probe::tests::/) |
+test(/^chatbox::(completed|live|text_pacing)::tests::/) |
+test(/^host_resolver::tests::/) |
+test(/^recognition::openai::(realtime|reconnect|tests|transport)::/) |
+test(/^recognition::tests::/) |
+test(/^runtime::(coordinator|manager|output|supervisor)::tests::/) |
+test(/^translation::/)
+'''
+
+[profile.risk-timeout.junit]
+path = "junit.xml"
+report-name = "risk-timeout"
+
+[profile.risk-cancellation]
+inherits = "ci"
+default-filter = '''
+test(/^audio::(capture|probe)::tests::/) |
+test(/^chatbox::(completed|live|text_pacing)::tests::/) |
+test(/^host_resolver::tests::/) |
+test(/^recognition::openai::(realtime|reconnect|tests|transport)::/) |
+test(/^recognition::tests::/) |
+test(/^runtime::(coordinator|manager|output|supervisor)::tests::/) |
+test(/^translation::/)
+'''
+
+[profile.risk-cancellation.junit]
+path = "junit.xml"
+report-name = "risk-cancellation"
+
+[profile.risk-property-regression]
+inherits = "ci"
+default-filter = 'test(/^chatbox::(layout|regression_tests)::/)'
+
+[profile.risk-property-regression.junit]
+path = "junit.xml"
+report-name = "risk-property-regression"
+
+[profile.risk-all]
+inherits = "ci"
+default-filter = '''
+test(/^audio::(capture|probe)::tests::/) |
+test(/^chatbox::(completed|layout|live|osc|regression_tests|text_pacing)::/) |
+test(/^desktop::state::tests::/) |
+test(/^host_resolver::tests::/) |
+test(/^recognition::openai::/) |
+test(/^recognition::tests::/) |
+test(/^runtime::(coordinator|manager|output|supervisor)::tests::/) |
+test(/^translation::/)
+'''
+
+[profile.risk-all.junit]
+path = "junit.xml"
+report-name = "risk-all"
