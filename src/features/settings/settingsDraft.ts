@@ -95,14 +95,16 @@ function configFromDraft(
     audio: { inputDeviceId: draft.audio.inputDeviceId },
     recognition: {
       path: draft.recognition.path,
-      expectedLanguages: [...draft.recognition.expectedLanguages],
+      expectedLanguages: draft.recognition.expectedLanguages.map((language) =>
+        language.trim(),
+      ),
     },
     translation:
       draft.publication.content === "sourceOnly"
         ? (materializedTranslation ?? dormantTranslationFallback)
         : materializedTranslation,
     osc: {
-      host: draft.osc.host,
+      host: draft.osc.host.trim(),
       port: draft.osc.port,
       enabled: draft.osc.enabled,
     },
@@ -268,8 +270,6 @@ export function useSettingsDraft(savedConfig: () => AppConfig | null) {
     }
 
     const next = configFromDraft(draft.value, saved.translation);
-    next.recognition.expectedLanguages = normalizedExpectedLanguages.value;
-    next.osc.host = next.osc.host.trim();
     next.osc.port = Number.isFinite(next.osc.port)
       ? next.osc.port
       : saved.osc.port;
