@@ -143,11 +143,9 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libxdo-dev
 
-      # Keep this version in sync with rust-toolchain.toml.
+      # rustup installs the channel, profile, and components from rust-toolchain.toml.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
-        with:
-          components: clippy,rustfmt
+        run: rustup toolchain install
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -211,9 +209,9 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libxdo-dev
 
-      # Keep this version in sync with rust-toolchain.toml.
+      # rustup installs the channel, profile, and components from rust-toolchain.toml.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        run: rustup toolchain install
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
