@@ -66,6 +66,16 @@ the checks were skipped and why in the pull request.
 
 ### Isolated test runs and CI evidence
 
+Concurrency tests must drive the lifecycle order they claim to cover. Use
+module-owned fixtures with explicit admission, entry, completion, and
+quiescence milestones; advance policy time from the test after the preceding
+milestone is acknowledged. Wall-clock timeouts are bounded deadlock diagnostics,
+not evidence that another thread has reached a state. Make negative assertions
+after the relevant owner or effect is quiescent, and distinguish an empty
+channel from a disconnected one. Test-owned threads, sockets, and blockers must
+converge on cleanup when setup or an assertion fails. Keep outcomes typed and
+diagnostics free of credentials, private captions, audio, and provider bodies.
+
 Required Rust tests use `cargo-nextest` 0.9.143. Each test runs in its own
 process, the repository assigns explicit timeout classes in
 `src-tauri/.config/nextest.toml`, and the required run always uses four workers
