@@ -56,6 +56,7 @@ test("keeps a dirty cloned draft until saved config content changes", async () =
 
   expect(settings.draft.value).toBe(firstDraft);
   expect(settings.draft.value?.osc.host).toBe("vrchat.local");
+  expect(settings.isDirty.value).toBe(true);
 
   const changed = appConfig();
   changed.audio.inputDeviceId = "usb-headset";
@@ -66,6 +67,78 @@ test("keeps a dirty cloned draft until saved config content changes", async () =
   expect(settings.draft.value).not.toBe(changed);
   expect(settings.draft.value?.audio.inputDeviceId).toBe("usb-headset");
   expect(settings.isDirty.value).toBe(false);
+});
+
+test.each([
+  {
+    field: "OSC host",
+    host: "  127.0.0.1  ",
+    expectedLanguages: ["zh", "en"],
+  },
+  {
+    field: "expected language hints",
+    host: "127.0.0.1",
+    expectedLanguages: [" zh ", "\ten\n"],
+  },
+])("ignores save-normalized whitespace in $field", async (edits) => {
+  const saved = ref<AppConfig | null>(appConfig());
+  const settings = useSettingsDraft(() => saved.value);
+  const draft = settings.draft.value;
+
+  if (draft === null) {
+    throw new Error("The initial saved config must create a draft.");
+  }
+
+  draft.osc.host = edits.host;
+  draft.recognition.expectedLanguages = edits.expectedLanguages;
+
+  const next = settings.createSaveConfig();
+  expect(next).toEqual(saved.value);
+  expect(settings.isDirty.value).toBe(false);
+
+  saved.value = next;
+  await nextTick();
+
+  expect(settings.draft.value).toBe(draft);
+  expect(draft.osc.host).toBe(edits.host);
+  expect(draft.recognition.expectedLanguages).toEqual(edits.expectedLanguages);
+  expect(settings.isDirty.value).toBe(false);
+});
+
+test.each([
+  { expectedLanguages: [" fr ", "en"], valid: true },
+  { expectedLanguages: [" en ", "EN"], valid: false },
+  { expectedLanguages: ["zh", "   "], valid: false },
+  { expectedLanguages: [], valid: false },
+])(
+  "keeps changed language hints dirty: $expectedLanguages",
+  ({ expectedLanguages, valid }) => {
+    const saved = ref<AppConfig | null>(appConfig());
+    const settings = useSettingsDraft(() => saved.value);
+
+    if (settings.draft.value === null) {
+      throw new Error("The initial saved config must create a draft.");
+    }
+
+    settings.draft.value.recognition.expectedLanguages = expectedLanguages;
+
+    expect(settings.isDirty.value).toBe(true);
+    expect(settings.canSave.value).toBe(valid);
+  },
+);
+
+test("keeps an invalid port dirty even when saving would use the saved port", () => {
+  const saved = ref<AppConfig | null>(appConfig());
+  const settings = useSettingsDraft(() => saved.value);
+
+  if (settings.draft.value === null) {
+    throw new Error("The initial saved config must create a draft.");
+  }
+
+  settings.draft.value.osc.port = Number.NaN;
+
+  expect(settings.createSaveConfig()?.osc.port).toBe(9_000);
+  expect(settings.isDirty.value).toBe(true);
 });
 
 test("validates trimmed language hints without case-insensitive duplicates", () => {

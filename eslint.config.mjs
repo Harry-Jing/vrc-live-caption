@@ -344,6 +344,8 @@ export default defineConfigWithVueTs(
   {
     name: "app/platform-adapters",
     files: ["src/platform/**/*.{vue,ts}", "tests/eslint/platform/**/*.mjs"],
+    // Preview owns its complete syntax restrictions, including toast copy.
+    ignores: ["src/platform/preview/**"],
     rules: {
       "no-restricted-syntax": ["error", stableToastCopyRestriction],
     },

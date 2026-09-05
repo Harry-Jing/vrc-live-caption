@@ -1,7 +1,7 @@
 use super::attempt::{RecognitionAttempt, RecognitionAttemptAudioChunk};
 use super::realtime::OpenAiRealtimeAttemptContext;
 use super::*;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, RetryDisposition};
 use crate::recognition::{
     OwnedRecognitionAudioFrame, RecognitionEvent, RecognitionGenerationScope, RecognitionModule,
     RecognitionSignal,
@@ -22,6 +22,7 @@ struct RecordingAttempt {
     context: OpenAiRealtimeAttemptContext,
     probe: Arc<Mutex<AttemptProbe>>,
     fail_next_drain: bool,
+    received_audio: bool,
 }
 
 impl RecognitionAttempt for RecordingAttempt {
@@ -40,6 +41,7 @@ impl RecognitionAttempt for RecordingAttempt {
             .lock()
             .map_err(|_| AppError::state("OpenAI driver test probe lock was poisoned."))?;
         probe.appended_samples = probe.appended_samples.saturating_add(audio.samples.len());
+        self.received_audio |= !audio.samples.is_empty();
         Ok(())
     }
 
@@ -48,7 +50,8 @@ impl RecognitionAttempt for RecordingAttempt {
     }
 
     fn drain_events(&mut self, _received_at_ms: u64) -> AppResult<Vec<RecognitionEvent>> {
-        if self.fail_next_drain {
+        // Idle polls must not retire the attempt before the test submits its audio.
+        if self.fail_next_drain && self.received_audio {
             self.fail_next_drain = false;
             return Err(AppError::recognition_network_retryable(
                 "The test connection was interrupted.",
@@ -69,7 +72,7 @@ impl RecognitionAttempt for RecordingAttempt {
 
 struct RecordingAttemptFactory {
     probe: Arc<Mutex<AttemptProbe>>,
-    fail_first_drain: bool,
+    fail_first_attempt_after_audio: bool,
 }
 
 impl OpenAiRecognitionAttemptFactory for RecordingAttemptFactory {
@@ -90,9 +93,42 @@ impl OpenAiRecognitionAttemptFactory for RecordingAttemptFactory {
         Ok(RecordingAttempt {
             context,
             probe: Arc::clone(&self.probe),
-            fail_next_drain: self.fail_first_drain && attempt == 1,
+            fail_next_drain: self.fail_first_attempt_after_audio && attempt == 1,
+            received_audio: false,
         })
     }
+}
+
+#[test]
+fn recording_attempt_fails_only_after_receiving_audio() -> AppResult<()> {
+    let mut factory = RecordingAttemptFactory {
+        probe: Arc::new(Mutex::new(AttemptProbe::default())),
+        fail_first_attempt_after_audio: true,
+    };
+    let mut attempt = factory.connect(
+        OpenAiRealtimeAttemptContext {
+            generation: 1,
+            connection_epoch: 1,
+            stream_id: "recognition-1-1".to_string(),
+        },
+        &|| false,
+    )?;
+
+    assert!(attempt.drain_events(10)?.is_empty());
+    assert!(attempt.drain_events(20)?.is_empty());
+    attempt.append_audio(RecognitionAttemptAudioChunk {
+        sample_rate_hz: 16_000,
+        samples: &[0.25; 160],
+    })?;
+    assert!(matches!(
+        attempt.drain_events(30),
+        Err(AppError::RecognitionNetwork {
+            retry_disposition: RetryDisposition::Retryable,
+            ..
+        })
+    ));
+    assert!(attempt.drain_events(40)?.is_empty());
+    attempt.stop()
 }
 
 #[test]
@@ -134,7 +170,7 @@ fn continuous_audio_is_unitized_inside_the_openai_recognition_module() -> AppRes
     let probe = Arc::new(Mutex::new(AttemptProbe::default()));
     let driver = OpenAiRecognitionDriver::new(RecordingAttemptFactory {
         probe: Arc::clone(&probe),
-        fail_first_drain: false,
+        fail_first_attempt_after_audio: false,
     });
     let module = RecognitionModule::with_audio_budget(Duration::from_millis(500), 8, driver)?;
     let mut running = module.start(RecognitionGenerationScope {
@@ -181,7 +217,7 @@ fn retryable_failure_pauses_capture_before_opening_a_fresh_attempt() -> AppResul
     let probe = Arc::new(Mutex::new(AttemptProbe::default()));
     let driver = OpenAiRecognitionDriver::new(RecordingAttemptFactory {
         probe: Arc::clone(&probe),
-        fail_first_drain: true,
+        fail_first_attempt_after_audio: true,
     });
     let module = RecognitionModule::with_audio_budget(Duration::from_millis(500), 8, driver)?;
     let mut running = module.start(RecognitionGenerationScope {
@@ -201,10 +237,18 @@ fn retryable_failure_pauses_capture_before_opening_a_fresh_attempt() -> AppResul
             sequence: 1,
             captured_at_ms: 456,
             sample_rate_hz: 16_000,
-            samples: vec![0.25; 160].into_boxed_slice(),
+            samples: vec![0.25; 4_800].into_boxed_slice(),
         })
         .map_err(|error| AppError::state(format!("Test audio was rejected: {error:?}")))?;
 
+    assert!(matches!(
+        running.signals.recv_timeout(TEST_TIMEOUT),
+        Ok(RecognitionSignal::Event(RecognitionEvent::UnitStarted {
+            generation: 11,
+            started_at_ms: 456,
+            ..
+        }))
+    ));
     let pause_epoch = match running.signals.recv_timeout(TEST_TIMEOUT) {
         Ok(RecognitionSignal::Reconnecting {
             epoch,
@@ -245,7 +289,7 @@ fn caption_unit_ids_remain_unique_across_reconnect_attempts() -> AppResult<()> {
     let probe = Arc::new(Mutex::new(AttemptProbe::default()));
     let driver = OpenAiRecognitionDriver::new(RecordingAttemptFactory {
         probe,
-        fail_first_drain: true,
+        fail_first_attempt_after_audio: true,
     });
     let module = RecognitionModule::with_audio_budget(Duration::from_millis(500), 8, driver)?;
     let mut running = module.start(RecognitionGenerationScope {
@@ -321,7 +365,7 @@ fn stop_after_reconnect_ack_prevents_a_fresh_attempt() -> AppResult<()> {
     let probe = Arc::new(Mutex::new(AttemptProbe::default()));
     let driver = OpenAiRecognitionDriver::new(RecordingAttemptFactory {
         probe: Arc::clone(&probe),
-        fail_first_drain: true,
+        fail_first_attempt_after_audio: true,
     });
     let module = RecognitionModule::with_audio_budget(Duration::from_millis(500), 8, driver)?;
     let mut running = module.start(RecognitionGenerationScope {
@@ -338,10 +382,18 @@ fn stop_after_reconnect_ack_prevents_a_fresh_attempt() -> AppResult<()> {
             sequence: 1,
             captured_at_ms: 789,
             sample_rate_hz: 16_000,
-            samples: vec![0.25; 160].into_boxed_slice(),
+            samples: vec![0.25; 4_800].into_boxed_slice(),
         })
         .map_err(|error| AppError::state(format!("Test audio was rejected: {error:?}")))?;
 
+    assert!(matches!(
+        running.signals.recv_timeout(TEST_TIMEOUT),
+        Ok(RecognitionSignal::Event(RecognitionEvent::UnitStarted {
+            generation: 12,
+            started_at_ms: 789,
+            ..
+        }))
+    ));
     let pause_epoch = match running.signals.recv_timeout(TEST_TIMEOUT) {
         Ok(RecognitionSignal::Reconnecting { epoch, .. }) => epoch,
         signal => {
