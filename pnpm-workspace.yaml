@@ -3,13 +3,9 @@ allowBuilds:
   lefthook: true
   vue-demi: true
 
-# Temporary for #35: allow the just-published security fix through pnpm's
-# minimum-release-age policy. Remove after nanoid 3.3.18 clears that window.
-minimumReleaseAgeExclude:
-  - nanoid@3.3.18
-
-overrides:
-  nanoid@<3.3.18: ^3.3.18
+# Drop `minimumReleaseAgeExclude` entries once the lockfile no longer needs them,
+# so `pnpm audit --fix` exceptions do not outlive their advisories.
+minimumReleaseAgeExcludePrune: true
 
 # Lefthook runs independent quality gates in parallel. Dependency installation
 # is an explicit prerequisite so concurrent checks never mutate node_modules.
