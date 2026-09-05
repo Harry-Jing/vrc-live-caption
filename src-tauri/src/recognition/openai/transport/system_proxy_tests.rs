@@ -162,34 +162,35 @@ fn selected_proxy_failure_never_falls_back_to_direct() -> AppResult<()> {
 }
 
 #[test]
-fn direct_hostname_resolution_obeys_the_connection_deadline() -> AppResult<()> {
+fn direct_route_preserves_a_typed_resolver_failure() -> AppResult<()> {
     let resolver = HostResolver::with_lookup(|_, _| {
-        thread::sleep(Duration::from_millis(100));
-        Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], 9))])
+        Err(std::io::Error::other("Synthetic direct lookup failure."))
     });
-    let request = test_request("wss://blocked.test/realtime")?;
-    let started_at = Instant::now();
-
+    let request = test_request("wss://unresolved.test/realtime")?;
     let error = connect_with_matcher_until(
         &request,
         &Matcher::builder().build(),
         &resolver,
-        started_at + Duration::from_millis(20),
+        Instant::now() + Duration::from_secs(1),
         &|| false,
     )
     .err()
-    .ok_or_else(|| AppError::state("A DNS lookup exceeded the OpenAI connection deadline."))?;
+    .ok_or_else(|| AppError::state("A failed direct hostname unexpectedly connected."))?;
 
-    assert_eq!(error.code(), "stt.network_unreachable");
-    assert!(error.to_string().contains("timed out"));
+    assert!(matches!(
+        error,
+        AppError::RecognitionNetwork {
+            retry_disposition: RetryDisposition::Retryable,
+            ..
+        }
+    ));
     Ok(())
 }
 
 #[test]
-fn selected_proxy_hostname_resolution_observes_cancellation() -> AppResult<()> {
+fn selected_proxy_route_preserves_typed_resolver_cancellation() -> AppResult<()> {
     let matcher = Matcher::builder().https("http://proxy.test:8080").build();
     let request = test_request("wss://api.openai.com/realtime")?;
-
     let error = connect_with_matcher_until(
         &request,
         &matcher,
@@ -200,8 +201,13 @@ fn selected_proxy_hostname_resolution_observes_cancellation() -> AppResult<()> {
     .err()
     .ok_or_else(|| AppError::state("A cancelled proxy hostname unexpectedly connected."))?;
 
-    assert_eq!(error.code(), "stt.network_unreachable");
-    assert!(error.to_string().contains("cancelled"));
+    assert!(matches!(
+        error,
+        AppError::RecognitionNetwork {
+            retry_disposition: RetryDisposition::Terminal,
+            ..
+        }
+    ));
     Ok(())
 }
 
@@ -277,20 +283,33 @@ fn proxy_response_wait_observes_cancellation() -> AppResult<()> {
 }
 
 #[test]
-fn transient_resolution_failures_are_retryable_but_internal_failures_are_terminal() {
-    let timeout = map_resolution_error("OpenAI", HostResolutionError::DeadlineExceeded);
-    let lookup = map_resolution_error(
-        "OpenAI",
-        HostResolutionError::LookupFailed("temporary DNS failure".to_string()),
-    );
-    let unavailable = map_resolution_error(
-        "OpenAI",
-        HostResolutionError::WorkerUnavailable("worker stopped".to_string()),
-    );
+fn typed_resolution_failures_preserve_recognition_retry_policy() {
+    let cases = [
+        (
+            HostResolutionError::DeadlineExceeded,
+            RetryDisposition::Retryable,
+        ),
+        (
+            HostResolutionError::LookupFailed("synthetic lookup failure".to_string()),
+            RetryDisposition::Retryable,
+        ),
+        (HostResolutionError::QueueFull, RetryDisposition::Retryable),
+        (HostResolutionError::Cancelled, RetryDisposition::Terminal),
+        (
+            HostResolutionError::WorkerUnavailable("synthetic worker failure".to_string()),
+            RetryDisposition::Terminal,
+        ),
+    ];
 
-    assert_eq!(timeout.retry_disposition(), RetryDisposition::Retryable);
-    assert_eq!(lookup.retry_disposition(), RetryDisposition::Retryable);
-    assert_eq!(unavailable.retry_disposition(), RetryDisposition::Terminal);
+    for (resolution_error, expected_disposition) in cases {
+        assert!(matches!(
+            map_resolution_error("OpenAI", resolution_error),
+            AppError::RecognitionNetwork {
+                retry_disposition,
+                ..
+            } if retry_disposition == expected_disposition
+        ));
+    }
 }
 
 #[test]

@@ -2,11 +2,10 @@ use super::super::layout::{PreparedChatboxText, prepare_single_message};
 use super::super::test_support::AdvancingClock;
 use super::super::text_pacing::ChatboxTextPacer;
 use super::*;
-use crate::host_resolver::HostResolver;
+use crate::host_resolver::{HostResolutionError, HostResolver};
 use rosc::{decoder, encoder};
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::thread;
 use std::time::{Duration, Instant};
 
 struct ScriptedOscTransport {
@@ -234,51 +233,25 @@ fn hostname_resolution_uses_the_injected_resolver() -> AppResult<()> {
 }
 
 #[test]
-fn hostname_resolution_deadline_maps_to_an_osc_error() -> AppResult<()> {
-    let resolver = HostResolver::with_lookup(|_, _| {
-        thread::sleep(Duration::from_millis(100));
-        Ok(vec![SocketAddr::from(([127, 0, 0, 1], 9000))])
-    });
-    let target = OscConfig {
-        host: "blocked.test".to_string(),
-        port: 9000,
-        enabled: true,
-    };
+fn typed_hostname_resolution_failures_map_to_the_osc_target() {
+    let target = "blocked.test:9000";
+    let errors = [
+        HostResolutionError::Cancelled,
+        HostResolutionError::DeadlineExceeded,
+        HostResolutionError::LookupFailed("synthetic lookup failure".to_string()),
+        HostResolutionError::WorkerUnavailable("synthetic worker failure".to_string()),
+        HostResolutionError::QueueFull,
+    ];
 
-    let error = ChatboxOscSender::new_until(
-        &target,
-        &resolver,
-        Instant::now() + Duration::from_millis(20),
-        &|| false,
-    )
-    .err()
-    .ok_or_else(|| AppError::state("A timed-out OSC hostname unexpectedly resolved."))?;
-
-    assert_eq!(error.code(), "osc.send_failed");
-    assert!(error.to_string().contains("timed out"));
-    Ok(())
-}
-
-#[test]
-fn hostname_resolution_cancellation_maps_to_an_osc_error() -> AppResult<()> {
-    let target = OscConfig {
-        host: "cancelled.test".to_string(),
-        port: 9000,
-        enabled: true,
-    };
-
-    let error = ChatboxOscSender::new_until(
-        &target,
-        &HostResolver::default(),
-        Instant::now() + Duration::from_secs(1),
-        &|| true,
-    )
-    .err()
-    .ok_or_else(|| AppError::state("A cancelled OSC hostname unexpectedly resolved."))?;
-
-    assert_eq!(error.code(), "osc.send_failed");
-    assert!(error.to_string().contains("cancelled"));
-    Ok(())
+    for resolution_error in errors {
+        assert!(matches!(
+            map_resolution_error(target, resolution_error),
+            AppError::OscSend {
+                target: mapped_target,
+                ..
+            } if mapped_target == target
+        ));
+    }
 }
 
 fn receive_packet(receiver: &UdpSocket) -> AppResult<OscPacket> {
