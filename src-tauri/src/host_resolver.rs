@@ -99,6 +99,10 @@ impl Default for HostResolver {
 }
 
 impl HostResolver {
+    /// Resolve only within the caller's monotonic deadline, discarding expired or late-observed
+    /// results. Cancellation wins when both terminal states are visible at a checkpoint; the
+    /// Boolean callback cannot establish which happened first between observations. Abandoning
+    /// a request never joins the OS lookup or creates a replacement worker.
     pub(crate) fn resolve_until(
         &self,
         host: &str,
