@@ -100,3 +100,12 @@ fn diagnostic_report_has_write_only_clipboard_permissions() {
         assert!(!desktop_capability.contains(&format!("\"{permission}\"")));
     }
 }
+// Temporary #41 acceptance probe; removed before this PR is ready.
+#[test]
+fn ci_stuck_test_probe() {
+    if std::env::var_os("VRC_CI_GATE_PROBE").is_some() {
+        loop {
+            std::thread::park();
+        }
+    }
+}

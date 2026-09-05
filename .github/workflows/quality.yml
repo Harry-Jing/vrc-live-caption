@@ -252,6 +252,9 @@ jobs:
 
       - name: Run Rust tests (required, zero retries)
         id: rust_tests
+        # Temporary #41 acceptance probe; removed before this PR is ready.
+        env:
+          VRC_CI_GATE_PROBE: "fail"
         shell: bash
         working-directory: src-tauri
         run: |
