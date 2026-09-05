@@ -113,7 +113,7 @@ property/regression test groups: first with the same four-worker schedule, then
 with one worker. They are new zero-retry runs, not retries that can change the
 required result. Download the `rust-test-results-<os>` artifact for the original
 JUnit report, captured failure output, environment and seed metadata, doctest
-output, and any diagnostic JUnit reports. The `frontend-test-results` artifact
+output, and any diagnostic JUnit reports. The `frontend-test-results-<os>` artifact
 contains the required Vitest JUnit report.
 
 Vitest's normal pool, isolation, worker count, timeouts, retry count, and

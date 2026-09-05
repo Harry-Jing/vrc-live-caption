@@ -22,9 +22,17 @@ concurrency:
 
 jobs:
   frontend:
-    name: Frontend
-    runs-on: ubuntu-latest
+    name: Frontend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
 
     env:
       VITEST_SEQUENCE_SEED: "20260817"
@@ -45,7 +53,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Check pull request title
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && runner.os == 'Linux'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: printf '%s\n' "$PR_TITLE" | pnpm commitlint
@@ -95,21 +103,30 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: frontend-test-results
+          name: frontend-test-results-${{ matrix.os }}
           path: test-results/frontend
           if-no-files-found: warn
           retention-days: 14
 
   rust_static:
-    name: Rust static analysis
-    runs-on: ubuntu-latest
+    name: Rust static analysis (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
