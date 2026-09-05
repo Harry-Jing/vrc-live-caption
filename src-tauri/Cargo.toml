@@ -5,7 +5,6 @@ description = "Desktop live caption tool for VRChat"
 authors = ["VRC Live Caption contributors"]
 license = "MIT"
 edition = "2024"
-rust-version = "1.97.1"
 
 [lib]
 # The `_lib` suffix avoids Cargo's Windows library/binary target-name collision.

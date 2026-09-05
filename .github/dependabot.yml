@@ -9,6 +9,10 @@ updates:
       npm-non-major:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    ignore:
+      # The pinned runtime is Node 24; bump this together with devEngines.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: cargo
     directory: "/src-tauri"
@@ -18,6 +22,15 @@ updates:
       cargo-patches:
         patterns: ["*"]
         update-types: ["patch"]
+    ignore:
+      # 0.23 is a breaking 0.x minor for a dev-facing API; revisit with the next line.
+      - dependency-name: base64
+        versions: ["0.23.*"]
+
+  - package-ecosystem: rust-toolchain
+    directory: "/"
+    schedule:
+      interval: weekly
 
   - package-ecosystem: github-actions
     directory: "/"
