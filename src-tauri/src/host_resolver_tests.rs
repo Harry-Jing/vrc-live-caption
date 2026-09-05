@@ -743,8 +743,3 @@ fn one_blocked_worker_has_a_bounded_request_queue() -> AppResult<()> {
         .map_err(|error| AppError::state(format!("Blocking resolver caller failed: {error:?}")))?;
     Ok(())
 }
-// Temporary #41 acceptance probe; removed before this PR is ready.
-#[test]
-fn ci_required_failure_probe() {
-    assert!(std::env::var_os("VRC_CI_GATE_PROBE").is_none());
-}
