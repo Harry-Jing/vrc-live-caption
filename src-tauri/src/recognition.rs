@@ -342,6 +342,17 @@ pub(crate) struct RunningRecognition {
     worker: Option<JoinHandle<AppResult<()>>>,
 }
 
+#[cfg(test)]
+/// Passive witness for the Module-owned admission guard's terminal state.
+///
+/// A Driver-local drop signal fires before `RecognitionAdmissionGuard` closes
+/// admission, so it cannot establish the pre-activation ordering that Runtime
+/// coordinator tests need to drive without scheduler luck.
+#[derive(Clone)]
+pub(crate) struct RecognitionOwnerTerminationObserver {
+    stopped: Arc<RecognitionStopState>,
+}
+
 impl RunningRecognition {
     pub(crate) fn try_submit(
         &self,
@@ -429,8 +440,22 @@ impl RunningRecognition {
         self.stopped.is_accepting_audio()
     }
 
+    #[cfg(test)]
+    pub(crate) fn owner_termination_observer(&self) -> RecognitionOwnerTerminationObserver {
+        RecognitionOwnerTerminationObserver {
+            stopped: Arc::clone(&self.stopped),
+        }
+    }
+
     pub(crate) fn acknowledge_capture_paused(&self, epoch: u64) -> AppResult<()> {
         self.stopped.acknowledge_capture_paused(epoch)
+    }
+}
+
+#[cfg(test)]
+impl RecognitionOwnerTerminationObserver {
+    pub(crate) fn wait_for_termination(&self, timeout: Duration) -> AppResult<()> {
+        self.stopped.wait_for_termination(timeout)
     }
 }
 
@@ -799,6 +824,30 @@ impl RecognitionStopState {
                 .wake
                 .wait(guard)
                 .map_err(|_| AppError::state("Recognition lifecycle wait lock was poisoned."))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn wait_for_termination(&self, timeout: Duration) -> AppResult<()> {
+        let guard = self
+            .wait_lock
+            .lock()
+            .map_err(|_| AppError::state("Recognition lifecycle wait lock was poisoned."))?;
+        if self.is_terminated() {
+            return Ok(());
+        }
+        // `mark_terminated` closes admission by acquiring this same wait lock
+        // before notifying. The predicate is rechecked while the lock is held,
+        // so termination cannot land between the check and sleep as a lost wake.
+        let (_guard, wait_result) = self
+            .wake
+            .wait_timeout_while(guard, timeout, |_| !self.is_terminated())
+            .map_err(|_| AppError::state("Recognition lifecycle wait lock was poisoned."))?;
+        if wait_result.timed_out() && !self.is_terminated() {
+            return Err(AppError::state(
+                "Recognition owner did not terminate before the test watchdog expired.",
+            ));
         }
         Ok(())
     }

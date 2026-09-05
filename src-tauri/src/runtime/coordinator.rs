@@ -133,6 +133,36 @@ struct ActiveRecognitionCapture {
     audio_level: AudioLevelMeter,
 }
 
+#[derive(Clone, Copy)]
+struct RecognitionCaptureAdapter<'context> {
+    open: &'context dyn Fn(&AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
+    #[cfg(test)]
+    // Observes the exact coordinator seam after capture retirement and before
+    // the Recognition owner is allowed to resume from its pause handshake.
+    before_pause_acknowledgement: Option<&'context dyn Fn() -> AppResult<()>>,
+}
+
+impl<'context> RecognitionCaptureAdapter<'context> {
+    fn new(open: &'context dyn Fn(&AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>) -> Self {
+        Self {
+            open,
+            #[cfg(test)]
+            before_pause_acknowledgement: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_pause_acknowledgement(
+        open: &'context dyn Fn(&AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
+        before_pause_acknowledgement: &'context dyn Fn() -> AppResult<()>,
+    ) -> Self {
+        Self {
+            open,
+            before_pause_acknowledgement: Some(before_pause_acknowledgement),
+        }
+    }
+}
+
 trait RecognitionCapture {
     fn sample_rate(&self) -> u32;
     fn receive(&self, timeout: Duration) -> AppResult<Option<Vec<f32>>>;
@@ -168,7 +198,7 @@ struct RecognitionCoordinator<'context, R: Runtime> {
     chatbox_publication: Option<&'context ChatboxPublication>,
     generation: &'context RuntimeGeneration,
     status_recorder: &'context RuntimeStatusRecorder,
-    open_capture: &'context dyn Fn(&AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
+    capture_adapter: RecognitionCaptureAdapter<'context>,
 }
 
 fn coordinate_running_recognition<R: Runtime>(
@@ -199,6 +229,26 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
     status_recorder: &RuntimeStatusRecorder,
     open_capture: &dyn Fn(&AudioConfig) -> AppResult<Box<dyn RecognitionCapture>>,
 ) -> AppResult<()> {
+    coordinate_running_recognition_with_capture_adapter(
+        app,
+        audio_config,
+        chatbox_publication,
+        generation,
+        recognition,
+        status_recorder,
+        RecognitionCaptureAdapter::new(open_capture),
+    )
+}
+
+fn coordinate_running_recognition_with_capture_adapter<R: Runtime>(
+    app: &AppHandle<R>,
+    audio_config: &AudioConfig,
+    chatbox_publication: Option<&ChatboxPublication>,
+    generation: &RuntimeGeneration,
+    recognition: &mut RunningRecognition,
+    status_recorder: &RuntimeStatusRecorder,
+    capture_adapter: RecognitionCaptureAdapter<'_>,
+) -> AppResult<()> {
     let mut active_capture = None;
     let mut audio_level_revision = 0_u64;
     let mut audio_sequence = 0_u64;
@@ -208,7 +258,7 @@ fn coordinate_running_recognition_with_capture<R: Runtime>(
         chatbox_publication,
         generation,
         status_recorder,
-        open_capture,
+        capture_adapter,
     };
     let translation_status_recorder =
         status_recorder.translation_recorder(generation.generation_id());
@@ -360,7 +410,7 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
         let chatbox_publication = self.chatbox_publication;
         let generation = self.generation;
         let status_recorder = self.status_recorder;
-        let open_capture = self.open_capture;
+        let open_capture = self.capture_adapter.open;
 
         match signal {
             RecognitionSignal::Ready {
@@ -455,6 +505,12 @@ impl<R: Runtime> RecognitionCoordinator<'_, R> {
                         ),
                     );
                 })?;
+                #[cfg(test)]
+                if let Some(before_acknowledgement) =
+                    self.capture_adapter.before_pause_acknowledgement
+                {
+                    before_acknowledgement()?;
+                }
                 recognition.acknowledge_capture_paused(epoch)?;
                 Ok(if reconnecting {
                     RecognitionCoordinatorFlow::Continue
