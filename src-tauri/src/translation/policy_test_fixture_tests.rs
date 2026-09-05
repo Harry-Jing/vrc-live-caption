@@ -768,6 +768,9 @@ fn unwinding_drop_releases_and_waits_for_non_cooperative_begin() -> AppResult<()
     let captured_probe = Arc::clone(&probe);
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let fixture = TranslationPolicyFixture::new();
+        // Force poisoning after publication but before the branch re-locks
+        // state to own its blocker; merely seeing an attempt left this racing.
+        fixture.pause_after_attempt_publication();
         let (module, _outcomes) = fixture_module(&fixture)
             .unwrap_or_else(|error| std::panic::resume_unwind(Box::new(error)));
         let store = CaptionAggregateStore::default();
@@ -783,6 +786,9 @@ fn unwinding_drop_releases_and_waits_for_non_cooperative_begin() -> AppResult<()
             .wait_for_attempt_count(1, FIXTURE_WATCHDOG)
             .unwrap_or_else(|error| std::panic::resume_unwind(Box::new(error)))[0]
             .id();
+        fixture
+            .wait_until_attempt_publication_paused(FIXTURE_WATCHDOG)
+            .unwrap_or_else(|error| std::panic::resume_unwind(Box::new(error)));
         *captured_probe
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
@@ -807,5 +813,16 @@ fn unwinding_drop_releases_and_waits_for_non_cooperative_begin() -> AppResult<()
         .take()
         .ok_or_else(|| AppError::state("Unwind scenario produced no quiescence probe."))?;
     probe.wait(Duration::ZERO).map_err(fixture_error)?;
+    let state = probe
+        .shared
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let attempt = state
+        .attempts
+        .get(&probe.id)
+        .ok_or_else(|| AppError::state("Unwind scenario lost its recorded attempt."))?;
+    assert!(attempt.completion.is_none());
+    assert!(attempt.non_cooperative_resolution.is_none());
     Ok(())
 }

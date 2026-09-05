@@ -766,11 +766,13 @@ impl CompletedTextAdapter for FixtureAdapter {
                 Arc::clone(&self.shared),
             ))),
             PublishedAttempt::NonCooperative { id } => {
+                // Publication transferred callback/blocker cleanup to this
+                // branch. Poisoning must not abandon that terminal transition.
                 let mut state = self
                     .shared
                     .state
                     .lock()
-                    .map_err(|_| fixture_adapter_failure())?;
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 loop {
                     let should_leave = state.is_closed()
                         || state.attempts.get(&id).is_some_and(|attempt| {
