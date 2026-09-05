@@ -624,7 +624,8 @@ fn unit_aborted_events_close_the_app_unit_and_completed_typing_activity() -> App
         let snapshot = caption_aggregate.snapshot()?;
         assert!(snapshot.open_source_units.is_empty());
         assert!(snapshot.captions.is_empty());
-        assert!(text_receiver.try_recv().is_err());
+        publisher.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+        assert!(matches!(text_receiver.try_recv(), Err(TryRecvError::Empty)));
 
         publisher.request_close(PublisherCloseReason::RuntimeError)?;
         publisher.join()?;
