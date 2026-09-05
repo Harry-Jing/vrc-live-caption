@@ -443,6 +443,13 @@ async fn execute_request(
         // the provider-neutral class, but never authorize an overlapping retry.
         .map_err(|_| terminal_deadline_exceeded())?
         .map_err(map_ambiguous_transport_error)?;
+    decode_response(response, deadline).await
+}
+
+async fn decode_response(
+    response: reqwest::Response,
+    deadline: Instant,
+) -> Result<String, AdapterFailure> {
     let status = response.status().as_u16();
     let headers = response.headers().clone();
 

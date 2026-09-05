@@ -928,15 +928,16 @@ fn provider_neutral_module_runs_the_concrete_responses_adapter() -> Result<(), S
 fn retryable_http_failure_is_followed_by_one_non_overlapping_physical_retry() -> Result<(), String>
 {
     let server = ResponsesFixture::start()?;
-    let concrete: Arc<dyn CompletedTextAdapter> = Arc::new(OpenAiResponsesAdapter::new_for_test(
+    let concrete = OpenAiResponsesAdapter::new_for_test(
         server.endpoint()?,
         SecretString::from("retry-composition-secret"),
-    )?);
+    )?;
+    let physical_attempts = Arc::clone(&concrete.attempt_gate);
     let (observation_sender, observation_receiver) = mpsc::channel();
     let active = Arc::new(AtomicUsize::new(0));
     let overlap_observed = Arc::new(AtomicBool::new(false));
     let adapter = Arc::new(ObservedAdapter {
-        inner: concrete,
+        inner: Arc::new(concrete),
         observations: observation_sender,
         attempts: AtomicUsize::new(0),
         active: Arc::clone(&active),
@@ -989,6 +990,9 @@ fn retryable_http_failure_is_followed_by_one_non_overlapping_physical_retry() ->
         .map_err(|_| "policy retry delay did not begin".to_string())?;
     assert_eq!(requested_delay, Duration::from_millis(250));
     assert_eq!(active.load(Ordering::SeqCst), 0);
+    if !physical_attempts.wait_until_released(NETWORK_TEST_TIMEOUT) {
+        return Err("first physical attempt did not quiesce before retry".to_string());
+    }
     clock.advance(requested_delay)?;
 
     let second_observation = observation_receiver
@@ -1035,6 +1039,9 @@ fn retryable_http_failure_is_followed_by_one_non_overlapping_physical_retry() ->
         .stop()
         .map_err(|_| "translation module did not stop".to_string())?;
 
+    if !physical_attempts.wait_until_released(NETWORK_TEST_TIMEOUT) {
+        return Err("second physical attempt did not quiesce".to_string());
+    }
     assert_eq!(active.load(Ordering::SeqCst), 0);
     assert_eq!(adapter.attempts.load(Ordering::SeqCst), 2);
     assert!(!overlap_observed.load(Ordering::SeqCst));
@@ -1379,38 +1386,55 @@ fn failed_selected_proxy_never_falls_back_to_the_origin() -> Result<(), String> 
 }
 
 #[test]
-fn the_shorter_adapter_budget_covers_the_entire_response_body() -> Result<(), String> {
+fn successful_headers_are_followed_by_a_response_body_deadline() -> Result<(), String> {
     let server = ResponsesFixture::start()?;
-    let adapter = OpenAiResponsesAdapter::new_for_test(
-        server.endpoint()?,
-        SecretString::from("timeout-secret"),
-    )?;
-    let (result_sender, result_receiver) = mpsc::sync_channel(1);
-    let _active = adapter
-        .begin(
-            CompletedTextRequest {
-                source_text: "private source".to_string(),
-                target: crate::config::TranslationTarget::English,
-            },
-            AttemptControl {
-                attempt_budget: Duration::from_millis(250),
-                total_budget: Duration::from_secs(1),
-            },
-            AdapterCompletion {
-                sender: result_sender,
-            },
-        )
-        .map_err(|_| "adapter did not begin".to_string())?;
+    let runtime = build_runtime().map_err(|_| "test runtime did not build".to_string())?;
+    let client = base_client_builder(false)
+        .connect_timeout(NETWORK_TEST_TIMEOUT)
+        .build()
+        .map_err(|_| "test client did not build".to_string())?;
+    let request = build_request(
+        &client,
+        server.endpoint()?.url(),
+        &SecretString::from("timeout-secret"),
+        encode_request(crate::config::TranslationTarget::English, "private source")
+            .map_err(|_| "test request did not encode".to_string())?,
+    )
+    .map_err(|_| "test request did not build".to_string())?;
+    let (response_sender, response_receiver) = mpsc::sync_channel(1);
+    let request_task = runtime.spawn(async move {
+        let _ignored = response_sender.send(request.send().await);
+    });
 
     let mut exchange = server.accept_request().map_err(|error| error.to_string())?;
     exchange
         .send_headers("200 OK", &[], 1)
         .map_err(|error| error.to_string())?;
+    let response = response_receiver
+        .recv_timeout(NETWORK_TEST_TIMEOUT)
+        .map_err(|_| "adapter did not receive successful response headers".to_string())?
+        .map_err(|_| "successful response headers failed".to_string())?;
+    runtime
+        .block_on(request_task)
+        .map_err(|_| "response-header task panicked".to_string())?;
+    assert!(response.status().is_success());
+
+    // Start the tested budget after Reqwest has received the real headers.
+    // Socket setup cannot consume it, and this client has no competing body
+    // timeout that could make a missing adapter deadline appear to pass.
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let body_task = runtime.spawn(async move {
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let _ignored = result_sender.send(decode_response(response, deadline).await);
+    });
     let failure = result_receiver
         .recv_timeout(NETWORK_TEST_TIMEOUT)
         .map_err(|_| "adapter did not time out".to_string())?
         .err()
         .ok_or_else(|| "stalled body unexpectedly completed".to_string())?;
+    runtime
+        .block_on(body_task)
+        .map_err(|_| "response-body task panicked".to_string())?;
     assert_eq!(failure.class, TranslationFailureClass::DeadlineExceeded);
     assert!(failure.retryable);
     assert!(!failure.request_outcome_ambiguous);

@@ -379,22 +379,37 @@ impl ResponsesExchange {
         Ok(())
     }
 
-    fn write_all(&mut self, bytes: &[u8]) -> Result<(), FixtureError> {
+    fn write_all(&mut self, mut bytes: &[u8]) -> Result<(), FixtureError> {
         let stream = self.stream.as_mut().ok_or_else(|| {
             FixtureError::new(FixtureStage::Protocol, FixtureFailure::DuplicateOperation)
         })?;
-        configure_stream(stream, self.deadline)?;
-        stream.write_all(bytes).map_err(|error| {
-            let failure = if matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ) {
-                FixtureFailure::Timeout
-            } else {
-                FixtureFailure::Io(error.kind())
-            };
-            FixtureError::new(FixtureStage::WriteResponse, failure)
-        })
+        while !bytes.is_empty() {
+            // A partial write or EINTR must consume the same absolute
+            // watchdog; `Write::write_all` would reuse one syscall timeout.
+            configure_stream(stream, self.deadline)?;
+            match stream.write(bytes) {
+                Ok(0) => {
+                    return Err(FixtureError::new(
+                        FixtureStage::WriteResponse,
+                        FixtureFailure::Io(io::ErrorKind::WriteZero),
+                    ));
+                }
+                Ok(written) => bytes = &bytes[written..],
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => {
+                    let failure = if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) {
+                        FixtureFailure::Timeout
+                    } else {
+                        FixtureFailure::Io(error.kind())
+                    };
+                    return Err(FixtureError::new(FixtureStage::WriteResponse, failure));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn shutdown(&mut self, direction: Shutdown) -> Result<(), FixtureError> {
