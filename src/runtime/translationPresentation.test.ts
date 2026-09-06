@@ -173,7 +173,7 @@ describe("translation presentation", () => {
     ]);
   });
 
-  test("projects Translation-only without exposing Source text and keeps failed units terminal", () => {
+  test("projects Translation-only with its exact Source pairing and keeps failed units terminal", () => {
     const presentation = translationPresentation(
       translationGeneration("translationOnly"),
       fixtureAggregate,
@@ -184,7 +184,11 @@ describe("translation presentation", () => {
       "pending",
       "completed",
     ]);
-    expect(presentation.units.every((unit) => unit.source === null)).toBe(true);
+    expect(presentation.units.map((unit) => unit.source.text)).toEqual([
+      "Source whose translation failed.",
+      "Source awaiting translation.",
+      "Source with a completed translation.",
+    ]);
     expect(presentation.units[0]).toMatchObject({
       state: "failed",
       translation: null,
@@ -200,7 +204,27 @@ describe("translation presentation", () => {
       translation: { text: "已完成翻译的原文。" },
       reasonCode: null,
     });
-    expect(JSON.stringify(presentation)).not.toContain("Source ");
+  });
+
+  test("is inactive for a retained generation that is no longer active", () => {
+    const failedGeneration: RuntimeGenerationSnapshot = {
+      ...translationGeneration("bilingual", {
+        state: "degraded",
+        reasonCode: "translation.provider_unavailable",
+      }),
+      phase: "error",
+    };
+
+    expect(translationPresentation(failedGeneration, fixtureAggregate)).toEqual(
+      {
+        state: "inactive",
+        content: null,
+        target: null,
+        endpointKind: null,
+        reasonCode: null,
+        units: [],
+      },
+    );
   });
 
   test("takes generation degradation from Runtime Control on pull or reconnect", () => {
@@ -254,7 +278,7 @@ describe("translation presentation", () => {
     },
   );
 
-  test("redacts endpoint URL, credentials, and Source text from Translation-only presentation", () => {
+  test("redacts endpoint URL and credentials from Translation-only presentation", () => {
     const generation = translationGeneration("translationOnly");
     const presentationText = JSON.stringify(
       translationPresentation(generation, fixtureAggregate),
@@ -268,7 +292,6 @@ describe("translation presentation", () => {
     expect(presentationText).not.toContain("https://");
     expect(presentationText).not.toContain("displaySuffix");
     expect(presentationText).not.toContain("credentials");
-    expect(presentationText).not.toContain("Source ");
   });
 
   test("exposes only the safe endpoint kind for Official Translation", () => {

@@ -61,28 +61,51 @@ describe("CaptioningPage Translation presentation", () => {
     expect(wrapper.findComponent(CaptionPreview).exists()).toBe(true);
     expect(wrapper.findComponent(TranslationActivity).exists()).toBe(false);
     expect(wrapper.text()).toContain("Caption Preview");
+    expect(wrapper.text()).toContain("Source only");
+    expect(wrapper.text()).not.toContain("Translation activity");
   });
 
-  test("shows stopped Translation without falling back to stale Source activity", async () => {
+  test("keeps the Caption Preview above Translation activity during a bilingual run", async () => {
+    const wrapper = await mountPage("?translationScenario=official-success");
+    const preview = wrapper.findComponent(CaptionPreview);
+    const activity = wrapper.findComponent(TranslationActivity);
+
+    expect(preview.exists()).toBe(true);
+    expect(activity.exists()).toBe(true);
+    expect(
+      preview.element.compareDocumentPosition(activity.element) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(wrapper.text()).toContain(
+      "Bilingual · Simplified Chinese (zh-Hans) · Official OpenAI",
+    );
+    expect(wrapper.text()).toContain("Translation active");
+    expect(wrapper.text()).toContain("第 7 代的确定性译文。");
+  });
+
+  test("hides Translation activity after Stop while the next Start setup stays visible", async () => {
     const wrapper = await mountPage("?translationScenario=stopped");
 
-    expect(wrapper.findComponent(TranslationActivity).exists()).toBe(true);
-    expect(wrapper.findComponent(CaptionPreview).exists()).toBe(false);
-    expect(wrapper.text()).toContain("Translation stopped");
-    expect(wrapper.text()).not.toContain(
-      "Deterministic Source for official-stopped.",
+    expect(wrapper.findComponent(CaptionPreview).exists()).toBe(true);
+    expect(wrapper.findComponent(TranslationActivity).exists()).toBe(false);
+    expect(wrapper.text()).toContain(
+      "Translation only · Simplified Chinese (zh-Hans) · Official OpenAI",
     );
+    expect(wrapper.text()).not.toContain("Translated");
+    expect(wrapper.text()).not.toContain("Translation failed");
   });
 
-  test("does not expose Source anywhere on a Translation-only failed page", async () => {
+  test("shows the failed Source caption and its Chatbox consequence on a Translation-only page", async () => {
     const wrapper = await mountPage("?translationScenario=official-failed");
 
+    expect(wrapper.findComponent(CaptionPreview).exists()).toBe(true);
     expect(wrapper.text()).toContain("Translation failed");
     expect(wrapper.text()).toContain(
       "The Translation service rate-limited this request.",
     );
-    expect(wrapper.text()).not.toContain(
+    expect(wrapper.text()).toContain(
       "Deterministic Source for official-failed-unit.",
     );
+    expect(wrapper.text()).toContain("Chatbox skips this caption.");
   });
 });

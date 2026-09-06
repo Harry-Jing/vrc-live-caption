@@ -9,12 +9,15 @@ import { formatTime } from "../../i18n/format";
 import { isActiveRuntimeGenerationPhase } from "../../runtime/lifecycle";
 import { useRuntimeContext } from "../../runtime/context";
 import {
+  contentSelectionMessageKey,
   publicationDisplayPlanView,
   publicationModeMessageKey,
   publicationPlanDescription,
   publicationStartIsBlocked,
   recognitionPathMessageKey,
   recognitionPathServiceMessageKey,
+  translationEndpointKindMessageKey,
+  translationTargetMessageKey,
 } from "../../runtime/presentation";
 
 const {
@@ -160,12 +163,32 @@ const currentRecognitionPath = computed(() =>
     : (desiredConfig.value?.recognition.path ?? null),
 );
 
-const showTranslationActivity = computed(() =>
-  currentGeneration.value
-    ? translationPresentation.value.state !== "inactive"
-    : desiredConfig.value?.publication.content !== "sourceOnly" &&
-      desiredConfig.value !== null,
-);
+// Mirrors the other setup rows: the immutable selection of the current run,
+// otherwise the saved configuration for the next Start.
+const currentTranslationLabel = computed(() => {
+  const source = currentGenerationSelection.value ?? desiredConfig.value;
+
+  if (!source) {
+    return uiText("common.loading");
+  }
+
+  const content = uiText(
+    contentSelectionMessageKey[source.publication.content],
+  );
+  const translation = source.translation;
+
+  if (source.publication.content === "sourceOnly" || translation === null) {
+    return content;
+  }
+
+  return uiText("captioning.currentSetup.translationValue", {
+    content,
+    endpoint: uiText(
+      translationEndpointKindMessageKey[translation.endpoint.kind],
+    ),
+    target: uiText(translationTargetMessageKey[translation.target]),
+  });
+});
 </script>
 
 <template>
@@ -232,15 +255,14 @@ const showTranslationActivity = computed(() =>
       </template>
     </UAlert>
 
-    <TranslationActivity
-      v-if="showTranslationActivity"
-      :presentation="translationPresentation"
-    />
     <CaptionPreview
-      v-else
       :latest-completed-caption="latestCompletedCaption"
       :status="captionPreviewStatus"
       :text="visibleCaptionText"
+    />
+    <TranslationActivity
+      v-if="translationPresentation.state !== 'inactive'"
+      :presentation="translationPresentation"
     />
 
     <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -320,6 +342,16 @@ const showTranslationActivity = computed(() =>
             </div>
             <div class="flex items-center justify-between gap-4">
               <dt class="text-muted">
+                {{ uiText("captioning.currentSetup.translation") }}
+              </dt>
+              <dd
+                class="min-w-0 text-right font-medium break-words text-highlighted"
+              >
+                {{ currentTranslationLabel }}
+              </dd>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <dt class="text-muted">
                 {{ uiText("captioning.currentSetup.oscTarget") }}
               </dt>
               <dd class="font-medium text-highlighted">
@@ -345,7 +377,7 @@ const showTranslationActivity = computed(() =>
           </template>
 
           <div class="grid gap-4 text-sm">
-            <div v-if="!showTranslationActivity">
+            <div>
               <p class="text-muted">
                 {{ uiText("captioning.recentActivity.latestCompletedCaption") }}
               </p>
@@ -357,7 +389,7 @@ const showTranslationActivity = computed(() =>
               </p>
             </div>
 
-            <USeparator v-if="!showTranslationActivity" />
+            <USeparator />
 
             <div>
               <p class="text-muted">

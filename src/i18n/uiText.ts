@@ -39,6 +39,36 @@ const englishMessages = {
   "publication.timing.completed": "Sends completed captions only.",
   "publication.timing.liveUnit": ({ delayMs }: { delayMs: number }) =>
     `Observes the first ${String(delayMs)} ms, then updates the newest caption until its unit completes.`,
+  "translation.content.sourceOnly": "Source only",
+  "translation.content.translationOnly": "Translation only",
+  "translation.content.bilingual": "Bilingual",
+  "translation.target.en": "English (en)",
+  "translation.target.zhHans": "Simplified Chinese (zh-Hans)",
+  "translation.endpoint.official": "Official OpenAI",
+  "translation.endpoint.custom": "Custom HTTPS endpoint",
+  "translation.failure.providerAuthenticationFailed":
+    "The Translation service rejected its credential.",
+  "translation.failure.providerPermissionDenied":
+    "The Translation service denied permission for this request.",
+  "translation.failure.providerInvalidRequest":
+    "The Translation service rejected this request as invalid.",
+  "translation.failure.providerRateLimited":
+    "The Translation service rate-limited this request.",
+  "translation.failure.providerUsageLimit":
+    "The Translation service usage limit was reached.",
+  "translation.failure.providerUnavailable":
+    "The Translation service was unavailable.",
+  "translation.failure.invalidOutput":
+    "The Translation service returned unusable output.",
+  "translation.failure.deadlineExceeded":
+    "Translation did not finish before its deadline.",
+  "translation.failure.backpressure":
+    "Translation capacity was full for this caption.",
+  "translation.failure.sourceTooLarge":
+    "This Source caption was too large to translate safely.",
+  "translation.failure.stopped":
+    "Translation stopped before this caption finished.",
+  "translation.failure.failed": "Translation could not complete this caption.",
   "runtime.title": "Runtime",
   "runtime.status.idle": "Idle",
   "runtime.status.starting": "Starting",
@@ -104,6 +134,16 @@ const englishMessages = {
   "captioning.currentSetup.microphone": "Microphone",
   "captioning.currentSetup.recognitionPath": "Recognition path",
   "captioning.currentSetup.publication": "Publication",
+  "captioning.currentSetup.translation": "Translation",
+  "captioning.currentSetup.translationValue": ({
+    content,
+    endpoint,
+    target,
+  }: {
+    content: string;
+    endpoint: string;
+    target: string;
+  }) => `${content} · ${target} · ${endpoint}`,
   "captioning.currentSetup.oscTarget": "OSC / Test target",
   "captioning.publication.readyValue": ({
     description,
@@ -148,6 +188,28 @@ const englishMessages = {
   "captioning.microphoneMeter.gateOpen": "Speech gate open",
   "captioning.microphoneMeter.belowThreshold": "Below speech threshold",
   "captioning.microphoneMeter.clipping": "Clipping detected",
+  "captioning.translationActivity.title": "Translation activity",
+  "captioning.translationActivity.description":
+    "Each completed caption and its Translation for the current run, newest first.",
+  "captioning.translationActivity.status.inactive": "Translation inactive",
+  "captioning.translationActivity.status.active": "Translation active",
+  "captioning.translationActivity.status.degraded": "Translation degraded",
+  "captioning.translationActivity.degradedDescription":
+    "Recognition and the selected content continue unchanged. Captions that already failed are not retried; later captions are still translated.",
+  "captioning.translationActivity.noUnits": "Waiting for a completed caption.",
+  "captioning.translationActivity.unitsLabel":
+    "Translation for the current run",
+  "captioning.translationActivity.sourceLabel": "Source",
+  "captioning.translationActivity.translationLabel": "Translation",
+  "captioning.translationActivity.unit.pending": "Translating",
+  "captioning.translationActivity.unit.pendingDescription":
+    "Waiting for the exact Translation to finish.",
+  "captioning.translationActivity.unit.completed": "Translated",
+  "captioning.translationActivity.unit.failed": "Translation failed",
+  "captioning.translationActivity.unit.failedTranslationOnly":
+    "Chatbox skips this caption.",
+  "captioning.translationActivity.unit.failedBilingual":
+    "Chatbox shows only the Source for this caption.",
 
   "settings.title": "Settings",
   "settings.page.title": "Capture, recognition, and output",

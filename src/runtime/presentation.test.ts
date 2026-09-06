@@ -1,9 +1,12 @@
 import { describe, expect, test } from "vitest";
+import { uiText } from "../i18n/uiText";
+import { TRANSLATION_FAILURE_REASONS } from "./captionAggregate";
 import {
   publicationDisplayPlanView,
   publicationPlanView,
   publicationSettingsView,
   publicationStartIsBlocked,
+  translationFailureReasonMessageKey,
 } from "./presentation";
 import type { CaptionPipelinePlan, PublicationPlan } from "./captionPipeline";
 
@@ -94,4 +97,18 @@ describe("publication plan presentation", () => {
       supportedModes: ["completed"],
     });
   });
+});
+
+describe("translation failure presentation", () => {
+  test.each(TRANSLATION_FAILURE_REASONS)(
+    "renders %s as provider-neutral, secret-free text",
+    (reason) => {
+      const rendered = uiText(translationFailureReasonMessageKey[reason]);
+
+      expect(rendered).not.toContain(reason);
+      expect(rendered).not.toMatch(
+        /https?:|api[_ -]?key|bearer|provider body/iu,
+      );
+    },
+  );
 });

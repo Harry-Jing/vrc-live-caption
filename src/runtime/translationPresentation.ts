@@ -7,6 +7,7 @@ import type {
   TranslationUnitSnapshot,
 } from "./captionAggregate";
 import type { ContentSelection, TranslationTarget } from "./captionPipeline";
+import { isActiveRuntimeGenerationPhase } from "./lifecycle";
 import type {
   RuntimeGenerationSnapshot,
   RuntimeGenerationTranslationState,
@@ -17,9 +18,11 @@ export type TranslationPresentationCaption = Readonly<{
   language: string | null;
 }>;
 
+// Source is always presented: the app is the speaker's own console, so the
+// content selection governs Chatbox publication, not what the speaker sees.
 type TranslationPresentationUnitBase = Readonly<{
   sourceRef: SourceSnapshotRef;
-  source: TranslationPresentationCaption | null;
+  source: TranslationPresentationCaption;
 }>;
 
 export type TranslationPresentationUnit =
@@ -118,7 +121,6 @@ function presentCaption(
 function presentUnit(
   outcome: TranslationUnitSnapshot,
   aggregate: CaptionAggregateSnapshot,
-  content: Exclude<ContentSelection, "sourceOnly">,
 ): TranslationPresentationUnit | null {
   const source = aggregate.captions.find((caption) =>
     sourceMatchesRef(caption, outcome.sourceRef),
@@ -127,8 +129,7 @@ function presentUnit(
     return null;
   }
 
-  const presentedSource =
-    content === "bilingual" ? presentCaption(source) : null;
+  const presentedSource = presentCaption(source);
 
   switch (outcome.state) {
     case "pending":
@@ -181,6 +182,12 @@ export function translationPresentation(
     return inactivePresentation(content);
   }
 
+  // A stopped or failed generation is retained for diagnostics only; its
+  // Translation work is over and must not read as active.
+  if (!isActiveRuntimeGenerationPhase(generation.phase)) {
+    return inactivePresentation(null);
+  }
+
   const translation = generation.selection.translation;
   if (translation === null) {
     return inactivePresentation(null);
@@ -200,7 +207,7 @@ export function translationPresentation(
             return [];
           }
 
-          const unit = presentUnit(outcome, aggregate, content);
+          const unit = presentUnit(outcome, aggregate);
           return unit === null ? [] : [unit];
         })
       : [];

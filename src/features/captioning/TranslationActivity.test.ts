@@ -74,13 +74,10 @@ function presentation(
   } as Extract<TranslationPresentation, { state: "active" | "degraded" }>;
 }
 
-function mountActivity(
-  value: TranslationPresentation,
-  locale: "en" | "zh-Hans" = "en",
-) {
+function mountActivity(value: TranslationPresentation) {
   const wrapper = mount(TranslationActivity, {
     attachTo: document.body,
-    props: { presentation: value, locale },
+    props: { presentation: value },
     global: { plugins: [ui] },
   });
   mountedWrappers.push(wrapper);
@@ -100,13 +97,16 @@ describe("TranslationActivity", () => {
     }
 
     expect(wrapper.get("ol").attributes("aria-label")).toBe(
-      "Current generation Translation units",
+      "Translation for the current run",
     );
-    expect(wrapper.get("ol").attributes("aria-live")).toBe("polite");
+    expect(wrapper.get("ol").attributes("aria-live")).toBeUndefined();
     expect(units).toHaveLength(3);
     expect(failed.text()).toContain("Source whose Translation failed.");
     expect(failed.text()).toContain(
       "The Translation service rate-limited this request.",
+    );
+    expect(failed.text()).toContain(
+      "Chatbox shows only the Source for this caption.",
     );
     expect(pending.text()).toContain("Translating");
     expect(pending.text()).toContain(
@@ -120,43 +120,38 @@ describe("TranslationActivity", () => {
     expect(completed.get('p[lang="zh-Hans"]').text()).toBe("已完成的译文。");
   });
 
-  test("never renders Source text or unsafe endpoint details in Translation-only", () => {
-    const units = bilingualUnits.map((unit) => ({ ...unit, source: null }));
+  test("keeps Source visible in Translation-only and states the Chatbox consequence", () => {
     const wrapper = mountActivity(
       presentation({
         content: "translationOnly",
         endpointKind: "custom",
-        units,
       }),
     );
     const rendered = wrapper.text();
 
-    expect(rendered).toContain("Translation only");
-    expect(rendered).toContain("Custom");
-    expect(rendered).toContain(
-      "This caption remains omitted because the selected Translation failed.",
-    );
-    expect(rendered).not.toContain("Source whose Translation failed.");
-    expect(rendered).not.toContain("Source awaiting Translation.");
-    expect(rendered).not.toContain("Source with Translation.");
+    expect(rendered).toContain("Source whose Translation failed.");
+    expect(rendered).toContain("Chatbox skips this caption.");
+    expect(rendered).not.toContain("Chatbox shows only the Source");
+    expect(rendered).toContain("Source awaiting Translation.");
+    expect(rendered).toContain("Source with Translation.");
     expect(wrapper.html()).not.toMatch(/https?:|api[_ -]?key|bearer/iu);
   });
 
-  test("localizes degraded status and stable failure reasons without provider payloads", () => {
+  test("renders degraded status and stable failure reasons without provider payloads", () => {
     const wrapper = mountActivity(
       presentation({
         state: "degraded",
         reasonCode: "translation.provider_unavailable",
       }),
-      "zh-Hans",
     );
 
-    expect(
-      wrapper.get('[data-testid="translation-activity"]').attributes("lang"),
-    ).toBe("zh-Hans");
-    expect(wrapper.text()).toContain("翻译已降级");
-    expect(wrapper.text()).toContain("翻译服务暂时不可用。");
-    expect(wrapper.text()).toContain("语音识别会继续");
+    expect(wrapper.text()).toContain("Translation degraded");
+    expect(wrapper.text()).toContain(
+      "The Translation service was unavailable.",
+    );
+    expect(wrapper.text()).toContain(
+      "Recognition and the selected content continue unchanged.",
+    );
     expect(wrapper.text()).not.toContain("translation.provider_unavailable");
   });
 
@@ -170,7 +165,7 @@ describe("TranslationActivity", () => {
       units: [],
     });
 
-    expect(wrapper.text()).toContain("Translation stopped");
+    expect(wrapper.text()).toContain("Translation inactive");
     expect(wrapper.find("ol").exists()).toBe(false);
     expect(wrapper.text()).not.toContain("Source whose Translation failed.");
   });
