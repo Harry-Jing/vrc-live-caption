@@ -2,14 +2,14 @@ use super::*;
 use crate::error::AppResult;
 
 fn decode_pcm16(bytes: &[u8]) -> AppResult<Vec<i16>> {
-    bytes
-        .chunks_exact(2)
-        .map(|chunk| {
-            let array = <[u8; 2]>::try_from(chunk)
-                .map_err(|_| AppError::state("PCM16 test received a partial sample."))?;
-            Ok(i16::from_le_bytes(array))
-        })
-        .collect()
+    let (samples, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
+        return Err(AppError::state("PCM16 test received a partial sample."));
+    }
+    Ok(samples
+        .iter()
+        .map(|sample| i16::from_le_bytes(*sample))
+        .collect())
 }
 
 #[test]
