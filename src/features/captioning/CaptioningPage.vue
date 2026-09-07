@@ -3,17 +3,21 @@ import { computed } from "vue";
 import CaptionPreview from "./CaptionPreview.vue";
 import MicrophoneLevelMeter from "./MicrophoneLevelMeter.vue";
 import RuntimeControls from "./RuntimeControls.vue";
+import TranslationActivity from "./TranslationActivity.vue";
 import { uiText } from "../../i18n/uiText";
 import { formatTime } from "../../i18n/format";
 import { isActiveRuntimeGenerationPhase } from "../../runtime/lifecycle";
 import { useRuntimeContext } from "../../runtime/context";
 import {
+  contentSelectionMessageKey,
   publicationDisplayPlanView,
   publicationModeMessageKey,
   publicationPlanDescription,
   publicationStartIsBlocked,
   recognitionPathMessageKey,
   recognitionPathServiceMessageKey,
+  translationEndpointKindMessageKey,
+  translationTargetMessageKey,
 } from "../../runtime/presentation";
 
 const {
@@ -33,6 +37,7 @@ const {
   runAction,
   runtimeFailure,
   runtimeStatus,
+  translationPresentation,
   visibleCaptionText,
 } = useRuntimeContext();
 
@@ -157,6 +162,33 @@ const currentRecognitionPath = computed(() =>
     ? currentGenerationSelection.value.recognition.path
     : (desiredConfig.value?.recognition.path ?? null),
 );
+
+// Mirrors the other setup rows: the immutable selection of the current run,
+// otherwise the saved configuration for the next Start.
+const currentTranslationLabel = computed(() => {
+  const source = currentGenerationSelection.value ?? desiredConfig.value;
+
+  if (!source) {
+    return uiText("common.loading");
+  }
+
+  const content = uiText(
+    contentSelectionMessageKey[source.publication.content],
+  );
+  const translation = source.translation;
+
+  if (source.publication.content === "sourceOnly" || translation === null) {
+    return content;
+  }
+
+  return uiText("captioning.currentSetup.translationValue", {
+    content,
+    endpoint: uiText(
+      translationEndpointKindMessageKey[translation.endpoint.kind],
+    ),
+    target: uiText(translationTargetMessageKey[translation.target]),
+  });
+});
 </script>
 
 <template>
@@ -227,6 +259,10 @@ const currentRecognitionPath = computed(() =>
       :latest-completed-caption="latestCompletedCaption"
       :status="captionPreviewStatus"
       :text="visibleCaptionText"
+    />
+    <TranslationActivity
+      v-if="translationPresentation.state !== 'inactive'"
+      :presentation="translationPresentation"
     />
 
     <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -302,6 +338,16 @@ const currentRecognitionPath = computed(() =>
                 class="min-w-0 text-right font-medium break-words text-highlighted"
               >
                 {{ currentPublicationLabel }}
+              </dd>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <dt class="text-muted">
+                {{ uiText("captioning.currentSetup.translation") }}
+              </dt>
+              <dd
+                class="min-w-0 text-right font-medium break-words text-highlighted"
+              >
+                {{ currentTranslationLabel }}
               </dd>
             </div>
             <div class="flex items-center justify-between gap-4">

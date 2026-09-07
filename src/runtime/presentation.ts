@@ -4,16 +4,24 @@
 // silently rendering a default.
 
 import { uiText, type UiStaticMessageKey } from "../i18n/uiText";
+import type { TranslationEndpoint } from "./appConfig";
+import type { TranslationFailureReason } from "./captionAggregate";
 import type {
   CaptionPipelinePlan,
+  ContentSelection,
   PublicationMode,
   RecognitionPath,
+  TranslationTarget,
 } from "./captionPipeline";
 import type {
   DiagnosticCategory,
   DiagnosticSeverity,
   RuntimeStatus,
 } from "./runtimeEvents";
+import type {
+  TranslationPresentation,
+  TranslationPresentationUnit,
+} from "./translationPresentation";
 
 export type CaptionPreviewStatus =
   "waiting" | "listening" | "ongoing" | "completed";
@@ -114,6 +122,67 @@ export const publicationModeDescriptionMessageKey = {
   completed: "publication.option.completed.description",
   live: "publication.option.live.description",
 } satisfies Record<PublicationMode, UiStaticMessageKey>;
+
+export const translationPresentationStateColor = {
+  inactive: "neutral",
+  active: "success",
+  degraded: "warning",
+} satisfies Record<TranslationPresentation["state"], StatusBadgeColor>;
+
+export const translationPresentationStateMessageKey = {
+  inactive: "captioning.translationActivity.status.inactive",
+  active: "captioning.translationActivity.status.active",
+  degraded: "captioning.translationActivity.status.degraded",
+} satisfies Record<TranslationPresentation["state"], UiStaticMessageKey>;
+
+export const translationUnitStateColor = {
+  pending: "info",
+  completed: "success",
+  failed: "error",
+} satisfies Record<TranslationPresentationUnit["state"], StatusBadgeColor>;
+
+export const translationUnitStateMessageKey = {
+  pending: "captioning.translationActivity.unit.pending",
+  completed: "captioning.translationActivity.unit.completed",
+  failed: "captioning.translationActivity.unit.failed",
+} satisfies Record<TranslationPresentationUnit["state"], UiStaticMessageKey>;
+
+export const contentSelectionMessageKey = {
+  sourceOnly: "translation.content.sourceOnly",
+  translationOnly: "translation.content.translationOnly",
+  bilingual: "translation.content.bilingual",
+} satisfies Record<ContentSelection, UiStaticMessageKey>;
+
+export const translationTargetMessageKey = {
+  en: "translation.target.en",
+  "zh-Hans": "translation.target.zhHans",
+} satisfies Record<TranslationTarget, UiStaticMessageKey>;
+
+export const translationEndpointKindMessageKey = {
+  official: "translation.endpoint.official",
+  custom: "translation.endpoint.custom",
+} satisfies Record<TranslationEndpoint["kind"], UiStaticMessageKey>;
+
+// Stable failure codes map to provider-neutral copy; the UI never renders the
+// raw code, a provider body, or endpoint details.
+export const translationFailureReasonMessageKey = {
+  "translation.provider_authentication_failed":
+    "translation.failure.providerAuthenticationFailed",
+  "translation.provider_permission_denied":
+    "translation.failure.providerPermissionDenied",
+  "translation.provider_invalid_request":
+    "translation.failure.providerInvalidRequest",
+  "translation.provider_rate_limited":
+    "translation.failure.providerRateLimited",
+  "translation.provider_usage_limit": "translation.failure.providerUsageLimit",
+  "translation.provider_unavailable": "translation.failure.providerUnavailable",
+  "translation.invalid_output": "translation.failure.invalidOutput",
+  "translation.deadline_exceeded": "translation.failure.deadlineExceeded",
+  "translation.backpressure": "translation.failure.backpressure",
+  "translation.source_too_large": "translation.failure.sourceTooLarge",
+  "translation.stopped": "translation.failure.stopped",
+  "translation.failed": "translation.failure.failed",
+} satisfies Record<TranslationFailureReason, UiStaticMessageKey>;
 
 export type PublicationPlanView =
   | Readonly<{ state: "unavailable" }>

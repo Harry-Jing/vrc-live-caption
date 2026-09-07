@@ -264,6 +264,7 @@ test("keeps the public runtime composable surface stable", async () => {
       "saveConfig",
       "saveCredential",
       "settingsFailure",
+      "translationPresentation",
       "visibleCaptionText",
     ]);
   } finally {
