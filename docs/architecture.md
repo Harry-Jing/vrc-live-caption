@@ -211,8 +211,9 @@ by the [VRChat Chatbox reference](./research/vrchat-chatbox-reference.md).
 ### Network and secrets
 
 Service credentials are resolved at desktop composition and bound to the
-prepared recognition path without exposing plaintext to Runtime Control or the
-frontend. Config and diagnostics carry only redacted credential status.
+prepared recognition or Translation path without exposing plaintext to Runtime
+Control or the frontend. Config and diagnostics carry only redacted credential
+status.
 
 Cloud connections follow the user's selected system or explicit environment
 proxy route. Unsupported or malformed selected proxy configurations fail closed;
@@ -240,11 +241,13 @@ terminal outcome or Stop, so bounded history trimming cannot remove that Source
 snapshot while translation work is in flight.
 
 Prepared Runtime generations capture the resolved Translation path, target,
-endpoint, and credential as one immutable owner. Production Start keeps active
-Translation gated until [issue #25](https://github.com/Harry-Jing/vrc-live-caption/issues/25)
-connects selected-content publication. Phase 5 planning permits Translation only
-with Completed publication; Live remains incompatible until its update shape is
-evaluated. Provider and endpoint rules stay behind the Module boundary
+endpoint, and credential as one immutable owner. Desktop Start binds that owner,
+including the Official or Custom credential, before microphone capture opens;
+a missing credential fails Start before any generation exists. Source-only
+content keeps a saved Translation selection dormant. Phase 5 planning permits
+Translation only with Completed publication; Live remains incompatible until
+its update shape is evaluated. Provider and endpoint rules stay behind the
+Module boundary
 ([ADR 0015](./adr/0015-cloud-connections-honor-explicit-routes-and-endpoints.md),
 [ADR 0021](./adr/0021-use-openai-responses-for-completed-translation.md)).
 

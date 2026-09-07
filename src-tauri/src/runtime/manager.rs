@@ -442,9 +442,8 @@ fn validate_prepared_translation(
             return Ok((None, RuntimeGenerationTranslationState::Inactive, false));
         }
         (Some(_), None) => {
-            return Err(AppError::config(
-                "The selected Translation path is not implemented yet \
-                 (translation.module_unavailable).",
+            return Err(AppError::state(
+                "Active Translation selection requires a prepared Translation owner.",
             ));
         }
         (None, Some(_)) => {

@@ -209,20 +209,11 @@ fn translation_capabilities(translation: &TranslationConfig) -> TranslationCapab
 pub(crate) fn resolve_caption_pipeline_start_timing(
     plan: &CaptionPipelinePlan,
 ) -> AppResult<ResolvedPublicationTiming> {
-    let timing = resolve_caption_pipeline_timing(plan)?;
-    if plan.translation.is_some() {
-        return Err(AppError::config(
-            "The selected Translation path is not implemented yet (translation.module_unavailable).",
-        ));
-    }
-
-    Ok(timing)
+    resolve_caption_pipeline_timing(plan)
 }
 
-/// Resolves planner compatibility without deciding whether production has
-/// composed every selected Module. The desktop Start preflight owns that
-/// availability gate until GitHub issue #25; generation-scoped Runtime accepts
-/// only prepared owners.
+/// Resolves planner compatibility without composing selected Modules. The
+/// desktop Start preflight prepares every active owner before Runtime begins.
 pub(crate) fn resolve_caption_pipeline_timing(
     plan: &CaptionPipelinePlan,
 ) -> AppResult<ResolvedPublicationTiming> {

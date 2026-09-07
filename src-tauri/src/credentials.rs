@@ -11,6 +11,7 @@ use crate::error::{AppError, AppResult};
 use keyring_core::{Entry, Error as KeyringError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+#[cfg(not(test))]
 use std::env;
 use zeroize::Zeroizing;
 
@@ -144,8 +145,20 @@ pub(crate) fn resolve_openai_credential() -> AppResult<ResolvedCredential> {
     resolve_credential(CredentialId::OpenAi)
 }
 
+#[cfg(not(test))]
 pub(crate) fn resolve_credential(id: CredentialId) -> AppResult<ResolvedCredential> {
     resolve_credential_from_sources(id, read_system_secret, environment_openai_secret)
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_credential(id: CredentialId) -> AppResult<ResolvedCredential> {
+    // Unit tests must never open the operator's credential store or trigger an
+    // OS authorization prompt. Source-policy behavior is tested below through
+    // injected readers; desktop composition sees deterministic missing keys.
+    Err(match id {
+        CredentialId::OpenAi => missing_openai_api_key(),
+        CredentialId::CustomTranslation => missing_custom_translation_api_key(),
+    })
 }
 
 fn resolve_credential_from_sources(
@@ -231,6 +244,7 @@ fn custom_translation_credential_status() -> CredentialStatus {
     }
 }
 
+#[cfg(not(test))]
 fn environment_openai_secret() -> Option<SecretString> {
     env::var(OPENAI_API_KEY_ENV).ok().and_then(|value| {
         let value = Zeroizing::new(value);
@@ -277,7 +291,10 @@ fn display_suffix(secret: &str) -> Option<String> {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(all(
+    not(test),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 fn read_system_secret(account: &str) -> AppResult<Option<SecretString>> {
     let entry = system_entry(account)?;
 
@@ -292,7 +309,10 @@ fn read_system_secret(account: &str) -> AppResult<Option<SecretString>> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(all(
+    not(test),
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
+))]
 fn read_system_secret(_account: &str) -> AppResult<Option<SecretString>> {
     Err(AppError::secret(
         "System credential store is not supported on this platform.",

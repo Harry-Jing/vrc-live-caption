@@ -22,13 +22,6 @@ pub(crate) struct PreparedTranslation {
 }
 
 impl PreparedTranslation {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "GitHub issue #25 activates the prepared Translation owner at desktop Start."
-        )
-    )]
     pub(crate) fn cloud(binding: BoundTranslationModule) -> Self {
         let BoundTranslationParts {
             selection,

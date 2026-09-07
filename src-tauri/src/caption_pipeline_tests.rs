@@ -286,7 +286,7 @@ fn source_only_keeps_saved_translation_dormant() {
 }
 
 #[test]
-fn active_translation_fails_start_until_the_translation_module_exists()
+fn compatible_completed_translation_is_startable_after_modules_are_prepared()
 -> crate::error::AppResult<()> {
     let mut config = crate::config::AppConfig {
         translation: Some(TranslationConfig {
@@ -299,14 +299,10 @@ fn active_translation_fails_start_until_the_translation_module_exists()
     config.publication.content = ContentSelection::TranslationOnly;
     let plan = plan_caption_pipeline(&config);
 
-    let error = resolve_caption_pipeline_start_timing(&plan)
-        .err()
-        .ok_or_else(|| {
-            crate::error::AppError::state("Translation unexpectedly became startable.")
-        })?;
-
-    assert_eq!(error.code(), "config.invalid");
-    assert!(error.to_string().contains("translation.module_unavailable"));
+    assert_eq!(
+        resolve_caption_pipeline_start_timing(&plan)?,
+        ResolvedPublicationTiming::Completed
+    );
     Ok(())
 }
 
