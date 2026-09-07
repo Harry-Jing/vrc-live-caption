@@ -393,6 +393,30 @@ export function createPreviewAppGateway(search = ""): AppGateway {
       osc: structuredClone(config.osc),
       publication: structuredClone(config.publication),
     };
+    const translationCredentialId =
+      selection.translation?.endpoint.kind === "custom"
+        ? "customTranslation"
+        : "openai";
+    const credentials: Array<RuntimeGenerationSnapshot["credentials"][number]> =
+      [
+        {
+          id: "openai",
+          storage: "systemCredentialStore",
+          displaySuffix: credentialSuffixes.openai,
+          revision: credentialRevisions.openai,
+        },
+      ];
+    if (
+      selection.translation !== null &&
+      translationCredentialId === "customTranslation"
+    ) {
+      credentials.push({
+        id: "customTranslation",
+        storage: "systemCredentialStore",
+        displaySuffix: credentialSuffixes.customTranslation,
+        revision: credentialRevisions.customTranslation,
+      });
+    }
 
     return {
       id: nextGeneration,
@@ -400,22 +424,18 @@ export function createPreviewAppGateway(search = ""): AppGateway {
       startedFromConfigRevision: configRevision,
       selection,
       captionPipelinePlan: previewCaptionPipelinePlan(config),
-      credentials: [
-        {
-          id: "openai",
-          storage: "systemCredentialStore",
-          displaySuffix: credentialSuffixes.openai,
-          revision: credentialRevisions.openai,
-        },
-      ],
+      credentials,
       chatboxPublication: {
         state: selection.osc.enabled ? "ready" : "disabled",
         host: selection.osc.host,
         port: selection.osc.port,
       },
-      translationState: { state: "inactive" },
+      translationState:
+        selection.translation === null
+          ? { state: "inactive" }
+          : { state: "active" },
       uploadsMicrophoneAudio: true,
-      uploadsSourceText: false,
+      uploadsSourceText: selection.translation !== null,
     };
   }
 
@@ -435,11 +455,23 @@ export function createPreviewAppGateway(search = ""): AppGateway {
       );
     }
     if (captionPipelinePlan.translation !== null) {
-      return Promise.reject(
-        new Error(
-          "The selected Translation path is not implemented yet (translation.module_unavailable).",
-        ),
-      );
+      if (credentialSuffixes.openai === null) {
+        return Promise.reject(
+          new Error(
+            "The active OpenAI Recognition credential is not configured for browser preview.",
+          ),
+        );
+      }
+      if (
+        config.translation?.endpoint.kind === "custom" &&
+        credentialSuffixes.customTranslation === null
+      ) {
+        return Promise.reject(
+          new Error(
+            "The active Translation credential is not configured for browser preview.",
+          ),
+        );
+      }
     }
     nextGeneration += 1;
     generation = createGeneration("starting");
