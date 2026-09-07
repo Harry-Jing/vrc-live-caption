@@ -7,10 +7,9 @@ use crate::caption::{
     CaptionAggregateSnapshot, CaptionAggregateStore, CaptionAggregateUpdate, CaptionLane,
     CaptionSnapshot, CaptionState, TranslationFailureReason,
 };
-use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::chatbox::{
     ChatboxPublication, ChatboxPublicationStartRequest, ChatboxTextPacer,
-    PublicationObservationOutcome, PublisherCloseReason,
+    PublicationObservationOutcome, PublicationSelection, PublisherCloseReason,
 };
 use crate::config::OscConfig;
 use crate::error::{AppError, AppResult};
@@ -582,7 +581,7 @@ fn combine_output_close_results(
 pub(super) fn start_chatbox_publication<R: Runtime>(
     app: &AppHandle<R>,
     config: &OscConfig,
-    publication_timing: ResolvedPublicationTiming,
+    publication: PublicationSelection,
     chatbox_text_pacer: ChatboxTextPacer,
     generation: &RuntimeGeneration,
     host_resolver: &HostResolver,
@@ -593,7 +592,7 @@ pub(super) fn start_chatbox_publication<R: Runtime>(
         Arc::new(move |diagnostic| emit_diagnostic(&reporter_app, diagnostic));
     ChatboxPublication::start(ChatboxPublicationStartRequest {
         config,
-        publication_timing,
+        publication,
         text_pacer: chatbox_text_pacer,
         generation_id: generation.generation_id(),
         committer: generation.committer(),

@@ -11,10 +11,16 @@ use super::common::{
     PublicationObservationOutcome, PublisherCloseReason, PublisherLifecycle, PublisherWorkerJoin,
     TYPING_REASSERT_INTERVAL, describe_layout_error,
 };
-use super::layout::prepare_completed_pages;
+use super::layout::{
+    PreparedBilingualCompletedPage, prepare_bilingual_completed_pages, prepare_completed_pages,
+};
 use super::text_pacing::{ChatboxTextAttemptPermit, ChatboxTextPacer};
 use super::transport::ChatboxTransport;
-use crate::caption::{CaptionAggregateChange, CaptionAggregateUpdate, CaptionLane, CaptionState};
+use crate::caption::{
+    CaptionAggregateChange, CaptionAggregateUpdate, CaptionLane, CaptionState, SourceSnapshotRef,
+    TranslationFailureReason, TranslationUnitSnapshot,
+};
+use crate::config::ContentSelection;
 use crate::error::{AppError, AppResult};
 use crate::generation_fence::GenerationCommitter;
 use std::collections::{HashSet, VecDeque};
@@ -25,6 +31,12 @@ use std::time::{Duration, Instant};
 
 const PROVISIONAL_MAX_RESIDENT_PAGES: usize = 32;
 const PROVISIONAL_MAX_WAIT_BEFORE_FIRST_SEND_ATTEMPT: Duration = Duration::from_secs(30);
+// A held Source normally resolves through the Translation Module's own
+// deadlines. This budget is the publisher's independent bound so that a
+// terminal outcome that never arrives as an aggregate update cannot block the
+// queue head forever; it must stay above the Module's total deadline plus the
+// runtime's outcome drain latency.
+const PROVISIONAL_MAX_WAIT_FOR_TRANSLATION: Duration = Duration::from_secs(20);
 
 pub(crate) type CompletedPublisherReporter =
     Arc<dyn Fn(CompletedPublisherDiagnostic) + Send + Sync>;
@@ -65,6 +77,19 @@ pub(crate) enum CompletedPublisherDiagnostic {
         unit_count: usize,
         page_count: usize,
         send_started_unit_count: usize,
+        translation_wait_unit_count: usize,
+    },
+    /// Translation-only content omitted the unit because its Translation
+    /// reached a terminal failure or the publisher's wait budget.
+    UnitOmittedWithoutTranslation {
+        unit_id: String,
+        resolution: TranslationResolution,
+    },
+    /// Bilingual content queued the exact Source alone as a visible partial
+    /// result because its Translation could not be used.
+    UnitQueuedWithoutTranslation {
+        unit_id: String,
+        resolution: TranslationResolution,
     },
     TypingFailed {
         is_typing: bool,
@@ -75,10 +100,62 @@ pub(crate) enum CompletedPublisherDiagnostic {
     },
 }
 
+/// Why a held Source resolved without a usable Translation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TranslationResolution {
+    Failed(TranslationFailureReason),
+    WaitExpired,
+    LayoutFailed { reason: String },
+}
+
 enum SourceUnitEvent {
-    Opened { unit_id: String },
-    Completed { unit_id: String, text: String },
-    Aborted { unit_id: String },
+    Opened {
+        unit_id: String,
+    },
+    Completed {
+        unit_id: String,
+        revision: u64,
+        text: String,
+    },
+    Aborted {
+        unit_id: String,
+    },
+    TranslationCompleted {
+        source_ref: SourceSnapshotRef,
+        text: String,
+    },
+    TranslationFailed {
+        source_ref: SourceSnapshotRef,
+        reason_code: TranslationFailureReason,
+    },
+}
+
+/// The terminal outcome that releases one held Source.
+enum HeldResolution {
+    Translated(String),
+    Failed(TranslationFailureReason),
+    WaitExpired,
+}
+
+/// The publication decision for one held Source after its resolution.
+enum HeldOutcome {
+    Queue {
+        pages: Vec<PreparedChatboxText>,
+        without_translation: Option<TranslationResolution>,
+    },
+    Omit {
+        resolution: TranslationResolution,
+    },
+    Discard,
+    LayoutFailed {
+        reason: String,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PageAdmission {
+    Admitted,
+    Rejected,
 }
 
 #[derive(Clone)]
@@ -91,6 +168,7 @@ pub(crate) struct CompletedChatboxPublisher {
 struct PublisherLimits {
     max_resident_pages: usize,
     max_wait_before_first_send_attempt: Duration,
+    max_wait_for_translation: Duration,
 }
 
 struct PublisherShared {
@@ -102,6 +180,10 @@ struct PublisherShared {
     committer: GenerationCommitter,
     reporter: CompletedPublisherReporter,
     limits: PublisherLimits,
+    // The generation's immutable content selection. Source-only never holds a
+    // unit; Translation-only and Bilingual hold each completed Source in
+    // admission order until its exact Translation resolves.
+    content: ContentSelection,
 }
 
 struct PublisherState {
@@ -125,15 +207,30 @@ struct QueuedUnitPublication {
     pages: Vec<PreparedChatboxText>,
     next_page: usize,
     first_send_attempt_started: bool,
+    // For a held unit this is the hold time; it restarts when the unit becomes
+    // sendable so the first-send-attempt budget measures queue wait only.
     enqueued_at: Instant,
     sent_pages: usize,
     sent_bytes: usize,
     target: Option<String>,
+    // A held unit keeps its queue position and zero resident pages until its
+    // exact Translation resolves. The worker never sends past a held head.
+    awaiting_translation: Option<HeldSource>,
+}
+
+struct HeldSource {
+    text: String,
+    revision: u64,
+    waiting_since: Instant,
 }
 
 impl QueuedUnitPublication {
     fn remaining_pages(&self) -> usize {
         self.pages.len().saturating_sub(self.next_page)
+    }
+
+    fn is_ready(&self) -> bool {
+        self.awaiting_translation.is_none()
     }
 }
 
@@ -157,16 +254,19 @@ impl CompletedChatboxPublisher {
         transport: Arc<dyn ChatboxTransport>,
         text_pacer: ChatboxTextPacer,
         committer: GenerationCommitter,
+        content: ContentSelection,
         reporter: CompletedPublisherReporter,
     ) -> AppResult<Self> {
         Self::start_with_limits(
             transport,
             text_pacer,
             committer,
+            content,
             reporter,
             PublisherLimits {
                 max_resident_pages: PROVISIONAL_MAX_RESIDENT_PAGES,
                 max_wait_before_first_send_attempt: PROVISIONAL_MAX_WAIT_BEFORE_FIRST_SEND_ATTEMPT,
+                max_wait_for_translation: PROVISIONAL_MAX_WAIT_FOR_TRANSLATION,
             },
         )
     }
@@ -175,12 +275,16 @@ impl CompletedChatboxPublisher {
         transport: Arc<dyn ChatboxTransport>,
         text_pacer: ChatboxTextPacer,
         committer: GenerationCommitter,
+        content: ContentSelection,
         reporter: CompletedPublisherReporter,
         limits: PublisherLimits,
     ) -> AppResult<Self> {
-        if limits.max_resident_pages == 0 || limits.max_wait_before_first_send_attempt.is_zero() {
+        if limits.max_resident_pages == 0
+            || limits.max_wait_before_first_send_attempt.is_zero()
+            || limits.max_wait_for_translation.is_zero()
+        {
             return Err(AppError::state(
-                "Completed publisher limits must both be greater than zero.",
+                "Completed publisher limits must all be greater than zero.",
             ));
         }
 
@@ -206,6 +310,7 @@ impl CompletedChatboxPublisher {
             committer,
             reporter,
             limits,
+            content,
         });
         let worker_shared = Arc::clone(&shared);
         let worker = thread::Builder::new()
@@ -250,6 +355,16 @@ impl CompletedChatboxPublisher {
         &self,
         update: &CaptionAggregateUpdate,
     ) -> AppResult<PublicationObservationOutcome> {
+        let in_active_stream = |generation: u64, stream_id: &str| {
+            update
+                .snapshot
+                .active_stream
+                .as_ref()
+                .is_some_and(|active| {
+                    generation == active.generation && stream_id == active.stream_id
+                })
+        };
+        let translation_selected = self.shared.content != ContentSelection::SourceOnly;
         let input = match &update.change {
             CaptionAggregateChange::SourceUnitOpened(unit) => Some(SourceUnitEvent::Opened {
                 unit_id: unit.unit_id.clone(),
@@ -262,24 +377,45 @@ impl CompletedChatboxPublisher {
             CaptionAggregateChange::CaptionAccepted(caption)
                 if caption.lane == CaptionLane::Source
                     && caption.state == CaptionState::Completed
-                    && update
-                        .snapshot
-                        .active_stream
-                        .as_ref()
-                        .is_some_and(|active| {
-                            caption.generation == active.generation
-                                && caption.stream_id == active.stream_id
-                        }) =>
+                    && in_active_stream(caption.generation, &caption.stream_id) =>
             {
                 caption
                     .unit_id
                     .as_ref()
                     .map(|unit_id| SourceUnitEvent::Completed {
                         unit_id: unit_id.clone(),
+                        revision: caption.revision,
+                        text: caption.text.clone(),
+                    })
+            }
+            CaptionAggregateChange::CaptionAccepted(caption)
+                if translation_selected
+                    && caption.lane == CaptionLane::Translation
+                    && caption.state == CaptionState::Completed =>
+            {
+                caption
+                    .source_ref
+                    .as_ref()
+                    .filter(|source_ref| {
+                        in_active_stream(source_ref.generation, &source_ref.stream_id)
+                    })
+                    .map(|source_ref| SourceUnitEvent::TranslationCompleted {
+                        source_ref: source_ref.clone(),
                         text: caption.text.clone(),
                     })
             }
             CaptionAggregateChange::CaptionAccepted(_) => None,
+            CaptionAggregateChange::TranslationFailed(TranslationUnitSnapshot::Failed {
+                source_ref,
+                reason_code,
+            }) if translation_selected
+                && in_active_stream(source_ref.generation, &source_ref.stream_id) =>
+            {
+                Some(SourceUnitEvent::TranslationFailed {
+                    source_ref: source_ref.clone(),
+                    reason_code: *reason_code,
+                })
+            }
             CaptionAggregateChange::TranslationFailed(_) => None,
         };
 
@@ -327,8 +463,29 @@ impl CompletedChatboxPublisher {
                 release_unit_typing_activity(&mut state, &unit_id);
                 self.signal_worker_locked();
             }
-            SourceUnitEvent::Completed { unit_id, text } => {
-                return self.try_enqueue_completed_source(unit_id, text);
+            SourceUnitEvent::Completed {
+                unit_id,
+                revision,
+                text,
+            } => {
+                return match self.shared.content {
+                    ContentSelection::SourceOnly => {
+                        self.try_enqueue_completed_source(unit_id, text)
+                    }
+                    ContentSelection::TranslationOnly | ContentSelection::Bilingual => {
+                        self.try_hold_completed_source(unit_id, revision, text)
+                    }
+                };
+            }
+            SourceUnitEvent::TranslationCompleted { source_ref, text } => {
+                return self.try_resolve_held_source(&source_ref, HeldResolution::Translated(text));
+            }
+            SourceUnitEvent::TranslationFailed {
+                source_ref,
+                reason_code,
+            } => {
+                return self
+                    .try_resolve_held_source(&source_ref, HeldResolution::Failed(reason_code));
             }
         }
 
@@ -503,15 +660,8 @@ impl CompletedChatboxPublisher {
             self.shared.limits.max_wait_before_first_send_attempt,
         )?;
         let page_count = pages.len();
-        let protected_pages = state
-            .units
-            .front()
-            .filter(|unit| unit.first_send_attempt_started)
-            .map(QueuedUnitPublication::remaining_pages)
-            .unwrap_or(0);
-
-        if page_count > self.shared.limits.max_resident_pages
-            || protected_pages.saturating_add(page_count) > self.shared.limits.max_resident_pages
+        if reserve_resident_pages(&mut state, self.shared.limits, page_count, None)?
+            == PageAdmission::Rejected
         {
             release_unit_typing_activity(&mut state, &unit_id);
             state
@@ -522,43 +672,6 @@ impl CompletedChatboxPublisher {
                 });
             self.signal_worker_locked();
             return Ok(PublicationObservationOutcome::Handled);
-        }
-
-        while state.resident_pages.saturating_add(page_count)
-            > self.shared.limits.max_resident_pages
-        {
-            let Some(position) = state
-                .units
-                .iter()
-                .position(|unit| !unit.first_send_attempt_started)
-            else {
-                release_unit_typing_activity(&mut state, &unit_id);
-                state
-                    .diagnostics
-                    .push_back(CompletedPublisherDiagnostic::UnitRejectedOverload {
-                        unit_id,
-                        page_count,
-                    });
-                self.signal_worker_locked();
-                return Ok(PublicationObservationOutcome::Handled);
-            };
-            let Some(dropped) = state.units.remove(position) else {
-                return Err(AppError::state(
-                    "Completed publisher could not remove an overload candidate.",
-                ));
-            };
-            let dropped_pages = dropped.remaining_pages();
-            state.resident_pages = state
-                .resident_pages
-                .checked_sub(dropped_pages)
-                .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
-            release_unit_typing_activity(&mut state, &dropped.unit_id);
-            state
-                .diagnostics
-                .push_back(CompletedPublisherDiagnostic::UnitDroppedOverload {
-                    unit_id: dropped.unit_id,
-                    page_count: dropped_pages,
-                });
         }
 
         let sequence = state.next_sequence;
@@ -574,7 +687,83 @@ impl CompletedChatboxPublisher {
             sent_pages: 0,
             sent_bytes: 0,
             target: None,
+            awaiting_translation: None,
         });
+        self.signal_worker_locked();
+
+        Ok(PublicationObservationOutcome::Handled)
+    }
+
+    /// Reserves the completed Source's queue position while its exact
+    /// Translation is pending. The unit holds no resident pages until it
+    /// resolves, and typing activity continues until its publication resolves.
+    fn try_hold_completed_source(
+        &self,
+        unit_id: String,
+        revision: u64,
+        text: String,
+    ) -> AppResult<PublicationObservationOutcome> {
+        let mut state = self.lock_state()?;
+        if state.lifecycle != PublisherLifecycle::Running || self.shared.committer.is_closed() {
+            return Ok(PublicationObservationOutcome::Closed);
+        }
+
+        let now = self.shared.text_pacer.now();
+        let sequence = state.next_sequence;
+        state.next_sequence = state.next_sequence.wrapping_add(1);
+        state.units.push_back(QueuedUnitPublication {
+            sequence,
+            unit_id,
+            pages: Vec::new(),
+            next_page: 0,
+            first_send_attempt_started: false,
+            enqueued_at: now,
+            sent_pages: 0,
+            sent_bytes: 0,
+            target: None,
+            awaiting_translation: Some(HeldSource {
+                text,
+                revision,
+                waiting_since: now,
+            }),
+        });
+        self.signal_worker_locked();
+
+        Ok(PublicationObservationOutcome::Handled)
+    }
+
+    /// Applies one terminal Translation outcome to the exact held Source. A
+    /// result for a unit that is no longer held is a successful no-op.
+    fn try_resolve_held_source(
+        &self,
+        source_ref: &SourceSnapshotRef,
+        resolution: HeldResolution,
+    ) -> AppResult<PublicationObservationOutcome> {
+        let mut state = self.lock_state()?;
+        if state.lifecycle != PublisherLifecycle::Running || self.shared.committer.is_closed() {
+            return Ok(PublicationObservationOutcome::Closed);
+        }
+
+        let position = state.units.iter().position(|unit| {
+            unit.unit_id == source_ref.unit_id
+                && unit
+                    .awaiting_translation
+                    .as_ref()
+                    .is_some_and(|held| held.revision == source_ref.revision)
+        });
+        let Some(position) = position else {
+            return Ok(PublicationObservationOutcome::Handled);
+        };
+
+        let now = self.shared.text_pacer.now();
+        resolve_held_unit(
+            &mut state,
+            position,
+            resolution,
+            now,
+            self.shared.limits,
+            self.shared.content,
+        )?;
         self.signal_worker_locked();
 
         Ok(PublicationObservationOutcome::Handled)
@@ -705,11 +894,13 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
             PublisherLifecycle::Running => {}
         }
 
+        let now = shared.text_pacer.now();
         expire_units_waiting_for_first_send_attempt(
             &mut state,
-            shared.text_pacer.now(),
+            now,
             shared.limits.max_wait_before_first_send_attempt,
         )?;
+        expire_units_awaiting_translation(&mut state, now, shared.limits, shared.content)?;
 
         if state.typing_attempted_epoch != Some(state.typing_epoch) {
             let epoch = state.typing_epoch;
@@ -733,7 +924,7 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
             return Ok(WorkerItem::Diagnostic(diagnostic));
         }
 
-        if let Some(unit) = state.units.front() {
+        if let Some(unit) = state.units.front().filter(|unit| unit.is_ready()) {
             let Some(text) = unit.pages.get(unit.next_page).cloned() else {
                 return Err(AppError::state(
                     "Completed publisher unit had no current page.",
@@ -748,7 +939,13 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
             return Ok(item);
         }
 
-        if let Some(deadline) = state.next_typing_reassert_at {
+        let translation_deadline =
+            earliest_translation_wait_deadline(&state, shared.limits.max_wait_for_translation);
+        let deadline = match (state.next_typing_reassert_at, translation_deadline) {
+            (Some(typing), Some(translation)) => Some(typing.min(translation)),
+            (typing, translation) => typing.or(translation),
+        };
+        if let Some(deadline) = deadline {
             let remaining = deadline.saturating_duration_since(shared.text_pacer.now());
             let (next_state, _) = shared
                 .wake
@@ -837,6 +1034,7 @@ fn discard_resident_pages_on_close(state: &mut PublisherState, reason: Publisher
         .iter()
         .filter(|unit| unit.first_send_attempt_started)
         .count();
+    let translation_wait_unit_count = state.units.iter().filter(|unit| !unit.is_ready()).count();
 
     state.units.clear();
     state.resident_pages = 0;
@@ -846,7 +1044,7 @@ fn discard_resident_pages_on_close(state: &mut PublisherState, reason: Publisher
     state.typing_attempted_epoch = None;
     state.next_typing_reassert_at = None;
 
-    if page_count > 0 {
+    if unit_count > 0 {
         state
             .diagnostics
             .push_back(CompletedPublisherDiagnostic::PagesDiscardedOnClose {
@@ -854,6 +1052,7 @@ fn discard_resident_pages_on_close(state: &mut PublisherState, reason: Publisher
                 unit_count,
                 page_count,
                 send_started_unit_count,
+                translation_wait_unit_count,
             });
     }
 }
@@ -985,7 +1184,8 @@ fn expire_units_waiting_for_first_send_attempt(
 ) -> AppResult<()> {
     loop {
         let position = state.units.iter().position(|unit| {
-            !unit.first_send_attempt_started
+            unit.is_ready()
+                && !unit.first_send_attempt_started
                 && now.saturating_duration_since(unit.enqueued_at)
                     >= max_wait_before_first_send_attempt
         });
@@ -1010,6 +1210,269 @@ fn expire_units_waiting_for_first_send_attempt(
                 page_count: expired_pages,
             });
     }
+}
+
+/// Makes room for `page_count` resident pages by evicting sendable units whose
+/// first send attempt has not started, oldest first. Held units own no pages
+/// and are never eviction candidates; `exclude_sequence` protects the unit
+/// that is being admitted.
+fn reserve_resident_pages(
+    state: &mut PublisherState,
+    limits: PublisherLimits,
+    page_count: usize,
+    exclude_sequence: Option<u64>,
+) -> AppResult<PageAdmission> {
+    let protected_pages = state
+        .units
+        .front()
+        .filter(|unit| unit.first_send_attempt_started)
+        .map(QueuedUnitPublication::remaining_pages)
+        .unwrap_or(0);
+    if page_count > limits.max_resident_pages
+        || protected_pages.saturating_add(page_count) > limits.max_resident_pages
+    {
+        return Ok(PageAdmission::Rejected);
+    }
+
+    while state.resident_pages.saturating_add(page_count) > limits.max_resident_pages {
+        let Some(position) = state.units.iter().position(|unit| {
+            unit.is_ready()
+                && !unit.first_send_attempt_started
+                && Some(unit.sequence) != exclude_sequence
+        }) else {
+            return Ok(PageAdmission::Rejected);
+        };
+        let Some(dropped) = state.units.remove(position) else {
+            return Err(AppError::state(
+                "Completed publisher could not remove an overload candidate.",
+            ));
+        };
+        let dropped_pages = dropped.remaining_pages();
+        state.resident_pages = state
+            .resident_pages
+            .checked_sub(dropped_pages)
+            .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
+        release_unit_typing_activity(state, &dropped.unit_id);
+        state
+            .diagnostics
+            .push_back(CompletedPublisherDiagnostic::UnitDroppedOverload {
+                unit_id: dropped.unit_id,
+                page_count: dropped_pages,
+            });
+    }
+
+    Ok(PageAdmission::Admitted)
+}
+
+/// Decides what one held Source publishes once its Translation resolves.
+/// Missing Translation is never replaced by other text: Translation-only omits
+/// the unit and Bilingual continues with the exact Source alone.
+fn prepare_held_outcome(
+    content: ContentSelection,
+    source: &str,
+    resolution: HeldResolution,
+) -> HeldOutcome {
+    match (content, resolution) {
+        (ContentSelection::SourceOnly, _) => HeldOutcome::Discard,
+        (ContentSelection::TranslationOnly, HeldResolution::Translated(translation)) => {
+            match prepare_completed_pages(&translation) {
+                Ok(pages) if pages.is_empty() => HeldOutcome::Discard,
+                Ok(pages) => HeldOutcome::Queue {
+                    pages,
+                    without_translation: None,
+                },
+                Err(error) => HeldOutcome::LayoutFailed {
+                    reason: describe_layout_error(error),
+                },
+            }
+        }
+        (ContentSelection::TranslationOnly, HeldResolution::Failed(reason)) => HeldOutcome::Omit {
+            resolution: TranslationResolution::Failed(reason),
+        },
+        (ContentSelection::TranslationOnly, HeldResolution::WaitExpired) => HeldOutcome::Omit {
+            resolution: TranslationResolution::WaitExpired,
+        },
+        (ContentSelection::Bilingual, HeldResolution::Translated(translation)) => {
+            match prepare_bilingual_completed_pages(source, &translation) {
+                Ok(pages) if pages.is_empty() => HeldOutcome::Discard,
+                Ok(pages) => HeldOutcome::Queue {
+                    pages: pages
+                        .into_iter()
+                        .map(PreparedBilingualCompletedPage::into_prepared_text)
+                        .collect(),
+                    without_translation: None,
+                },
+                Err(error) => prepare_source_only_fallback(
+                    source,
+                    TranslationResolution::LayoutFailed {
+                        reason: describe_layout_error(error),
+                    },
+                ),
+            }
+        }
+        (ContentSelection::Bilingual, HeldResolution::Failed(reason)) => {
+            prepare_source_only_fallback(source, TranslationResolution::Failed(reason))
+        }
+        (ContentSelection::Bilingual, HeldResolution::WaitExpired) => {
+            prepare_source_only_fallback(source, TranslationResolution::WaitExpired)
+        }
+    }
+}
+
+fn prepare_source_only_fallback(source: &str, resolution: TranslationResolution) -> HeldOutcome {
+    match prepare_completed_pages(source) {
+        Ok(pages) if pages.is_empty() => HeldOutcome::Discard,
+        Ok(pages) => HeldOutcome::Queue {
+            pages,
+            without_translation: Some(resolution),
+        },
+        Err(error) => HeldOutcome::LayoutFailed {
+            reason: describe_layout_error(error),
+        },
+    }
+}
+
+/// Resolves the held unit at `position`: it either becomes sendable in place,
+/// keeping its admission-order sequence, or leaves the queue with typing
+/// released and a diagnostic that carries no caption text.
+fn resolve_held_unit(
+    state: &mut PublisherState,
+    position: usize,
+    resolution: HeldResolution,
+    now: Instant,
+    limits: PublisherLimits,
+    content: ContentSelection,
+) -> AppResult<()> {
+    let Some(unit) = state.units.get(position) else {
+        return Ok(());
+    };
+    let Some(held) = unit.awaiting_translation.as_ref() else {
+        return Ok(());
+    };
+    let sequence = unit.sequence;
+    let unit_id = unit.unit_id.clone();
+    // Layout is pure and bounded by the aggregate's Source and Translation
+    // size limits, so preparing pages under the state lock keeps the held
+    // unit's resolution atomic with respect to close and expiry.
+    let outcome = prepare_held_outcome(content, &held.text, resolution);
+
+    let remove_unit = |state: &mut PublisherState| -> AppResult<QueuedUnitPublication> {
+        let position = state
+            .units
+            .iter()
+            .position(|unit| unit.sequence == sequence)
+            .ok_or_else(|| AppError::state("Completed publisher lost a held unit."))?;
+        let removed = state
+            .units
+            .remove(position)
+            .ok_or_else(|| AppError::state("Completed publisher could not remove a held unit."))?;
+        release_unit_typing_activity(state, &removed.unit_id);
+        Ok(removed)
+    };
+
+    match outcome {
+        HeldOutcome::Queue {
+            pages,
+            without_translation,
+        } => {
+            expire_units_waiting_for_first_send_attempt(
+                state,
+                now,
+                limits.max_wait_before_first_send_attempt,
+            )?;
+            let page_count = pages.len();
+            if reserve_resident_pages(state, limits, page_count, Some(sequence))?
+                == PageAdmission::Rejected
+            {
+                remove_unit(state)?;
+                state
+                    .diagnostics
+                    .push_back(CompletedPublisherDiagnostic::UnitRejectedOverload {
+                        unit_id,
+                        page_count,
+                    });
+                return Ok(());
+            }
+            let unit = state
+                .units
+                .iter_mut()
+                .find(|unit| unit.sequence == sequence)
+                .ok_or_else(|| AppError::state("Completed publisher lost a held unit."))?;
+            unit.pages = pages;
+            unit.next_page = 0;
+            unit.enqueued_at = now;
+            unit.awaiting_translation = None;
+            state.resident_pages += page_count;
+            if let Some(resolution) = without_translation {
+                state.diagnostics.push_back(
+                    CompletedPublisherDiagnostic::UnitQueuedWithoutTranslation {
+                        unit_id,
+                        resolution,
+                    },
+                );
+            }
+        }
+        HeldOutcome::Omit { resolution } => {
+            remove_unit(state)?;
+            state.diagnostics.push_back(
+                CompletedPublisherDiagnostic::UnitOmittedWithoutTranslation {
+                    unit_id,
+                    resolution,
+                },
+            );
+        }
+        HeldOutcome::Discard => {
+            remove_unit(state)?;
+        }
+        HeldOutcome::LayoutFailed { reason } => {
+            remove_unit(state)?;
+            state
+                .diagnostics
+                .push_back(CompletedPublisherDiagnostic::LayoutFailed { unit_id, reason });
+        }
+    }
+
+    Ok(())
+}
+
+/// Applies the publisher's own wait budget to every held unit whose
+/// Translation outcome has not arrived, oldest first.
+fn expire_units_awaiting_translation(
+    state: &mut PublisherState,
+    now: Instant,
+    limits: PublisherLimits,
+    content: ContentSelection,
+) -> AppResult<()> {
+    loop {
+        let position = state.units.iter().position(|unit| {
+            unit.awaiting_translation.as_ref().is_some_and(|held| {
+                now.saturating_duration_since(held.waiting_since) >= limits.max_wait_for_translation
+            })
+        });
+        let Some(position) = position else {
+            return Ok(());
+        };
+        resolve_held_unit(
+            state,
+            position,
+            HeldResolution::WaitExpired,
+            now,
+            limits,
+            content,
+        )?;
+    }
+}
+
+fn earliest_translation_wait_deadline(
+    state: &PublisherState,
+    max_wait_for_translation: Duration,
+) -> Option<Instant> {
+    state
+        .units
+        .iter()
+        .filter_map(|unit| unit.awaiting_translation.as_ref())
+        .map(|held| held.waiting_since + max_wait_for_translation)
+        .min()
 }
 
 fn release_unit_typing_activity(state: &mut PublisherState, unit_id: &str) {

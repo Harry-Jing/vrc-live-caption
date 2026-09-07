@@ -29,7 +29,7 @@ pub(crate) use transport::{ChatboxSendReceipt, ChatboxTransport};
 
 use crate::caption::CaptionAggregateUpdate;
 use crate::caption_pipeline::ResolvedPublicationTiming;
-use crate::config::OscConfig;
+use crate::config::{ContentSelection, OscConfig};
 use crate::error::{AppError, AppResult};
 use crate::events::DiagnosticUpdate;
 use crate::generation_fence::GenerationCommitter;
@@ -70,9 +70,17 @@ pub(crate) enum ChatboxPublicationStartOutcome {
     Unavailable(AppError),
 }
 
+/// The generation's immutable publication selection: when caption text is
+/// sent and which lanes it carries.
+#[derive(Clone, Copy)]
+pub(crate) struct PublicationSelection {
+    pub(crate) timing: ResolvedPublicationTiming,
+    pub(crate) content: ContentSelection,
+}
+
 pub(crate) struct ChatboxPublicationStartRequest<'a> {
     pub(crate) config: &'a OscConfig,
-    pub(crate) publication_timing: ResolvedPublicationTiming,
+    pub(crate) publication: PublicationSelection,
     pub(crate) text_pacer: ChatboxTextPacer,
     pub(crate) generation_id: u64,
     pub(crate) committer: GenerationCommitter,
@@ -107,7 +115,7 @@ impl ChatboxPublication {
     ) -> ChatboxPublicationStartOutcome {
         let ChatboxPublicationStartRequest {
             config,
-            publication_timing,
+            publication,
             text_pacer,
             generation_id,
             committer,
@@ -128,7 +136,8 @@ impl ChatboxPublication {
             text_pacer,
             generation_id,
             committer,
-            publication_timing,
+            publication.timing,
+            publication.content,
             reporter,
         ) {
             Ok(publication) => ChatboxPublicationStartOutcome::Ready(publication),
@@ -142,6 +151,7 @@ impl ChatboxPublication {
         generation_id: u64,
         committer: GenerationCommitter,
         publication_timing: ResolvedPublicationTiming,
+        content: ContentSelection,
         reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync>,
     ) -> AppResult<Self> {
         let publication_committer = committer.clone();
@@ -155,10 +165,19 @@ impl ChatboxPublication {
                     transport,
                     text_pacer,
                     committer,
+                    content,
                     completed_reporter,
                 )?)
             }
             ResolvedPublicationTiming::LiveUnit { .. } => {
+                // Planning already resolves Translation content as incompatible
+                // with Live timing; this guard keeps the facade explicit instead
+                // of silently narrowing the selection to Source.
+                if content != ContentSelection::SourceOnly {
+                    return Err(AppError::config(
+                        "Live publication supports Source-only content.",
+                    ));
+                }
                 let diagnostic_reporter = Arc::clone(&reporter);
                 let live_reporter: LivePublisherReporter = Arc::new(move |diagnostic| {
                     diagnostic_reporter(live_publisher_diagnostic(diagnostic));

@@ -189,10 +189,21 @@ it. The build-scoped layout model must not let uncertain shaping produce a less
 conservative sendable result; exact metrics and fallback mechanics remain owned
 by the implementation and the linked research reference.
 
+For Translation-only and Bilingual content, the Completed worker holds each
+completed Source in admission order until its exact Translation resolves, paired
+by generation, stream, unit, and Source revision. Translation-only sends only the
+terminal Translation and omits a unit whose Translation failed. Bilingual sends
+the exact pair through the bilingual layout, or the Source alone as a visible
+partial result when the Translation failed or could not be laid out. Every
+terminal failure, and a publisher-owned wait budget, releases the held position
+so later units cannot wait forever. Source-only never holds a unit and is
+unchanged. Missing Translation is never replaced by other text.
+
 Publisher instances are generation-scoped. Stop discards their queued caption
-text rather than draining it. Typing indication is lifecycle control outside the
-text-send pacer. Periodic typing-on reassertions are best effort only, not a
-keepalive guarantee, because their reset behavior has not been verified.
+text, including held units, rather than draining it. Typing indication is
+lifecycle control outside the text-send pacer and stays active while a unit is
+held. Periodic typing-on reassertions are best effort only, not a keepalive
+guarantee, because their reset behavior has not been verified.
 
 OSC, pacing, layout, wrapping, clipping, and validation constraints are defined
 by the [VRChat Chatbox reference](./research/vrchat-chatbox-reference.md).

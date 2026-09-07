@@ -19,10 +19,6 @@ use unicode_segmentation::UnicodeSegmentation;
 mod bilingual;
 mod model;
 
-#[allow(
-    unused_imports,
-    reason = "GitHub issue #25 will consume the bilingual Completed layout interface"
-)]
 pub(crate) use bilingual::{PreparedBilingualCompletedPage, prepare_bilingual_completed_pages};
 
 use model::{
