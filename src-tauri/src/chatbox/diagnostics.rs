@@ -5,10 +5,37 @@
 //! diagnostic vocabulary consumed by the runtime UI.
 
 use super::common::PublisherCloseReason;
-use super::completed::CompletedPublisherDiagnostic;
+use super::completed::{CompletedPublisherDiagnostic, TranslationResolution};
 use super::live::LivePublisherDiagnostic;
-use crate::caption::{CaptionAggregateChange, CaptionAggregateUpdate, CaptionLane, CaptionState};
+use crate::caption::{
+    CaptionAggregateChange, CaptionAggregateUpdate, CaptionLane, CaptionState,
+    TranslationFailureReason,
+};
 use crate::events::{DiagnosticCategory, DiagnosticUpdate};
+
+fn translation_failure_code(reason: TranslationFailureReason) -> String {
+    serde_json::to_value(reason)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "translation.failed".to_string())
+}
+
+fn describe_translation_resolution(resolution: &TranslationResolution) -> String {
+    match resolution {
+        TranslationResolution::Failed(reason) => {
+            format!(
+                "its Translation failed ({})",
+                translation_failure_code(*reason)
+            )
+        }
+        TranslationResolution::WaitExpired => {
+            "no terminal Translation outcome arrived within the publisher's wait budget".to_string()
+        }
+        TranslationResolution::LayoutFailed { reason } => {
+            format!("the bilingual pair could not be laid out for Chatbox: {reason}")
+        }
+    }
+}
 
 pub(super) fn completed_update_discarded_after_close(
     update: &CaptionAggregateUpdate,
@@ -129,6 +156,7 @@ pub(crate) fn completed_publisher_diagnostic(
             unit_count,
             page_count,
             send_started_unit_count,
+            translation_wait_unit_count,
         } => {
             let (code, message) = match reason {
                 PublisherCloseReason::Stop => (
@@ -145,10 +173,34 @@ pub(crate) fn completed_publisher_diagnostic(
                 code,
                 message,
                 format!(
-                    "Discarded {page_count} unsent page(s) across {unit_count} caption unit(s), including {send_started_unit_count} unit(s) whose first send attempt had begun."
+                    "Discarded {page_count} unsent page(s) across {unit_count} caption unit(s), including {send_started_unit_count} unit(s) whose first send attempt had begun and {translation_wait_unit_count} unit(s) still waiting for Translation."
                 ),
             )
         }
+        CompletedPublisherDiagnostic::UnitOmittedWithoutTranslation {
+            unit_id,
+            resolution,
+        } => DiagnosticUpdate::warning(
+            DiagnosticCategory::Osc,
+            "osc.completed_unit_omitted_without_translation",
+            "Completed caption omitted from Chatbox",
+            format!(
+                "Translation-only publication omitted caption unit {unit_id} because {}. The App caption remains available.",
+                describe_translation_resolution(&resolution)
+            ),
+        ),
+        CompletedPublisherDiagnostic::UnitQueuedWithoutTranslation {
+            unit_id,
+            resolution,
+        } => DiagnosticUpdate::warning(
+            DiagnosticCategory::Osc,
+            "osc.completed_unit_queued_without_translation",
+            "Completed caption queued without its Translation",
+            format!(
+                "Bilingual publication queued caption unit {unit_id} as Source only because {}. Later units still request Translation.",
+                describe_translation_resolution(&resolution)
+            ),
+        ),
         CompletedPublisherDiagnostic::TypingFailed { is_typing, error } => {
             let transition = if is_typing { "on" } else { "off" };
             DiagnosticUpdate::from_error(

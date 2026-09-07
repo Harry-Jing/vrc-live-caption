@@ -5,7 +5,7 @@ use super::supervisor::run_runtime_thread;
 
 use crate::caption::CaptionAggregateStore;
 use crate::caption_pipeline::{plan_caption_pipeline, resolve_caption_pipeline_timing};
-use crate::chatbox::{ChatboxPublication, ChatboxTextPacer};
+use crate::chatbox::{ChatboxPublication, ChatboxTextPacer, PublicationSelection};
 use crate::config::AppConfig;
 use crate::credentials::CredentialId;
 use crate::error::{AppError, AppResult};
@@ -231,7 +231,10 @@ impl RuntimeManager {
         let publication_start_outcome = start_chatbox_publication(
             &app,
             &config.osc,
-            publication_timing,
+            PublicationSelection {
+                timing: publication_timing,
+                content: config.publication.content,
+            },
             chatbox_text_pacer,
             &generation,
             &chatbox_host_resolver,
