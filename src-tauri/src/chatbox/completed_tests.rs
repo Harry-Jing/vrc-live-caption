@@ -581,10 +581,12 @@ fn sends_every_exact_page_in_order() -> AppResult<()> {
         transport.clone(),
         pacer,
         committer,
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 8,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
     let text = "中".repeat(136);
@@ -600,6 +602,7 @@ fn sends_every_exact_page_in_order() -> AppResult<()> {
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "unit-a".to_string(),
+            revision: 1,
             text,
         },
     )?;
@@ -635,10 +638,12 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
         transport.clone(),
         ChatboxTextPacer::with_clock(clock),
         open_committer(),
+        ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 8,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -652,6 +657,7 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "unit-a".to_string(),
+            revision: 1,
             text: "first".to_string(),
         },
     )?;
@@ -672,6 +678,7 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
             &submitted_publisher,
             SourceUnitEvent::Completed {
                 unit_id: "unit-b".to_string(),
+                revision: 1,
                 text: "second".to_string(),
             },
         )?;
@@ -720,10 +727,12 @@ fn overload_drops_only_the_oldest_whole_unit_waiting_for_its_first_send_attempt(
         transport.clone(),
         pacer,
         open_committer(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 3,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -742,6 +751,7 @@ fn overload_drops_only_the_oldest_whole_unit_waiting_for_its_first_send_attempt(
             &publisher,
             SourceUnitEvent::Completed {
                 unit_id: unit_id.to_string(),
+                revision: 1,
                 text,
             },
         )?;
@@ -791,10 +801,12 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
         transport.clone(),
         pacer,
         open_committer(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 8,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
     let first_text = "中".repeat(271);
@@ -812,6 +824,7 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
             &publisher,
             SourceUnitEvent::Completed {
                 unit_id: unit_id.to_string(),
+                revision: 1,
                 text,
             },
         )?;
@@ -881,10 +894,12 @@ fn send_started_unit_is_protected_and_new_unit_is_rejected_without_eviction() ->
         transport.clone(),
         ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         open_committer(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 3,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
     let first_text = "中".repeat(136);
@@ -902,6 +917,7 @@ fn send_started_unit_is_protected_and_new_unit_is_rejected_without_eviction() ->
             &publisher,
             SourceUnitEvent::Completed {
                 unit_id: unit_id.to_string(),
+                revision: 1,
                 text,
             },
         )?;
@@ -920,6 +936,7 @@ fn send_started_unit_is_protected_and_new_unit_is_rejected_without_eviction() ->
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "unit-c".to_string(),
+            revision: 1,
             text: "中".repeat(136),
         },
     )?;
@@ -966,10 +983,12 @@ fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> A
         transport.clone(),
         pacer,
         open_committer(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 2,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -984,6 +1003,7 @@ fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> A
             &publisher,
             SourceUnitEvent::Completed {
                 unit_id: unit_id.to_string(),
+                revision: 1,
                 text,
             },
         )?;
@@ -1025,10 +1045,12 @@ fn stale_unit_waiting_for_its_first_send_attempt_expires_whole() -> AppResult<()
         transport.clone(),
         pacer,
         open_committer(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -1042,6 +1064,7 @@ fn stale_unit_waiting_for_its_first_send_attempt_expires_whole() -> AppResult<()
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "expired".to_string(),
+            revision: 1,
             text: "中".repeat(136),
         },
     )?;
@@ -1058,6 +1081,7 @@ fn stale_unit_waiting_for_its_first_send_attempt_expires_whole() -> AppResult<()
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "fresh".to_string(),
+            revision: 1,
             text: "fresh".to_string(),
         },
     )?;
@@ -1094,10 +1118,12 @@ fn overlapping_activity_keeps_typing_on_until_the_last_unit_resolves() -> AppRes
         transport.clone(),
         ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         open_committer(),
+        ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -1124,6 +1150,7 @@ fn overlapping_activity_keeps_typing_on_until_the_last_unit_resolves() -> AppRes
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "unit-b".to_string(),
+            revision: 1,
             text: "B".to_string(),
         },
     )?;
@@ -1150,10 +1177,12 @@ fn active_typing_is_reasserted_on_the_best_effort_interval() -> AppResult<()> {
         transport.clone(),
         ChatboxTextPacer::with_clock(clock.clone()),
         open_committer(),
+        ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -1223,10 +1252,12 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
         transport.clone(),
         ChatboxTextPacer::with_clock(clock.clone()),
         open_committer(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -1294,10 +1325,12 @@ fn stop_cancels_a_pending_typing_reassertion() -> AppResult<()> {
         transport.clone(),
         ChatboxTextPacer::with_clock(clock.clone()),
         fence.committer(),
+        ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -1338,10 +1371,12 @@ fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<
         transport.clone(),
         ChatboxTextPacer::with_clock(clock.clone()),
         committer.clone(),
+        ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -1407,10 +1442,12 @@ fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<(
         transport.clone(),
         ChatboxTextPacer::with_clock(clock),
         open_committer(),
+        ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: page_count,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -1424,6 +1461,7 @@ fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<(
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "paced-around-typing".to_string(),
+            revision: 1,
             text,
         },
     )?;
@@ -1463,10 +1501,12 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
         transport.clone(),
         ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         open_committer(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -1482,6 +1522,7 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "layout-failure".to_string(),
+            revision: 1,
             text: oversized_grapheme,
         },
     )?;
@@ -1516,10 +1557,12 @@ fn failed_typing_on_is_diagnosed_and_still_followed_by_typing_off() -> AppResult
         transport.clone(),
         ChatboxTextPacer::with_clock(clock),
         open_committer(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -1533,6 +1576,7 @@ fn failed_typing_on_is_diagnosed_and_still_followed_by_typing_off() -> AppResult
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "typing-failure".to_string(),
+            revision: 1,
             text: "caption".to_string(),
         },
     )?;
@@ -1578,10 +1622,12 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
         transport.clone(),
         pacer,
         fence.committer(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
 
@@ -1595,6 +1641,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "stopped".to_string(),
+            revision: 1,
             text: "must not send".to_string(),
         },
     )?;
@@ -1605,6 +1652,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
     assert_eq!(
         publisher.try_handle_input(SourceUnitEvent::Completed {
             unit_id: "late".to_string(),
+            revision: 1,
             text: "late".to_string(),
         })?,
         PublicationObservationOutcome::Closed
@@ -1626,6 +1674,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
             unit_count: 1,
             page_count: 1,
             send_started_unit_count: 0,
+            translation_wait_unit_count: 0,
         }
     ))?);
 
@@ -1647,10 +1696,12 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         transport.clone(),
         ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         committer.clone(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
     let pages = prepared_strings(&"中".repeat(136))?;
@@ -1665,6 +1716,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         &publisher,
         SourceUnitEvent::Completed {
             unit_id: "in-flight".to_string(),
+            revision: 1,
             text: "中".repeat(136),
         },
     )?;
@@ -1689,6 +1741,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
     assert_eq!(
         publisher.try_handle_input(SourceUnitEvent::Completed {
             unit_id: "late".to_string(),
+            revision: 1,
             text: "late".to_string(),
         })?,
         PublicationObservationOutcome::Closed
@@ -1733,10 +1786,12 @@ fn concurrent_close_and_join_perform_one_cleanup() -> AppResult<()> {
         transport.clone(),
         ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         open_committer(),
+        ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
     let barrier = Arc::new(std::sync::Barrier::new(3));
@@ -1770,10 +1825,12 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
         transport.clone(),
         ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new())),
         open_committer(),
+        ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
             max_resident_pages: 4,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
+            max_wait_for_translation: Duration::from_secs(20),
         },
     )?;
     let shared = Arc::clone(&publisher.shared);
@@ -1792,5 +1849,608 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
         CompletedPublisherDiagnostic::WorkerFailed { .. }
     ))?);
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Selected-content publication: held Source units, exact pairing, wait budget.
+// ---------------------------------------------------------------------------
+
+struct ContentPublisher {
+    publisher: CompletedChatboxPublisher,
+    transport: Arc<RecordingTransport>,
+    diagnostics: Arc<RecordedDiagnostics>,
+    fence: GenerationFence,
+}
+
+fn content_limits(max_resident_pages: usize) -> PublisherLimits {
+    PublisherLimits {
+        max_resident_pages,
+        max_wait_before_first_send_attempt: Duration::from_secs(30),
+        max_wait_for_translation: Duration::from_secs(20),
+    }
+}
+
+fn start_content_publisher(
+    content: ContentSelection,
+    pacer: ChatboxTextPacer,
+    limits: PublisherLimits,
+) -> AppResult<ContentPublisher> {
+    let transport = Arc::new(RecordingTransport::new());
+    let (reporter, diagnostics) = recording_reporter();
+    let fence = GenerationFence::new();
+    let publisher = CompletedChatboxPublisher::start_with_limits(
+        transport.clone(),
+        pacer,
+        fence.committer(),
+        content,
+        reporter,
+        limits,
+    )?;
+    Ok(ContentPublisher {
+        publisher,
+        transport,
+        diagnostics,
+        fence,
+    })
+}
+
+fn advancing_pacer() -> ChatboxTextPacer {
+    ChatboxTextPacer::with_clock(Arc::new(AdvancingClock::new()))
+}
+
+fn held_source_ref(unit_id: &str, revision: u64) -> SourceSnapshotRef {
+    SourceSnapshotRef {
+        generation: 1,
+        stream_id: "recognition-1-1".to_string(),
+        unit_id: unit_id.to_string(),
+        revision,
+    }
+}
+
+fn complete_source(
+    publisher: &CompletedChatboxPublisher,
+    unit_id: &str,
+    revision: u64,
+    text: &str,
+) -> AppResult<()> {
+    submit_handled(
+        publisher,
+        SourceUnitEvent::Opened {
+            unit_id: unit_id.to_string(),
+        },
+    )?;
+    submit_handled(
+        publisher,
+        SourceUnitEvent::Completed {
+            unit_id: unit_id.to_string(),
+            revision,
+            text: text.to_string(),
+        },
+    )
+}
+
+fn complete_translation(
+    publisher: &CompletedChatboxPublisher,
+    unit_id: &str,
+    revision: u64,
+    text: &str,
+) -> AppResult<()> {
+    submit_handled(
+        publisher,
+        SourceUnitEvent::TranslationCompleted {
+            source_ref: held_source_ref(unit_id, revision),
+            text: text.to_string(),
+        },
+    )
+}
+
+fn fail_translation(
+    publisher: &CompletedChatboxPublisher,
+    unit_id: &str,
+    revision: u64,
+    reason_code: TranslationFailureReason,
+) -> AppResult<()> {
+    submit_handled(
+        publisher,
+        SourceUnitEvent::TranslationFailed {
+            source_ref: held_source_ref(unit_id, revision),
+            reason_code,
+        },
+    )
+}
+
+fn sent_texts(events: &[TransportEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            TransportEvent::Text(text) => Some(text.clone()),
+            TransportEvent::Typing(_) => None,
+        })
+        .collect()
+}
+
+fn bilingual_strings(source: &str, translation: &str) -> AppResult<Vec<String>> {
+    prepare_bilingual_completed_pages(source, translation)
+        .map(|pages| {
+            pages
+                .into_iter()
+                .map(|page| page.into_prepared_text().as_str().to_string())
+                .collect()
+        })
+        .map_err(|error| AppError::runtime(describe_layout_error(error)))
+}
+
+const EVERY_TRANSLATION_FAILURE_REASON: [TranslationFailureReason; 12] = [
+    TranslationFailureReason::ProviderAuthenticationFailed,
+    TranslationFailureReason::ProviderPermissionDenied,
+    TranslationFailureReason::ProviderInvalidRequest,
+    TranslationFailureReason::ProviderRateLimited,
+    TranslationFailureReason::ProviderUsageLimit,
+    TranslationFailureReason::ProviderUnavailable,
+    TranslationFailureReason::InvalidOutput,
+    TranslationFailureReason::DeadlineExceeded,
+    TranslationFailureReason::Backpressure,
+    TranslationFailureReason::SourceTooLarge,
+    TranslationFailureReason::Stopped,
+    TranslationFailureReason::Failed,
+];
+
+#[test]
+fn translation_only_holds_the_source_and_sends_only_the_exact_translation() -> AppResult<()> {
+    let ContentPublisher {
+        publisher,
+        transport,
+        ..
+    } = start_content_publisher(
+        ContentSelection::TranslationOnly,
+        advancing_pacer(),
+        content_limits(8),
+    )?;
+
+    complete_source(&publisher, "unit-a", 1, "source a")?;
+    // Typing stays on while the exact Translation is pending; nothing is sent.
+    assert_eq!(
+        transport.wait_for_events(1)?,
+        vec![TransportEvent::Typing(true)]
+    );
+
+    complete_translation(&publisher, "unit-a", 1, "译文 A")?;
+    assert_eq!(
+        transport.wait_for_events(3)?,
+        vec![
+            TransportEvent::Typing(true),
+            TransportEvent::Text("译文 A".to_string()),
+            TransportEvent::Typing(false),
+        ]
+    );
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn translation_only_preserves_source_admission_order_across_out_of_order_results() -> AppResult<()>
+{
+    let ContentPublisher {
+        publisher,
+        transport,
+        ..
+    } = start_content_publisher(
+        ContentSelection::TranslationOnly,
+        advancing_pacer(),
+        content_limits(8),
+    )?;
+
+    complete_source(&publisher, "unit-a", 1, "source a")?;
+    complete_source(&publisher, "unit-b", 1, "source b")?;
+    // The later unit resolves first but must wait behind the held head.
+    complete_translation(&publisher, "unit-b", 1, "译文 B")?;
+    complete_translation(&publisher, "unit-a", 1, "译文 A")?;
+
+    let events = transport.wait_for_events(4)?;
+    assert_eq!(
+        sent_texts(&events),
+        vec!["译文 A".to_string(), "译文 B".to_string()]
+    );
+    assert_eq!(events.first(), Some(&TransportEvent::Typing(true)));
+    assert_eq!(events.last(), Some(&TransportEvent::Typing(false)));
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn translation_only_omits_every_terminal_failure_and_releases_the_queue_head() -> AppResult<()> {
+    let ContentPublisher {
+        publisher,
+        transport,
+        diagnostics,
+        ..
+    } = start_content_publisher(
+        ContentSelection::TranslationOnly,
+        advancing_pacer(),
+        content_limits(8),
+    )?;
+
+    for (index, reason) in EVERY_TRANSLATION_FAILURE_REASON.into_iter().enumerate() {
+        let unit_id = format!("failed-{index}");
+        complete_source(&publisher, &unit_id, 1, &format!("source {index}"))?;
+        fail_translation(&publisher, &unit_id, 1, reason)?;
+        diagnostics.wait_for(
+            "an omitted-unit diagnostic carrying the stable failure reason",
+            |diagnostic| {
+                matches!(
+                    diagnostic,
+                    CompletedPublisherDiagnostic::UnitOmittedWithoutTranslation {
+                        unit_id: omitted,
+                        resolution,
+                    } if omitted == &unit_id && *resolution == TranslationResolution::Failed(reason)
+                )
+            },
+        )?;
+    }
+
+    // Every failed head released its position: the next exact Translation is
+    // the first and only text the transport ever receives.
+    complete_source(&publisher, "unit-last", 1, "source last")?;
+    complete_translation(&publisher, "unit-last", 1, "最后")?;
+    publisher.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert_eq!(sent_texts(&transport.events()?), vec!["最后".to_string()]);
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn bilingual_sends_the_exact_pair_through_every_bilingual_page() -> AppResult<()> {
+    let ContentPublisher {
+        publisher,
+        transport,
+        diagnostics,
+        ..
+    } = start_content_publisher(
+        ContentSelection::Bilingual,
+        advancing_pacer(),
+        content_limits(32),
+    )?;
+    let source = "source lane ".repeat(40);
+    let translation = "短译文";
+    let expected_pages = bilingual_strings(&source, translation)?;
+    assert!(expected_pages.len() > 1);
+
+    complete_source(&publisher, "unit-a", 1, &source)?;
+    complete_translation(&publisher, "unit-a", 1, translation)?;
+
+    // The queue is the causal text barrier; typing reassertions may interleave
+    // with a long unit, so compare the sent pages after quiescence.
+    diagnostics.wait_for("the pair to be sent completely", |diagnostic| {
+        matches!(
+            diagnostic,
+            CompletedPublisherDiagnostic::UnitSendSucceeded { unit_id, page_count, .. }
+                if unit_id == "unit-a" && *page_count == expected_pages.len()
+        )
+    })?;
+    publisher.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert_eq!(sent_texts(&transport.events()?), expected_pages);
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn bilingual_publishes_source_alone_after_failure_and_keeps_pairing_later_units() -> AppResult<()> {
+    let ContentPublisher {
+        publisher,
+        transport,
+        diagnostics,
+        ..
+    } = start_content_publisher(
+        ContentSelection::Bilingual,
+        advancing_pacer(),
+        content_limits(8),
+    )?;
+
+    complete_source(&publisher, "unit-a", 1, "source a")?;
+    complete_source(&publisher, "unit-b", 1, "source b")?;
+    fail_translation(
+        &publisher,
+        "unit-a",
+        1,
+        TranslationFailureReason::DeadlineExceeded,
+    )?;
+    complete_translation(&publisher, "unit-b", 1, "译文 B")?;
+
+    let events = transport.wait_for_events(4)?;
+    assert_eq!(
+        sent_texts(&events),
+        vec!["source a".to_string(), "source b\n译文 B".to_string()]
+    );
+    assert!(diagnostics.contains(|diagnostic| matches!(
+        diagnostic,
+        CompletedPublisherDiagnostic::UnitQueuedWithoutTranslation {
+            unit_id,
+            resolution: TranslationResolution::Failed(TranslationFailureReason::DeadlineExceeded),
+        } if unit_id == "unit-a"
+    ))?);
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn bilingual_layout_failure_falls_back_to_the_exact_source() -> AppResult<()> {
+    let ContentPublisher {
+        publisher,
+        transport,
+        diagnostics,
+        ..
+    } = start_content_publisher(
+        ContentSelection::Bilingual,
+        advancing_pacer(),
+        content_limits(8),
+    )?;
+    let oversized_grapheme = format!("a{}", "\u{301}".repeat(144));
+
+    complete_source(&publisher, "unit-a", 1, "readable source")?;
+    complete_translation(&publisher, "unit-a", 1, &oversized_grapheme)?;
+    let events = transport.wait_for_events(3)?;
+    assert_eq!(sent_texts(&events), vec!["readable source".to_string()]);
+    diagnostics.wait_for(
+        "a Source-only fallback after a layout failure",
+        |diagnostic| {
+            matches!(
+                diagnostic,
+                CompletedPublisherDiagnostic::UnitQueuedWithoutTranslation {
+                    unit_id,
+                    resolution: TranslationResolution::LayoutFailed { .. },
+                } if unit_id == "unit-a"
+            )
+        },
+    )?;
+
+    // A Source that cannot be laid out itself is not sent in any form.
+    complete_source(&publisher, "unit-b", 1, &oversized_grapheme)?;
+    complete_translation(&publisher, "unit-b", 1, "译文 B")?;
+    diagnostics.wait_for("a layout-failure diagnostic for unit-b", |diagnostic| {
+        matches!(
+            diagnostic,
+            CompletedPublisherDiagnostic::LayoutFailed { unit_id, .. } if unit_id == "unit-b"
+        )
+    })?;
+    publisher.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert_eq!(
+        sent_texts(&transport.events()?),
+        vec!["readable source".to_string()]
+    );
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn translation_only_wait_budget_omits_the_unit_and_ignores_a_late_result() -> AppResult<()> {
+    let clock = Arc::new(ControlledClock::new());
+    clock.release_automatic();
+    let ContentPublisher {
+        publisher,
+        transport,
+        diagnostics,
+        ..
+    } = start_content_publisher(
+        ContentSelection::TranslationOnly,
+        ChatboxTextPacer::with_clock(clock.clone()),
+        content_limits(8),
+    )?;
+
+    complete_source(&publisher, "unit-a", 1, "source a")?;
+    assert_eq!(
+        transport.wait_for_events(1)?,
+        vec![TransportEvent::Typing(true)]
+    );
+
+    advance_publisher_clock(&clock, &publisher, Duration::from_secs(20));
+    diagnostics.wait_for("a wait-expired omission for unit-a", |diagnostic| {
+        matches!(
+            diagnostic,
+            CompletedPublisherDiagnostic::UnitOmittedWithoutTranslation {
+                unit_id,
+                resolution: TranslationResolution::WaitExpired,
+            } if unit_id == "unit-a"
+        )
+    })?;
+    assert_eq!(
+        transport.wait_for_events(2)?,
+        vec![TransportEvent::Typing(true), TransportEvent::Typing(false)]
+    );
+
+    // The late result finds no held unit and is a successful no-op.
+    complete_translation(&publisher, "unit-a", 1, "迟到的译文")?;
+    publisher.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert!(sent_texts(&transport.events()?).is_empty());
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn bilingual_wait_budget_publishes_the_source_alone() -> AppResult<()> {
+    let clock = Arc::new(ControlledClock::new());
+    clock.release_automatic();
+    let ContentPublisher {
+        publisher,
+        transport,
+        diagnostics,
+        ..
+    } = start_content_publisher(
+        ContentSelection::Bilingual,
+        ChatboxTextPacer::with_clock(clock.clone()),
+        content_limits(8),
+    )?;
+
+    complete_source(&publisher, "unit-a", 1, "source a")?;
+    assert_eq!(
+        transport.wait_for_events(1)?,
+        vec![TransportEvent::Typing(true)]
+    );
+
+    advance_publisher_clock(&clock, &publisher, Duration::from_secs(20));
+    let events = transport.wait_for_events(3)?;
+    assert_eq!(sent_texts(&events), vec!["source a".to_string()]);
+    assert!(diagnostics.contains(|diagnostic| matches!(
+        diagnostic,
+        CompletedPublisherDiagnostic::UnitQueuedWithoutTranslation {
+            unit_id,
+            resolution: TranslationResolution::WaitExpired,
+        } if unit_id == "unit-a"
+    ))?);
+
+    complete_translation(&publisher, "unit-a", 1, "迟到的译文")?;
+    publisher.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert_eq!(
+        sent_texts(&transport.events()?),
+        vec!["source a".to_string()]
+    );
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn resolved_translation_that_cannot_fit_is_rejected_whole() -> AppResult<()> {
+    let ContentPublisher {
+        publisher,
+        transport,
+        diagnostics,
+        ..
+    } = start_content_publisher(
+        ContentSelection::TranslationOnly,
+        advancing_pacer(),
+        content_limits(2),
+    )?;
+    let oversized_translation = "中".repeat(400);
+    let page_count = prepared_strings(&oversized_translation)?.len();
+    assert!(page_count > 2);
+
+    complete_source(&publisher, "unit-a", 1, "source a")?;
+    assert_eq!(
+        transport.wait_for_events(1)?,
+        vec![TransportEvent::Typing(true)]
+    );
+    complete_translation(&publisher, "unit-a", 1, &oversized_translation)?;
+    diagnostics.wait_for(
+        "an overload rejection for the resolved unit",
+        |diagnostic| {
+            matches!(
+                diagnostic,
+                CompletedPublisherDiagnostic::UnitRejectedOverload {
+                    unit_id,
+                    page_count: rejected,
+                } if unit_id == "unit-a" && *rejected == page_count
+            )
+        },
+    )?;
+    assert_eq!(
+        transport.wait_for_events(2)?,
+        vec![TransportEvent::Typing(true), TransportEvent::Typing(false)]
+    );
+    publisher.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn mismatched_translation_does_not_resolve_a_held_unit() -> AppResult<()> {
+    let ContentPublisher {
+        publisher,
+        transport,
+        ..
+    } = start_content_publisher(
+        ContentSelection::TranslationOnly,
+        advancing_pacer(),
+        content_limits(8),
+    )?;
+
+    complete_source(&publisher, "unit-a", 1, "source a")?;
+    // A different Source revision and a different unit must not release the slot.
+    complete_translation(&publisher, "unit-a", 2, "错误的修订")?;
+    complete_translation(&publisher, "other", 1, "错误的单元")?;
+    complete_translation(&publisher, "unit-a", 1, "正确")?;
+
+    assert_eq!(
+        transport.wait_for_events(3)?,
+        vec![
+            TransportEvent::Typing(true),
+            TransportEvent::Text("正确".to_string()),
+            TransportEvent::Typing(false),
+        ]
+    );
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn close_discards_held_units_and_rejects_late_results() -> AppResult<()> {
+    for reason in [
+        PublisherCloseReason::Stop,
+        PublisherCloseReason::RuntimeError,
+    ] {
+        let ContentPublisher {
+            publisher,
+            transport,
+            diagnostics,
+            fence,
+        } = start_content_publisher(
+            ContentSelection::Bilingual,
+            advancing_pacer(),
+            content_limits(8),
+        )?;
+
+        complete_source(&publisher, "unit-a", 1, "source a")?;
+        assert_eq!(
+            transport.wait_for_events(1)?,
+            vec![TransportEvent::Typing(true)]
+        );
+
+        match reason {
+            PublisherCloseReason::Stop => close_at_fence(&fence, &publisher)?,
+            PublisherCloseReason::RuntimeError => publisher.request_close(reason)?,
+        }
+        publisher.join()?;
+
+        assert_eq!(
+            transport.events()?,
+            vec![TransportEvent::Typing(true), TransportEvent::Typing(false)]
+        );
+        assert!(diagnostics.contains(|diagnostic| matches!(
+            diagnostic,
+            CompletedPublisherDiagnostic::PagesDiscardedOnClose {
+                reason: discarded_reason,
+                unit_count: 1,
+                page_count: 0,
+                send_started_unit_count: 0,
+                translation_wait_unit_count: 1,
+            } if *discarded_reason == reason
+        ))?);
+        assert_eq!(
+            publisher.try_handle_input(SourceUnitEvent::TranslationCompleted {
+                source_ref: held_source_ref("unit-a", 1),
+                text: "迟到的译文".to_string(),
+            })?,
+            PublicationObservationOutcome::Closed
+        );
+    }
     Ok(())
 }

@@ -5,10 +5,10 @@ use super::*;
 use crate::caption::{
     ActiveCaptionStream, CAPTION_AGGREGATE_CONTRACT_VERSION, CaptionAggregateChange,
     CaptionAggregateSnapshot, CaptionAggregateUpdate, CaptionLane, CaptionSnapshot, CaptionState,
-    OpenSourceUnit,
+    OpenSourceUnit, SourceSnapshotRef, TranslationFailureReason, TranslationUnitSnapshot,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
-use crate::config::OscConfig;
+use crate::config::{ContentSelection, OscConfig};
 use crate::error::AppError;
 use crate::events::{DiagnosticUpdate, emit_diagnostic};
 use crate::generation_fence::GenerationFence;
@@ -264,6 +264,7 @@ fn start_completed() -> AppResult<(ChatboxPublication, Receiver<String>)> {
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
+        ContentSelection::SourceOnly,
         reporter(),
     )?;
     Ok((publication, receiver))
@@ -281,6 +282,7 @@ fn start_live() -> AppResult<(ChatboxPublication, Receiver<String>)> {
         ResolvedPublicationTiming::LiveUnit {
             observation_window_ms: 1_000,
         },
+        ContentSelection::SourceOnly,
         reporter(),
     )?;
     Ok((publication, receiver))
@@ -393,6 +395,7 @@ fn facade_selects_completed_publication_without_exposing_its_worker() -> AppResu
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
+        ContentSelection::SourceOnly,
         reporter,
     )?;
 
@@ -422,6 +425,7 @@ fn completed_publication_uses_exact_changes_across_revision_gaps_and_deduplicate
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
+        ContentSelection::SourceOnly,
         reporter(),
     )?;
     let old_trimmed = completed_update(10, "old-trimmed", "first accepted", false);
@@ -457,6 +461,7 @@ fn completed_publication_derives_opened_completed_and_aborted_from_aggregates() 
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
+        ContentSelection::SourceOnly,
         reporter(),
     )?;
 
@@ -534,6 +539,7 @@ fn completed_publication_ignores_duplicate_out_of_order_and_prior_generation_his
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
+        ContentSelection::SourceOnly,
         reporter,
     )?;
     assert_eq!(
@@ -568,6 +574,7 @@ fn completed_publication_ignores_duplicate_out_of_order_and_prior_generation_his
         2,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
+        ContentSelection::SourceOnly,
         prior_reporter,
     )?;
     let mut prior_snapshot = completed_snapshot(3, "prior generation");
@@ -617,6 +624,7 @@ fn start_for_closed_diagnostic(
         1,
         fence.committer(),
         timing,
+        ContentSelection::SourceOnly,
         reporter,
     )
 }
@@ -652,6 +660,7 @@ fn generation_stop_cutoff_keeps_stop_diagnostics_before_publication_shutdown() -
         1,
         fence.committer(),
         ResolvedPublicationTiming::Completed,
+        ContentSelection::SourceOnly,
         reporter,
     )?;
 
@@ -833,6 +842,7 @@ fn completed_and_live_publications_share_the_actual_attempt_pacing_boundary() ->
         1,
         completed_fence.committer(),
         ResolvedPublicationTiming::Completed,
+        ContentSelection::SourceOnly,
         reporter(),
     )?;
     assert_eq!(
@@ -851,6 +861,7 @@ fn completed_and_live_publications_share_the_actual_attempt_pacing_boundary() ->
         ResolvedPublicationTiming::LiveUnit {
             observation_window_ms: 1_000,
         },
+        ContentSelection::SourceOnly,
         reporter(),
     )?;
     assert_eq!(
@@ -863,4 +874,190 @@ fn completed_and_live_publications_share_the_actual_attempt_pacing_boundary() ->
     clock.advance(Duration::from_secs(1));
     assert_eq!(wait_for_text(&receiver)?, "live attempt");
     close(&live)
+}
+
+fn start_completed_with_content(
+    content: ContentSelection,
+) -> AppResult<(ChatboxPublication, Receiver<String>)> {
+    let (texts, receiver) = mpsc::channel();
+    let transport: Arc<dyn ChatboxTransport> = Arc::new(RecordingTransport { texts });
+    let fence = GenerationFence::new();
+    let publication = ChatboxPublication::start_with_transport(
+        transport,
+        ChatboxTextPacer::default(),
+        1,
+        fence.committer(),
+        ResolvedPublicationTiming::Completed,
+        content,
+        reporter(),
+    )?;
+    Ok((publication, receiver))
+}
+
+fn translation_source_ref(
+    generation: u64,
+    unit_id: &str,
+    source_revision: u64,
+) -> SourceSnapshotRef {
+    SourceSnapshotRef {
+        generation,
+        stream_id: format!("recognition-{generation}-1"),
+        unit_id: unit_id.to_string(),
+        revision: source_revision,
+    }
+}
+
+fn translation_update(
+    revision: u64,
+    unit_id: &str,
+    source_revision: u64,
+    source_generation: u64,
+    text: &str,
+) -> CaptionAggregateUpdate {
+    let mut snapshot = completed_snapshot_for(1, source_revision, unit_id, "source text");
+    snapshot.snapshot_revision = revision;
+    let caption = CaptionSnapshot {
+        generation: source_generation,
+        stream_id: format!("recognition-{source_generation}-1"),
+        unit_id: Some(unit_id.to_string()),
+        lane: CaptionLane::Translation,
+        revision: 1,
+        text: text.to_string(),
+        state: CaptionState::Completed,
+        language: Some("zh-Hans".to_string()),
+        source_ref: Some(translation_source_ref(
+            source_generation,
+            unit_id,
+            source_revision,
+        )),
+        unit_started_at_ms: Some(100),
+        timestamp_ms: 200 + revision,
+    };
+    snapshot.captions.insert(0, caption.clone());
+    CaptionAggregateUpdate {
+        snapshot,
+        change: CaptionAggregateChange::CaptionAccepted(caption),
+    }
+}
+
+fn translation_failed_update(
+    revision: u64,
+    unit_id: &str,
+    source_revision: u64,
+    reason_code: TranslationFailureReason,
+) -> CaptionAggregateUpdate {
+    let mut snapshot = completed_snapshot_for(1, source_revision, unit_id, "source text");
+    snapshot.snapshot_revision = revision;
+    CaptionAggregateUpdate {
+        snapshot,
+        change: CaptionAggregateChange::TranslationFailed(TranslationUnitSnapshot::Failed {
+            source_ref: translation_source_ref(1, unit_id, source_revision),
+            reason_code,
+        }),
+    }
+}
+
+#[test]
+fn facade_ignores_translation_outcomes_for_source_only_content() -> AppResult<()> {
+    let (publication, receiver) = start_completed()?;
+
+    assert_eq!(
+        publication.try_observe(&completed_update(1, "unit-1", "source text", true))?,
+        PublicationObservationOutcome::Handled
+    );
+    assert_eq!(wait_for_text(&receiver)?, "source text");
+    assert_eq!(
+        publication.try_observe(&translation_update(2, "unit-1", 1, 1, "译文"))?,
+        PublicationObservationOutcome::Handled
+    );
+    assert_eq!(
+        publication.try_observe(&translation_failed_update(
+            3,
+            "unit-1",
+            1,
+            TranslationFailureReason::ProviderUnavailable,
+        ))?,
+        PublicationObservationOutcome::Handled
+    );
+    publication.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert_no_text(&receiver);
+    close(&publication)
+}
+
+#[test]
+fn facade_routes_the_exact_translation_for_translation_only_content() -> AppResult<()> {
+    let (publication, receiver) = start_completed_with_content(ContentSelection::TranslationOnly)?;
+
+    assert_eq!(
+        publication.try_observe(&opened_update(1, "unit-1"))?,
+        PublicationObservationOutcome::Handled
+    );
+    assert_eq!(
+        publication.try_observe(&completed_update(2, "unit-1", "source text", true))?,
+        PublicationObservationOutcome::Handled
+    );
+    // A result whose Source belongs to another generation never releases the
+    // held unit, even though it arrives through the current generation's
+    // aggregate stream.
+    assert_eq!(
+        publication.try_observe(&translation_update(3, "unit-1", 2, 2, "其他代的译文"))?,
+        PublicationObservationOutcome::Handled
+    );
+    assert_eq!(
+        publication.try_observe(&translation_update(4, "unit-1", 2, 1, "译文"))?,
+        PublicationObservationOutcome::Handled
+    );
+
+    assert_eq!(wait_for_text(&receiver)?, "译文");
+    publication.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert_no_text(&receiver);
+    close(&publication)
+}
+
+#[test]
+fn facade_publishes_bilingual_source_alone_after_a_failed_translation_update() -> AppResult<()> {
+    let (publication, receiver) = start_completed_with_content(ContentSelection::Bilingual)?;
+
+    assert_eq!(
+        publication.try_observe(&opened_update(1, "unit-1"))?,
+        PublicationObservationOutcome::Handled
+    );
+    assert_eq!(
+        publication.try_observe(&completed_update(2, "unit-1", "source text", true))?,
+        PublicationObservationOutcome::Handled
+    );
+    assert_eq!(
+        publication.try_observe(&translation_failed_update(
+            3,
+            "unit-1",
+            2,
+            TranslationFailureReason::DeadlineExceeded,
+        ))?,
+        PublicationObservationOutcome::Handled
+    );
+
+    assert_eq!(wait_for_text(&receiver)?, "source text");
+    publication.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert_no_text(&receiver);
+    close(&publication)
+}
+
+#[test]
+fn live_timing_rejects_translation_content_explicitly() {
+    let (texts, _receiver) = mpsc::channel();
+    let transport: Arc<dyn ChatboxTransport> = Arc::new(RecordingTransport { texts });
+    let fence = GenerationFence::new();
+    let result = ChatboxPublication::start_with_transport(
+        transport,
+        ChatboxTextPacer::default(),
+        1,
+        fence.committer(),
+        ResolvedPublicationTiming::LiveUnit {
+            observation_window_ms: 1_000,
+        },
+        ContentSelection::Bilingual,
+        reporter(),
+    );
+
+    assert!(result.is_err_and(|error| error.to_string().contains("Source-only")));
 }

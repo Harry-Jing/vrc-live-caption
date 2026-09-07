@@ -17,10 +17,6 @@ const BILINGUAL_SEPARATOR_UTF16_UNITS: usize = 1;
 /// consume the sealed page as the existing prepared transport capability.
 #[must_use = "prepared bilingual pages must be consumed in returned order"]
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-#[allow(
-    dead_code,
-    reason = "GitHub issue #25 will consume bilingual Completed pages"
-)]
 pub(crate) struct PreparedBilingualCompletedPage {
     prepared: PreparedChatboxText,
     #[cfg(test)]
@@ -29,10 +25,6 @@ pub(crate) struct PreparedBilingualCompletedPage {
     prepared_translation: Box<str>,
 }
 
-#[allow(
-    dead_code,
-    reason = "GitHub issue #25 will consume bilingual Completed pages"
-)]
 impl PreparedBilingualCompletedPage {
     #[must_use = "the sealed Chatbox text must be handed to publication"]
     pub(crate) fn into_prepared_text(self) -> PreparedChatboxText {
@@ -85,10 +77,6 @@ impl PreparedBilingualCompletedPage {
 ///
 /// Correlation is a caller invariant: layout receives only the exact Source
 /// and Translation text selected by the owning publication coordinator.
-#[allow(
-    dead_code,
-    reason = "GitHub issue #25 will call bilingual Completed layout"
-)]
 pub(crate) fn prepare_bilingual_completed_pages(
     source: &str,
     translation: &str,

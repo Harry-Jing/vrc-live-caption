@@ -13,6 +13,7 @@ use crate::caption::{
     CaptionAggregateSnapshot, CaptionAggregateUpdate, CaptionLane, CaptionSnapshot, CaptionState,
 };
 use crate::caption_pipeline::ResolvedPublicationTiming;
+use crate::config::ContentSelection;
 use crate::error::{AppError, AppResult};
 use crate::events::DiagnosticUpdate;
 use crate::generation_fence::GenerationFence;
@@ -249,6 +250,7 @@ fn start_corpus_publication_with_reporter(
         1,
         fence.committer(),
         timing,
+        ContentSelection::SourceOnly,
         reporter,
     )?;
     Ok((publication, receiver))

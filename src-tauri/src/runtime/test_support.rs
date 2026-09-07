@@ -7,6 +7,7 @@ use crate::caption_pipeline::ResolvedPublicationTiming;
 use crate::chatbox::{
     ChatboxPublication, ChatboxSendReceipt, ChatboxTextPacer, ChatboxTransport, PreparedChatboxText,
 };
+use crate::config::ContentSelection;
 use crate::error::{AppError, AppResult};
 use crate::events::DiagnosticUpdate;
 use std::sync::Arc;
@@ -62,6 +63,7 @@ pub(super) fn runtime_test_publisher(
         generation.generation_id(),
         generation.committer(),
         ResolvedPublicationTiming::Completed,
+        ContentSelection::SourceOnly,
         reporter,
     )?;
 
@@ -95,4 +97,27 @@ pub(super) fn receive_json_event(
     serde_json::from_str(&payload).map_err(|error| {
         AppError::runtime(format!("Failed to parse the {event_name} event: {error}"))
     })
+}
+
+pub(super) fn runtime_test_publisher_with_content(
+    generation: RuntimeGeneration,
+    content: ContentSelection,
+    typing_sender: Option<std::sync::mpsc::Sender<bool>>,
+) -> AppResult<(ChatboxPublication, std::sync::mpsc::Receiver<String>)> {
+    let (text_sender, text_receiver) = std::sync::mpsc::channel();
+    let reporter: Arc<dyn Fn(DiagnosticUpdate) + Send + Sync> = Arc::new(|_| {});
+    let publication = ChatboxPublication::start_with_transport(
+        Arc::new(RecordingChatboxTransport {
+            text_sender,
+            typing_sender,
+        }),
+        ChatboxTextPacer::default(),
+        generation.generation_id(),
+        generation.committer(),
+        ResolvedPublicationTiming::Completed,
+        content,
+        reporter,
+    )?;
+
+    Ok((publication, text_receiver))
 }

@@ -1,9 +1,13 @@
 use super::super::test_support::{
     RecordingChatboxTransport, inactive_caption_update, receive_json_event, runtime_test_publisher,
+    runtime_test_publisher_with_content,
 };
 use super::*;
 use crate::caption::{TranslationFailureReason, TranslationUnitSnapshot};
-use crate::config::{TranslationConfig, TranslationEndpoint, TranslationPath, TranslationTarget};
+use crate::caption_pipeline::ResolvedPublicationTiming;
+use crate::config::{
+    ContentSelection, TranslationConfig, TranslationEndpoint, TranslationPath, TranslationTarget,
+};
 use crate::credentials::{CredentialId, CredentialStorage, ResolvedCredential};
 use crate::recognition::{ScriptedRecognitionContext, ScriptedRecognitionEvents, ScriptedText};
 use crate::runtime::PreparedTranslation;
@@ -815,8 +819,102 @@ fn runtime_test_live_publisher(
         ResolvedPublicationTiming::LiveUnit {
             observation_window_ms: 1_000,
         },
+        ContentSelection::SourceOnly,
         reporter,
     )?;
 
     Ok((publication, text_receiver))
+}
+
+#[test]
+fn translation_only_publisher_waits_for_the_exact_terminal_translation() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let aggregate = CaptionAggregateStore::default();
+    let (prepared, control) = prepared_test_translation([TestTranslationResult::Blocked])?;
+    let generation =
+        RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
+    let (publisher, text_receiver) = runtime_test_publisher_with_content(
+        generation.clone(),
+        ContentSelection::TranslationOnly,
+        None,
+    )?;
+    let events = completed_source_events(&generation, "translated", "hello", 100);
+
+    assert_eq!(
+        generation.submit_recognition_event(app.handle(), Some(&publisher), events[0].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+    assert_eq!(
+        generation.submit_recognition_event(app.handle(), Some(&publisher), events[1].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+    control.wait_until_called(1, Duration::from_secs(1))?;
+
+    control.complete_blocked(Ok("你好".to_string()));
+    let report = drain_until_terminal(&generation, app.handle(), Some(&publisher))?;
+    assert_eq!(report.applied, 1);
+    assert_eq!(report.degradation, None);
+
+    // The first and only text is the exact Translation; the held Source was
+    // never published on its own.
+    assert_eq!(
+        text_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Translation was not published."))?,
+        "你好"
+    );
+    publisher.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert!(matches!(text_receiver.try_recv(), Err(TryRecvError::Empty)));
+
+    generation.request_stop(Some(&publisher))?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn bilingual_publisher_sends_source_alone_after_a_terminal_translation_failure() -> AppResult<()> {
+    let app = tauri::test::mock_app();
+    let aggregate = CaptionAggregateStore::default();
+    let (prepared, _control) = prepared_test_translation([TestTranslationResult::Failed(
+        TranslationFailureClass::InvalidOutput,
+    )])?;
+    let generation =
+        RuntimeGeneration::activate_with_translation(app.handle(), 1, aggregate.clone(), prepared)?;
+    let (publisher, text_receiver) =
+        runtime_test_publisher_with_content(generation.clone(), ContentSelection::Bilingual, None)?;
+    let events = completed_source_events(&generation, "partial", "source remains", 100);
+
+    assert_eq!(
+        generation.submit_recognition_event(app.handle(), Some(&publisher), events[0].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+    assert_eq!(
+        generation.submit_recognition_event(app.handle(), Some(&publisher), events[1].clone())?,
+        RecognitionEventSubmitOutcome::Accepted
+    );
+
+    let report = drain_until_terminal(&generation, app.handle(), Some(&publisher))?;
+    assert_eq!(report.applied, 1);
+    assert_eq!(
+        report.degradation,
+        Some(TranslationFailureReason::InvalidOutput)
+    );
+    let snapshot = aggregate.snapshot()?;
+    assert!(matches!(
+        snapshot.translation_units.as_slice(),
+        [TranslationUnitSnapshot::Failed { .. }]
+    ));
+
+    assert_eq!(
+        text_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| AppError::runtime("Source was not published as a partial result."))?,
+        "source remains"
+    );
+    publisher.wait_until_text_quiescent_for_test(Duration::from_secs(1))?;
+    assert!(matches!(text_receiver.try_recv(), Err(TryRecvError::Empty)));
+
+    generation.request_stop(Some(&publisher))?;
+    publisher.join()?;
+    Ok(())
 }
