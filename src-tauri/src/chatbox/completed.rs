@@ -2,9 +2,9 @@
 //!
 //! Runtime producers submit Source-unit recognition lifecycle changes through
 //! a non-waiting in-memory seam. One dedicated worker owns pagination output,
-//! typing transitions, queue order, process-wide pacing, OSC attempts, and
-//! diagnostics. No producer waits for a Chatbox text-send pacing opportunity
-//! or network operation.
+//! typing transitions, queue order, each sent page's reading dwell,
+//! process-wide pacing, OSC attempts, and diagnostics. No producer waits for a
+//! Chatbox text-send pacing opportunity, a reading dwell, or network operation.
 
 use super::PreparedChatboxText;
 use super::common::{
@@ -14,6 +14,7 @@ use super::common::{
 use super::layout::{
     PreparedBilingualCompletedPage, prepare_bilingual_completed_pages, prepare_completed_pages,
 };
+use super::reading_time::{PROVISIONAL_MAX_PAGE_DWELL, completed_page_dwell};
 use super::text_pacing::{ChatboxTextAttemptPermit, ChatboxTextPacer};
 use super::transport::ChatboxTransport;
 use crate::caption::{
@@ -29,7 +30,27 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const PROVISIONAL_MAX_RESIDENT_PAGES: usize = 32;
+// Every admission limit below is provisional until native readability
+// validation.
+//
+// Resident capacity is measured in reading time: the summed dwell of every
+// unsent page. When pages were only paced one second apart, a page count was a
+// time bound (32 pages drained in about 32 s, matching the 30-s first-send
+// budget). With dwell, 32 capped pages would need over four minutes, so a count
+// no longer bounds how late admitted speech appears. Eight capped pages admit,
+// whole, the longest unit that a 30-s hard-bounded recognition path should
+// produce: a fast Bilingual en→zh utterance lays out as five or six dense pages
+// (up to 48 s). Every admitted page is then sent within this budget plus the
+// displayed page's remaining dwell (about 72 s); only a Translation hold ahead
+// of it can add to that wait.
+const PROVISIONAL_MAX_RESIDENT_READING_TIME: Duration =
+    PROVISIONAL_MAX_PAGE_DWELL.saturating_mul(8);
+// When speech outpaces reading, this budget rather than the capacity trims the
+// queue: a sendable unit whose first page cannot start within 30 s is dropped
+// whole and visibly. Staleness therefore stays bounded instead of growing with
+// every queued unit. Under sustained overload the share of units that can be
+// shown is set by the reading rate, not by this budget; a larger budget would
+// only absorb longer bursts while showing every queued unit later.
 const PROVISIONAL_MAX_WAIT_BEFORE_FIRST_SEND_ATTEMPT: Duration = Duration::from_secs(30);
 // A held Source normally resolves through the Translation Module's own
 // deadlines. This budget is the publisher's independent bound so that a
@@ -140,7 +161,7 @@ enum HeldResolution {
 /// The publication decision for one held Source after its resolution.
 enum HeldOutcome {
     Queue {
-        pages: Vec<PreparedChatboxText>,
+        pages: Vec<CompletedPage>,
         without_translation: Option<TranslationResolution>,
     },
     Omit {
@@ -166,7 +187,7 @@ pub(crate) struct CompletedChatboxPublisher {
 
 #[derive(Clone, Copy)]
 struct PublisherLimits {
-    max_resident_pages: usize,
+    max_resident_reading_time: Duration,
     max_wait_before_first_send_attempt: Duration,
     max_wait_for_translation: Duration,
 }
@@ -198,13 +219,46 @@ struct PublisherState {
     typing_epoch: u64,
     typing_attempted_epoch: Option<u64>,
     next_typing_reassert_at: Option<Instant>,
+    // Earliest time a later Completed page may replace the page that transport
+    // most recently accepted, so that page stays visible for its reading time.
+    // This hold is in addition to the shared pacer, and a failed attempt does
+    // not start one because it displayed nothing new.
+    page_dwell_until: Option<Instant>,
     diagnostics: VecDeque<CompletedPublisherDiagnostic>,
+}
+
+/// One prepared page and how long it holds the Chatbox once sent. The dwell is
+/// computed once at admission so the resident budget and the worker's hold
+/// always agree.
+#[derive(Clone)]
+struct CompletedPage {
+    text: PreparedChatboxText,
+    dwell: Duration,
+}
+
+impl CompletedPage {
+    fn from_prepared(pages: Vec<PreparedChatboxText>) -> Vec<Self> {
+        pages
+            .into_iter()
+            .map(|text| Self {
+                dwell: completed_page_dwell(&text),
+                text,
+            })
+            .collect()
+    }
+}
+
+fn total_reading_time<'a>(pages: impl IntoIterator<Item = &'a CompletedPage>) -> Duration {
+    pages
+        .into_iter()
+        .map(|page| page.dwell)
+        .fold(Duration::ZERO, Duration::saturating_add)
 }
 
 struct QueuedUnitPublication {
     sequence: u64,
     unit_id: String,
-    pages: Vec<PreparedChatboxText>,
+    pages: Vec<CompletedPage>,
     next_page: usize,
     first_send_attempt_started: bool,
     // For a held unit this is the hold time; it restarts when the unit becomes
@@ -229,6 +283,10 @@ impl QueuedUnitPublication {
         self.pages.len().saturating_sub(self.next_page)
     }
 
+    fn remaining_reading_time(&self) -> Duration {
+        total_reading_time(self.pages.iter().skip(self.next_page))
+    }
+
     fn is_ready(&self) -> bool {
         self.awaiting_translation.is_none()
     }
@@ -241,10 +299,15 @@ enum WorkerItem {
     },
     CleanupTyping,
     Diagnostic(CompletedPublisherDiagnostic),
+    /// Holds the next page until `until`: the end of the displayed page's
+    /// dwell, or an earlier typing, expiry, or Translation decision.
+    Dwell {
+        until: Instant,
+    },
     Page {
         sequence: u64,
         page_index: usize,
-        text: PreparedChatboxText,
+        page: CompletedPage,
     },
     Exit,
 }
@@ -264,7 +327,7 @@ impl CompletedChatboxPublisher {
             content,
             reporter,
             PublisherLimits {
-                max_resident_pages: PROVISIONAL_MAX_RESIDENT_PAGES,
+                max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
                 max_wait_before_first_send_attempt: PROVISIONAL_MAX_WAIT_BEFORE_FIRST_SEND_ATTEMPT,
                 max_wait_for_translation: PROVISIONAL_MAX_WAIT_FOR_TRANSLATION,
             },
@@ -279,7 +342,7 @@ impl CompletedChatboxPublisher {
         reporter: CompletedPublisherReporter,
         limits: PublisherLimits,
     ) -> AppResult<Self> {
-        if limits.max_resident_pages == 0
+        if limits.max_resident_reading_time.is_zero()
             || limits.max_wait_before_first_send_attempt.is_zero()
             || limits.max_wait_for_translation.is_zero()
         {
@@ -301,6 +364,7 @@ impl CompletedChatboxPublisher {
                 // not need a transport transition.
                 typing_attempted_epoch: Some(0),
                 next_typing_reassert_at: None,
+                page_dwell_until: None,
                 diagnostics: VecDeque::new(),
             }),
             wake: Condvar::new(),
@@ -622,7 +686,7 @@ impl CompletedChatboxPublisher {
         text: String,
     ) -> AppResult<PublicationObservationOutcome> {
         let pages = match prepare_completed_pages(&text) {
-            Ok(pages) => pages,
+            Ok(pages) => CompletedPage::from_prepared(pages),
             Err(error) => {
                 let mut state = self.lock_state()?;
                 if state.lifecycle != PublisherLifecycle::Running
@@ -660,7 +724,8 @@ impl CompletedChatboxPublisher {
             self.shared.limits.max_wait_before_first_send_attempt,
         )?;
         let page_count = pages.len();
-        if reserve_resident_pages(&mut state, self.shared.limits, page_count, None)?
+        let reading_time = total_reading_time(&pages);
+        if reserve_resident_reading_time(&mut state, self.shared.limits, reading_time, None)?
             == PageAdmission::Rejected
         {
             release_unit_typing_activity(&mut state, &unit_id);
@@ -792,10 +857,18 @@ fn run_publisher_worker(shared: Arc<PublisherShared>) -> AppResult<()> {
             }
             WorkerItem::CleanupTyping => process_cleanup_typing(&shared)?,
             WorkerItem::Diagnostic(diagnostic) => (shared.reporter)(diagnostic),
+            WorkerItem::Dwell { until } => {
+                // Every input and Stop sets the interrupt, so the worker
+                // re-evaluates within one pacing poll instead of sleeping
+                // through a hold that may last several seconds.
+                shared
+                    .text_pacer
+                    .sleep_until(until, &shared.interrupt_text_wait);
+            }
             WorkerItem::Page {
                 sequence,
                 page_index,
-                text,
+                page,
             } => {
                 let permit = shared
                     .text_pacer
@@ -804,7 +877,7 @@ fn run_publisher_worker(shared: Arc<PublisherShared>) -> AppResult<()> {
                     continue;
                 };
                 let attempt_result = shared.committer.try_commit(|| {
-                    attempt_selected_page(&shared, sequence, page_index, &text, permit)
+                    attempt_selected_page(&shared, sequence, page_index, &page, permit)
                 })?;
 
                 if let Some(result) = attempt_result {
@@ -924,8 +997,20 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
             return Ok(WorkerItem::Diagnostic(diagnostic));
         }
 
+        let deadline = next_scheduled_decision(&state, shared.limits);
         if let Some(unit) = state.units.front().filter(|unit| unit.is_ready()) {
-            let Some(text) = unit.pages.get(unit.next_page).cloned() else {
+            // No later Completed page, from this unit or the next, may replace
+            // the displayed page before its reading dwell ends. The hold is a
+            // clock wait rather than a condition-variable wait so it advances
+            // on the same controllable clock as pacing; it still ends early
+            // for typing reassertion, expiry, or a Translation budget.
+            if let Some(dwell_until) = state.page_dwell_until.filter(|until| now < *until) {
+                let until = deadline.map_or(dwell_until, |deadline| deadline.min(dwell_until));
+                shared.interrupt_text_wait.store(false, Ordering::SeqCst);
+                return Ok(WorkerItem::Dwell { until });
+            }
+
+            let Some(page) = unit.pages.get(unit.next_page).cloned() else {
                 return Err(AppError::state(
                     "Completed publisher unit had no current page.",
                 ));
@@ -933,18 +1018,12 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
             let item = WorkerItem::Page {
                 sequence: unit.sequence,
                 page_index: unit.next_page,
-                text,
+                page,
             };
             shared.interrupt_text_wait.store(false, Ordering::SeqCst);
             return Ok(item);
         }
 
-        let translation_deadline =
-            earliest_translation_wait_deadline(&state, shared.limits.max_wait_for_translation);
-        let deadline = match (state.next_typing_reassert_at, translation_deadline) {
-            (Some(typing), Some(translation)) => Some(typing.min(translation)),
-            (typing, translation) => typing.or(translation),
-        };
         if let Some(deadline) = deadline {
             let remaining = deadline.saturating_duration_since(shared.text_pacer.now());
             let (next_state, _) = shared
@@ -1061,7 +1140,7 @@ fn attempt_selected_page(
     shared: &PublisherShared,
     sequence: u64,
     page_index: usize,
-    text: &PreparedChatboxText,
+    page: &CompletedPage,
     permit: ChatboxTextAttemptPermit<'_>,
 ) -> AppResult<()> {
     {
@@ -1109,7 +1188,10 @@ fn attempt_selected_page(
         unit.first_send_attempt_started = true;
     }
 
-    let send_result = permit.attempt(|| shared.transport.send_text(text));
+    // The dwell is measured between attempt starts, like pacing, so a page at
+    // the dwell floor is replaced exactly when the pacer would allow it.
+    let attempt_started_at = shared.text_pacer.now();
+    let send_result = permit.attempt(|| shared.transport.send_text(&page.text));
     let mut state = shared
         .state
         .lock()
@@ -1128,6 +1210,7 @@ fn attempt_selected_page(
                 .resident_pages
                 .checked_sub(1)
                 .ok_or_else(|| AppError::state("Completed publisher page count underflowed."))?;
+            state.page_dwell_until = Some(attempt_started_at + page.dwell);
             let Some(unit) = state.units.front_mut() else {
                 return Ok(());
             };
@@ -1212,29 +1295,32 @@ fn expire_units_waiting_for_first_send_attempt(
     }
 }
 
-/// Makes room for `page_count` resident pages by evicting sendable units whose
-/// first send attempt has not started, oldest first. Held units own no pages
-/// and are never eviction candidates; `exclude_sequence` protects the unit
-/// that is being admitted.
-fn reserve_resident_pages(
+/// Makes room for `reading_time` of resident pages by evicting sendable units
+/// whose first send attempt has not started, oldest first. Held units own no
+/// pages and are never eviction candidates; `exclude_sequence` protects the
+/// unit that is being admitted. A unit that cannot fit beside the in-progress
+/// unit's remaining pages, which are never truncated, is rejected whole.
+fn reserve_resident_reading_time(
     state: &mut PublisherState,
     limits: PublisherLimits,
-    page_count: usize,
+    reading_time: Duration,
     exclude_sequence: Option<u64>,
 ) -> AppResult<PageAdmission> {
-    let protected_pages = state
+    let protected_reading_time = state
         .units
         .front()
         .filter(|unit| unit.first_send_attempt_started)
-        .map(QueuedUnitPublication::remaining_pages)
-        .unwrap_or(0);
-    if page_count > limits.max_resident_pages
-        || protected_pages.saturating_add(page_count) > limits.max_resident_pages
+        .map(QueuedUnitPublication::remaining_reading_time)
+        .unwrap_or_default();
+    if reading_time > limits.max_resident_reading_time
+        || protected_reading_time.saturating_add(reading_time) > limits.max_resident_reading_time
     {
         return Ok(PageAdmission::Rejected);
     }
 
-    while state.resident_pages.saturating_add(page_count) > limits.max_resident_pages {
+    while resident_reading_time(state).saturating_add(reading_time)
+        > limits.max_resident_reading_time
+    {
         let Some(position) = state.units.iter().position(|unit| {
             unit.is_ready()
                 && !unit.first_send_attempt_started
@@ -1264,6 +1350,14 @@ fn reserve_resident_pages(
     Ok(PageAdmission::Admitted)
 }
 
+fn resident_reading_time(state: &PublisherState) -> Duration {
+    state
+        .units
+        .iter()
+        .map(QueuedUnitPublication::remaining_reading_time)
+        .fold(Duration::ZERO, Duration::saturating_add)
+}
+
 /// Decides what one held Source publishes once its Translation resolves.
 /// Missing Translation is never replaced by other text: Translation-only omits
 /// the unit and Bilingual continues with the exact Source alone.
@@ -1278,7 +1372,7 @@ fn prepare_held_outcome(
             match prepare_completed_pages(&translation) {
                 Ok(pages) if pages.is_empty() => HeldOutcome::Discard,
                 Ok(pages) => HeldOutcome::Queue {
-                    pages,
+                    pages: CompletedPage::from_prepared(pages),
                     without_translation: None,
                 },
                 Err(error) => HeldOutcome::LayoutFailed {
@@ -1295,11 +1389,14 @@ fn prepare_held_outcome(
         (ContentSelection::Bilingual, HeldResolution::Translated(translation)) => {
             match prepare_bilingual_completed_pages(source, &translation) {
                 Ok(pages) if pages.is_empty() => HeldOutcome::Discard,
+                // Each composed page dwells for its full content: both lanes.
                 Ok(pages) => HeldOutcome::Queue {
-                    pages: pages
-                        .into_iter()
-                        .map(PreparedBilingualCompletedPage::into_prepared_text)
-                        .collect(),
+                    pages: CompletedPage::from_prepared(
+                        pages
+                            .into_iter()
+                            .map(PreparedBilingualCompletedPage::into_prepared_text)
+                            .collect(),
+                    ),
                     without_translation: None,
                 },
                 Err(error) => prepare_source_only_fallback(
@@ -1323,7 +1420,7 @@ fn prepare_source_only_fallback(source: &str, resolution: TranslationResolution)
     match prepare_completed_pages(source) {
         Ok(pages) if pages.is_empty() => HeldOutcome::Discard,
         Ok(pages) => HeldOutcome::Queue {
-            pages,
+            pages: CompletedPage::from_prepared(pages),
             without_translation: Some(resolution),
         },
         Err(error) => HeldOutcome::LayoutFailed {
@@ -1381,7 +1478,8 @@ fn resolve_held_unit(
                 limits.max_wait_before_first_send_attempt,
             )?;
             let page_count = pages.len();
-            if reserve_resident_pages(state, limits, page_count, Some(sequence))?
+            let reading_time = total_reading_time(&pages);
+            if reserve_resident_reading_time(state, limits, reading_time, Some(sequence))?
                 == PageAdmission::Rejected
             {
                 remove_unit(state)?;
@@ -1473,6 +1571,33 @@ fn earliest_translation_wait_deadline(
         .filter_map(|unit| unit.awaiting_translation.as_ref())
         .map(|held| held.waiting_since + max_wait_for_translation)
         .min()
+}
+
+fn earliest_first_send_deadline(
+    state: &PublisherState,
+    max_wait_before_first_send_attempt: Duration,
+) -> Option<Instant> {
+    state
+        .units
+        .iter()
+        .filter(|unit| unit.is_ready() && !unit.first_send_attempt_started)
+        .map(|unit| unit.enqueued_at + max_wait_before_first_send_attempt)
+        .min()
+}
+
+/// The earliest time-based decision a waiting worker must revisit: a typing
+/// reassertion, a held unit's Translation budget, or a sendable unit's
+/// first-send budget. The last matters once the worker holds a page for its
+/// reading dwell, because a waiting unit can expire during that hold.
+fn next_scheduled_decision(state: &PublisherState, limits: PublisherLimits) -> Option<Instant> {
+    [
+        state.next_typing_reassert_at,
+        earliest_translation_wait_deadline(state, limits.max_wait_for_translation),
+        earliest_first_send_deadline(state, limits.max_wait_before_first_send_attempt),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
 }
 
 fn release_unit_typing_activity(state: &mut PublisherState, unit_id: &str) {

@@ -22,8 +22,9 @@ mod model;
 pub(crate) use bilingual::{PreparedBilingualCompletedPage, prepare_bilingual_completed_pages};
 
 use model::{
-    TMP_FOLLOWING_CHARACTERS, TMP_LEADING_CHARACTERS, fits_chatbox_width, grapheme_advance_units,
-    has_modeled_zero_advance, measurable_kerning_character, positive_kerning_adjustment,
+    TMP_FOLLOWING_CHARACTERS, TMP_LEADING_CHARACTERS, fits_chatbox_width,
+    grapheme_advance_milli_ems, grapheme_advance_units, has_modeled_zero_advance,
+    measurable_kerning_character, positive_kerning_adjustment,
     requires_conservative_sequence_width,
 };
 
@@ -44,6 +45,20 @@ pub(crate) struct PreparedChatboxText(String);
 impl PreparedChatboxText {
     pub(crate) fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Modeled advance of each grapheme in payload order, in thousandths of an
+    /// em. Explicit line separators advance nothing. This is the conservative
+    /// layout model, not a glyph measurement: an unmodeled grapheme reports its
+    /// whole-line reservation, so a per-glyph consumer must bound it.
+    pub(crate) fn grapheme_advances_milli_em(&self) -> impl Iterator<Item = u32> + '_ {
+        self.0.graphemes(true).map(|grapheme| {
+            if is_explicit_line_break(grapheme) {
+                0
+            } else {
+                grapheme_advance_milli_ems(grapheme)
+            }
+        })
     }
 }
 
