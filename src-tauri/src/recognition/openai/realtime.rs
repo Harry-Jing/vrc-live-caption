@@ -973,6 +973,12 @@ impl ProviderError {
             Some("server_error" | "websocket_connection_limit_reached") => {
                 return ProviderFailureClass::ServiceUnavailable;
             }
+            // OpenAI ends every Realtime session at a fixed, non-configurable
+            // maximum duration (60 minutes when reviewed on 2026-09-25): it
+            // sends this code under the `invalid_request_error` type, then
+            // closes the socket. It must win over that type because only the
+            // session is spent; the request itself remains valid.
+            Some("session_expired") => return ProviderFailureClass::SessionExpired,
             Some("invalid_value" | "invalid_request_error") => {
                 return ProviderFailureClass::InvalidRequest;
             }
@@ -1010,6 +1016,9 @@ pub(crate) fn openai_provider_failure(class: ProviderFailureClass) -> AppError {
         }
         ProviderFailureClass::ServiceUnavailable => {
             "OpenAI Realtime transcription is temporarily unavailable."
+        }
+        ProviderFailureClass::SessionExpired => {
+            "The OpenAI Realtime session reached its maximum duration; reconnecting."
         }
         ProviderFailureClass::Unknown => "OpenAI Realtime transcription failed.",
     };

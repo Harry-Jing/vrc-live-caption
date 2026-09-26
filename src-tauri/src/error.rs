@@ -24,6 +24,9 @@ pub(crate) enum ProviderFailureClass {
     RateLimited,
     UsageLimit,
     ServiceUnavailable,
+    /// The provider ended one session at its fixed lifetime limit. Only that
+    /// session is spent, so a fresh attempt may continue the generation.
+    SessionExpired,
     Unknown,
 }
 
@@ -208,6 +211,7 @@ impl AppError {
                 ProviderFailureClass::RateLimited => "stt.provider_rate_limited",
                 ProviderFailureClass::UsageLimit => "stt.provider_usage_limit",
                 ProviderFailureClass::ServiceUnavailable => "stt.provider_unavailable",
+                ProviderFailureClass::SessionExpired => "stt.provider_session_expired",
                 ProviderFailureClass::Unknown => "stt.provider_failed",
             },
             Self::RecognitionBackpressure { .. } => "stt.backpressure",
@@ -228,7 +232,10 @@ impl AppError {
                 retry_disposition, ..
             } => *retry_disposition,
             Self::RecognitionProvider {
-                class: ProviderFailureClass::RateLimited | ProviderFailureClass::ServiceUnavailable,
+                class:
+                    ProviderFailureClass::RateLimited
+                    | ProviderFailureClass::ServiceUnavailable
+                    | ProviderFailureClass::SessionExpired,
                 ..
             } => RetryDisposition::Retryable,
             _ => RetryDisposition::Terminal,

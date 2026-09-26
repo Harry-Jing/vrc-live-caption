@@ -889,6 +889,119 @@ fn backpressured_peer_close_is_reported_only_after_its_acknowledgement_flushes()
 }
 
 #[test]
+fn provider_close_after_a_session_expiry_notice_is_not_classified_again() -> AppResult<()> {
+    // The exact notice OpenAI sends at its maximum session duration.
+    const SESSION_EXPIRED_EVENT: &str = r#"{"type":"error","error":{"type":"invalid_request_error","code":"session_expired","message":"Your session hit the maximum duration of 60 minutes.","param":null,"event_id":null}}"#;
+    const CLOSE_REASON: &str = "session-expired-close";
+
+    let PlainWebSocketHarness {
+        transport,
+        peer: server_stream,
+    } = PlainWebSocketHarness::connect(WebSocketConfig::default())?;
+    server_stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|error| {
+            AppError::state(format!("Failed to configure test peer timeout: {error}"))
+        })?;
+    let (frames_sent_sender, frames_sent_receiver) = mpsc::channel();
+    let server = thread::spawn(move || -> AppResult<()> {
+        let mut socket = plain_server_websocket(server_stream);
+        socket
+            .send(Message::text(SESSION_EXPIRED_EVENT))
+            .map_err(|error| {
+                AppError::state(format!(
+                    "Test peer could not send the expiry notice: {error}"
+                ))
+            })?;
+        // A status that would be terminal on its own shows that the retired
+        // attempt never classifies the Close that follows the notice.
+        socket
+            .send(Message::Close(Some(CloseFrame {
+                code: CloseCode::Policy,
+                reason: CLOSE_REASON.into(),
+            })))
+            .map_err(|error| {
+                AppError::state(format!("Test WebSocket peer could not send Close: {error}"))
+            })?;
+        frames_sent_sender
+            .send(())
+            .map_err(|_| AppError::state("Could not report the test peer expiry frames."))?;
+        loop {
+            match socket.read() {
+                Ok(Message::Close(_)) => {
+                    return Err(AppError::state(
+                        "The retired attempt read and acknowledged the provider Close.",
+                    ));
+                }
+                Ok(_) => {}
+                Err(
+                    WebSocketError::ConnectionClosed
+                    | WebSocketError::AlreadyClosed
+                    | WebSocketError::Protocol(ProtocolError::ResetWithoutClosingHandshake),
+                ) => return Ok(()),
+                Err(WebSocketError::Io(error))
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::ConnectionReset
+                            | ErrorKind::ConnectionAborted
+                            | ErrorKind::BrokenPipe
+                            | ErrorKind::UnexpectedEof
+                    ) =>
+                {
+                    return Ok(());
+                }
+                Err(error) => {
+                    return Err(AppError::state(format!(
+                        "Test peer did not observe the retired attempt closing: {error}"
+                    )));
+                }
+            }
+        }
+    });
+    frames_sent_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| AppError::state("Test WebSocket peer did not send its expiry frames."))?;
+    // Server frames are unmasked: the notice needs a 16-bit extended length,
+    // and the Close payload is its status code plus reason. Waiting for both
+    // makes the first poll the worst case for reading past the notice.
+    let notice_frame_bytes = 4 + SESSION_EXPIRED_EVENT.len();
+    let close_frame_bytes = 2 + 2 + CLOSE_REASON.len();
+    wait_for_plain_client_readable(
+        &transport,
+        notice_frame_bytes + close_frame_bytes,
+        Instant::now() + Duration::from_secs(1),
+    )?;
+
+    let mut attempt = OpenAiRealtimeAttempt::connect(
+        OpenAiRealtimeAttemptContext {
+            generation: 41,
+            connection_epoch: 1,
+            stream_id: "recognition-41-1".to_string(),
+        },
+        OpenAiTranscriptionModel::GptLiveTranscribe,
+        vec!["en".to_string()],
+        transport,
+    )?;
+    let error = attempt
+        .drain_events(0)
+        .err()
+        .ok_or_else(|| AppError::state("The expiry notice did not retire the attempt."))?;
+    let later_events = attempt.drain_events(1)?;
+    server
+        .join()
+        .map_err(|_| AppError::state("Test WebSocket peer thread panicked."))??;
+
+    assert_eq!(
+        error.provider_failure_class(),
+        Some(ProviderFailureClass::SessionExpired)
+    );
+    assert_eq!(error.retry_disposition(), RetryDisposition::Retryable);
+    assert_eq!(error.code(), "stt.provider_session_expired");
+    assert!(later_events.is_empty());
+    Ok(())
+}
+
+#[test]
 fn control_frame_flood_yields_between_polls_and_acknowledges_each_ping() -> AppResult<()> {
     const PING_COUNT: usize = MAX_WEBSOCKET_CONTROL_FRAMES_PER_POLL + 1;
 
