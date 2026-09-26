@@ -1,5 +1,5 @@
 use super::*;
-use crate::error::{AppError, RetryDisposition};
+use crate::error::{AppError, ProviderFailureClass, RetryDisposition};
 use std::time::Duration;
 
 #[test]
@@ -111,6 +111,31 @@ fn a_stable_connection_resets_only_the_backoff_not_the_epoch() {
         ReconnectDecision::Retry {
             retry_number: 1,
             delay: Duration::from_millis(400),
+        }
+    );
+    assert_eq!(tracker.begin_connection_attempt(), 3);
+}
+
+#[test]
+fn an_expired_session_retries_under_the_shared_backoff_policy() {
+    let mut tracker = ReconnectTracker::default();
+    let transient = AppError::recognition_network_retryable("Connection reset.");
+    let expired = AppError::recognition_provider(
+        ProviderFailureClass::SessionExpired,
+        "The provider session expired.",
+    );
+
+    assert_eq!(tracker.begin_connection_attempt(), 1);
+    let _ = tracker.on_failure(&transient, None, 100);
+    assert_eq!(tracker.begin_connection_attempt(), 2);
+
+    // A session that lived to its provider limit was stable, so its
+    // replacement starts from the base delay rather than accumulated backoff.
+    assert_eq!(
+        tracker.on_failure(&expired, Some(Duration::from_secs(60 * 60)), 100),
+        ReconnectDecision::Retry {
+            retry_number: 1,
+            delay: Duration::from_millis(500),
         }
     );
     assert_eq!(tracker.begin_connection_attempt(), 3);

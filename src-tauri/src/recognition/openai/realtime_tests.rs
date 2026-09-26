@@ -1,13 +1,24 @@
 use super::super::attempt::{RecognitionAttempt, RecognitionAttemptAudioChunk};
+use super::super::{OpenAiRecognitionAttemptFactory, OpenAiRecognitionDriver};
 use super::*;
 use crate::caption::{CaptionSnapshot, CaptionState};
 use crate::error::{AppError, AppResult, ProviderFailureClass, RetryDisposition};
-use crate::recognition::{RecognitionEvent, RecognitionUnitAbortReason};
+use crate::recognition::{
+    OwnedRecognitionAudioFrame, RecognitionEvent, RecognitionGenerationScope, RecognitionModule,
+    RecognitionSignal, RecognitionUnitAbortReason, RunningRecognition,
+};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+
+/// The exact event OpenAI sends when a Realtime session reaches its maximum
+/// duration; the server closes the socket after it.
+const SESSION_EXPIRED_EVENT: &str = r#"{"type":"error","error":{"type":"invalid_request_error","code":"session_expired","message":"Your session hit the maximum duration of 60 minutes.","param":null,"event_id":null}}"#;
+const SESSION_EXPIRED_PROVIDER_MESSAGE: &str =
+    "Your session hit the maximum duration of 60 minutes.";
+const DRIVER_SIGNAL_WATCHDOG: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 struct FakeTransportState {
@@ -52,6 +63,10 @@ impl FakeTransportProbe {
 
     fn close_count(&self) -> AppResult<usize> {
         Ok(self.lock()?.close_count)
+    }
+
+    fn unread_server_events(&self) -> AppResult<usize> {
+        Ok(self.lock()?.received.len())
     }
 }
 
@@ -98,6 +113,39 @@ impl Write for TracingCaptureWriter {
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
+}
+
+/// Captures this thread's tracing output while `scenario` runs.
+///
+/// `tracing` caches callsite interest process-wide and, while at most one
+/// dispatcher exists, computes it on the thread that registers the callsite
+/// first. A concurrently running test without a subscriber can therefore cache
+/// `never` for the provider-failure callsite. Registering that callsite first
+/// under a throwaway subscriber lets the capture subscriber's own registration
+/// rebuild its interest.
+fn capture_provider_failure_tracing<T>(scenario: impl FnOnce() -> T) -> AppResult<(T, String)> {
+    let registration = tracing_subscriber::fmt().with_writer(io::sink).finish();
+    tracing::subscriber::with_default(registration, || -> AppResult<()> {
+        let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+        probe.push_server_event(json!({ "type": "error", "error": {} }))?;
+        if attempt.drain_events(0).is_ok() {
+            return Err(AppError::state(
+                "The provider-failure callsite registration did not fail.",
+            ));
+        }
+        Ok(())
+    })?;
+
+    let capture = TracingCapture::default();
+    let writer_capture = capture.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_target(false)
+        .with_writer(move || writer_capture.writer())
+        .finish();
+    let result = tracing::subscriber::with_default(subscriber, scenario);
+    Ok((result, capture.contents()?))
 }
 
 impl FakeTransport {
@@ -190,6 +238,85 @@ fn attempt_with_manual_clock(
         Box::new(clock.clone()),
     )?;
     Ok((attempt, probe, clock))
+}
+
+type ScriptedSessions = Arc<Mutex<Vec<(OpenAiRealtimeAttemptContext, FakeTransportProbe)>>>;
+
+/// Opens every Driver attempt as a confirmed session over its own fake
+/// transport and records it, so a test can script one specific session.
+struct FakeTransportAttemptFactory {
+    sessions: ScriptedSessions,
+}
+
+impl OpenAiRecognitionAttemptFactory for FakeTransportAttemptFactory {
+    type Attempt = OpenAiRealtimeAttempt<FakeTransport>;
+
+    fn connect(
+        &mut self,
+        context: OpenAiRealtimeAttemptContext,
+        _is_cancelled: &dyn Fn() -> bool,
+    ) -> AppResult<Self::Attempt> {
+        let (transport, probe) = FakeTransport::new();
+        probe.push_server_event(json!({ "type": "session.updated", "session": {} }))?;
+        // The manual clock keeps the item-completion deadline out of Driver tests.
+        let mut attempt = OpenAiRealtimeAttempt::connect_with_clock(
+            context.clone(),
+            OpenAiTranscriptionModel::GptLiveTranscribe,
+            vec!["en".to_string()],
+            transport,
+            Box::new(ManualClock::default()),
+        )?;
+        if !attempt.drain_events(0)?.is_empty() || !attempt.is_ready() {
+            return Err(AppError::state(
+                "A scripted Realtime session did not confirm its configuration.",
+            ));
+        }
+        self.sessions
+            .lock()
+            .map_err(|_| AppError::state("Scripted Realtime session lock was poisoned."))?
+            .push((context, probe));
+        Ok(attempt)
+    }
+}
+
+fn scripted_session(sessions: &ScriptedSessions, index: usize) -> AppResult<FakeTransportProbe> {
+    sessions
+        .lock()
+        .map_err(|_| AppError::state("Scripted Realtime session lock was poisoned."))?
+        .get(index)
+        .map(|(_, probe)| probe.clone())
+        .ok_or_else(|| AppError::state(format!("Scripted Realtime session {index} never opened.")))
+}
+
+fn next_driver_signal(
+    running: &RunningRecognition,
+    observed: &mut Vec<RecognitionSignal>,
+) -> AppResult<RecognitionSignal> {
+    let signal = running
+        .signals
+        .recv_timeout(DRIVER_SIGNAL_WATCHDOG)
+        .map_err(|error| {
+            AppError::state(format!(
+                "The Recognition Driver emitted no signal before the watchdog: {error:?}"
+            ))
+        })?;
+    observed.push(signal.clone());
+    Ok(signal)
+}
+
+fn submit_speech(
+    running: &RunningRecognition,
+    sequence: u64,
+    captured_at_ms: u64,
+) -> AppResult<()> {
+    running
+        .try_submit(OwnedRecognitionAudioFrame {
+            sequence,
+            captured_at_ms,
+            sample_rate_hz: 16_000,
+            samples: vec![0.25; 4_800].into_boxed_slice(),
+        })
+        .map_err(|error| AppError::state(format!("Test speech was rejected: {error:?}")))
 }
 
 fn start_unit(
@@ -457,6 +584,13 @@ fn provider_error_classes_have_stable_retry_dispositions() -> AppResult<()> {
             RetryDisposition::Retryable,
             "stt.provider_unavailable",
         ),
+        (
+            "invalid_request_error",
+            Some("session_expired"),
+            ProviderFailureClass::SessionExpired,
+            RetryDisposition::Retryable,
+            "stt.provider_session_expired",
+        ),
     ];
 
     for (kind, code, expected_class, expected_retry, expected_code) in cases {
@@ -502,22 +636,126 @@ fn provider_error_does_not_escape_through_tracing() -> AppResult<()> {
         }
     }))?;
 
-    let capture = TracingCapture::default();
-    let writer_capture = capture.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .without_time()
-        .with_ansi(false)
-        .with_target(false)
-        .with_writer(move || writer_capture.writer())
-        .finish();
-    let result = tracing::subscriber::with_default(subscriber, || attempt.drain_events(100));
+    let (result, tracing_output) = capture_provider_failure_tracing(|| attempt.drain_events(100))?;
     assert!(result.is_err());
-
-    let tracing_output = capture.contents()?;
     assert!(tracing_output.contains("OpenAI Realtime provider failure"));
     for canary in canaries {
         assert!(!tracing_output.contains(canary));
     }
+    Ok(())
+}
+
+/// Our code contains the provider's code as a substring, so it is removed
+/// before checking that no provider-authored field was echoed.
+fn assert_no_session_expired_provider_text(observable: &str) {
+    assert!(!observable.contains(SESSION_EXPIRED_PROVIDER_MESSAGE));
+    assert!(!observable.contains("invalid_request_error"));
+    assert!(
+        !observable
+            .replace("stt.provider_session_expired", "")
+            .contains("session_expired")
+    );
+}
+
+#[test]
+fn session_expired_code_is_classified_before_its_invalid_request_type() -> AppResult<()> {
+    let event = serde_json::from_str::<ServerEvent>(SESSION_EXPIRED_EVENT).map_err(|error| {
+        AppError::state(format!(
+            "Session-expiry fixture was not a server event: {error}"
+        ))
+    })?;
+    let ServerEvent::Error {
+        error: provider_error,
+    } = event
+    else {
+        return Err(AppError::state(
+            "Session-expiry fixture did not decode as a provider error event.",
+        ));
+    };
+    assert_eq!(
+        provider_error.classification(),
+        ProviderFailureClass::SessionExpired
+    );
+
+    // Unrecognized codes keep falling back to the broader type as before.
+    for (provider_error, expected_class) in [
+        (
+            json!({ "code": "session_expired" }),
+            ProviderFailureClass::SessionExpired,
+        ),
+        (
+            json!({ "type": "invalid_request_error", "code": "unrecognized_code" }),
+            ProviderFailureClass::InvalidRequest,
+        ),
+        (
+            json!({ "type": "server_error", "code": "unrecognized_code" }),
+            ProviderFailureClass::ServiceUnavailable,
+        ),
+        (
+            json!({ "code": "unrecognized_code" }),
+            ProviderFailureClass::Unknown,
+        ),
+    ] {
+        let provider_error =
+            serde_json::from_value::<ProviderError>(provider_error).map_err(|error| {
+                AppError::state(format!("Provider error fixture did not decode: {error}"))
+            })?;
+        assert_eq!(provider_error.classification(), expected_class);
+    }
+    Ok(())
+}
+
+#[test]
+fn session_expiry_retires_the_attempt_once_as_a_retryable_failure() -> AppResult<()> {
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptLiveTranscribe, &["en"])?;
+    start_unit(&mut attempt, "unit-a", 100)?;
+    attempt.append_audio(RecognitionAttemptAudioChunk {
+        sample_rate_hz: 24_000,
+        samples: &[0.25; 240],
+    })?;
+    probe.push_raw_server_event(SESSION_EXPIRED_EVENT)?;
+    // Whatever follows the notice belongs to the retired session. A frame that
+    // would be terminal on its own proves that nothing is classified twice.
+    probe.push_server_event(json!({
+        "type": "error",
+        "error": { "type": "authentication_error", "code": "invalid_api_key" },
+    }))?;
+
+    let error = attempt
+        .drain_events(200)
+        .err()
+        .ok_or_else(|| AppError::state("Session expiry unexpectedly succeeded."))?;
+    let serialized = serde_json::to_string(&error)
+        .map_err(|error| AppError::state(format!("Failed to serialize provider error: {error}")))?;
+
+    assert_eq!(
+        error.provider_failure_class(),
+        Some(ProviderFailureClass::SessionExpired)
+    );
+    assert_eq!(error.retry_disposition(), RetryDisposition::Retryable);
+    assert_eq!(error.code(), "stt.provider_session_expired");
+    assert_eq!(
+        error.to_string(),
+        "The OpenAI Realtime session reached its maximum duration; reconnecting."
+    );
+    assert_no_session_expired_provider_text(&format!("{error:?}\n{error}\n{serialized}"));
+    assert!(attempt.drain_events(220)?.is_empty());
+    assert_eq!(probe.close_count()?, 1);
+    assert_eq!(probe.unread_server_events()?, 1);
+    Ok(())
+}
+
+#[test]
+fn session_expiry_diagnostics_carry_the_application_code_without_provider_text() -> AppResult<()> {
+    let (mut attempt, probe) = attempt(OpenAiTranscriptionModel::GptTranscribe, &["en"])?;
+    probe.push_raw_server_event(SESSION_EXPIRED_EVENT)?;
+
+    let (result, tracing_output) = capture_provider_failure_tracing(|| attempt.drain_events(100))?;
+    assert!(result.is_err());
+    assert!(tracing_output.contains("code=\"stt.provider_session_expired\""));
+    assert!(tracing_output.contains("provider_failure_class=Some(SessionExpired)"));
+    assert!(tracing_output.contains("retry_disposition=Retryable"));
+    assert_no_session_expired_provider_text(&tracing_output);
     Ok(())
 }
 
@@ -1073,5 +1311,103 @@ fn stop_closes_once_and_permanently_suppresses_queued_provider_output() -> AppRe
     assert!(attempt.drain_events(200)?.is_empty());
     assert_eq!(probe.close_count()?, 1);
     assert!(attempt.start_unit("unit-b".to_string(), 220).is_err());
+    Ok(())
+}
+
+#[test]
+fn session_expiry_reconnects_within_the_same_generation_with_monotonic_units() -> AppResult<()> {
+    let sessions = ScriptedSessions::default();
+    let driver = OpenAiRecognitionDriver::new(FakeTransportAttemptFactory {
+        sessions: Arc::clone(&sessions),
+    });
+    let module = RecognitionModule::with_audio_budget(Duration::from_millis(500), 8, driver)?;
+    let mut running = module.start(RecognitionGenerationScope {
+        generation: 31,
+        stream_id: "recognition-31-1".to_string(),
+    })?;
+    let mut observed = Vec::new();
+
+    let ready = next_driver_signal(&running, &mut observed)?;
+    assert!(matches!(
+        ready,
+        RecognitionSignal::Ready {
+            recovered: false,
+            ..
+        }
+    ));
+    submit_speech(&running, 1, 100)?;
+    let first_unit = next_driver_signal(&running, &mut observed)?;
+    assert!(matches!(
+        &first_unit,
+        RecognitionSignal::Event(RecognitionEvent::UnitStarted {
+            generation: 31,
+            unit_id,
+            started_at_ms: 100,
+            ..
+        }) if unit_id == "unit-1"
+    ));
+
+    // The first session still owns an open unit when OpenAI expires it.
+    scripted_session(&sessions, 0)?.push_raw_server_event(SESSION_EXPIRED_EVENT)?;
+    let pause_epoch = match next_driver_signal(&running, &mut observed)? {
+        RecognitionSignal::Reconnecting {
+            epoch: first_session_epoch @ 1,
+            retry_number: 1,
+            delay_ms,
+        } => {
+            assert!((400..=600).contains(&delay_ms));
+            first_session_epoch
+        }
+        signal => {
+            return Err(AppError::state(format!(
+                "Session expiry did not start one reconnect: {signal:?}"
+            )));
+        }
+    };
+    assert!(!running.is_accepting_audio());
+    running.acknowledge_capture_paused(pause_epoch)?;
+
+    let recovered = next_driver_signal(&running, &mut observed)?;
+    assert!(matches!(
+        &recovered,
+        RecognitionSignal::Ready {
+            generation: 31,
+            stream_id,
+            recovered: true,
+        } if stream_id == "recognition-31-1"
+    ));
+    submit_speech(&running, 2, 2_000)?;
+    let second_unit = next_driver_signal(&running, &mut observed)?;
+    assert!(matches!(
+        &second_unit,
+        RecognitionSignal::Event(RecognitionEvent::UnitStarted {
+            generation: 31,
+            unit_id,
+            started_at_ms: 2_000,
+            ..
+        }) if unit_id == "unit-2"
+    ));
+
+    // A clean Stop proves the Driver never ended the generation with a failure.
+    running.stop()?;
+
+    let sessions = sessions
+        .lock()
+        .map_err(|_| AppError::state("Scripted Realtime session lock was poisoned."))?;
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|(context, _)| (
+                context.generation,
+                context.connection_epoch,
+                context.stream_id.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![(31, 1, "recognition-31-1"), (31, 2, "recognition-31-1")]
+    );
+    for (_, probe) in sessions.iter() {
+        assert_eq!(probe.close_count()?, 1);
+    }
+    assert!(!format!("{observed:?}").contains(SESSION_EXPIRED_PROVIDER_MESSAGE));
     Ok(())
 }

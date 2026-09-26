@@ -4,7 +4,9 @@ A user Start creates one runtime generation with an immutable path selection and
 one hard Stop boundary. A structured transient failure may replace the current
 recognition attempt inside that generation and remains visibly reconnecting;
 authentication, permission, configuration, protocol, and unknown failures are
-terminal.
+terminal. A provider session that reaches its fixed maximum duration is replaced
+the same way, because that limit recurs in long use and is not a configuration
+fault.
 
 Repeated transient failures may continue retrying until Stop; a terminal
 classification ends the generation visibly.

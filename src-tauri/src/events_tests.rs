@@ -197,6 +197,7 @@ fn error_codes_share_the_prefix_of_their_diagnostic_category() {
         AppError::state("x"),
         AppError::recognition("x"),
         AppError::recognition_provider(ProviderFailureClass::Unknown, "x"),
+        AppError::recognition_provider(ProviderFailureClass::SessionExpired, "x"),
         AppError::recognition_backpressure("x"),
         AppError::recognition_network_terminal("x"),
     ];
