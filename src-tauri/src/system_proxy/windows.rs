@@ -15,6 +15,8 @@ const fn hresult_from_win32(code: u16) -> i32 {
 const HRESULT_FILE_NOT_FOUND: i32 = hresult_from_win32(2);
 /// `ERROR_WINHTTP_AUTODETECTION_FAILED`: discovery completed without a script.
 const HRESULT_AUTODETECTION_FAILED: i32 = hresult_from_win32(12180);
+/// `ERROR_NO_UNICODE_TRANSLATION`: a proxy setting is not valid UTF-16 text.
+const HRESULT_NO_UNICODE_TRANSLATION: i32 = hresult_from_win32(1113);
 
 const CONFIGURED_SCRIPT_UNSUPPORTED: &str = "Windows proxy settings use a setup script (PAC), which OpenAI connections do not support yet; turn off \"Use setup script\" in Windows proxy settings and set a manual HTTP proxy if this network needs one, or set HTTPS_PROXY to an HTTP proxy.";
 const DETECTED_SCRIPT_UNSUPPORTED: &str = "Windows automatic proxy detection found a setup script (PAC), which OpenAI connections do not support yet; turn off \"Automatically detect settings\" in Windows proxy settings and set a manual HTTP proxy if this network needs one, or set HTTPS_PROXY to an HTTP proxy.";
@@ -30,20 +32,71 @@ pub(super) fn system_proxy_matcher(
     // This documented WinHTTP bridge reads the current active LAN/VPN
     // connection. The individual Internet Settings registry values do not
     // provide an equivalent, reliable WPAD signal.
-    let settings = current_user_settings(
-        winhttp::get_ie_proxy_config()
-            .map(|config| WindowsProxySettings {
-                proxy_server: config.proxy,
-                proxy_override: config.proxy_bypass,
-                auto_config_url: config.auto_config_url,
-                auto_detect: config.auto_detect,
-            })
-            .map_err(|error| error.code().0),
-    )?;
+    let settings = current_user_settings(current_user::read())?;
 
     matcher_for_settings(&settings, no_proxy.as_deref(), || {
         shared_detector().detect_until(deadline, is_cancelled)
     })
+}
+
+#[cfg(target_os = "windows")]
+#[allow(
+    unsafe_code,
+    reason = "winhttp's safe wrapper reads settings that are not valid UTF-16 as unset, which would bypass a configured proxy"
+)]
+mod current_user {
+    use super::{WindowsProxySettings, decoded_setting};
+    use std::string::FromUtf16Error;
+    use windows::Win32::Foundation::{GlobalFree, HGLOBAL};
+    use windows::Win32::Networking::WinHttp::{
+        WINHTTP_CURRENT_USER_IE_PROXY_CONFIG, WinHttpGetIEProxyConfigForCurrentUser,
+    };
+    use windows::core::PWSTR;
+
+    /// Reads the current user's proxy settings, or the HRESULT that stops them
+    /// from being read.
+    pub(super) fn read() -> Result<WindowsProxySettings, i32> {
+        let mut config = WINHTTP_CURRENT_USER_IE_PROXY_CONFIG::default();
+        // SAFETY: `config` is a live, writable structure for the whole call.
+        unsafe { WinHttpGetIEProxyConfigForCurrentUser(&mut config) }
+            .map_err(|error| error.code().0)?;
+
+        // Every string is taken before any is decoded, so all of them are freed
+        // even when an earlier one is not valid text.
+        // SAFETY: WinHTTP returned these strings for the caller to free, and each
+        // pointer is taken exactly once.
+        let (proxy_server, proxy_override, auto_config_url) = unsafe {
+            (
+                take(config.lpszProxy),
+                take(config.lpszProxyBypass),
+                take(config.lpszAutoConfigUrl),
+            )
+        };
+        Ok(WindowsProxySettings {
+            proxy_server: decoded_setting(proxy_server)?,
+            proxy_override: decoded_setting(proxy_override)?,
+            auto_config_url: decoded_setting(auto_config_url)?,
+            auto_detect: config.fAutoDetect.as_bool(),
+        })
+    }
+
+    /// Copies a string that WinHTTP returned, then frees it.
+    ///
+    /// # Safety
+    ///
+    /// `setting` must be null or a NUL-terminated string that WinHTTP allocated
+    /// with `GlobalAlloc` and that nothing else frees.
+    unsafe fn take(setting: PWSTR) -> Option<Result<String, FromUtf16Error>> {
+        if setting.is_null() {
+            return None;
+        }
+        // SAFETY: the caller guarantees a NUL-terminated string from WinHTTP.
+        let text = unsafe { setting.to_string() };
+        // SAFETY: WinHTTP allocated the string with GlobalAlloc, and this is its
+        // only release. A failed release only leaks the string.
+        let _ = unsafe { GlobalFree(Some(HGLOBAL(setting.as_ptr().cast()))) };
+        Some(text)
+    }
 }
 
 /// One worker and one reusable answer serve every connection in the process.
@@ -76,6 +129,16 @@ struct WindowsProxySettings {
     proxy_override: Option<String>,
     auto_config_url: Option<String>,
     auto_detect: bool,
+}
+
+/// A setting that is not valid UTF-16 leaves the selected route unknown, so it
+/// fails closed like an unreadable call instead of reading as unset.
+fn decoded_setting(
+    setting: Option<Result<String, std::string::FromUtf16Error>>,
+) -> Result<Option<String>, i32> {
+    setting
+        .transpose()
+        .map_err(|_| HRESULT_NO_UNICODE_TRANSLATION)
 }
 
 /// `WinHttpGetIEProxyConfigForCurrentUser` reports `ERROR_FILE_NOT_FOUND`
