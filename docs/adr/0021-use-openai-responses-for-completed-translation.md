@@ -9,6 +9,10 @@ targets, with no model, protocol, provider, or local fallback. A failed
 [evaluation](../research/cloud-translation-evaluation.md) requires a new
 decision rather than a runtime switch.
 
+A failure ends only its own unit. A request that may have reached the provider
+is never retried for that unit, and at most one physical request is in flight at
+a time, so later units neither overlap it nor inherit its failure.
+
 Official uses the existing OpenAI credential. Custom uses a separate OS-stored
 credential and an explicitly selected HTTPS API base URL implementing the same
 profile; the app appends one `responses` segment and never guesses `/v1`.

@@ -251,6 +251,49 @@ fn reserved_source(
         .ok_or_else(|| "test source was not reserved".to_string())
 }
 
+/// Reserves one completed Source per text in generation 31, as units
+/// `unit-31`, `unit-32`, and so on, in admission order.
+fn reserved_sources<const N: usize>(
+    store: &CaptionAggregateStore,
+    texts: [&str; N],
+) -> Result<[crate::caption::ReservedCompletedSource; N], String> {
+    let generation = 31;
+    let active = store
+        .begin_generation(generation)
+        .map_err(|_| "test generation did not start".to_string())?
+        .active_stream
+        .ok_or_else(|| "test generation has no stream".to_string())?;
+    let mut reservations = Vec::with_capacity(N);
+    for (offset, text) in (0_u64..).zip(texts) {
+        let unit_id = format!("unit-{}", 31 + offset);
+        store
+            .start_unit(generation, &active.stream_id, unit_id.clone(), 10 + offset)
+            .map_err(|_| "test source unit did not start".to_string())?;
+        let source = CaptionSnapshot {
+            generation,
+            stream_id: active.stream_id.clone(),
+            unit_id: Some(unit_id),
+            lane: CaptionLane::Source,
+            revision: 1,
+            text: text.to_string(),
+            state: CaptionState::Completed,
+            language: Some("en".to_string()),
+            source_ref: None,
+            unit_started_at_ms: Some(10 + offset),
+            timestamp_ms: 20 + offset,
+        };
+        let reservation = store
+            .accept_completed_source_for_translation(source)
+            .map_err(|_| "test source was not accepted".to_string())?
+            .map(|(_, reservation)| reservation)
+            .ok_or_else(|| "test source was not reserved".to_string())?;
+        reservations.push(reservation);
+    }
+    reservations
+        .try_into()
+        .map_err(|_| "test sources were not reserved".to_string())
+}
+
 #[test]
 fn failure_before_a_client_connection_is_preserved_during_fixture_cleanup() -> Result<(), String> {
     let failure = (|| -> Result<(), String> {
@@ -1406,10 +1449,12 @@ fn failed_selected_proxy_never_falls_back_to_the_origin() -> Result<(), String> 
         .map_err(|_| "adapter did not report selected proxy failure".to_string())?
         .err()
         .ok_or_else(|| "failed selected proxy unexpectedly completed".to_string())?;
+    // The CONNECT tunnel failed before any request byte reached the origin, so
+    // the unit may retry, but only through the same selected proxy.
     assert_eq!(failure.class, TranslationFailureClass::ServiceUnavailable);
-    assert!(!failure.retryable);
-    assert!(failure.request_outcome_ambiguous);
-    assert_eq!(active.cancel(), CancellationStatus::Unconfirmed);
+    assert!(failure.retryable);
+    assert!(!failure.request_outcome_ambiguous);
+    assert_eq!(active.cancel(), CancellationStatus::Confirmed);
     if !attempt_gate.wait_until_released(NETWORK_TEST_TIMEOUT) {
         return Err("selected proxy attempt did not quiesce".to_string());
     }
@@ -1421,6 +1466,51 @@ fn failed_selected_proxy_never_falls_back_to_the_origin() -> Result<(), String> 
         origin.accept(),
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
     ));
+    Ok(())
+}
+
+#[test]
+fn refused_connection_before_dispatch_is_retryable_and_unambiguous() -> Result<(), String> {
+    // Reserve a loopback port and close it, so the connect is refused before
+    // any request byte can be written.
+    let closed = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| error.to_string())?;
+    let closed_address = closed.local_addr().map_err(|error| error.to_string())?;
+    drop(closed);
+    let endpoint = ResponsesEndpoint::for_test(format!("http://{closed_address}/v1/responses"))
+        .map_err(|_| "test endpoint did not resolve".to_string())?;
+    let adapter =
+        OpenAiResponsesAdapter::new_for_test(endpoint, SecretString::from("refused-secret"))?;
+    let attempt_gate = Arc::clone(&adapter.attempt_gate);
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let mut active = adapter
+        .begin(
+            CompletedTextRequest {
+                source_text: "private source".to_string(),
+                target: crate::config::TranslationTarget::English,
+            },
+            // Windows retries a refused loopback SYN before reporting it, so the
+            // budget leaves room for the refusal to arrive before any deadline.
+            AttemptControl {
+                attempt_budget: Duration::from_secs(5),
+                total_budget: Duration::from_secs(10),
+            },
+            AdapterCompletion {
+                sender: result_sender,
+            },
+        )
+        .map_err(|_| "adapter did not begin".to_string())?;
+
+    let failure = result_receiver
+        .recv_timeout(Duration::from_secs(8))
+        .map_err(|_| "adapter did not report the refused connection".to_string())?
+        .err()
+        .ok_or_else(|| "refused connection unexpectedly completed".to_string())?;
+    assert_eq!(failure.class, TranslationFailureClass::ServiceUnavailable);
+    assert!(failure.retryable);
+    assert!(!failure.request_outcome_ambiguous);
+    assert_eq!(active.cancel(), CancellationStatus::Confirmed);
+    // The gate is released before the result is published.
+    assert!(!attempt_gate.is_occupied());
     Ok(())
 }
 
@@ -1557,49 +1647,98 @@ fn peer_eof_after_post_dispatch_is_an_ambiguous_transport_failure() -> Result<()
 }
 
 #[test]
-fn provider_neutral_module_does_not_retry_an_ambiguous_post_timeout() -> Result<(), String> {
+fn ambiguous_post_timeout_ends_only_its_unit_and_the_next_unit_gets_its_own_request()
+-> Result<(), String> {
     let server = ResponsesFixture::start()?;
     let runtime = Arc::new(build_runtime().map_err(|_| "test runtime did not build".to_string())?);
     let attempt_gate = Arc::new(PhysicalAttemptGate::default());
-    let adapter = OpenAiResponsesAdapter::with_network_and_executor(
+    let concrete = OpenAiResponsesAdapter::with_network_and_executor(
         server.endpoint()?,
         SecretString::from("ambiguous-timeout-secret"),
         AdapterNetwork::LoopbackDirect,
         runtime,
         Arc::clone(&attempt_gate),
     );
+    let (observation_sender, observation_receiver) = mpsc::channel();
+    let overlap_observed = Arc::new(AtomicBool::new(false));
+    let adapter = Arc::new(ObservedAdapter {
+        inner: Arc::new(concrete),
+        observations: observation_sender,
+        attempts: AtomicUsize::new(0),
+        active: Arc::new(AtomicUsize::new(0)),
+        overlap_observed: Arc::clone(&overlap_observed),
+    });
     let (mut module, outcomes) = TranslationModule::start_for_test(
         crate::config::TranslationTarget::English,
-        Arc::new(adapter),
+        adapter,
         TestPolicyDependencies::real(),
     )
     .map_err(|_| "translation module did not start".to_string())?;
     let store = CaptionAggregateStore::default();
+    let [first_source, second_source] =
+        reserved_sources(&store, ["first private source", "second private source"])?;
     module
-        .try_submit(reserved_source(&store)?)
-        .map_err(|_| "translation module rejected the source".to_string())?;
+        .try_submit(first_source)
+        .map_err(|_| "translation module rejected the first source".to_string())?;
+    module
+        .try_submit(second_source)
+        .map_err(|_| "translation module rejected the second source".to_string())?;
 
-    let exchange = server.accept_request().map_err(|error| error.to_string())?;
-    let request = exchange.request();
-    assert!(
-        String::from_utf8(request.to_vec())
-            .map_err(|error| error.to_string())?
-            .starts_with("POST /v1/responses HTTP/1.1\r\n")
-    );
+    // Hold the first POST without a response until the attempt deadline.
+    let first_exchange = server.accept_request().map_err(|error| error.to_string())?;
+    let first_request =
+        String::from_utf8(first_exchange.request().to_vec()).map_err(|error| error.to_string())?;
+    assert!(first_request.starts_with("POST /v1/responses HTTP/1.1\r\n"));
+    assert!(first_request.contains("first private source"));
 
     let outcome = outcomes
         .recv_timeout(Duration::from_secs(6))
         .map_err(|_| "ambiguous POST timeout produced no terminal outcome".to_string())?;
+    assert_eq!(outcome.source_ref().unit_id, "unit-31");
     let TranslationTerminalOutcome::Failed(failed) = outcome else {
         return Err("ambiguous POST timeout unexpectedly completed".to_string());
     };
     assert_eq!(failed.class, TranslationFailureClass::DeadlineExceeded);
 
+    // The ambiguous unit is not retried, but the queued unit is not failed by
+    // it either: it gets its own request once the first call is over.
+    let mut second_exchange = server.accept_request().map_err(|error| error.to_string())?;
+    let second_request =
+        String::from_utf8(second_exchange.request().to_vec()).map_err(|error| error.to_string())?;
+    assert!(second_request.contains("second private source"));
+    assert!(!second_request.contains("first private source"));
+    second_exchange
+        .respond(
+            "200 OK",
+            &[],
+            &successful_response_body("second translation")?,
+        )
+        .map_err(|error| error.to_string())?;
+    drop(second_exchange);
+
+    let outcome = outcomes
+        .recv_timeout(NETWORK_TEST_TIMEOUT)
+        .map_err(|_| "the unit after the ambiguous one produced no outcome".to_string())?;
+    assert_eq!(outcome.source_ref().unit_id, "unit-32");
+    let TranslationTerminalOutcome::Completed(completed) = outcome else {
+        return Err("the unit after the ambiguous one did not complete".to_string());
+    };
+    assert_eq!(completed.text, "second translation");
+    assert_eq!(
+        observation_receiver
+            .try_iter()
+            .map(|observation| observation.number)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert!(!overlap_observed.load(Ordering::SeqCst));
+
+    drop(first_exchange);
     module
         .stop()
         .map_err(|_| "translation module did not stop".to_string())?;
     if !attempt_gate.wait_until_released(NETWORK_TEST_TIMEOUT) {
-        return Err("ambiguous timeout attempt did not quiesce".to_string());
+        return Err("translation attempts did not quiesce".to_string());
     }
     server
         .assert_no_pending_request()
