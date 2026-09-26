@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in the app does not work as expected.
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. English or Chinese is fine. Please search existing issues first,
+        and don't paste API keys, private captions, or audio.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: What did you do, what did you see, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Optional. Say whether it happens every time.
+      placeholder: |
+        1. In Settings, choose Bilingual content with zh-Hans
+        2. Start captioning and say one sentence
+        3. The Chatbox shows only the English line
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic report
+      description: >-
+        Optional but very helpful. Open Diagnostics, click "Copy diagnostic report", and paste
+        it here. It contains only the app version, platform, status, and error codes.
+      render: json
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: e.g. 0.1.0, or the commit you built from
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux
