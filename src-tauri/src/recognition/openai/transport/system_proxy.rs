@@ -32,7 +32,7 @@ pub(super) fn connect_with_system_proxy(
     // Read the environment and OS settings for every connection attempt so
     // changing the system proxy does not require restarting the application.
     let match_uri = https_proxy_match_uri(request.uri())?;
-    let matcher = system_proxy_matcher(&match_uri)?;
+    let matcher = system_proxy_matcher(&match_uri, deadline, is_cancelled)?;
     connect_with_matcher_until(request, &matcher, resolver, deadline, is_cancelled)
 }
 
