@@ -36,7 +36,7 @@ impl Drop for TestSettingsDirectory {
 fn missing_saved_settings_load_editable_defaults_without_review() -> AppResult<()> {
     let directory = TestSettingsDirectory::new("missing")?;
 
-    match load_from_path(directory.config_path())? {
+    match load_from_path(directory.config_path()) {
         SavedSettingsLoad::Ready(config) => assert_eq!(config, AppConfig::default()),
         SavedSettingsLoad::DefaultsRequireReview { .. } => {
             return Err(AppError::state(
@@ -71,7 +71,7 @@ fn supported_v1_settings_migrate_to_v2_in_memory_without_rewriting_the_file() ->
         ))
     })?;
 
-    let migrated = match load_from_path(path.clone())? {
+    let migrated = match load_from_path(path.clone()) {
         SavedSettingsLoad::Ready(config) => config,
         SavedSettingsLoad::DefaultsRequireReview { .. } => {
             return Err(AppError::state(
@@ -118,7 +118,7 @@ fn invalid_saved_settings_load_defaults_with_review_context() -> AppResult<()> {
         ))
     })?;
 
-    match load_from_path(path.clone())? {
+    match load_from_path(path.clone()) {
         SavedSettingsLoad::Ready(_) => {
             return Err(AppError::state(
                 "Invalid saved settings unexpectedly loaded without review.",
@@ -138,6 +138,114 @@ fn invalid_saved_settings_load_defaults_with_review_context() -> AppResult<()> {
     Ok(())
 }
 
+fn defaults_review_error(load: SavedSettingsLoad, path: &Path) -> AppResult<AppError> {
+    match load {
+        SavedSettingsLoad::Ready(_) => Err(AppError::state(
+            "Unusable saved settings unexpectedly loaded without review.",
+        )),
+        SavedSettingsLoad::DefaultsRequireReview {
+            config,
+            path: reported_path,
+            error,
+        } => {
+            assert_eq!(config, AppConfig::default());
+            assert_eq!(reported_path, path);
+            Ok(error)
+        }
+    }
+}
+
+#[test]
+fn non_utf8_saved_settings_load_defaults_with_review_context() -> AppResult<()> {
+    let directory = TestSettingsDirectory::new("non-utf8")?;
+    let path = directory.config_path();
+    let mut config = AppConfig::default();
+    config.audio.input_device_id = Some("麦克风 synthetic-device".to_string());
+    let utf8 = serde_json::to_string(&config)
+        .map_err(|error| AppError::state(format!("Failed to serialize test config: {error}")))?;
+    // Only the encoding is broken: the UTF-8 original is valid, and an editor
+    // re-saved its device name in the GBK code page.
+    parse_valid_config(&utf8)?;
+    let (before, after) = utf8
+        .split_once("麦克风")
+        .ok_or_else(|| AppError::state("Test config lost its device name."))?;
+    let contents = [
+        before.as_bytes(),
+        b"\xC2\xF3\xBF\xCB\xB7\xE7",
+        after.as_bytes(),
+    ]
+    .concat();
+    fs::write(&path, &contents).map_err(|error| {
+        AppError::config_io(format!(
+            "Failed to write non-UTF-8 saved settings at {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    let error = defaults_review_error(load_from_path(path.clone()), &path)?;
+
+    assert_eq!(error.code(), "config.io_failed");
+    assert!(
+        !error.to_string().contains("synthetic-device"),
+        "the read error must not echo file contents"
+    );
+    assert_eq!(
+        fs::read(&path).map_err(|error| {
+            AppError::config_io(format!(
+                "Failed to reread non-UTF-8 saved settings: {error}"
+            ))
+        })?,
+        contents
+    );
+    Ok(())
+}
+
+#[test]
+fn directory_at_the_saved_settings_path_loads_defaults_with_review_context() -> AppResult<()> {
+    let directory = TestSettingsDirectory::new("directory")?;
+    let path = directory.config_path();
+    fs::create_dir(&path).map_err(|error| {
+        AppError::config_io(format!(
+            "Failed to create a directory at the saved settings path {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    let error = defaults_review_error(load_from_path(path.clone()), &path)?;
+
+    assert_eq!(error.code(), "config.io_failed");
+    assert!(path.is_dir());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_saved_settings_load_defaults_with_review_context() -> AppResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = TestSettingsDirectory::new("unreadable")?;
+    let path = directory.config_path();
+    let mut config = AppConfig::default();
+    config.audio.input_device_id = Some("unreadable-device".to_string());
+    save_to_path(&path, &config)?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).map_err(|error| {
+        AppError::config_io(format!(
+            "Failed to revoke read access to saved settings at {}: {error}",
+            path.display()
+        ))
+    })?;
+    // Privileged users, such as root in a container, bypass permission bits,
+    // so the denied read cannot be reproduced there.
+    if fs::File::open(&path).is_ok() {
+        return Ok(());
+    }
+
+    let error = defaults_review_error(load_from_path(path.clone()), &path)?;
+
+    assert_eq!(error.code(), "config.io_failed");
+    Ok(())
+}
+
 #[test]
 fn current_v2_settings_save_and_load_through_the_temporary_path() -> AppResult<()> {
     let directory = TestSettingsDirectory::new("save")?;
@@ -149,7 +257,7 @@ fn current_v2_settings_save_and_load_through_the_temporary_path() -> AppResult<(
     save_to_path(&path, &config)?;
 
     assert!(!path.with_extension("json.tmp").exists());
-    match load_from_path(path)? {
+    match load_from_path(path) {
         SavedSettingsLoad::Ready(saved) => assert_eq!(saved, config),
         SavedSettingsLoad::DefaultsRequireReview { .. } => {
             return Err(AppError::state(
@@ -192,7 +300,7 @@ fn v2_custom_url_loads_without_rewrite_or_compatibility_defaults() -> AppResult<
         ))
     })?;
 
-    let loaded = match load_from_path(path.clone())? {
+    let loaded = match load_from_path(path.clone()) {
         SavedSettingsLoad::Ready(config) => config,
         SavedSettingsLoad::DefaultsRequireReview { .. } => {
             return Err(AppError::state(
@@ -293,7 +401,7 @@ fn custom_translation_v2_round_trips_with_the_exact_persisted_shape() -> AppResu
         })
     );
 
-    match load_from_path(path)? {
+    match load_from_path(path) {
         SavedSettingsLoad::Ready(saved) => assert_eq!(saved, config),
         SavedSettingsLoad::DefaultsRequireReview { .. } => {
             return Err(AppError::state(
@@ -319,7 +427,7 @@ fn save_replaces_existing_settings_without_leaving_the_temporary_file() -> AppRe
     save_to_path(&path, &replacement)?;
 
     assert!(!path.with_extension("json.tmp").exists());
-    match load_from_path(path)? {
+    match load_from_path(path) {
         SavedSettingsLoad::Ready(saved) => assert_eq!(saved, replacement),
         SavedSettingsLoad::DefaultsRequireReview { .. } => {
             return Err(AppError::state(
@@ -353,7 +461,7 @@ fn failed_temporary_write_preserves_existing_settings() -> AppResult<()> {
         .err()
         .ok_or_else(|| AppError::state("Blocked temporary settings path unexpectedly saved."))?;
     assert_eq!(error.code(), "config.io_failed");
-    match load_from_path(path)? {
+    match load_from_path(path) {
         SavedSettingsLoad::Ready(saved) => assert_eq!(saved, original),
         SavedSettingsLoad::DefaultsRequireReview { .. } => {
             return Err(AppError::state(
@@ -583,7 +691,7 @@ fn pre_baseline_v1_through_v4_require_review_without_rewriting_the_file() -> App
             ))
         })?;
 
-        match load_from_path(path.clone())? {
+        match load_from_path(path.clone()) {
             SavedSettingsLoad::Ready(_) => {
                 return Err(AppError::state(format!(
                     "Pre-baseline {version} settings unexpectedly loaded without review."

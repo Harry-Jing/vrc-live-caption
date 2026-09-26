@@ -1,9 +1,9 @@
 //! Persistent non-secret app settings.
 //!
 //! This module owns the `config.json` path, strict current-schema decoding,
-//! and write-then-rename persistence. Invalid saved settings fall back to
-//! editable defaults while carrying an explicit review requirement back to
-//! the desktop state; secrets never enter this module.
+//! and write-then-rename persistence. Unreadable or invalid saved settings
+//! fall back to editable defaults while carrying an explicit review
+//! requirement back to the desktop state; secrets never enter this module.
 
 use crate::config::{
     APP_CONFIG_SCHEMA_VERSION, AppConfig, AudioConfig, ContentSelection, OscConfig,
@@ -64,27 +64,30 @@ pub(crate) enum SavedSettingsLoad {
 }
 
 pub(crate) fn load<R: Runtime>(app: &AppHandle<R>) -> AppResult<SavedSettingsLoad> {
-    let path = config_path(app)?;
-    load_from_path(path)
+    config_path(app).map(load_from_path)
 }
 
-fn load_from_path(path: PathBuf) -> AppResult<SavedSettingsLoad> {
-    match fs::read_to_string(&path) {
+// Deliberately infallible once the path is known: startup treats a load error
+// as fatal, and saving from Settings is how a user replaces an unusable file.
+fn load_from_path(path: PathBuf) -> SavedSettingsLoad {
+    let error = match fs::read_to_string(&path) {
         Ok(contents) => match parse_valid_config(&contents) {
-            Ok(config) => Ok(SavedSettingsLoad::Ready(config)),
-            Err(error) => Ok(SavedSettingsLoad::DefaultsRequireReview {
-                config: AppConfig::default(),
-                path,
-                error,
-            }),
+            Ok(config) => return SavedSettingsLoad::Ready(config),
+            Err(error) => error,
         },
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            Ok(SavedSettingsLoad::Ready(AppConfig::default()))
+            return SavedSettingsLoad::Ready(AppConfig::default());
         }
-        Err(error) => Err(AppError::config_io(format!(
-            "Failed to read app config at {}: {error}",
-            path.display()
-        ))),
+        // Non-UTF-8 text (for example, re-saved in a legacy code page), a
+        // directory at the path, or denied or locked access. The caller reports
+        // the path; the message carries only the I/O failure, never contents.
+        Err(error) => AppError::config_io(format!("Failed to read app config: {error}.")),
+    };
+
+    SavedSettingsLoad::DefaultsRequireReview {
+        config: AppConfig::default(),
+        path,
+        error,
     }
 }
 
