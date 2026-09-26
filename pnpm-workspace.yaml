@@ -7,6 +7,14 @@ allowBuilds:
 # so `pnpm audit --fix` exceptions do not outlive their advisories.
 minimumReleaseAgeExcludePrune: true
 
+# Temporary for #83: @nuxt/ui declares Tiptap as `^3` auto-installed peers, which
+# stay on 3.27.3 and fail the high-severity audit gate (GHSA-j95f-988m-3j2f).
+# @tiptap/pm follows @tiptap/core's exact peer requirement. Remove once @nuxt/ui
+# resolves a patched Tiptap on its own.
+overrides:
+  "@tiptap/core@>=3.7.0 <3.30.5": ^3.30.5
+  "@tiptap/pm@>=3.7.0 <3.30.5": ^3.30.5
+
 # Lefthook runs independent quality gates in parallel. Dependency installation
 # is an explicit prerequisite so concurrent checks never mutate node_modules.
 verifyDepsBeforeRun: false
