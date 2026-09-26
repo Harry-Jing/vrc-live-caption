@@ -33,10 +33,11 @@ latency, stability, and resource use while VRChat is running
   measured Chatbox behavior in the
   [VRChat reference](./research/vrchat-chatbox-reference.md).
 - **Chatbox preparation is explicit.** Before layout and transmission, the app
-  preserves Unicode normalization and the verified CRLF, LF, VT, LINE
-  SEPARATOR, and PARAGRAPH SEPARATOR controls. It replaces each bare CR, NEL,
-  and FORM FEED with one ASCII space, and no emitted message splits an extended
-  grapheme cluster. These are product transformations, not claims about VRChat.
+  preserves Unicode normalization, TAB, and the verified CRLF, LF, VT, LINE
+  SEPARATOR, and PARAGRAPH SEPARATOR controls. It replaces every other control
+  character (Unicode category Cc), including NUL, bare CR, NEL, and FORM FEED,
+  with one ASCII space, and no emitted message splits an extended grapheme
+  cluster. These are product transformations, not claims about VRChat.
 
 ## Target user choices
 

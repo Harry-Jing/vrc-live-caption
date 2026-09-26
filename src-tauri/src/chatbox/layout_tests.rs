@@ -117,6 +117,36 @@ fn require_live_view(input: &str) -> Result<PreparedChatboxText, String> {
         .ok_or_else(|| "nonempty Live input produced no viewport".to_owned())
 }
 
+/// Every scalar in Unicode general category `Cc`.
+fn cc_controls() -> impl Iterator<Item = char> {
+    ('\u{0000}'..='\u{001F}').chain('\u{007F}'..='\u{009F}')
+}
+
+/// Whether every remaining `Cc` control is TAB, LF, VT, or the CR of CRLF.
+fn only_preserved_controls_remain(text: &str) -> bool {
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        let preserved = match character {
+            '\t' | '\n' | '\u{000B}' => true,
+            '\r' => characters.peek() == Some(&'\n'),
+            _ => !character.is_control(),
+        };
+        if !preserved {
+            return false;
+        }
+    }
+    true
+}
+
+fn utf16_grapheme_ends(text: &str) -> HashSet<usize> {
+    text.graphemes(true)
+        .scan(0, |offset, grapheme| {
+            *offset += grapheme.encode_utf16().count();
+            Some(*offset)
+        })
+        .collect()
+}
+
 fn representative_grapheme_text() -> impl Strategy<Value = String> {
     let representable_atom = prop::sample::select(vec![
         "a",
@@ -168,6 +198,15 @@ fn prepared_control_policy_text() -> impl Strategy<Value = (String, String)> {
         ("\u{2029}", "\u{2029}"),
         ("\u{0301}", "\u{0301}"),
         ("e\u{0301}", "e\u{0301}"),
+        ("\t", "\t"),
+        // An atom that starts with LF would turn a preceding bare CR into CRLF.
+        ("x\n", "x\n"),
+        ("\u{0000}", " "),
+        ("\u{0001}", " "),
+        ("\u{001F}", " "),
+        ("\u{007F}", " "),
+        ("\u{0080}", " "),
+        ("\u{009F}", " "),
     ]);
 
     prop::collection::vec(atom, 0..=MAX_GENERATED_GRAPHEME_ATOMS).prop_map(|atoms| {
@@ -183,6 +222,27 @@ fn prepared_control_policy_text() -> impl Strategy<Value = (String, String)> {
             .concat();
         (raw, expected)
     })
+}
+
+/// Raw text whose controls come from the whole `Cc` category rather than an
+/// authored list. Generated CR and LF can form CRLF or a bare CR beside it, and
+/// prepend or combining neighbors probe the grapheme boundaries of each control.
+fn text_with_arbitrary_cc_controls() -> impl Strategy<Value = String> {
+    let control = prop::sample::select(cc_controls().collect::<Vec<_>>()).prop_map(String::from);
+    let text = prop::sample::select(vec![
+        "x",
+        "中",
+        " ",
+        "e\u{0301}",
+        "\u{0301}",
+        "\u{0600}",
+        "👍🏽",
+        "\r\n",
+    ])
+    .prop_map(str::to_owned);
+
+    prop::collection::vec(prop_oneof![control, text], 0..=MAX_GENERATED_GRAPHEME_ATOMS)
+        .prop_map(|atoms| atoms.concat())
 }
 
 #[test]
@@ -469,9 +529,18 @@ fn completed_preparation_preserves_verified_breaks_and_replaces_ambiguous_contro
         ("LF", "one\ntwo\n中", "one\ntwo\n中"),
         ("CRLF", "one\r\ntwo", "one\r\ntwo"),
         ("vertical tab", "one\u{000B}two", "one\u{000B}two"),
+        ("TAB", "one\ttwo", "one\ttwo"),
         ("bare CR", "one\rtwo", "one two"),
+        ("bare CR before CRLF", "one\r\r\ntwo", "one \r\ntwo"),
+        ("bare CR after CRLF", "one\r\n\rtwo", "one\r\n two"),
         ("NEL", "one\u{0085}two", "one two"),
         ("form feed", "one\u{000C}two", "one two"),
+        ("NUL", "one\u{0000}two", "one two"),
+        ("C0 start of heading", "one\u{0001}two", "one two"),
+        ("C0 unit separator", "one\u{001F}two", "one two"),
+        ("DELETE", "one\u{007F}two", "one two"),
+        ("first C1 control", "one\u{0080}two", "one two"),
+        ("last C1 control", "one\u{009F}two", "one two"),
         (
             "Unicode line and paragraph separators",
             "甲\u{2028}乙\u{2029}丙",
@@ -487,6 +556,74 @@ fn completed_preparation_preserves_verified_breaks_and_replaces_ambiguous_contro
     for (name, input, expected) in cases {
         let pages = prepare_completed_pages(input).map_err(|error| format!("{error:?}"))?;
         assert_eq!(prepared_texts(&pages), vec![expected], "{name}");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn every_entrypoint_replaces_each_cc_control_except_tab_lf_vt_and_crlf() -> Result<(), String> {
+    // The policy tests `char::is_control`, which is exactly general category
+    // `Cc`; keep this list and the documented ranges equal to that category.
+    assert!(cc_controls().all(char::is_control));
+    assert_eq!(
+        ('\u{0000}'..=char::MAX)
+            .filter(|character| character.is_control())
+            .count(),
+        cc_controls().count()
+    );
+
+    for control in cc_controls() {
+        let name = format!("U+{:04X}", u32::from(control));
+        let input = format!("left{control}right");
+        let (expected, expected_lines) = match control {
+            '\t' => (input.as_str(), 1),
+            '\n' | '\u{000B}' => (input.as_str(), 2),
+            _ => ("left right", 1),
+        };
+
+        let single = prepare_single_message(&input)
+            .map_err(|error| format!("{name}: {error:?}"))?
+            .ok_or_else(|| format!("{name}: nonempty message was omitted"))?;
+        assert_eq!(single.as_str(), expected, "{name}");
+        let pages =
+            prepare_completed_pages(&input).map_err(|error| format!("{name}: {error:?}"))?;
+        assert_eq!(prepared_texts(&pages), vec![expected], "{name}");
+        assert_eq!(require_live_view(&input)?.as_str(), expected, "{name}");
+        let prediction = predict_layout(&input).map_err(|error| format!("{name}: {error:?}"))?;
+        assert_eq!(prediction.logical_line_count(), expected_lines, "{name}");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn replaced_controls_are_whole_graphemes_in_the_pinned_segmenter() -> Result<(), String> {
+    let replaced = cc_controls().filter(|control| !matches!(control, '\t' | '\n' | '\u{000B}'));
+    for control in replaced {
+        let name = format!("U+{:04X}", u32::from(control));
+        let control_text = control.to_string();
+        // A prepend before and a combining mark after would join any
+        // non-control scalar into their grapheme (UAX #29 GB9b and GB9).
+        let raw = format!("\u{0600}{control}\u{0301}");
+        assert_eq!(
+            raw.graphemes(true).collect::<Vec<_>>(),
+            vec!["\u{0600}", control_text.as_str(), "\u{0301}"],
+            "{name}"
+        );
+
+        // The one-unit space keeps every UTF-16 offset but may merge its
+        // neighbors, which is why layout segments only the prepared text.
+        let prepared = prepare_single_message(&raw)
+            .map_err(|error| format!("{name}: {error:?}"))?
+            .ok_or_else(|| format!("{name}: nonempty message was omitted"))?;
+        assert_eq!(prepared.as_str(), "\u{0600} \u{0301}", "{name}");
+        assert_eq!(prepared.as_str().graphemes(true).count(), 1, "{name}");
+        assert_eq!(
+            prepared.as_str().encode_utf16().count(),
+            raw.encode_utf16().count(),
+            "{name}"
+        );
     }
 
     Ok(())
@@ -1076,6 +1213,61 @@ proptest! {
         prop_assert_eq!(concat_prepared(&pages), expected);
         prop_assert!(pages_are_nonempty_and_bounded || raw.is_empty());
         prop_assert!(every_page_ends_at_a_prepared_grapheme);
+        prop_assert!(pages.iter().all(|page| only_preserved_controls_remain(page.as_str())));
+    }
+
+    #[test]
+    fn arbitrary_cc_controls_survive_only_as_tab_lf_vt_or_crlf(
+        raw in text_with_arbitrary_cc_controls(),
+    ) {
+        match prepare_completed_pages(&raw) {
+            Ok(pages) => {
+                let prepared = concat_prepared(&pages);
+                let raw_characters = raw.chars().collect::<Vec<_>>();
+                let expected = raw_characters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &character)| {
+                        let begins_crlf = character == '\r'
+                            && raw_characters.get(index + 1) == Some(&'\n');
+                        let preserved = !character.is_control()
+                            || matches!(character, '\t' | '\n' | '\u{000B}')
+                            || begins_crlf;
+                        if preserved { character } else { ' ' }
+                    })
+                    .collect::<String>();
+                prop_assert_eq!(&prepared, &expected);
+                prop_assert!(pages.iter().all(|page| only_preserved_controls_remain(page.as_str())));
+
+                // Replacement may merge graphemes but never splits one, so each
+                // page ends on a boundary of both the raw and prepared text.
+                let raw_boundaries = utf16_grapheme_ends(&raw);
+                let prepared_boundaries = utf16_grapheme_ends(&prepared);
+                let mut page_end = 0;
+                for page in &pages {
+                    page_end += page.as_str().encode_utf16().count();
+                    prop_assert!(raw_boundaries.contains(&page_end));
+                    prop_assert!(prepared_boundaries.contains(&page_end));
+                }
+
+                match prepare_live_viewport(&raw) {
+                    Ok(Some(viewport)) => {
+                        prop_assert!(only_preserved_controls_remain(viewport.as_str()));
+                        prop_assert!(prepared.ends_with(viewport.as_str()));
+                    }
+                    Ok(None) => prop_assert!(prepared.is_empty()),
+                    Err(error) => {
+                        prop_assert!(false, "Live rejected representable prepared text: {error:?}");
+                    }
+                }
+            }
+            Err(ChatboxLayoutError::GraphemeExceedsInputBudget { utf16_units }) => {
+                prop_assert!(utf16_units > CHATBOX_MAX_UTF16_UNITS);
+            }
+            Err(ChatboxLayoutError::RequiresPagination { page_count }) => {
+                prop_assert!(false, "Completed pagination returned its single-view-only error for {page_count} pages");
+            }
+        }
     }
 
     #[test]

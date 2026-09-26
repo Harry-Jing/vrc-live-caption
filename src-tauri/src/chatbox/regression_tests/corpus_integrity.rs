@@ -130,6 +130,8 @@ fn chatbox_regression_corpus_has_stable_identity_and_unicode_facts()
                     || character == '-'),
             "case ID is not path-safe: {case_id}"
         );
+        // Corpus payloads were sent raw to measure the VRChat client, and NUL
+        // ends an OSC string. Layout and OSC tests cover NUL preparation.
         assert!(!payload.contains('\0'), "payload contains NUL: {case_id}");
         let targets = case["test_targets"]
             .as_array()

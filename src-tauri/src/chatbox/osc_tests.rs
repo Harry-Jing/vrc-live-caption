@@ -195,6 +195,68 @@ fn udp_transport_sends_exact_text_and_typing_packets() -> AppResult<()> {
 }
 
 #[test]
+fn prepared_nul_reaches_the_receiver_as_one_complete_osc_string() -> AppResult<()> {
+    // OSC 1.0 ends a string at its first NUL: sent unprepared, this text would
+    // decode as `left` and leave the rest of the argument unconsumed.
+    let raw = "left\u{0000}right";
+    let unprepared = encoder::encode(&chatbox_input_packet(raw))
+        .map_err(|error| AppError::osc_encode(error.to_string()))?;
+    assert!(
+        !decoder::decode_udp(&unprepared).is_ok_and(|(remainder, packet)| {
+            remainder.is_empty() && packet == chatbox_input_packet(raw)
+        })
+    );
+
+    let receiver =
+        UdpSocket::bind("127.0.0.1:0").map_err(|error| AppError::osc_bind(error.to_string()))?;
+    receiver
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|error| AppError::osc_bind(error.to_string()))?;
+    let port = receiver
+        .local_addr()
+        .map_err(|error| AppError::osc_bind(error.to_string()))?
+        .port();
+    let sender = ChatboxOscSender::new(
+        &OscConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            enabled: true,
+        },
+        &HostResolver::default(),
+        &|| false,
+    )?;
+    let text = prepared_text(raw)?;
+    assert_eq!(text.as_str(), "left right");
+
+    let receipt = sender.send_text(&text)?;
+    let datagram = receive_datagram(&receiver)?;
+    let (remainder, packet) =
+        decoder::decode_udp(&datagram).map_err(|error| AppError::osc_encode(error.to_string()))?;
+
+    assert_eq!(receipt.byte_count, datagram.len());
+    assert!(
+        remainder.is_empty(),
+        "OSC decoding left {} trailing bytes",
+        remainder.len()
+    );
+    let OscPacket::Message(message) = packet else {
+        return Err(AppError::runtime(
+            "Chatbox text did not decode as an OSC message.",
+        ));
+    };
+    assert_eq!(message.addr, OSC_CHATBOX_INPUT_ADDRESS);
+    assert_eq!(
+        message.args,
+        vec![
+            OscType::String(text.as_str().to_string()),
+            OscType::Bool(true),
+            OscType::Bool(false),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn hostname_resolution_uses_the_injected_resolver() -> AppResult<()> {
     let receiver =
         UdpSocket::bind("127.0.0.1:0").map_err(|error| AppError::osc_bind(error.to_string()))?;

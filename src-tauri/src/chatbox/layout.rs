@@ -1,9 +1,10 @@
 //! Pure Chatbox text preparation and layout for Completed pages and Live viewports.
 //!
 //! The module has no runtime, pacing, OSC, or queue dependencies. Before any
-//! measurement it applies the product control policy: verified line separators
-//! and Unicode normalization are preserved, while bare CR, NEL, and form feed
-//! become one ASCII space each. It then simulates VRChat's fixed 280-unit
+//! measurement it applies the product control policy: Unicode normalization,
+//! TAB, and the verified line separators are preserved, while every other `Cc`
+//! control character, including NUL, bare CR, NEL, and form feed, becomes one
+//! ASCII space. It then simulates VRChat's fixed 280-unit
 //! TextMeshPro width, nine visible lines, and conservative 144 UTF-16 input
 //! budget. Completed layout returns every prepared page in order; Live layout
 //! returns one safe viewport retaining the newest prepared text. Soft wraps
@@ -588,12 +589,26 @@ impl<'text> LayoutText<'text> {
 }
 
 /// Applies the product-side control policy before any indexing, measurement,
-/// pagination, or transmission. CRLF is one verified line break and stays
-/// intact; ambiguous standalone controls become one ordinary space each.
+/// pagination, or transmission.
+///
+/// Of the Unicode `Cc` controls, only TAB, LF, VT, and the CR of CRLF survive:
+/// LF, VT, and CRLF are verified line breaks, and TAB is horizontal whitespace.
+/// Every other `Cc` control becomes one ASCII space. NUL terminates an OSC 1.0
+/// string, so a receiver would decode only the text before it; on the tested
+/// client, bare CR made later text overdraw its line and NEL showed a
+/// missing-glyph marker; the remaining controls have no verified rendering.
+/// LINE SEPARATOR and PARAGRAPH SEPARATOR are not `Cc` and pass through as
+/// verified line breaks.
+///
+/// UAX #29 makes each replaced control its own extended grapheme cluster, and
+/// each replacement swaps one UTF-16 code unit for another, so the pass cannot
+/// split an input grapheme or move a UTF-16 offset. The space may join a
+/// neighboring prepend or combining mark into one grapheme, so layout segments
+/// only the returned text.
 fn apply_control_character_policy(text: &str) -> Cow<'_, str> {
     if !text
         .chars()
-        .any(|character| matches!(character, '\r' | '\u{000C}' | '\u{0085}'))
+        .any(|character| character.is_control() && !is_always_preserved_control(character))
     {
         return Cow::Borrowed(text);
     }
@@ -601,13 +616,18 @@ fn apply_control_character_policy(text: &str) -> Cow<'_, str> {
     let mut prepared = String::with_capacity(text.len());
     let mut characters = text.chars().peekable();
     while let Some(character) = characters.next() {
-        match character {
-            '\r' if characters.peek() == Some(&'\n') => prepared.push(character),
-            '\r' | '\u{000C}' | '\u{0085}' => prepared.push(' '),
-            _ => prepared.push(character),
-        }
+        let preserved = !character.is_control()
+            || is_always_preserved_control(character)
+            || (character == '\r' && characters.peek() == Some(&'\n'));
+        prepared.push(if preserved { character } else { ' ' });
     }
     Cow::Owned(prepared)
+}
+
+/// `Cc` controls kept in every context. CR is absent because it survives only
+/// as the first half of CRLF.
+fn is_always_preserved_control(character: char) -> bool {
+    matches!(character, '\t' | '\n' | '\u{000B}')
 }
 
 fn grapheme_break_opportunity(

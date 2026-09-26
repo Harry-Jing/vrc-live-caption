@@ -22,6 +22,13 @@ fn prepared_lane_text() -> impl Strategy<Value = (String, String)> {
         ("\r", " "),
         ("\u{0085}", " "),
         ("\u{000C}", " "),
+        ("\u{0000}", " "),
+        ("\u{0001}", " "),
+        ("\u{001F}", " "),
+        ("\u{007F}", " "),
+        ("\u{0080}", " "),
+        ("\u{009F}", " "),
+        ("\t", "\t"),
         ("\r\n", "\r\n"),
         ("x\n", "x\n"),
         ("\u{000B}", "\u{000B}"),
@@ -61,6 +68,19 @@ fn short_pair_prepares_each_lane_before_sealing_the_payload() -> Result<(), Stri
         PreparedBilingualCompletedPage::into_prepared_text;
     let prepared = consume(pages.remove(0));
     assert_eq!(prepared.as_str(), "Source \n翻译 ");
+
+    Ok(())
+}
+
+#[test]
+fn nul_and_c1_controls_are_replaced_in_each_lane_before_composition() -> Result<(), String> {
+    let pages = prepare_bilingual_completed_pages("left\u{0000}right\u{0000}", "\u{009F}翻译\t")
+        .map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].prepared_source_text(), "left right ");
+    assert_eq!(pages[0].prepared_translation_text(), " 翻译\t");
+    assert_eq!(pages[0].prepared_text().as_str(), "left right \n 翻译\t");
 
     Ok(())
 }
