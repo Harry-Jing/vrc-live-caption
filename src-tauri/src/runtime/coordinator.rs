@@ -362,12 +362,22 @@ fn coordinate_running_recognition_with_capture_adapter<R: Runtime>(
         audio_sequence = audio_sequence
             .checked_add(1)
             .ok_or_else(|| AppError::state("Recognition audio sequence was exhausted."))?;
-        match recognition.try_submit(OwnedRecognitionAudioFrame {
+        let frame = OwnedRecognitionAudioFrame {
             sequence: audio_sequence,
             captured_at_ms: unix_timestamp_ms(),
             sample_rate_hz: active.capture.sample_rate(),
             samples: samples.into_boxed_slice(),
-        }) {
+        };
+        // Admission is what hands captured audio to the Recognition Module, so
+        // it runs inside the generation fence: a Stop that lands while
+        // `receive` is waiting rejects the frame even when it was too short to
+        // finish a fenced level window above. `try_submit` never blocks and
+        // takes only Recognition-owned leaf locks, so holding the gate across
+        // it cannot invert a lock order or stall Stop's commit wait.
+        let Some(submit_result) = generation.try_commit(|| recognition.try_submit(frame))? else {
+            return Ok(());
+        };
+        match submit_result {
             Ok(()) => {}
             Err(RecognitionSubmitError::Backpressure) => {
                 return Err(AppError::recognition_backpressure(

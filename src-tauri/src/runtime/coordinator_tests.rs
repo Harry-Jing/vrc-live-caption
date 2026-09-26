@@ -13,18 +13,40 @@ use crate::runtime_control::{
     ChatboxPublicationSnapshot, RuntimeControlStore, RuntimeGenerationPhase,
     RuntimeGenerationSelection, RuntimeGenerationSnapshot, RuntimeGenerationTranslationState,
 };
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use tauri::Listener;
 
 const TEST_WATCHDOG: Duration = Duration::from_secs(5);
+/// Ten milliseconds at 16 kHz: too short to complete a 100 ms level window, so
+/// the frame reaches audio admission without passing any fenced level commit.
+const SHORT_FRAME_SAMPLES: usize = 160;
+/// Coordinator sequences start at one; only the test submits this sequence.
+const DRAIN_MARKER_SEQUENCE: u64 = u64::MAX;
 
 enum LifecycleDriverPlan {
     ReadyUntilStopped,
-    FailAfterRelease { release: mpsc::Receiver<()> },
-    FailAfterFirstAudio { capture: CaptureProbe },
-    ReconnectAfterFirstAudio { capture: CaptureProbe },
+    FailAfterRelease {
+        release: mpsc::Receiver<()>,
+    },
+    FailAfterFirstAudio {
+        capture: CaptureProbe,
+    },
+    ReconnectAfterFirstAudio {
+        capture: CaptureProbe,
+    },
+    ReportAudioUntilDrainMarker {
+        receipts: mpsc::Sender<DriverAudioReceipt>,
+    },
+}
+
+/// One frame that crossed Recognition admission and reached the Driver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DriverAudioReceipt {
+    sequence: u64,
+    samples: usize,
 }
 
 struct LifecycleRecognitionDriver {
@@ -136,6 +158,26 @@ impl RecognitionDriver for LifecycleRecognitionDriver {
                 io.reconnecting(7, 1, Duration::from_millis(10))?;
                 io.wait_until_stopped()
             }
+            LifecycleDriverPlan::ReportAudioUntilDrainMarker { receipts } => loop {
+                let frame = match io.receive(TEST_WATCHDOG)? {
+                    RecognitionDriverInput::Audio(frame) => frame,
+                    RecognitionDriverInput::Stopped => return Ok(()),
+                    RecognitionDriverInput::Idle => {
+                        return Err(AppError::state(
+                            "The drain marker did not reach the Recognition Driver before the test watchdog expired.",
+                        ));
+                    }
+                };
+                receipts
+                    .send(DriverAudioReceipt {
+                        sequence: frame.sequence,
+                        samples: frame.samples.len(),
+                    })
+                    .map_err(|_| AppError::state("Driver audio receipts were dropped."))?;
+                if frame.sequence == DRAIN_MARKER_SEQUENCE {
+                    return io.wait_until_stopped();
+                }
+            },
         }
     }
 }
@@ -253,6 +295,45 @@ impl RecognitionCapture for HardStopRecognitionCapture {
             self.generation.request_stop(None)?;
         }
         Ok(None)
+    }
+}
+
+/// Returns `frames_before_stop` short frames, then completes hard Stop inside
+/// the next receive and still returns one more short frame.
+struct StopDuringReceiveRecognitionCapture {
+    control: RuntimeControlStore,
+    generation: RuntimeGeneration,
+    probe: CaptureProbe,
+    frames_before_stop: usize,
+    receives: Cell<usize>,
+}
+
+impl Drop for StopDuringReceiveRecognitionCapture {
+    fn drop(&mut self) {
+        self.probe.mark_dropped();
+    }
+}
+
+impl RecognitionCapture for StopDuringReceiveRecognitionCapture {
+    fn sample_rate(&self) -> u32 {
+        16_000
+    }
+
+    fn receive(&self, _timeout: Duration) -> AppResult<Option<Vec<f32>>> {
+        let receive_index = self.receives.replace(self.receives.get().saturating_add(1));
+        if receive_index == 0 {
+            // Fails unless Runtime committed Running before capture produced audio.
+            self.probe.begin_receive(&self.control)?;
+        }
+        if receive_index > self.frames_before_stop {
+            return Err(AppError::state(
+                "Coordinator polled microphone capture again after hard Stop.",
+            ));
+        }
+        if receive_index == self.frames_before_stop {
+            self.generation.request_stop(None)?;
+        }
+        Ok(Some(vec![0.0; SHORT_FRAME_SAMPLES]))
     }
 }
 
@@ -400,6 +481,108 @@ fn hard_stop_drops_active_capture_before_coordinator_returns() -> AppResult<()> 
         RuntimeStatus::Running
     );
     recognition.stop()?;
+    Ok(())
+}
+
+/// Runs the coordinator until hard Stop lands inside a capture receive that
+/// still returns a short frame, then reports every coordinator frame that the
+/// Recognition Driver received.
+fn driver_audio_when_stop_lands_during_receive(
+    frames_before_stop: usize,
+) -> AppResult<Vec<DriverAudioReceipt>> {
+    let app = tauri::test::mock_app();
+    let control = RuntimeControlStore::default();
+    let status_recorder = control.status_recorder();
+    let generation =
+        RuntimeGeneration::activate(app.handle(), 1, CaptionAggregateStore::default())?;
+    let (receipt_sender, receipts) = mpsc::channel();
+    let module = RecognitionModule::with_audio_budget(
+        Duration::from_millis(100),
+        8,
+        LifecycleRecognitionDriver {
+            plan: LifecycleDriverPlan::ReportAudioUntilDrainMarker {
+                receipts: receipt_sender,
+            },
+        },
+    )?;
+    let mut recognition = module.start(RecognitionGenerationScope {
+        generation: generation.generation_id(),
+        stream_id: generation.stream_id().to_string(),
+    })?;
+    let capture = CaptureProbe::default();
+    let opened_capture = capture.clone();
+    let capture_control = control.clone();
+    let stop_generation = generation.clone();
+    let open_capture = move |_config: &AudioConfig| {
+        opened_capture.mark_returned();
+        Ok(Box::new(StopDuringReceiveRecognitionCapture {
+            control: capture_control.clone(),
+            generation: stop_generation.clone(),
+            probe: opened_capture.clone(),
+            frames_before_stop,
+            receives: Cell::new(0),
+        }) as Box<dyn RecognitionCapture>)
+    };
+
+    coordinate_running_recognition_with_capture(
+        app.handle(),
+        &AudioConfig::default(),
+        None,
+        &generation,
+        &mut recognition,
+        &status_recorder,
+        &open_capture,
+    )?;
+    assert!(generation.is_hard_stop_requested());
+    assert!(capture.receive_was_entered());
+    assert!(capture.was_dropped());
+
+    // The coordinator was the only audio admitter and has returned. Stop has
+    // reached only the Runtime fence, so the Module still admits this marker,
+    // and its FIFO ingress delivers every earlier admission to the Driver first.
+    recognition
+        .try_submit(OwnedRecognitionAudioFrame {
+            sequence: DRAIN_MARKER_SEQUENCE,
+            captured_at_ms: 0,
+            sample_rate_hz: 16_000,
+            samples: vec![0.0; SHORT_FRAME_SAMPLES].into_boxed_slice(),
+        })
+        .map_err(|error| AppError::state(format!("Drain marker was rejected: {error:?}")))?;
+    let mut coordinator_audio = Vec::new();
+    loop {
+        let receipt = receipts.recv_timeout(TEST_WATCHDOG).map_err(|error| {
+            AppError::state(format!(
+                "Recognition Driver did not report the drain marker: {error}"
+            ))
+        })?;
+        if receipt.sequence == DRAIN_MARKER_SEQUENCE {
+            break;
+        }
+        coordinator_audio.push(receipt);
+    }
+
+    recognition.stop()?;
+    // The joined Driver dropped its sender, so no receipt can still arrive.
+    assert_eq!(receipts.try_recv(), Err(mpsc::TryRecvError::Disconnected));
+    Ok(coordinator_audio)
+}
+
+#[test]
+fn hard_stop_during_capture_receive_rejects_a_frame_without_level_readings() -> AppResult<()> {
+    assert_eq!(driver_audio_when_stop_lands_during_receive(0)?, Vec::new());
+    Ok(())
+}
+
+#[test]
+fn running_capture_admits_sequenced_frames_until_stop_lands_during_receive() -> AppResult<()> {
+    let frame = |sequence| DriverAudioReceipt {
+        sequence,
+        samples: SHORT_FRAME_SAMPLES,
+    };
+    assert_eq!(
+        driver_audio_when_stop_lands_during_receive(2)?,
+        vec![frame(1), frame(2)]
+    );
     Ok(())
 }
 

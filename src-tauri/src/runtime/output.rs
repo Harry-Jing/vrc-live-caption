@@ -141,9 +141,10 @@ impl RuntimeGeneration {
     }
 
     pub(crate) fn request_stop(&self, publication: Option<&ChatboxPublication>) -> AppResult<()> {
-        // Establish one shared App/Chatbox commit cutoff before cancelling
-        // capture and recognition work or waiting for either output sink. A commit
-        // that already crossed the fence may finish; every later one is rejected.
+        // Establish one shared cutoff for App/Chatbox commits and Recognition
+        // audio admission before cancelling capture and recognition work or
+        // waiting for either output sink. A commit that already crossed the
+        // fence may finish; every later one is rejected.
         self.generation_fence.request_stop();
         self.cancel_work();
         self.close_outputs_at_boundary(publication, PublisherCloseReason::Stop)
