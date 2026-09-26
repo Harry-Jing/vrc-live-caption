@@ -6,19 +6,19 @@ change; this keeps parallel work aligned with the product and architecture.
 
 ## Start with an issue
 
-Every contribution starts in the
-[issue tracker](https://github.com/Harry-Jing/vrc-live-caption/issues), including
-small fixes:
+Changes start in the
+[issue tracker](https://github.com/Harry-Jing/vrc-live-caption/issues):
 
 1. Search for an existing issue.
 2. If one exists, comment with the part you want to handle and wait for scope
-   confirmation. Otherwise, open an issue describing the problem, user impact,
-   and proposed direction.
+   confirmation. Otherwise, open an issue that describes the problem and the
+   result you want.
 3. Begin implementation after the issue is accepted and the scope is clear.
 4. Link the issue from the pull request.
 
-A pull request is not a substitute for an issue and may be closed when its scope
-was not discussed first.
+Small, self-explanatory fixes, such as typos or broken links, can go straight to
+a pull request; group several of them into one. Other pull requests whose scope
+was not discussed first may be closed.
 
 ## Development setup
 
@@ -167,6 +167,14 @@ Do not hand-edit lockfiles or generated files. Let pnpm, Cargo, or Tauri update
 `pnpm-lock.yaml`, `src-tauri/Cargo.lock`, and `src-tauri/gen/`, and include only
 the generated changes required by the issue.
 
+## Dependency updates
+
+Dependabot opens grouped weekly updates. Keep its ignore rules in
+[`.github/dependabot.yml`](./.github/dependabot.yml), not in `@dependabot ignore`
+comments, so they stay reviewable. GitHub's dependency graph reads
+`package.json` but not `pnpm-lock.yaml`, so the `pnpm audit --audit-level high`
+step in CI is the only check for transitive npm advisories.
+
 ## Documentation and contracts
 
 Use the [documentation guide](./docs/README.md) to update one authoritative
@@ -189,21 +197,50 @@ tests, and do not make an incompatible V1 change in place.
 - Use synthetic data in fixtures and screenshots. Review screenshots for names,
   paths, keys, and other identifying information before attaching them.
 
-For a suspected vulnerability, disclose no sensitive details publicly and ask
-the maintainer to arrange a private channel.
+Report a suspected vulnerability privately, as described in
+[SECURITY.md](./SECURITY.md).
 
-## Pull request checklist
+## Issues and pull requests
 
-Before requesting review:
+Write for someone who has not read the code: say what users notice first, use
+plain words, and keep it short. Most issues and pull requests fit in about 150
+words. Write in English; bug reporters may use Chinese. Do not hard-wrap issue or
+pull request text, because GitHub shows every line break.
 
-- use a Conventional Commit pull-request title without issue or pull-request
-  numbers; when squash-merging, make the final commit subject match the
-  pull-request title exactly and remove GitHub's automatically appended
-  `(#N)`;
-- link the accepted issue and explain what changed and why;
-- describe automated and manual validation, including anything not run;
-- include screenshots for user-interface changes;
-- update the one authoritative source for affected documentation;
-- wait for the required `Quality Gate` and `Native Build Gate` checks; and
-- confirm that the diff contains no secrets, unrelated changes, or hand-edited
-  generated files.
+Put each fact in one place:
+
+| Content | Where |
+|---|---|
+| The problem and the result we want | Issue |
+| How it was solved, what was tested, and what was not | Pull request |
+| Why the change was needed, for `git log` readers | Squash commit body |
+| Decisions and rules that outlive the change | ADR or docs |
+| Implementation status | [Roadmap](./docs/roadmap.md) |
+| Progress, CI runs, and other evidence | Comments, only when useful |
+
+### Issues
+
+- Title: plain words, no `feat:`-style prefix, at most 70 characters. A bug names
+  the symptom ("Captions containing a NUL character are cut off in VRChat");
+  other work names the outcome ("Keep each Chatbox page visible long enough to
+  read").
+- Body: the template's "Current behavior", "Expected behavior", and "Done when"
+  sections. Leave out implementation plans, file names, and progress logs.
+- Labels: one type label (`bug`, `enhancement`, `documentation`, `dependencies`,
+  `maintenance`, or `question`) and, while the issue is open, one state label.
+- Large work: a parent issue with sub-issues, linked with GitHub's "blocked by"
+  where order matters.
+
+### Pull requests
+
+- Title: a Conventional Commit, `type(scope): summary`, without issue or pull
+  request numbers. It becomes the squash commit subject. Common scopes are listed
+  in [`commitlint.config.mjs`](./commitlint.config.mjs).
+- Body: `Closes #N`, a short summary, and testing notes that say what was not
+  tested. Add screenshots for user-interface changes. Skip file-by-file change
+  lists, test names, and CI run IDs.
+- Before requesting review, update the one authoritative document for anything
+  you changed, wait for the required checks, and make sure the diff has no
+  secrets, unrelated changes, or hand-edited generated files.
+- Merge with a squash. Keep the subject equal to the title without GitHub's
+  `(#N)`, and use the summary as the commit body, followed by `Closes #N`.

@@ -37,12 +37,29 @@
 
 ## Sources of truth
 
-- GitHub Issues are the work and triage surface. Use the canonical labels
-  `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and
-  `wontfix`.
+- GitHub Issues are the work and triage surface. Give each issue one type label:
+  `bug`, `enhancement`, `documentation`, `dependencies`, `maintenance`, or
+  `question`. While it is open, add one state label: `needs-triage`,
+  `needs-info`, `ready-for-agent`, or `ready-for-human`. Remove the state label
+  when the issue closes, and close rejected work with `wontfix`.
 - `contracts/` owns shared Rust/TypeScript fixtures and manifests. Extend the
   normalized caption contract before adding a path whose lane, revision, or
   completion semantics it cannot represent.
+
+## Issues, pull requests, and commits
+
+- Follow "Issues and pull requests" in `CONTRIBUTING.md` and the templates in
+  `.github/`. They take precedence over the formats in skills such as `to-spec`,
+  `to-tickets`, and `triage`.
+- `gh issue create --body` and `gh pr create --body` skip the templates, so use
+  their section headings yourself. Pass `--label`, and use `--parent`,
+  `--blocked-by`, or `--blocking` instead of "Parent" or "Blocked by" sections.
+- Map skill sections onto the template: "What to build" or "Desired behavior"
+  goes under "Expected behavior", and acceptance criteria go under "Done when".
+  A spec becomes a short parent issue that links the roadmap, product spec, or
+  ADR instead of repeating them.
+- Keep progress notes, CI run links, test counts, and hashes out of issue and
+  pull request bodies. Add a comment only when someone needs that evidence.
 
 ## Code guardrails
 

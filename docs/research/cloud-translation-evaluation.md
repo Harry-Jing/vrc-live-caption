@@ -42,9 +42,9 @@ trust choices live in
   Simplified-Chinese-to-English samples containing names, numbers, punctuation,
   mixed-language text, and Chatbox-relevant Unicode.
 - Measure queue, provider, and terminal latency against the provisional
-  12-second admission deadline in
-  [Issue #11](https://github.com/Harry-Jing/vrc-live-caption/issues/11), including
-  saturation, bounded sizes, retry, cancellation, failure, and Stop.
+  12-second admission deadline and the other Translation Module limits in the
+  code, including saturation, bounded sizes, retry, cancellation, failure, and
+  Stop.
 - Verify that the UI discloses the selected recipient of Source text and that
   diagnostics contain no credentials, caption text, provider bodies, or full
   Custom URLs.

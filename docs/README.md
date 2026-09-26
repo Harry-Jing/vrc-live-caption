@@ -21,7 +21,8 @@ maintaining another copy.
 | Source | Audience and authority |
 |---|---|
 | [README.md](../README.md) | Public introduction: maturity, current user-visible capability, privacy, and the shortest source-run path. |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | Human contribution workflow: issue-first coordination, setup, checks, pull requests, and security hygiene. |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | Human contribution workflow: issue-first coordination, setup, checks, how to write issues and pull requests, and security hygiene. |
+| [SECURITY.md](../SECURITY.md) | How to report a vulnerability privately. |
 | [CONTEXT.md](../CONTEXT.md) | Project glossary. It defines shared domain terms, not lifecycle specifications or implementation status. |
 | [product.md](./product.md) | Durable product intent, user choices, guarantees, and non-goals. |
 | [roadmap.md](./roadmap.md) | The only implementation-status and sequencing record. |
