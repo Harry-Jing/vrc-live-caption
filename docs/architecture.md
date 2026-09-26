@@ -20,12 +20,11 @@ Vue application
       -> runtime generation
          -> audio capture
          -> Recognition Module -> Recognition Driver
-         -> Caption Aggregate
+         -> Caption Aggregate <-> Translation Module
          -> publication plan
          -> App view + Chatbox publishers
 
 Planned:
-  Caption Aggregate -> Translation Module
   Recognition Module -> local worker Driver
   separate incoming-audio pipeline
 ```
@@ -157,6 +156,29 @@ The Aggregate may retain bounded completed captions from older runtime
 generations for the app view. Stop removes ongoing work and rejects late output
 without turning retained completed captions into an active session.
 
+### Translation
+
+The Translation Module consumes completed Source snapshots. Each accepted unit
+resolves exactly once as either one terminal correlated Translation snapshot or
+a provider-neutral failure; it does not emit ongoing Translation revisions.
+Work is bounded and cancellable, and a stale, timed-out, or late result cannot
+overwrite another source revision or unit.
+
+Admitting translation work pins its exact completed Source snapshot until a
+terminal outcome or Stop, so bounded history trimming cannot remove that Source
+snapshot while translation work is in flight.
+
+Prepared Runtime generations capture the resolved Translation path, target,
+endpoint, and credential as one immutable owner. Desktop Start binds that owner,
+including the Official or Custom credential, before microphone capture opens;
+a missing credential fails Start before any generation exists. Source-only
+content keeps a saved Translation selection dormant. Planning permits
+Translation only with Completed publication; Live remains incompatible until
+its update shape is evaluated. Provider and endpoint rules stay behind the
+Module boundary
+([ADR 0015](./adr/0015-cloud-connections-honor-explicit-routes-and-endpoints.md),
+[ADR 0021](./adr/0021-use-openai-responses-for-completed-translation.md)).
+
 ### Pipeline planning
 
 Capabilities belong to a complete path, not a model name. A path declares the
@@ -228,28 +250,7 @@ capture begins.
 
 ## Planned extension seams
 
-### Translation
-
-The first Translation Module consumes completed Source snapshots. Each accepted
-unit resolves exactly once as either one terminal correlated Translation
-snapshot or a provider-neutral failure; it does not emit ongoing Translation
-revisions. Work is bounded and cancellable, and a stale, timed-out, or late
-result cannot overwrite another source revision or unit.
-
-Admitting translation work must pin its exact completed Source snapshot until a
-terminal outcome or Stop, so bounded history trimming cannot remove that Source
-snapshot while translation work is in flight.
-
-Prepared Runtime generations capture the resolved Translation path, target,
-endpoint, and credential as one immutable owner. Desktop Start binds that owner,
-including the Official or Custom credential, before microphone capture opens;
-a missing credential fails Start before any generation exists. Source-only
-content keeps a saved Translation selection dormant. Phase 5 planning permits
-Translation only with Completed publication; Live remains incompatible until
-its update shape is evaluated. Provider and endpoint rules stay behind the
-Module boundary
-([ADR 0015](./adr/0015-cloud-connections-honor-explicit-routes-and-endpoints.md),
-[ADR 0021](./adr/0021-use-openai-responses-for-completed-translation.md)).
+### Live translation
 
 Transcript-driven and direct-audio translation remain different path shapes.
 Repeatedly translating every unstable source revision is not the default Live
