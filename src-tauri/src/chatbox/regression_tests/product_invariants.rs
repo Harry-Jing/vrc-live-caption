@@ -337,9 +337,9 @@ fn expected_prepared_payload<'a>(case_id: &str, payload: &'a str) -> Result<Cow<
     }
 
     let has_unreviewed_ambiguous_control = payload.split("\r\n").any(|segment| {
-        segment
-            .chars()
-            .any(|character| matches!(character, '\r' | '\u{000C}' | '\u{0085}'))
+        segment.chars().any(|character| {
+            character.is_control() && !matches!(character, '\t' | '\n' | '\u{000B}')
+        })
     });
     if has_unreviewed_ambiguous_control {
         return Err(format!(

@@ -501,12 +501,15 @@ evidence above. They are intentionally stronger than VRChat's native behavior.
 6. For Live output, send a latest-wins safe viewport. Do not send a raw
    oversized caption and expect VRChat to retain the newest suffix; it retains
    the old prefix on the tested build.
-7. Preserve Unicode normalization and the verified CRLF, LF, VT, LINE SEPARATOR,
-   and PARAGRAPH SEPARATOR controls. Before both layout and send, replace each
-   bare CR, NEL, and FORM FEED with one ASCII space. Bare CR and NEL are unsafe
-   to pass through because their observed rendering is not a normal line break;
-   FORM FEED uses the same conservative product policy while its client behavior
-   remains unknown.
+7. Preserve Unicode normalization, TAB, and the verified CRLF, LF, VT, LINE
+   SEPARATOR, and PARAGRAPH SEPARATOR controls. Before both layout and send,
+   replace every other control character (general category `Cc`: C0
+   `U+0000`–`U+001F`, DEL `U+007F`, and C1 `U+0080`–`U+009F`), including NUL,
+   bare CR, NEL, and FORM FEED, with one ASCII space. NUL cannot pass through
+   because it terminates an OSC 1.0 string. Bare CR and NEL are unsafe to pass
+   through because their observed rendering is not a normal line break. FORM
+   FEED and the remaining controls use the same conservative product policy
+   while their client behavior remains unknown.
 8. Scripts requiring shaping or bidi reordering need shaped glyph advances.
    When the implementation cannot shape a grapheme confidently, reserve space
    conservatively rather than underestimating it.

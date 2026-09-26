@@ -784,12 +784,15 @@ fn completed_facade_sends_the_centrally_prepared_control_policy() -> AppResult<(
         publication.try_observe(&completed_update(
             1,
             "unit-1",
-            "one\rtwo\r\nthree\u{0085}four\u{000C}five",
+            "one\rtwo\r\nthree\u{0085}four\u{000C}five\u{0000}six\u{009F}seven",
             true,
         ))?,
         PublicationObservationOutcome::Handled
     );
-    assert_eq!(wait_for_text(&receiver)?, "one two\r\nthree four five");
+    assert_eq!(
+        wait_for_text(&receiver)?,
+        "one two\r\nthree four five six seven"
+    );
 
     close(&publication)
 }
@@ -797,8 +800,8 @@ fn completed_facade_sends_the_centrally_prepared_control_policy() -> AppResult<(
 #[test]
 fn live_facade_preserves_edge_separators_and_prepared_spaces() -> AppResult<()> {
     let (publication, receiver) = start_live()?;
-    let source = "\r\n\n\u{000B}\u{2028}\u{2029}\rnewest\u{0085}\u{000C}";
-    let expected = "\r\n\n\u{000B}\u{2028}\u{2029} newest  ";
+    let source = "\u{0000}\r\n\n\u{000B}\u{2028}\u{2029}\rnewest\u{0085}\u{000C}\u{009F}";
+    let expected = " \r\n\n\u{000B}\u{2028}\u{2029} newest   ";
 
     assert_eq!(
         publication.try_observe(&completed_update(1, "unit-1", source, true))?,
