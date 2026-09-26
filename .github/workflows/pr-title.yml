@@ -23,9 +23,12 @@ jobs:
   title:
     name: PR Title
     # Editing a closed pull request also fires `edited`; there is nothing to check then.
-    # Body edits on open pull requests still rerun the check, because a job skipped by a
-    # condition reports success and would hide a failing title.
-    if: github.event.pull_request.state == 'open'
+    # Dependabot writes its own conventional titles, and grouped ones can exceed the header
+    # limit. A job skipped by a condition reports success, so body edits on other open pull
+    # requests still rerun the check instead of skipping it and hiding a failing title.
+    if: >-
+      github.event.pull_request.state == 'open' &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
