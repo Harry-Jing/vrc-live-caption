@@ -309,7 +309,7 @@ impl CompletedTextAdapter for OpenAiResponsesAdapter {
         let (quiesced_sender, quiesced) = sync_channel(1);
         let task = QuiescenceGuard::new(
             async move {
-                let _attempt_permit = attempt_permit;
+                let attempt_permit = attempt_permit;
                 let result = execute_request(
                     endpoint,
                     credential,
@@ -320,6 +320,10 @@ impl CompletedTextAdapter for OpenAiResponsesAdapter {
                     task_provider_may_have_request,
                 )
                 .await;
+                // The physical call is over. Release the gate before publishing
+                // so the owner, which may begin the next unit as soon as it sees
+                // this result, never finds the gate still held by this call.
+                drop(attempt_permit);
                 if !task_cancelled.load(Ordering::SeqCst) {
                     completion.finish(result);
                 }
@@ -435,15 +439,24 @@ async fn execute_request(
     }
     // Once the send future is polled, the provider may finish the POST even if
     // dropping our local future closes the connection. A later timeout must
-    // therefore fail closed rather than authorize an overlapping retry.
+    // therefore stay ambiguous rather than authorize retrying this unit.
     provider_may_have_request.store(true, Ordering::SeqCst);
-    let response = tokio::time::timeout(remaining_budget(deadline)?, request.send())
-        .await
-        // Without provider acknowledgement, a POST that timed out or failed
-        // after dispatch is ambiguous: it may still have been accepted. Keep
-        // the provider-neutral class, but never authorize an overlapping retry.
-        .map_err(|_| terminal_deadline_exceeded())?
-        .map_err(map_ambiguous_transport_error)?;
+    let response = match tokio::time::timeout(remaining_budget(deadline)?, request.send()).await {
+        // Without provider acknowledgement, a POST that timed out after
+        // dispatch is ambiguous: it may still have been accepted.
+        Err(_) => return Err(terminal_deadline_exceeded()),
+        // hyper-util reports only connector failures as connect errors: TCP
+        // connect, the HTTP CONNECT tunnel, and the TLS handshake all finish
+        // before any request byte is written, so the provider never saw it.
+        Ok(Err(error)) if error.is_connect() => {
+            provider_may_have_request.store(false, Ordering::SeqCst);
+            return Err(map_transport_error(error));
+        }
+        // Any other send failure may follow a transmitted POST. Keep the
+        // provider-neutral class, but never authorize retrying this unit.
+        Ok(Err(error)) => return Err(map_ambiguous_transport_error(error)),
+        Ok(Ok(response)) => response,
+    };
     decode_response(response, deadline).await
 }
 

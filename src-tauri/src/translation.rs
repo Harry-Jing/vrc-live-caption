@@ -880,8 +880,9 @@ struct AdapterFailure {
     class: TranslationFailureClass,
     retryable: bool,
     retry_after: Option<Duration>,
-    // The adapter cannot prove whether the provider accepted the request.
-    // The owner must close admission, not merely finish this one unit.
+    // The adapter cannot prove whether the provider accepted the request, so
+    // the owner must never retry this unit. Later units keep their own
+    // attempts; the Adapter refuses a physical call that would overlap it.
     request_outcome_ambiguous: bool,
 }
 
@@ -893,6 +894,11 @@ trait CompletedTextAdapter: Send + Sync + 'static {
     /// bounded and cancellation-aware. They execute on an isolated attempt
     /// thread and never own a reservation or resource permit. A completion
     /// racing with Stop is suppressed by the owner.
+    ///
+    /// `begin` must refuse a new physical call while an earlier one, including
+    /// one whose cancellation was unconfirmed, has not quiesced locally. The
+    /// owner ends an ambiguous unit without retrying it but keeps serving later
+    /// units, so this refusal is what keeps their calls from overlapping it.
     fn begin(
         &self,
         request: CompletedTextRequest,
@@ -904,8 +910,8 @@ trait CompletedTextAdapter: Send + Sync + 'static {
 trait ActiveTranslationCall: Send {
     /// Returns `Confirmed` only after the provider request is fully quiescent
     /// and can no longer complete. An Adapter that cannot prove that boundary
-    /// must return `Unconfirmed`; the owner then closes admission instead of
-    /// starting another call.
+    /// must return `Unconfirmed`; the owner then ends that unit instead of
+    /// retrying it.
     fn cancel(&mut self) -> CancellationStatus;
 }
 
@@ -1007,9 +1013,14 @@ fn process_work(
         let result = match attempt_result {
             AttemptResult::Stopped => return,
             // Cancellation may be non-cooperative. Ending this job rather than
-            // retrying prevents two physical provider calls from overlapping.
+            // retrying keeps the provider from receiving this unit twice; the
+            // Adapter keeps a later job's call from overlapping this one.
             AttemptResult::UnconfirmedTimeout => {
-                fail_closed_after_unconfirmed_timeout(shared);
+                finish_failure(
+                    shared,
+                    work.job_id,
+                    TranslationFailureClass::DeadlineExceeded,
+                );
                 return;
             }
             AttemptResult::Cancelled => Err(AdapterFailure {
@@ -1020,7 +1031,7 @@ fn process_work(
             }),
             // Preserve an ambiguous provider outcome even if it arrives just
             // after the owner's deadline. Reclassifying it as a normal timeout
-            // would authorize an overlapping physical request.
+            // would authorize retrying a request the provider may have accepted.
             AttemptResult::Returned(Err(failure)) if failure.request_outcome_ambiguous => {
                 Err(failure)
             }
@@ -1049,8 +1060,10 @@ fn process_work(
                 return;
             }
             Err(failure) => {
+                // The provider may already hold this request, so the unit ends
+                // with its own class; later units keep their own attempts.
                 if failure.request_outcome_ambiguous {
-                    fail_closed_after_unconfirmed_timeout(shared);
+                    finish_failure(shared, work.job_id, failure.class);
                     return;
                 }
                 if !failure.retryable || attempt >= MAX_ATTEMPTS {
@@ -1231,8 +1244,8 @@ fn run_attempt(
         }
         if cancellation_requested && now >= total_deadline {
             // A provider that violated the bounded cancel contract is
-            // quarantined: dropping its JoinHandle detaches that attempt, while
-            // the owner closes admission and starts no replacement request.
+            // abandoned: dropping its JoinHandle detaches that attempt, and the
+            // owner ends this unit without a replacement request.
             return AttemptResult::UnconfirmedTimeout;
         }
         match event_receiver.recv_timeout(WORKER_POLL_INTERVAL) {
@@ -1314,34 +1327,6 @@ fn finish_failure(shared: &TranslationShared, job_id: u64, class: TranslationFai
     state
         .outcomes
         .push_back(TranslationOutcomeEnvelope { outcome });
-    drop(state);
-    shared.wake.notify_all();
-}
-
-fn fail_closed_after_unconfirmed_timeout(shared: &TranslationShared) {
-    let Ok(mut state) = shared.state.lock() else {
-        return;
-    };
-    state.accepting = false;
-    let mut failed = VecDeque::new();
-    if let Some(active) = state.active.take() {
-        failed.push_back(active);
-    }
-    failed.append(&mut state.pending);
-    for mut job in failed {
-        let Some(reservation) = job.reservation.take() else {
-            continue;
-        };
-        let outcome = TranslationTerminalOutcome::Failed(FailedTranslation {
-            source_ref: job.source_ref,
-            class: TranslationFailureClass::DeadlineExceeded,
-            reservation: Box::new(reservation),
-            _permit: job.permit,
-        });
-        state
-            .outcomes
-            .push_back(TranslationOutcomeEnvelope { outcome });
-    }
     drop(state);
     shared.wake.notify_all();
 }

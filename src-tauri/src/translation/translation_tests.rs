@@ -1041,7 +1041,7 @@ fn queued_work_does_not_shorten_retry_after_to_fit_the_remaining_budget() -> App
 }
 
 #[test]
-fn unconfirmed_attempt_timeout_fails_closed_without_starting_more_work() -> AppResult<()> {
+fn unconfirmed_attempt_timeout_fails_only_its_unit() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
     let fixture = TranslationPolicyFixture::new();
     let (mut module, outcomes) = fixture
@@ -1067,6 +1067,8 @@ fn unconfirmed_attempt_timeout_fails_closed_without_starting_more_work() -> AppR
         .map_err(fixture_error)?;
     fixture.advance(TOTAL_DEADLINE).map_err(fixture_error)?;
 
+    // The unconfirmed unit ends without a retry. The queued unit expires on
+    // its own admission deadline, which includes its time in the queue.
     for _ in 0..2 {
         let outcome = outcomes
             .recv_timeout(TEST_TIMEOUT)
@@ -1095,19 +1097,31 @@ fn unconfirmed_attempt_timeout_fails_closed_without_starting_more_work() -> AppR
     fixture
         .wait_for_quiescence(first, TEST_TIMEOUT)
         .map_err(fixture_error)?;
-    assert_eq!(
-        module
-            .try_submit(reservation(&store, 10, "after-close", "private source")?)
-            .map_err(|rejection| rejection.kind()),
-        Err(TranslationSubmitError::Closed)
-    );
+
+    // Admission stays open: a later unit gets its own attempt and translates.
+    fixture
+        .admit(
+            &module,
+            reservation(&store, 10, "after-unconfirmed", "later private source")?,
+            [AttemptScript::success("later translation")],
+        )
+        .map_err(fixture_error)?;
+    let later = outcomes
+        .recv_timeout(TEST_TIMEOUT)
+        .map_err(|_| AppError::state("Later translation was not received."))?;
+    let TranslationTerminalOutcome::Completed(later) = later else {
+        return Err(AppError::state("Later translation was not completed."));
+    };
+    assert_eq!(later.text, "later translation");
     let owner = module.stop_and_confirm_owner_quiesced()?;
-    assert_eq!(fixture.finish(owner).map_err(fixture_error)?.len(), 1);
+    let records = fixture.finish(owner).map_err(fixture_error)?;
+    assert_eq!(records.len(), 2);
+    assert_ne!(records[0].source_id(), records[1].source_id());
     Ok(())
 }
 
 #[test]
-fn late_ambiguous_result_keeps_its_fail_closed_semantics() -> AppResult<()> {
+fn late_ambiguous_result_fails_only_its_unit() -> AppResult<()> {
     let store = CaptionAggregateStore::default();
     let fixture = TranslationPolicyFixture::new();
     let (mut module, outcomes) = fixture
@@ -1132,8 +1146,13 @@ fn late_ambiguous_result_keeps_its_fail_closed_semantics() -> AppResult<()> {
     fixture
         .admit(
             &module,
-            reservation(&store, 29, "must-not-start", "queued private source")?,
-            [],
+            reservation(
+                &store,
+                29,
+                "queued-behind-ambiguous",
+                "queued private source",
+            )?,
+            [AttemptScript::success("queued translation")],
         )
         .map_err(fixture_error)?;
     fixture
@@ -1143,34 +1162,33 @@ fn late_ambiguous_result_keeps_its_fail_closed_semantics() -> AppResult<()> {
         .release_non_cooperative(first)
         .map_err(fixture_error)?;
 
-    for _ in 0..2 {
-        let outcome = outcomes
-            .recv_timeout(TEST_TIMEOUT)
-            .map_err(|_| AppError::state("Ambiguous failure was not received."))?;
-        assert!(matches!(
-            outcome,
-            TranslationTerminalOutcome::Failed(FailedTranslation {
-                class: TranslationFailureClass::DeadlineExceeded,
-                ..
-            })
-        ));
-    }
+    let ambiguous = outcomes
+        .recv_timeout(TEST_TIMEOUT)
+        .map_err(|_| AppError::state("Ambiguous failure was not received."))?;
+    assert!(matches!(
+        ambiguous,
+        TranslationTerminalOutcome::Failed(FailedTranslation {
+            class: TranslationFailureClass::DeadlineExceeded,
+            ..
+        })
+    ));
+    // The ambiguous unit is never retried, and the unit queued behind it does
+    // not inherit its failure: it gets its own attempt and translates.
+    let queued = outcomes
+        .recv_timeout(TEST_TIMEOUT)
+        .map_err(|_| AppError::state("Queued translation was not received."))?;
+    let TranslationTerminalOutcome::Completed(queued) = queued else {
+        return Err(AppError::state("Queued translation was not completed."));
+    };
+    assert_eq!(queued.text, "queued translation");
     fixture
         .wait_for_quiescence(first, TEST_TIMEOUT)
         .map_err(fixture_error)?;
-    assert!(matches!(
-        module
-            .try_submit(reservation(
-                &store,
-                29,
-                "closed-admission",
-                "later private source",
-            )?)
-            .map_err(|rejection| rejection.kind()),
-        Err(TranslationSubmitError::Closed)
-    ));
     let owner = module.stop_and_confirm_owner_quiesced()?;
-    assert_eq!(fixture.finish(owner).map_err(fixture_error)?.len(), 1);
+    let records = fixture.finish(owner).map_err(fixture_error)?;
+    assert_eq!(records.len(), 2);
+    assert_ne!(records[0].source_id(), records[1].source_id());
+    assert!(records.iter().all(|record| record.attempt_number() == 1));
     Ok(())
 }
 
