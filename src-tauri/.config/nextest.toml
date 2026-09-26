@@ -22,6 +22,7 @@ test-group = "property-regression"
 [[profile.default.overrides]]
 filter = '''
 test(/^host_resolver::tests::/) |
+test(/^system_proxy::windows::auto_detect::tests::/) |
 test(/^chatbox::osc::tests::/) |
 test(/^recognition::openai::transport::/) |
 test(/^translation::openai_responses::tests::/)
@@ -106,6 +107,7 @@ report-name = "risk-translation"
 inherits = "ci"
 default-filter = '''
 test(/^host_resolver::tests::/) |
+test(/^system_proxy::windows::auto_detect::tests::/) |
 test(/^chatbox::osc::tests::/) |
 test(/^recognition::openai::transport::/) |
 test(/^translation::openai_responses::tests::/)
@@ -123,6 +125,7 @@ test(/^chatbox::(completed|live|text_pacing)::tests::/) |
 test(/^chatbox::tests::/) |
 test(/^desktop::state::tests::/) |
 test(/^host_resolver::tests::/) |
+test(/^system_proxy::windows::auto_detect::tests::/) |
 test(/^recognition::openai::(realtime|reconnect|tests|transport)::/) |
 test(/^recognition::tests::/) |
 test(/^runtime::(coordinator|manager|output|supervisor)::tests::/) |
@@ -141,6 +144,7 @@ test(/^chatbox::(completed|live|text_pacing)::tests::/) |
 test(/^chatbox::tests::/) |
 test(/^desktop::state::tests::/) |
 test(/^host_resolver::tests::/) |
+test(/^system_proxy::windows::auto_detect::tests::/) |
 test(/^recognition::openai::(realtime|reconnect|tests|transport)::/) |
 test(/^recognition::tests::/) |
 test(/^runtime::(coordinator|manager|output|supervisor)::tests::/) |
@@ -167,6 +171,7 @@ test(/^chatbox::(completed|layout|live|osc|regression_tests|text_pacing)::/) |
 test(/^chatbox::tests::/) |
 test(/^desktop::state::tests::/) |
 test(/^host_resolver::tests::/) |
+test(/^system_proxy::windows::auto_detect::tests::/) |
 test(/^recognition::openai::/) |
 test(/^recognition::tests::/) |
 test(/^runtime::(coordinator|manager|output|supervisor)::tests::/) |

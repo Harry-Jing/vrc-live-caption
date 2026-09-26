@@ -1,13 +1,17 @@
 //! Provider-neutral system-proxy route selection for cloud HTTPS connections.
 //!
 //! Environment and supported platform settings are read for every selection so
-//! changing the system route does not require restarting the application.
+//! changing the system route does not require restarting the application. Only
+//! a Windows automatic-detection probe that found no script is briefly reused,
+//! because that probe can take seconds. Selection waits no longer than the
+//! caller's deadline and stops waiting when the caller is cancelled.
 //! Callers own connection mechanics and map the opaque failure into their own
 //! diagnostic vocabulary.
 
 use crate::error::{AppError, AppResult};
 use hyper_util::client::proxy::matcher::Matcher;
 use std::env::VarError;
+use std::time::Instant;
 use tungstenite::http::{HeaderValue, Uri};
 
 /// The hostname and port that a selected HTTPS route must resolve and dial.
@@ -41,8 +45,12 @@ pub(crate) struct RouteSelectionFailure;
 /// Selects the current environment or platform route for one HTTPS attempt.
 pub(crate) fn select_https_route(
     target: &Uri,
+    deadline: Instant,
+    is_cancelled: &dyn Fn() -> bool,
 ) -> Result<SelectedHttpsRoute, RouteSelectionFailure> {
-    select_https_route_with(target, || system_proxy_matcher(target))
+    select_https_route_with(target, || {
+        system_proxy_matcher(target, deadline, is_cancelled)
+    })
 }
 
 fn select_https_route_with(
@@ -75,7 +83,11 @@ fn select_https_route_with(
     })
 }
 
-pub(crate) fn system_proxy_matcher(target: &Uri) -> AppResult<Matcher> {
+pub(crate) fn system_proxy_matcher(
+    target: &Uri,
+    deadline: Instant,
+    is_cancelled: &dyn Fn() -> bool,
+) -> AppResult<Matcher> {
     let https_proxy = first_environment_value(&["HTTPS_PROXY", "https_proxy"])?;
     let all_proxy = first_environment_value(&["ALL_PROXY", "all_proxy"])?;
     let explicit_proxy = https_proxy
@@ -85,7 +97,7 @@ pub(crate) fn system_proxy_matcher(target: &Uri) -> AppResult<Matcher> {
     matcher_for_proxy_sources(
         explicit_proxy,
         || first_environment_value(&["NO_PROXY", "no_proxy"]),
-        || system_proxy_matcher_without_explicit_https(target),
+        || system_proxy_matcher_without_explicit_https(target, deadline, is_cancelled),
     )
 }
 
@@ -178,7 +190,11 @@ mod macos;
 mod windows;
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn system_proxy_matcher_without_explicit_https(_target: &Uri) -> AppResult<Matcher> {
+fn system_proxy_matcher_without_explicit_https(
+    _target: &Uri,
+    _deadline: Instant,
+    _is_cancelled: &dyn Fn() -> bool,
+) -> AppResult<Matcher> {
     // Linux has no additional supported system-proxy source. Reaching this branch
     // means no non-empty environment proxy was selected, so connect directly;
     // NO_PROXY alone does not select an environment route.
@@ -186,13 +202,23 @@ fn system_proxy_matcher_without_explicit_https(_target: &Uri) -> AppResult<Match
 }
 
 #[cfg(target_os = "macos")]
-fn system_proxy_matcher_without_explicit_https(target: &Uri) -> AppResult<Matcher> {
+fn system_proxy_matcher_without_explicit_https(
+    target: &Uri,
+    // macOS rejects PAC and automatic discovery before any network lookup, so
+    // its selection never waits.
+    _deadline: Instant,
+    _is_cancelled: &dyn Fn() -> bool,
+) -> AppResult<Matcher> {
     macos::system_proxy_matcher(&target.to_string())
 }
 
 #[cfg(target_os = "windows")]
-fn system_proxy_matcher_without_explicit_https(_target: &Uri) -> AppResult<Matcher> {
-    windows::system_proxy_matcher(None)
+fn system_proxy_matcher_without_explicit_https(
+    _target: &Uri,
+    deadline: Instant,
+    is_cancelled: &dyn Fn() -> bool,
+) -> AppResult<Matcher> {
+    windows::system_proxy_matcher(None, deadline, is_cancelled)
 }
 
 fn direct_matcher(no_proxy: Option<&str>) -> Matcher {

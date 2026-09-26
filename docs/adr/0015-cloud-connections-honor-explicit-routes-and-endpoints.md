@@ -5,6 +5,11 @@ operating system's current manual proxy route. A malformed, unsupported, or
 failed selected route fails closed; the app never treats it as permission to
 connect directly.
 
+Operating-system automatic proxy discovery that finds no configuration is not a
+selected route, so the app follows the operating system's order to its manual
+proxy or a direct connection. A discovered or configured PAC script is a
+selected route and fails closed until PAC evaluation is supported.
+
 Only verified proxy mechanisms are accepted; unsupported routes fail explicitly
 rather than being approximated. Platform-specific discovery and bypass
 semantics remain private transport details.

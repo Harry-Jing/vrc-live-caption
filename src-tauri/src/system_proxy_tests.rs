@@ -60,7 +60,7 @@ fn selected_https_route_rejects_non_https_with_an_opaque_failure() -> Result<(),
         .parse::<Uri>()
         .map_err(|error| format!("Failed to parse the test target: {error}"))?;
 
-    let failure = select_https_route(&target)
+    let failure = select_https_route(&target, Instant::now(), &|| false)
         .err()
         .ok_or_else(|| "A non-HTTPS target unexpectedly selected a route.".to_string())?;
 

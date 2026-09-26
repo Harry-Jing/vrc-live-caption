@@ -493,7 +493,8 @@ fn build_attempt_client(
                 .as_str()
                 .parse::<Uri>()
                 .map_err(|_| invalid_request())?;
-            let route = select_https_route(&target).map_err(|_| unknown_failure())?;
+            let route = select_https_route(&target, deadline, &|| cancelled.load(Ordering::SeqCst))
+                .map_err(|_| unknown_failure())?;
             build_routed_client(resolver, route, deadline, cancelled, true)
         }
         #[cfg(test)]
