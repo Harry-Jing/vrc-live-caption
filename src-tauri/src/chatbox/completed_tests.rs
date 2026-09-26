@@ -674,11 +674,20 @@ fn prepared_strings(text: &str) -> AppResult<Vec<String>> {
         .map_err(|error| AppError::runtime(describe_layout_error(error)))
 }
 
+/// Advances the controlled clock under the publisher state lock, in the
+/// worker's lock order (publisher state, then clock). The worker evaluates and
+/// enters its timed wait under that lock, so it either observes the new time or
+/// is already waiting when the notification arrives; the wakeup cannot be lost.
 fn advance_publisher_clock(
     clock: &ControlledClock,
     publisher: &CompletedChatboxPublisher,
     duration: Duration,
 ) {
+    let _state = publisher
+        .shared
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     clock.advance(duration);
     publisher.shared.wake.notify_all();
 }

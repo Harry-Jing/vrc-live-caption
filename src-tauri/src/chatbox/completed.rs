@@ -967,6 +967,9 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
             PublisherLifecycle::Running => {}
         }
 
+        // One clock snapshot drives every decision in this evaluation. A clock
+        // step between checks could otherwise let a typing reassertion act on
+        // a later time than the expiry checks above it already evaluated.
         let now = shared.text_pacer.now();
         expire_units_waiting_for_first_send_attempt(
             &mut state,
@@ -985,7 +988,7 @@ fn next_worker_item(shared: &PublisherShared) -> AppResult<WorkerItem> {
         if state.typing_desired
             && state
                 .next_typing_reassert_at
-                .is_some_and(|deadline| shared.text_pacer.now() >= deadline)
+                .is_some_and(|deadline| now >= deadline)
         {
             return Ok(WorkerItem::Typing {
                 epoch: state.typing_epoch,
