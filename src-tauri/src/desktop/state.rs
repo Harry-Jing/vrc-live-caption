@@ -335,8 +335,8 @@ impl AppState {
             .lock()
             .map_err(|_| AppError::state("Desired-state operation gate was poisoned."))?;
         let (config, config_requires_review) = match saved_settings::load(app)? {
-            // A corrupt or invalid config file must not lock the user out of
-            // the Settings page (the form only renders with a loaded config),
+            // An unreadable or invalid config file must not lock the user out
+            // of the Settings page (the form only renders with a loaded config),
             // so fall back to defaults and report it; the next save replaces
             // the broken file.
             SavedSettingsLoad::Ready(config) => (config, false),
