@@ -278,9 +278,40 @@ fn unreadable_internet_settings_fail_closed() -> AppResult<()> {
 }
 
 #[test]
+fn proxy_settings_that_are_not_valid_text_fail_closed() -> AppResult<()> {
+    let unpaired_surrogate = String::from_utf16(&[0x0068, 0xD800]);
+    assert!(unpaired_surrogate.is_err());
+
+    let hresult = decoded_setting(Some(unpaired_surrogate))
+        .err()
+        .ok_or_else(|| AppError::state("An invalid proxy setting read as text."))?;
+    let error = current_user_settings(Err(hresult))
+        .err()
+        .ok_or_else(|| AppError::state("An invalid proxy setting read as unset."))?;
+
+    assert_eq!(error.code(), "stt.network_unreachable");
+    assert_eq!(error.retry_disposition(), RetryDisposition::Terminal);
+    assert!(error.to_string().contains("0x80070459"));
+    Ok(())
+}
+
+#[test]
+fn readable_and_missing_proxy_settings_decode_unchanged() {
+    assert_eq!(decoded_setting(None), Ok(None));
+    assert_eq!(
+        decoded_setting(Some(Ok("proxy.example:8080".to_string()))),
+        Ok(Some("proxy.example:8080".to_string()))
+    );
+}
+
+#[test]
 fn win32_errors_match_their_documented_hresults() {
     assert_eq!(HRESULT_FILE_NOT_FOUND, 0x8007_0002_u32.cast_signed());
     assert_eq!(HRESULT_AUTODETECTION_FAILED, 0x8007_2F94_u32.cast_signed());
+    assert_eq!(
+        HRESULT_NO_UNICODE_TRANSLATION,
+        0x8007_0459_u32.cast_signed()
+    );
 }
 
 #[test]

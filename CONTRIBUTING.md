@@ -51,10 +51,12 @@ The package scripts are the supported entry points for checks:
 | `pnpm check:frontend` | Formatting, lint, frontend tests, type checking, and the Vite build |
 | `pnpm check:rust` | Rust formatting, compilation, Clippy, and tests |
 | `pnpm check` | Normal full local gate |
-| `pnpm check:ci` | Locked CI-style gate; run after `pnpm install --frozen-lockfile` |
+| `pnpm check:ci` | `pnpm check` with locked Cargo dependencies; run after `pnpm install --frozen-lockfile` |
 
 Run focused checks while iterating and `pnpm check` before opening a pull
-request. Run a frozen pnpm install before `pnpm check:ci` when reproducing CI.
+request. `pnpm check:ci` matches the Quality workflow's formatting, lint, build,
+and test steps, except that CI runs the Rust tests with nextest (see below);
+the dependency audits and native builds run only in CI.
 Pre-commit checks formatting, lint, and frontend/Rust buildability; pre-push
 runs the complete frontend gate and the locked Rust gate. Changes to platform
 integration or user-visible runtime behavior may also need manual Windows/VRChat

@@ -23,7 +23,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-build-${{ github.workflow }}-${{ github.ref }}
+  # A newer pull request update replaces the older run, but every push to main keeps its own
+  # group: one shared group would cancel all but the last of several quick merges.
+  group: native-build-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:

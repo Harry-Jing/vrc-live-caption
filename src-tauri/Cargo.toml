@@ -59,6 +59,9 @@ system-configuration = "0.8.0"
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = "1.0.0"
 winhttp = { version = "0.1.3", default-features = false }
+# winhttp reads proxy settings that are not valid UTF-16 as unset; reading them
+# through the same windows version it builds on lets those settings fail closed.
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Networking_WinHttp"] }
 
 [dev-dependencies]
 proptest = { version = "1.11.0", default-features = false, features = ["std"] }
