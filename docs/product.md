@@ -93,12 +93,21 @@ may skip obsolete intermediate revisions rather than replaying old guesses.
 Completed speech is published in order. Text that exceeds one Chatbox view is
 paginated without truncating the beginning or end.
 
+Each Chatbox message replaces the previous one, so every Completed page stays
+visible for a reading time proportional to its length—never less than the
+one-second pacing interval and never more than a fixed cap—before the next page,
+from the same unit or the next, replaces it. A page with nothing queued behind
+it simply stays. When speech outpaces reading, waiting units are dropped whole
+and visibly rather than truncated or published ever later. The reading rate,
+cap, and backlog limits are provisional until native readability validation.
+
 ### Bilingual output
 
 When Translation succeeds, Completed Chatbox publication pairs it with its exact
 Source and renders Source above Translation. Across pages, each selected lane's
 text appears losslessly once; an exhausted shorter lane is not repeated, and
-the longer lane may continue alone.
+the longer lane may continue alone. Bilingual and Translation-only pages follow
+the same reading-time rule, measured over each page's full content.
 
 On terminal Translation failure, the App shows the failed unit and degraded
 state. Translation-only omits it; Bilingual publishes Source as a partial

@@ -12,6 +12,7 @@ mod diagnostics;
 mod layout;
 mod live;
 mod osc;
+mod reading_time;
 mod text_pacing;
 mod transport;
 

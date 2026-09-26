@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const PACING_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const CHATBOX_TEXT_ATTEMPT_INTERVAL: Duration = Duration::from_millis(1000);
+pub(super) const CHATBOX_TEXT_ATTEMPT_INTERVAL: Duration = Duration::from_millis(1000);
 
 pub(crate) trait Clock: Send + Sync {
     fn now(&self) -> Instant;
@@ -111,6 +111,25 @@ impl ChatboxTextPacer {
                 clock: self.shared.clock.as_ref(),
                 state,
             }));
+        }
+    }
+
+    /// Sleeps on the pacing clock until `deadline` or until `cancel` is set,
+    /// whichever comes first. It neither reserves nor records a text-send
+    /// attempt. Like a pacing wait, it sleeps at most one poll interval at a
+    /// time, so a publisher's own hold on the next attempt never sleeps
+    /// through Stop and stays driven by the same controllable clock.
+    pub(crate) fn sleep_until(&self, deadline: Instant, cancel: &AtomicBool) {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+
+            let remaining = deadline.saturating_duration_since(self.shared.clock.now());
+            if remaining.is_zero() {
+                return;
+            }
+            self.shared.clock.sleep(remaining.min(PACING_POLL_INTERVAL));
         }
     }
 }

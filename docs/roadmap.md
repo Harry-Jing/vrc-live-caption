@@ -148,7 +148,8 @@ that passed their gates.
 - establish versioning and release notes;
 - validate proxy and custom-base-URL behavior with users on Chinese networks;
 - audit the final Tauri capability allowlist;
-- tune provisional Chatbox backlog limits from real readability measurements;
+- tune provisional Chatbox page reading time and backlog limits from real
+  readability measurements;
 - run long-duration Windows/VRChat tests for every advertised path;
 - test clean install, update failure, recovery, and uninstall.
 

@@ -42,6 +42,42 @@ enum TransportEvent {
     Typing(bool),
 }
 
+/// Waits until the recorded transport events satisfy `satisfied`. The
+/// one-second bound is a deadlock diagnostic; every caller names a causal
+/// milestone, such as the final typing-off after the expected pages.
+fn wait_for_recorded<T: Clone>(
+    events: &Mutex<Vec<T>>,
+    changed: &Condvar,
+    expectation: &str,
+    satisfied: impl Fn(&[T]) -> bool,
+) -> AppResult<Vec<T>> {
+    let events = events
+        .lock()
+        .map_err(|_| AppError::state("Transport recording lock was poisoned."))?;
+    let (events, timeout) = changed
+        .wait_timeout_while(events, Duration::from_secs(1), |events| !satisfied(events))
+        .map_err(|_| AppError::state("Transport recording lock was poisoned."))?;
+    if timeout.timed_out() && !satisfied(&events) {
+        return Err(AppError::runtime(format!(
+            "Expected {expectation} within one second; recorded {} transport event(s).",
+            events.len()
+        )));
+    }
+
+    Ok(events.clone())
+}
+
+/// The publication milestone for a queue that drains completely: exactly
+/// `text_count` text attempts, followed by the final typing-off transition.
+fn texts_then_typing_off(events: &[TransportEvent], text_count: usize) -> bool {
+    events
+        .iter()
+        .filter(|event| matches!(event, TransportEvent::Text(_)))
+        .count()
+        == text_count
+        && events.last() == Some(&TransportEvent::Typing(false))
+}
+
 struct AdvancingClock {
     now: Mutex<Instant>,
 }
@@ -162,6 +198,95 @@ impl Clock for ControlledClock {
     }
 }
 
+/// A policy clock for scripted sustained input. Worker sleeps that end by the
+/// test-owned horizon complete immediately in policy time; a sleep that would
+/// pass it parks the worker. Parking is the milestone that the worker has made
+/// every decision due by the horizon, so the test can then submit input at
+/// exactly that policy time.
+struct HorizonClock {
+    state: Mutex<HorizonClockState>,
+    changed: Condvar,
+}
+
+struct HorizonClockState {
+    now: Instant,
+    horizon: Instant,
+    worker_parked: bool,
+}
+
+impl HorizonClock {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            state: Mutex::new(HorizonClockState {
+                now,
+                horizon: now,
+                worker_parked: false,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    /// Lets the worker run through `at`, waits until it parks beyond it, and
+    /// leaves policy time at exactly `at`. The worker must have queued pages;
+    /// an idle worker waits on its condition variable and never parks.
+    fn run_until(&self, at: Instant) -> AppResult<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::state("Horizon clock lock was poisoned."))?;
+        state.horizon = at;
+        state.worker_parked = false;
+        self.changed.notify_all();
+        let (mut state, timeout) = self
+            .changed
+            .wait_timeout_while(state, Duration::from_secs(1), |state| !state.worker_parked)
+            .map_err(|_| AppError::state("Horizon clock lock was poisoned."))?;
+        if timeout.timed_out() && !state.worker_parked {
+            return Err(AppError::runtime(
+                "The publisher worker did not park at the policy-time horizon.",
+            ));
+        }
+        state.now = state.now.max(at);
+        Ok(())
+    }
+
+    /// Removes the horizon so the worker can drain without further input.
+    fn release(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.horizon = state.now + Duration::from_secs(3_600);
+            self.changed.notify_all();
+        }
+    }
+}
+
+impl Clock for HorizonClock {
+    fn now(&self) -> Instant {
+        self.state
+            .lock()
+            .map(|state| state.now)
+            .unwrap_or_else(|poisoned| poisoned.into_inner().now)
+    }
+
+    fn sleep(&self, duration: Duration) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let deadline = state.now + duration;
+        while deadline > state.horizon {
+            if !state.worker_parked {
+                state.worker_parked = true;
+                self.changed.notify_all();
+            }
+            let Ok(next_state) = self.changed.wait(state) else {
+                return;
+            };
+            state = next_state;
+        }
+        state.now = state.now.max(deadline);
+    }
+}
+
 struct RecordingTransport {
     events: Mutex<Vec<TransportEvent>>,
     changed: Condvar,
@@ -202,6 +327,15 @@ impl RecordingTransport {
             .lock()
             .map(|events| events.clone())
             .map_err(|_| AppError::state("Recording transport lock was poisoned."))
+    }
+
+    fn wait_for_texts_then_typing_off(&self, text_count: usize) -> AppResult<Vec<TransportEvent>> {
+        wait_for_recorded(
+            &self.events,
+            &self.changed,
+            &format!("{text_count} text attempt(s) followed by typing-off"),
+            |events| texts_then_typing_off(events, text_count),
+        )
     }
 
     fn record(&self, event: TransportEvent) -> AppResult<()> {
@@ -248,6 +382,10 @@ impl BlockFirstTextTransport {
 
     fn wait_for_events(&self, count: usize) -> AppResult<Vec<TransportEvent>> {
         self.recording.wait_for_events(count)
+    }
+
+    fn wait_for_texts_then_typing_off(&self, text_count: usize) -> AppResult<Vec<TransportEvent>> {
+        self.recording.wait_for_texts_then_typing_off(text_count)
     }
 }
 
@@ -385,6 +523,24 @@ impl ScriptedTransport {
         Ok(events.clone())
     }
 
+    fn wait_for_texts_then_typing_off(
+        &self,
+        text_count: usize,
+    ) -> AppResult<Vec<TimedTransportEvent>> {
+        wait_for_recorded(
+            &self.events,
+            &self.changed,
+            &format!("{text_count} timed text attempt(s) followed by typing-off"),
+            |events| {
+                let events = events
+                    .iter()
+                    .map(|event| event.event.clone())
+                    .collect::<Vec<_>>();
+                texts_then_typing_off(&events, text_count)
+            },
+        )
+    }
+
     fn record(&self, event: TransportEvent) -> AppResult<()> {
         let mut events = self
             .events
@@ -518,11 +674,20 @@ fn prepared_strings(text: &str) -> AppResult<Vec<String>> {
         .map_err(|error| AppError::runtime(describe_layout_error(error)))
 }
 
+/// Advances the controlled clock under the publisher state lock, in the
+/// worker's lock order (publisher state, then clock). The worker evaluates and
+/// enters its timed wait under that lock, so it either observes the new time or
+/// is already waiting when the notification arrives; the wakeup cannot be lost.
 fn advance_publisher_clock(
     clock: &ControlledClock,
     publisher: &CompletedChatboxPublisher,
     duration: Duration,
 ) {
+    let _state = publisher
+        .shared
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     clock.advance(duration);
     publisher.shared.wake.notify_all();
 }
@@ -584,7 +749,7 @@ fn sends_every_exact_page_in_order() -> AppResult<()> {
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 8,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -607,7 +772,9 @@ fn sends_every_exact_page_in_order() -> AppResult<()> {
         },
     )?;
 
-    let events = transport.wait_for_events(expected_pages.len() + 2)?;
+    // Typing reassertions may interleave with the first page's reading dwell,
+    // so the milestone is the typing-off that follows every page.
+    let events = transport.wait_for_texts_then_typing_off(expected_pages.len())?;
     let sent_pages = events
         .iter()
         .filter_map(|event| match event {
@@ -641,7 +808,7 @@ fn submission_does_not_wait_for_an_in_flight_osc_attempt() -> AppResult<()> {
         ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
-            max_resident_pages: 8,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -730,7 +897,9 @@ fn overload_drops_only_the_oldest_whole_unit_waiting_for_its_first_send_attempt(
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 3,
+            // Room for one 136-ideograph unit (an 8-s capped page plus a
+            // 1-s page) and one short 1-s unit, but not a second long unit.
+            max_resident_reading_time: Duration::from_secs(10),
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -758,7 +927,7 @@ fn overload_drops_only_the_oldest_whole_unit_waiting_for_its_first_send_attempt(
     }
 
     clock.release_automatic();
-    let events = transport.wait_for_events(5)?;
+    let events = transport.wait_for_texts_then_typing_off(3)?;
     let sent_pages = events
         .iter()
         .filter_map(|event| match event {
@@ -787,7 +956,7 @@ fn overload_drops_only_the_oldest_whole_unit_waiting_for_its_first_send_attempt(
 }
 
 #[test]
-fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()> {
+fn failed_page_consumes_pacing_starts_no_dwell_and_aborts_the_rest_of_its_unit() -> AppResult<()> {
     let clock = Arc::new(ControlledClock::new());
     let clock_for_transport: Arc<dyn Clock> = clock.clone();
     let transport = Arc::new(ScriptedTransport::new(clock_for_transport, [2]));
@@ -804,7 +973,7 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 8,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -831,7 +1000,7 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
     }
     clock.release_automatic();
 
-    let events = transport.wait_for_events(5)?;
+    let events = transport.wait_for_texts_then_typing_off(3)?;
     let text_attempts = events
         .iter()
         .filter(|event| matches!(event.event, TransportEvent::Text(_)))
@@ -851,12 +1020,15 @@ fn failed_page_consumes_pacing_and_aborts_the_rest_of_its_unit() -> AppResult<()
             "B".to_string()
         ]
     );
+    // The accepted full first page holds the Chatbox for the capped dwell.
     assert_eq!(
         text_attempts[1]
             .at
             .saturating_duration_since(text_attempts[0].at),
-        Duration::from_secs(1)
+        PROVISIONAL_MAX_PAGE_DWELL
     );
+    // The failed attempt displayed nothing new, so only its consumed pacing
+    // opportunity separates it from the next unit.
     assert_eq!(
         text_attempts[2]
             .at
@@ -897,7 +1069,9 @@ fn send_started_unit_is_protected_and_new_unit_is_rejected_without_eviction() ->
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 3,
+            // Room for the in-flight unit's 8-s and 1-s pages plus one short
+            // unit; another 9-s unit cannot fit beside the protected pages.
+            max_resident_reading_time: Duration::from_secs(10),
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -944,7 +1118,7 @@ fn send_started_unit_is_protected_and_new_unit_is_rejected_without_eviction() ->
         .send(())
         .map_err(|_| AppError::runtime("Could not release the first in-flight send attempt."))?;
 
-    let events = transport.wait_for_events(5)?;
+    let events = transport.wait_for_texts_then_typing_off(3)?;
     let sent_pages = events
         .iter()
         .filter_map(|event| match event {
@@ -970,7 +1144,8 @@ fn send_started_unit_is_protected_and_new_unit_is_rejected_without_eviction() ->
 }
 
 #[test]
-fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> AppResult<()> {
+fn unit_longer_than_the_reading_budget_is_rejected_whole_without_changing_the_queue()
+-> AppResult<()> {
     let transport = Arc::new(RecordingTransport::new());
     let clock = Arc::new(ControlledClock::new());
     let pacer = ChatboxTextPacer::with_clock(clock.clone());
@@ -986,7 +1161,9 @@ fn unit_larger_than_capacity_is_rejected_whole_without_changing_the_queue() -> A
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 2,
+            // 271 ideographs need 8 s + 8 s + 1 s: longer than the budget
+            // even with nothing else queued.
+            max_resident_reading_time: Duration::from_secs(10),
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1048,7 +1225,7 @@ fn stale_unit_waiting_for_its_first_send_attempt_expires_whole() -> AppResult<()
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1121,7 +1298,7 @@ fn overlapping_activity_keeps_typing_on_until_the_last_unit_resolves() -> AppRes
         ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1180,7 +1357,7 @@ fn active_typing_is_reasserted_on_the_best_effort_interval() -> AppResult<()> {
         ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1255,7 +1432,7 @@ fn failed_typing_reassertion_waits_before_trying_again() -> AppResult<()> {
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1328,7 +1505,7 @@ fn stop_cancels_a_pending_typing_reassertion() -> AppResult<()> {
         ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1374,7 +1551,7 @@ fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<
         ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1429,15 +1606,16 @@ fn stop_waits_for_a_linearized_typing_reassertion_then_cleans_up() -> AppResult<
 }
 
 #[test]
-fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<()> {
+fn typing_is_reasserted_through_page_dwell_without_shifting_text_attempts() -> AppResult<()> {
     let clock = Arc::new(AdvancingClock::new());
     let transport_clock: Arc<dyn Clock> = clock.clone();
     let transport = Arc::new(ScriptedTransport::new(transport_clock, []));
+    // Six full 135-ideograph pages, each dwelling for the cap, then one more.
     let text = "中".repeat(811);
     let page_count = prepare_completed_pages(&text)
         .map_err(|error| AppError::runtime(describe_layout_error(error)))?
         .len();
-    assert!(page_count >= 6);
+    assert_eq!(page_count, 7);
     let publisher = CompletedChatboxPublisher::start_with_limits(
         transport.clone(),
         ChatboxTextPacer::with_clock(clock),
@@ -1445,7 +1623,7 @@ fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<(
         ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
-            max_resident_pages: page_count,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1466,7 +1644,7 @@ fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<(
         },
     )?;
 
-    let events = transport.wait_for_events(page_count + 3)?;
+    let events = transport.wait_for_texts_then_typing_off(page_count)?;
     let text_attempts = events
         .iter()
         .filter_map(|event| match event.event {
@@ -1474,18 +1652,30 @@ fn typing_reassertions_do_not_consume_text_pacing_opportunities() -> AppResult<(
             TransportEvent::Typing(_) => None,
         })
         .collect::<Vec<_>>();
+    let typing_on = events
+        .iter()
+        .filter(|event| event.event == TransportEvent::Typing(true))
+        .map(|event| event.at)
+        .collect::<Vec<_>>();
     assert_eq!(text_attempts.len(), page_count);
+    // Reassertions during each hold neither consume nor shift a text attempt.
     assert!(
         text_attempts
             .windows(2)
-            .all(|attempts| { attempts[1].duration_since(attempts[0]) == Duration::from_secs(1) })
+            .all(|attempts| attempts[1].duration_since(attempts[0]) == PROVISIONAL_MAX_PAGE_DWELL)
     );
+    // Typing stays on while pages remain queued and is reasserted on its own
+    // interval throughout every dwell, then turns off after the final page.
+    assert_eq!(typing_on.first(), text_attempts.first());
+    assert!(
+        typing_on
+            .windows(2)
+            .all(|typing| typing[1].duration_since(typing[0]) == TYPING_REASSERT_INTERVAL)
+    );
+    assert_eq!(typing_on.last(), text_attempts.last());
     assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.event == TransportEvent::Typing(true))
-            .count(),
-        2
+        events.last().map(|event| event.at),
+        text_attempts.last().copied()
     );
 
     publisher.request_close(PublisherCloseReason::Stop)?;
@@ -1504,7 +1694,7 @@ fn layout_failure_resolves_typing_without_attempting_text() -> AppResult<()> {
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1560,7 +1750,7 @@ fn failed_typing_on_is_diagnosed_and_still_followed_by_typing_off() -> AppResult
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1625,7 +1815,7 @@ fn stop_interrupts_a_pacing_wait_discards_late_submissions_and_cleans_typing_onc
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1699,7 +1889,7 @@ fn stop_waits_for_a_linearized_attempt_then_discards_every_remaining_page() -> A
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1789,7 +1979,7 @@ fn concurrent_close_and_join_perform_one_cleanup() -> AppResult<()> {
         ContentSelection::SourceOnly,
         Arc::new(|_| {}),
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1828,7 +2018,7 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
         ContentSelection::SourceOnly,
         reporter,
         PublisherLimits {
-            max_resident_pages: 4,
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
             max_wait_before_first_send_attempt: Duration::from_secs(30),
             max_wait_for_translation: Duration::from_secs(20),
         },
@@ -1853,6 +2043,474 @@ fn poisoned_state_still_wakes_the_worker_and_attempts_one_cleanup() -> AppResult
 }
 
 // ---------------------------------------------------------------------------
+// Reading dwell: an accepted page holds the Chatbox before the next page.
+// ---------------------------------------------------------------------------
+
+fn source_unit(text: &str) -> (String, String) {
+    (text.to_string(), String::new())
+}
+
+fn timed_text_attempts(events: &[TimedTransportEvent]) -> Vec<(String, Instant)> {
+    events
+        .iter()
+        .filter_map(|event| match &event.event {
+            TransportEvent::Text(text) => Some((text.clone(), event.at)),
+            TransportEvent::Typing(_) => None,
+        })
+        .collect()
+}
+
+fn gaps_between(attempts: &[(String, Instant)]) -> Vec<Duration> {
+    attempts
+        .windows(2)
+        .map(|pair| pair[1].1.saturating_duration_since(pair[0].1))
+        .collect()
+}
+
+/// Publishes each `(source, translation)` unit under `content` and returns the
+/// timed text attempts after every expected page and the final typing-off.
+/// Policy time advances only while the worker sleeps, so each gap between
+/// attempts is exactly the hold the worker chose, whatever the real thread
+/// schedule; Source-only units ignore their Translation.
+fn publish_and_time_units(
+    content: ContentSelection,
+    units: &[(String, String)],
+    expected_text_count: usize,
+) -> AppResult<Vec<(String, Instant)>> {
+    let clock = Arc::new(AdvancingClock::new());
+    let transport_clock: Arc<dyn Clock> = clock.clone();
+    let transport = Arc::new(ScriptedTransport::new(transport_clock, []));
+    let publisher = CompletedChatboxPublisher::start_with_limits(
+        transport.clone(),
+        ChatboxTextPacer::with_clock(clock),
+        open_committer(),
+        content,
+        Arc::new(|_| {}),
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
+    )?;
+
+    for (index, (source, translation)) in units.iter().enumerate() {
+        let unit_id = format!("unit-{index}");
+        complete_source(&publisher, &unit_id, 1, source)?;
+        if content != ContentSelection::SourceOnly {
+            complete_translation(&publisher, &unit_id, 1, translation)?;
+        }
+    }
+    let events = transport.wait_for_texts_then_typing_off(expected_text_count)?;
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(timed_text_attempts(&events))
+}
+
+#[test]
+fn short_page_dwells_only_for_the_one_second_pacing_floor() -> AppResult<()> {
+    // Two Latin letters read in well under a second, so the next unit replaces
+    // the page as soon as the shared pacer allows, exactly as before dwell.
+    let attempts = publish_and_time_units(
+        ContentSelection::SourceOnly,
+        &[source_unit("ok"), source_unit("next")],
+        2,
+    )?;
+
+    assert_eq!(gaps_between(&attempts), vec![Duration::from_secs(1)]);
+    Ok(())
+}
+
+#[test]
+fn page_dwell_is_proportional_to_its_reading_length() -> AppResult<()> {
+    // Each ideograph reads as one em at 120 ms, so 25 ideographs hold the
+    // Chatbox for 3 s and twice as many for 6 s.
+    let attempts = publish_and_time_units(
+        ContentSelection::SourceOnly,
+        &[
+            source_unit(&"中".repeat(25)),
+            source_unit(&"中".repeat(50)),
+            source_unit("next"),
+        ],
+        3,
+    )?;
+
+    assert_eq!(
+        gaps_between(&attempts),
+        vec![Duration::from_secs(3), Duration::from_secs(6)]
+    );
+    Ok(())
+}
+
+#[test]
+fn full_page_dwell_stops_at_the_cap() -> AppResult<()> {
+    // A full 135-ideograph page would need 16.2 s at the reading rate.
+    let full_page = "中".repeat(135);
+    assert_eq!(prepared_strings(&full_page)?.len(), 1);
+
+    let attempts = publish_and_time_units(
+        ContentSelection::SourceOnly,
+        &[source_unit(&full_page), source_unit("next")],
+        2,
+    )?;
+
+    assert_eq!(gaps_between(&attempts), vec![PROVISIONAL_MAX_PAGE_DWELL]);
+    Ok(())
+}
+
+#[test]
+fn final_page_of_a_unit_dwells_before_the_next_unit_replaces_it() -> AppResult<()> {
+    let long_unit = "中".repeat(160);
+    let pages = prepared_strings(&long_unit)?;
+    assert_eq!(
+        pages
+            .iter()
+            .map(|page| page.chars().count())
+            .collect::<Vec<_>>(),
+        vec![135, 25]
+    );
+
+    let attempts = publish_and_time_units(
+        ContentSelection::SourceOnly,
+        &[source_unit(&long_unit), source_unit("next")],
+        3,
+    )?;
+
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|(text, _)| text.clone())
+            .collect::<Vec<_>>(),
+        vec![pages[0].clone(), pages[1].clone(), "next".to_string()]
+    );
+    // The full first page dwells for the cap; the 25-ideograph final page
+    // still holds the Chatbox for its own 3 s before the next unit.
+    assert_eq!(
+        gaps_between(&attempts),
+        vec![PROVISIONAL_MAX_PAGE_DWELL, Duration::from_secs(3)]
+    );
+    Ok(())
+}
+
+#[test]
+fn bilingual_page_dwells_for_the_full_content_of_both_lanes() -> AppResult<()> {
+    let source = "中".repeat(10);
+    let translation = "文".repeat(15);
+
+    let attempts = publish_and_time_units(
+        ContentSelection::Bilingual,
+        &[
+            (source.clone(), translation.clone()),
+            ("next".to_string(), "下".to_string()),
+        ],
+        2,
+    )?;
+
+    assert_eq!(
+        attempts.first().map(|(text, _)| text.clone()),
+        Some(format!("{source}\n{translation}"))
+    );
+    // The shared page carries 25 ideographs and holds for 3 s; either lane
+    // alone would have held it for only 1.2 s or 1.8 s.
+    assert_eq!(gaps_between(&attempts), vec![Duration::from_secs(3)]);
+    Ok(())
+}
+
+#[test]
+fn translation_only_page_dwells_for_the_published_translation() -> AppResult<()> {
+    let translation = "文".repeat(25);
+
+    // The held 50-ideograph Source would read for 6 s, but only its
+    // 25-ideograph Translation is published.
+    let attempts = publish_and_time_units(
+        ContentSelection::TranslationOnly,
+        &[
+            ("中".repeat(50), translation.clone()),
+            ("next".to_string(), "下".to_string()),
+        ],
+        2,
+    )?;
+
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|(text, _)| text.clone())
+            .collect::<Vec<_>>(),
+        vec![translation, "下".to_string()]
+    );
+    assert_eq!(gaps_between(&attempts), vec![Duration::from_secs(3)]);
+    Ok(())
+}
+
+#[test]
+fn stop_during_a_page_dwell_sends_nothing_further_and_discards_queued_pages() -> AppResult<()> {
+    let transport = Arc::new(RecordingTransport::new());
+    let clock = Arc::new(ControlledClock::new());
+    let fence = GenerationFence::new();
+    let (reporter, diagnostics) = recording_reporter();
+    let publisher = CompletedChatboxPublisher::start_with_limits(
+        transport.clone(),
+        ChatboxTextPacer::with_clock(clock.clone()),
+        fence.committer(),
+        ContentSelection::SourceOnly,
+        reporter,
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
+    )?;
+    let long_unit = "中".repeat(160);
+    let pages = prepared_strings(&long_unit)?;
+
+    complete_source(&publisher, "dwelling", 1, &long_unit)?;
+    complete_source(&publisher, "queued", 1, "next")?;
+    // The fresh pacer admits the first page without sleeping, so the first
+    // clock sleep is the worker holding the next page for the 8-s dwell.
+    assert_eq!(
+        transport.wait_for_events(2)?,
+        vec![
+            TransportEvent::Typing(true),
+            TransportEvent::Text(pages[0].clone()),
+        ]
+    );
+    clock.wait_for_sleep_calls(1)?;
+
+    close_at_fence(&fence, &publisher)?;
+    clock.release_automatic();
+    publisher.join()?;
+
+    assert_eq!(
+        transport.events()?,
+        vec![
+            TransportEvent::Typing(true),
+            TransportEvent::Text(pages[0].clone()),
+            TransportEvent::Typing(false),
+        ]
+    );
+    // Stop ended the hold at its first poll instead of sleeping through it.
+    assert_eq!(clock.total_sleep()?, Duration::from_millis(100));
+    assert!(diagnostics.contains(|diagnostic| matches!(
+        diagnostic,
+        CompletedPublisherDiagnostic::PagesDiscardedOnClose {
+            reason: PublisherCloseReason::Stop,
+            unit_count: 2,
+            page_count: 2,
+            send_started_unit_count: 1,
+            translation_wait_unit_count: 0,
+        }
+    ))?);
+    Ok(())
+}
+
+#[test]
+fn unit_expiring_during_a_page_dwell_is_dropped_whole_at_its_deadline() -> AppResult<()> {
+    let clock = Arc::new(AdvancingClock::new());
+    let transport_clock: Arc<dyn Clock> = clock.clone();
+    let transport = Arc::new(ScriptedTransport::new(transport_clock, []));
+    let (reporter, diagnostics) = recording_reporter();
+    let first_send_budget = Duration::from_secs(5);
+    let publisher = CompletedChatboxPublisher::start_with_limits(
+        transport.clone(),
+        ChatboxTextPacer::with_clock(clock),
+        open_committer(),
+        ContentSelection::SourceOnly,
+        reporter,
+        PublisherLimits {
+            max_resident_reading_time: PROVISIONAL_MAX_RESIDENT_READING_TIME,
+            // Shorter than one capped dwell, so the waiting unit expires while
+            // the displayed page still holds the Chatbox.
+            max_wait_before_first_send_attempt: first_send_budget,
+            max_wait_for_translation: Duration::from_secs(20),
+        },
+    )?;
+    let displayed = "中".repeat(135);
+
+    // Both units open first, so typing stays on until the second resolves.
+    for unit_id in ["displayed", "stale"] {
+        submit_handled(
+            &publisher,
+            SourceUnitEvent::Opened {
+                unit_id: unit_id.to_string(),
+            },
+        )?;
+    }
+    for (unit_id, text) in [
+        ("displayed", displayed.clone()),
+        ("stale", "stale".to_string()),
+    ] {
+        submit_handled(
+            &publisher,
+            SourceUnitEvent::Completed {
+                unit_id: unit_id.to_string(),
+                revision: 1,
+                text,
+            },
+        )?;
+    }
+
+    let events = transport.wait_for_texts_then_typing_off(1)?;
+    let attempts = timed_text_attempts(&events);
+    let [(sent_text, sent_at)] = attempts.as_slice() else {
+        return Err(AppError::runtime("Expected exactly one text attempt."));
+    };
+    assert_eq!(sent_text, &displayed);
+    // The hold wakes for the waiting unit's first-send budget: the unit is
+    // dropped whole and typing released then, not when the 8-s dwell ends.
+    assert_eq!(
+        events.last().map(|event| event.at),
+        Some(*sent_at + first_send_budget)
+    );
+    diagnostics.wait_for("the stale unit to expire whole", |diagnostic| {
+        matches!(
+            diagnostic,
+            CompletedPublisherDiagnostic::UnitExpired {
+                unit_id,
+                page_count: 1,
+            } if unit_id == "stale"
+        )
+    })?;
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn reading_budget_drops_the_oldest_waiting_unit_although_few_pages_are_resident() -> AppResult<()> {
+    let transport = Arc::new(RecordingTransport::new());
+    let clock = Arc::new(ControlledClock::new());
+    let pacer = ChatboxTextPacer::with_clock(clock.clone());
+    pacer
+        .wait_for_text_attempt(None)?
+        .ok_or_else(|| AppError::runtime("Initial pacing reservation was cancelled."))?
+        .attempt(|| Ok(()))?;
+    let (reporter, diagnostics) = recording_reporter();
+    let publisher = CompletedChatboxPublisher::start_with_limits(
+        transport.clone(),
+        pacer,
+        open_committer(),
+        ContentSelection::SourceOnly,
+        reporter,
+        content_limits(PROVISIONAL_MAX_PAGE_DWELL * 2),
+    )?;
+    // Only three pages are resident, but each dwells for the cap: 24 s of
+    // reading cannot fit a 16-s budget, so the oldest waiting unit goes whole.
+    let [oldest, middle, newest] = ["甲", "乙", "丙"].map(|glyph| glyph.repeat(70));
+
+    complete_source(&publisher, "oldest", 1, &oldest)?;
+    complete_source(&publisher, "middle", 1, &middle)?;
+    complete_source(&publisher, "newest", 1, &newest)?;
+    clock.release_automatic();
+
+    let events = transport.wait_for_texts_then_typing_off(2)?;
+    assert_eq!(sent_texts(&events), vec![middle, newest]);
+    diagnostics.wait_for("the oldest unit to be dropped whole", |diagnostic| {
+        matches!(
+            diagnostic,
+            CompletedPublisherDiagnostic::UnitDroppedOverload {
+                unit_id,
+                page_count: 1,
+            } if unit_id == "oldest"
+        )
+    })?;
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+#[test]
+fn sustained_speech_faster_than_reading_drops_whole_units_and_bounds_staleness() -> AppResult<()> {
+    const ARRIVAL_INTERVAL: Duration = Duration::from_secs(4);
+    let clock = Arc::new(HorizonClock::new());
+    let transport_clock: Arc<dyn Clock> = clock.clone();
+    let transport = Arc::new(ScriptedTransport::new(transport_clock, []));
+    let (reporter, diagnostics) = recording_reporter();
+    // The production provisional limits: a 64-s reading budget and a 30-s
+    // first-send budget.
+    let publisher = CompletedChatboxPublisher::start(
+        transport.clone(),
+        ChatboxTextPacer::with_clock(clock.clone()),
+        open_committer(),
+        ContentSelection::SourceOnly,
+        reporter,
+    )?;
+    let started_at = clock.now();
+    // A two-page opening utterance, then one utterance every 4 s. Every page
+    // dwells for the 8-s cap, so speech arrives twice as fast as it is read.
+    let texts = [
+        "甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸", "子", "丑",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, glyph)| glyph.repeat(if index == 0 { 205 } else { 70 }))
+    .collect::<Vec<_>>();
+    let mut arrivals = Vec::new();
+
+    for (index, text) in texts.iter().enumerate() {
+        let offset = u32::try_from(index)
+            .map_err(|_| AppError::state("Scripted arrival index overflowed."))?;
+        let arrival = started_at + ARRIVAL_INTERVAL * offset;
+        if index > 0 {
+            // Each arrival lands while earlier pages are still dwelling.
+            clock.run_until(arrival)?;
+        }
+        complete_source(&publisher, &format!("unit-{index}"), 1, text)?;
+        arrivals.push(arrival);
+    }
+    clock.release();
+
+    let events = transport.wait_for_texts_then_typing_off(10)?;
+    let attempts = timed_text_attempts(&events);
+    let opening_pages = prepared_strings(&texts[0])?;
+    let published_units = [1, 2, 3, 4, 5, 7, 9, 11];
+    let mut expected_texts = opening_pages;
+    expected_texts.extend(published_units.iter().map(|&index| texts[index].clone()));
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|(text, _)| text.clone())
+            .collect::<Vec<_>>(),
+        expected_texts
+    );
+    // The queue drains at one capped page every 8 s, in arrival order.
+    assert!(
+        gaps_between(&attempts)
+            .iter()
+            .all(|gap| *gap == PROVISIONAL_MAX_PAGE_DWELL)
+    );
+    // Every published utterance starts within the first-send budget; the
+    // oldest waiting utterances that could not are dropped whole instead of
+    // making every later one staler.
+    for (&index, (_, sent_at)) in published_units.iter().zip(attempts.iter().skip(2)) {
+        assert!(
+            sent_at.saturating_duration_since(arrivals[index])
+                < PROVISIONAL_MAX_WAIT_BEFORE_FIRST_SEND_ATTEMPT
+        );
+    }
+    for expired in ["unit-6", "unit-8", "unit-10"] {
+        diagnostics.wait_for("an expired utterance dropped whole", |diagnostic| {
+            matches!(
+                diagnostic,
+                CompletedPublisherDiagnostic::UnitExpired {
+                    unit_id,
+                    page_count: 1,
+                } if unit_id == expired
+            )
+        })?;
+    }
+    diagnostics.wait_for("the final utterance to be sent", |diagnostic| {
+        matches!(
+            diagnostic,
+            CompletedPublisherDiagnostic::UnitSendSucceeded { unit_id, .. } if unit_id == "unit-11"
+        )
+    })?;
+    // Expiry, not the reading budget, trimmed this backlog.
+    assert!(!diagnostics.contains(|diagnostic| matches!(
+        diagnostic,
+        CompletedPublisherDiagnostic::UnitDroppedOverload { .. }
+            | CompletedPublisherDiagnostic::UnitRejectedOverload { .. }
+    ))?);
+
+    publisher.request_close(PublisherCloseReason::Stop)?;
+    publisher.join()?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Selected-content publication: held Source units, exact pairing, wait budget.
 // ---------------------------------------------------------------------------
 
@@ -1863,9 +2521,9 @@ struct ContentPublisher {
     fence: GenerationFence,
 }
 
-fn content_limits(max_resident_pages: usize) -> PublisherLimits {
+fn content_limits(max_resident_reading_time: Duration) -> PublisherLimits {
     PublisherLimits {
-        max_resident_pages,
+        max_resident_reading_time,
         max_wait_before_first_send_attempt: Duration::from_secs(30),
         max_wait_for_translation: Duration::from_secs(20),
     }
@@ -2005,7 +2663,7 @@ fn translation_only_holds_the_source_and_sends_only_the_exact_translation() -> A
     } = start_content_publisher(
         ContentSelection::TranslationOnly,
         advancing_pacer(),
-        content_limits(8),
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
     )?;
 
     complete_source(&publisher, "unit-a", 1, "source a")?;
@@ -2040,7 +2698,7 @@ fn translation_only_preserves_source_admission_order_across_out_of_order_results
     } = start_content_publisher(
         ContentSelection::TranslationOnly,
         advancing_pacer(),
-        content_limits(8),
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
     )?;
 
     complete_source(&publisher, "unit-a", 1, "source a")?;
@@ -2072,7 +2730,7 @@ fn translation_only_omits_every_terminal_failure_and_releases_the_queue_head() -
     } = start_content_publisher(
         ContentSelection::TranslationOnly,
         advancing_pacer(),
-        content_limits(8),
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
     )?;
 
     for (index, reason) in EVERY_TRANSLATION_FAILURE_REASON.into_iter().enumerate() {
@@ -2115,7 +2773,7 @@ fn bilingual_sends_the_exact_pair_through_every_bilingual_page() -> AppResult<()
     } = start_content_publisher(
         ContentSelection::Bilingual,
         advancing_pacer(),
-        content_limits(32),
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
     )?;
     let source = "source lane ".repeat(40);
     let translation = "短译文";
@@ -2152,7 +2810,7 @@ fn bilingual_publishes_source_alone_after_failure_and_keeps_pairing_later_units(
     } = start_content_publisher(
         ContentSelection::Bilingual,
         advancing_pacer(),
-        content_limits(8),
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
     )?;
 
     complete_source(&publisher, "unit-a", 1, "source a")?;
@@ -2193,7 +2851,7 @@ fn bilingual_layout_failure_falls_back_to_the_exact_source() -> AppResult<()> {
     } = start_content_publisher(
         ContentSelection::Bilingual,
         advancing_pacer(),
-        content_limits(8),
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
     )?;
     let oversized_grapheme = format!("a{}", "\u{301}".repeat(144));
 
@@ -2246,7 +2904,7 @@ fn translation_only_wait_budget_omits_the_unit_and_ignores_a_late_result() -> Ap
     } = start_content_publisher(
         ContentSelection::TranslationOnly,
         ChatboxTextPacer::with_clock(clock.clone()),
-        content_limits(8),
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
     )?;
 
     complete_source(&publisher, "unit-a", 1, "source a")?;
@@ -2292,7 +2950,7 @@ fn bilingual_wait_budget_publishes_the_source_alone() -> AppResult<()> {
     } = start_content_publisher(
         ContentSelection::Bilingual,
         ChatboxTextPacer::with_clock(clock.clone()),
-        content_limits(8),
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
     )?;
 
     complete_source(&publisher, "unit-a", 1, "source a")?;
@@ -2334,7 +2992,8 @@ fn resolved_translation_that_cannot_fit_is_rejected_whole() -> AppResult<()> {
     } = start_content_publisher(
         ContentSelection::TranslationOnly,
         advancing_pacer(),
-        content_limits(2),
+        // Two capped pages of reading time; the Translation needs three.
+        content_limits(PROVISIONAL_MAX_PAGE_DWELL * 2),
     )?;
     let oversized_translation = "中".repeat(400);
     let page_count = prepared_strings(&oversized_translation)?.len();
@@ -2378,7 +3037,7 @@ fn mismatched_translation_does_not_resolve_a_held_unit() -> AppResult<()> {
     } = start_content_publisher(
         ContentSelection::TranslationOnly,
         advancing_pacer(),
-        content_limits(8),
+        content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
     )?;
 
     complete_source(&publisher, "unit-a", 1, "source a")?;
@@ -2415,7 +3074,7 @@ fn close_discards_held_units_and_rejects_late_results() -> AppResult<()> {
         } = start_content_publisher(
             ContentSelection::Bilingual,
             advancing_pacer(),
-            content_limits(8),
+            content_limits(PROVISIONAL_MAX_RESIDENT_READING_TIME),
         )?;
 
         complete_source(&publisher, "unit-a", 1, "source a")?;

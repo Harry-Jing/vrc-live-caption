@@ -144,6 +144,12 @@ pub(super) fn grapheme_advance_units(grapheme: &str) -> u32 {
         .min(MAX_GRAPHEME_ADVANCE_UNITS)
 }
 
+/// Expresses [`grapheme_advance_units`] in thousandths of an em, a unit that
+/// does not depend on the model font's design-unit resolution.
+pub(super) fn grapheme_advance_milli_ems(grapheme: &str) -> u32 {
+    grapheme_advance_units(grapheme).saturating_mul(1_000) / FONT_UNITS_PER_EM
+}
+
 pub(super) fn requires_conservative_sequence_width(grapheme: &str) -> bool {
     grapheme.chars().any(is_complex_sequence_marker)
 }
