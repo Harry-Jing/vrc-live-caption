@@ -57,7 +57,7 @@
     "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-vue": "^10.10.0",
-    "happy-dom": "^20.13.2",
+    "happy-dom": "^21.0.4",
     "lefthook": "^2.1.12",
     "prettier": "^3.9.6",
     "prettier-plugin-tailwindcss": "^0.8.1",
